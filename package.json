@@ -1,0 +1,36 @@
+{
+  "name": "foxhand-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Let an AI agent use your own Firefox through MCP tools",
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "packageManager": "npm@11.16.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "prepare": "husky",
+    "lint": "biome check .",
+    "typecheck": "turbo run typecheck",
+    "test": "turbo run test",
+    "build": "turbo run build",
+    "check:test-integrity": "sh bin/check-test-integrity.sh"
+  },
+  "lint-staged": {
+    "*": "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "husky": "^9.1.7",
+    "lint-staged": "^17.6.0",
+    "turbo": "^2.11.7",
+    "typescript": "^7.0.2"
+  },
+  "overrides": {
+    "shell-quote": "^1.12.0"
+  }
+}
