@@ -1,0 +1,12 @@
+node_modules/
+.turbo/
+coverage/
+dist/
+web-ext-artifacts/
+amo-dist/
+artifacts/
+*.log
+
+# Local agent instructions and settings
+CLAUDE.local.md
+.claude/
