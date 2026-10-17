@@ -36,6 +36,19 @@ The server's TypeScript runs directly on Node (type stripping), so it has no bui
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
 refuses to strip types from files it sees under `node_modules`.
 
+## Extension
+
+`npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
+version from `apps/extension/package.json`, an unminified `background.js`, and the icon. It
+then runs `web-ext lint --warnings-as-errors` on that folder.
+
+`npm run dev` rebuilds `background.js` whenever its TypeScript source changes and runs Firefox
+through `web-ext run`, which reloads the extension after each rebuild. It writes the manifest
+and the icon once at start, so restart it after changing them. Firefox uses a persistent
+profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
+`~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
+runs. It needs a desktop with Firefox 140 or later.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development

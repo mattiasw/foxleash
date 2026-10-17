@@ -100,6 +100,34 @@ describe("parseMessage accepts", () => {
         params: { url: "https://example.com/" },
       },
     },
+    ...[true, false].flatMap((allUrls) => [
+      {
+        name: `a hello from the extension with allUrls ${allUrls}`,
+        input: { ...hello, role: "extension", allUrls },
+        expected: {
+          type: "hello",
+          role: "extension",
+          protocol: 1,
+          version: "0.1.0",
+          allUrls,
+        } as const,
+      },
+      {
+        name: `a hello from an MCP server with allUrls ${allUrls}`,
+        input: { ...hello, allUrls },
+        expected: { type: "hello", role: "mcp", protocol: 1, version: "0.1.0", allUrls } as const,
+      },
+      {
+        name: `a welcome with a connected extension and allUrls ${allUrls}`,
+        input: { ...welcome, extension: { ...connectedWelcome.extension, allUrls } },
+        expected: {
+          type: "welcome",
+          protocol: 1,
+          version: "0.1.0",
+          extension: { connected: true, protocol: 1, version: "0.2.0", allUrls },
+        } as const,
+      },
+    ]),
     {
       name: "a 256-character token",
       input: { ...request, session: "s".repeat(256) },
@@ -275,6 +303,8 @@ describe("parseMessage rejects", () => {
 
   const fieldCases: { base: Fields; path: string[]; values: unknown[]; id?: string }[] = [
     { base: hello, path: ["role"], values: [MISSING, "host", 1] },
+    { base: hello, path: ["allUrls"], values: [null, "true", 1, 0, {}] },
+    { base: connectedWelcome, path: ["extension", "allUrls"], values: [null, "true", 1, 0, {}] },
     { base: connectedWelcome, path: ["extension"], values: [null, "x", []] },
     { base: connectedWelcome, path: ["extension", "connected"], values: [MISSING, "true", 1] },
     {
@@ -348,6 +378,14 @@ describe("parseMessage returns only validated fields", () => {
     }
   });
 
+  it("leaves allUrls out when it is absent", () => {
+    const helloMessage = parsed(hello);
+    assert.equal(Object.hasOwn(helloMessage, "allUrls"), false);
+    const welcomeMessage = parsed(connectedWelcome);
+    assert.ok(welcomeMessage.type === "welcome" && welcomeMessage.extension);
+    assert.equal(Object.hasOwn(welcomeMessage.extension, "allUrls"), false);
+  });
+
   it("builds a fresh extension status", () => {
     const message = parsed(connectedWelcome);
     assert.ok(message.type === "welcome");
@@ -380,6 +418,18 @@ describe("parseMessage returns only validated fields", () => {
         value: { connected: false },
         input: welcome,
         expected: { ok: true, message: { type: "welcome", protocol: 1, version: "0.1.0" } },
+      },
+      {
+        key: "allUrls",
+        value: true,
+        input: hello,
+        expected: { ok: true, message: hello },
+      },
+      {
+        key: "allUrls",
+        value: true,
+        input: connectedWelcome,
+        expected: { ok: true, message: connectedWelcome },
       },
       {
         key: "result",

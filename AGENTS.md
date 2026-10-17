@@ -35,7 +35,7 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Fast gate (run before every commit) | `npm run lint && npx turbo run typecheck test --force` |
 | Install on this machine | `npm run setup` |
 | Check the installation | `npm run doctor` |
-| Develop the extension | `npm run dev` (temporary Firefox profile, rebuilds on change) |
+| Develop the extension | `npm run dev` (persistent dev profile in `~/.cache/foxhand/dev-profile`, rebuilds on change) |
 
 Always run tests through the npm scripts, in CI too: the coverage floors live in the
 scripts, and calling `node --test` directly runs the suite with them switched off.

@@ -4,7 +4,7 @@ export type Role = "extension" | "mcp";
 
 export type ExtensionStatus =
   | { connected: false }
-  | { connected: true; protocol: number; version: string };
+  | { connected: true; protocol: number; version: string; allUrls?: boolean };
 
 /**
  * Keep these fields and their allowed values the same in every protocol version: a peer on
@@ -15,6 +15,7 @@ export interface HelloMessage {
   role: Role;
   protocol: number;
   version: string;
+  allUrls?: boolean;
 }
 
 /**
@@ -78,7 +79,11 @@ function parseHello(fields: Fields): ParseResult {
   if (!isProtocol(protocol)) return fail("protocol");
   const version = own(fields, "version");
   if (!isVersion(version)) return fail("version");
-  return { ok: true, message: { type: "hello", role, protocol, version } };
+  const allUrls = own(fields, "allUrls");
+  if (allUrls === undefined)
+    return { ok: true, message: { type: "hello", role, protocol, version } };
+  if (typeof allUrls !== "boolean") return fail("allUrls");
+  return { ok: true, message: { type: "hello", role, protocol, version, allUrls } };
 }
 
 function parseWelcome(fields: Fields): ParseResult {
@@ -103,7 +108,10 @@ function parseExtensionStatus(value: unknown): ExtensionStatus | string {
   if (!isProtocol(protocol)) return "extension.protocol";
   const version = own(value, "version");
   if (!isVersion(version)) return "extension.version";
-  return { connected: true, protocol, version };
+  const allUrls = own(value, "allUrls");
+  if (allUrls === undefined) return { connected: true, protocol, version };
+  if (typeof allUrls !== "boolean") return "extension.allUrls";
+  return { connected: true, protocol, version, allUrls };
 }
 
 function parseRequest(fields: Fields): ParseResult {

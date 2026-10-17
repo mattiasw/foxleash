@@ -64,6 +64,9 @@ The first time a session acts on a site, Foxhand asks you in that tab whether to
 once, always, or not at all. You can see and revoke your answers in the extension's
 settings.
 
+Each agent session's tabs open in an orange tab group titled Foxhand, and Foxhand acts only
+on tabs in that group, including tabs you move into it.
+
 ## Security
 
 Foxhand acts in your logged-in browser, so read this before you use it.
