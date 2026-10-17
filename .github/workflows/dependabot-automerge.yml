@@ -1,0 +1,120 @@
+name: Auto-merge Dependabot
+
+on:
+  workflow_run:
+    workflows:
+      - "CI"
+    types: [completed]
+    # A cost filter only, so no run starts for CI on other branches; the PR author check below
+    # decides whether to merge.
+    branches: ["dependabot/**"]
+
+permissions:
+  actions: read
+  checks: read
+  contents: write
+  pull-requests: write
+  statuses: read
+
+# One merge attempt per head sha at a time, so a re-run cannot race another into `gh pr merge`.
+concurrency:
+  group: automerge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: false
+
+jobs:
+  automerge:
+    # Only a pull_request run tests the PR merged with main.
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check all checks passed and merge
+        # GitHub context values reach the script only through env:, never interpolated into
+        # run:, so a crafted branch or workflow name cannot inject a command.
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGERING_WORKFLOW: ${{ github.event.workflow_run.name }}
+          REPO: ${{ github.repository }}
+        run: |
+          REQUIRED_WORKFLOWS=(
+            "CI"
+          )
+
+          # Triggered by a workflow not in the required list means the two lists in this file
+          # are out of sync.
+          IS_TRIGGER_REQUIRED=false
+          for REQUIRED_WORKFLOW in "${REQUIRED_WORKFLOWS[@]}"; do
+            if [ "$TRIGGERING_WORKFLOW" = "$REQUIRED_WORKFLOW" ]; then
+              IS_TRIGGER_REQUIRED=true
+            fi
+          done
+          if [ "$IS_TRIGGER_REQUIRED" != "true" ]; then
+            echo "::error::Triggered by workflow \"$TRIGGERING_WORKFLOW\" which is not in the required list. Update workflow names in dependabot-automerge.yml."
+            exit 1
+          fi
+
+          # Find the Dependabot PR for this commit.
+          PR=$(gh pr list --repo "$REPO" \
+            --state open --json number,headRefOid,author \
+            --jq ".[] | select(.headRefOid == \"$SHA\" and (.author.login == \"dependabot[bot]\" or .author.login == \"app/dependabot\")) | .number")
+          if [ -z "$PR" ]; then
+            echo "No open Dependabot PR found for $SHA"
+            exit 0
+          fi
+
+          # A run still in progress means "not ready"; a required workflow with no run at all
+          # for this sha is an error (the names drifted), not a wait that never ends. Runs from
+          # fork PRs with the same sha do not count: a later one could hide a failed run.
+          if ! WORKFLOW_RUNS=$(gh api \
+            "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
+            --jq '.workflow_runs'); then
+            echo "Failed to fetch workflow runs for $SHA"
+            exit 1
+          fi
+          ARE_REQUIRED_WORKFLOWS_SUCCESSFUL=true
+          for REQUIRED_WORKFLOW in "${REQUIRED_WORKFLOWS[@]}"; do
+            WORKFLOW_CONCLUSION=$(echo "$WORKFLOW_RUNS" | jq -r \
+              --arg WORKFLOW_NAME "$REQUIRED_WORKFLOW" \
+              'map(select(.name == $WORKFLOW_NAME and .head_repository.id == .repository.id))
+                | if length == 0 then "not started"
+                  else (sort_by(.run_started_at // .created_at) | last | .conclusion // "in progress")
+                  end')
+            if [ "$WORKFLOW_CONCLUSION" = "not started" ]; then
+              echo "::error::Required workflow \"$REQUIRED_WORKFLOW\" has no run for $SHA; the workflow names are out of sync."
+              exit 1
+            fi
+            if [ "$WORKFLOW_CONCLUSION" != "success" ]; then
+              echo "Workflow \"$REQUIRED_WORKFLOW\" is \"$WORKFLOW_CONCLUSION\" for $SHA"
+              ARE_REQUIRED_WORKFLOWS_SUCCESSFUL=false
+            fi
+          done
+          if [ "$ARE_REQUIRED_WORKFLOWS_SUCCESSFUL" != "true" ]; then
+            echo "Required workflows are not fully successful yet, not merging."
+            exit 0
+          fi
+
+          # Verify all PR checks are passing or skipped.
+          CHECKS=$(gh pr checks "$PR" --repo "$REPO" --json name,bucket) || true
+          if ! echo "$CHECKS" | jq -e 'type == "array"' > /dev/null; then
+            echo "Failed to fetch checks for PR #$PR"
+            exit 1
+          fi
+          BLOCKING=$(echo "$CHECKS" | jq '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length')
+          if [ "$BLOCKING" != "0" ]; then
+            echo "Checks still pending or failing, not merging:"
+            echo "$CHECKS" | jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name): \(.bucket)"'
+            exit 0
+          fi
+
+          echo "All checks passed, merging PR #$PR"
+          # Merge only the commit that was checked.
+          if ! gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
+            PR_STATE=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+            if [ "$PR_STATE" = "MERGED" ]; then
+              echo "PR #$PR was already merged by another run."
+            else
+              echo "::error::Failed to merge PR #$PR (state: $PR_STATE)."
+              exit 1
+            fi
+          fi

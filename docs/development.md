@@ -35,3 +35,11 @@ The repository is an npm workspaces monorepo run by Turborepo:
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
 refuses to strip types from files it sees under `node_modules`.
+
+## Dependency updates
+
+Dependabot opens pull requests every Thursday: npm updates grouped into one for development
+and one for production dependencies, and one per GitHub Action. It proposes a new release only
+once it is 3 days old; security updates skip that wait. The `Auto-merge Dependabot` workflow
+squash-merges such a pull request once CI and all of its checks pass; one that fails stays open
+for a person to fix.
