@@ -86,7 +86,7 @@ Why Foxhand requests each permission in its manifest:
 - storage: keeps the user's settings, such as the sites the user approved and the blocklist, in the extension's local storage in the user's Firefox profile.
 - <all_urls>: the agent may work on any site the user approves, so the extension cannot list the sites in advance. It needs this to run its scripts in pages, see their network requests and take screenshots. It reads and acts in a tab's page only while that page is on a site the user approved with a click in the browser and not on its blocklist of financial and health sites. Content that page embeds from other sites, blocklisted ones included, can show up in what the agent reads, for example in a screenshot.
 
-Firefox for Android: the manifest's gecko_android strict_min_version is there only so that the linter checks data_collection_permissions against Firefox for Android 142, the first version that supports them. Foxhand does not work on Firefox for Android, which has no native messaging or tab groups, although AMO marks each version compatible with it because of that key.
+Firefox for Android: Foxhand does not work on Firefox for Android, which has no native messaging or tab groups, so the manifest has no gecko_android key and each version is submitted for Firefox desktop only. The linter still reports one warning, that Firefox for Android supports data_collection_permissions only from version 142, because without gecko_android it checks Firefox for Android against the gecko strict_min_version of 140. That warning is expected.
 
 ## Data collection and handling
 
@@ -122,23 +122,20 @@ the local program runs on Linux only.
 It does not work on Firefox for Android. Firefox for Android has no `nativeMessaging` or
 `tabGroups` API, and there is no local Foxhand program for the extension to talk to.
 
-The manifest carries `browser_specific_settings.gecko_android.strict_min_version` `"142.0"`
-for addons-linter, not because Foxhand supports Android. When `gecko_android` is absent,
-addons-linter falls back to `gecko.strict_min_version` (140) for its Firefox for Android
-checks, and Firefox for Android supports `data_collection_permissions` only from 142, so
-`web-ext lint --warnings-as-errors` in the extension build fails. Removing the key brings
-that failure back.
+The manifest has no `gecko_android` key, so AMO records each version for Firefox desktop
+only. That is what each submission requests: `"compatibility": ["firefox"]` in the version
+object of the AMO v5 API, which `web-ext sign` passes through `--amo-metadata`. It is also
+AMO's default for an API submission that names no compatibility.
 
-AMO takes Firefox for Android compatibility from a manifest's `gecko_android` key. This is
-in AMO's server code (addons-server, `Version.from_upload` and the version `compatibility`
+addons-linter still checks `data_collection_permissions` against Firefox for Android. When
+`gecko_android` is absent it falls back to `gecko.strict_min_version` (140) for its Firefox
+for Android checks, and Firefox for Android supports the key only from 142, so it reports
+`KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`. The extension build accepts that as its
+one expected warning and fails on any other.
+
+Adding `gecko_android` to quiet the linter would make AMO mark every version compatible with
+Firefox for Android. AMO takes Firefox for Android compatibility from that key. This is in
+AMO's server code (addons-server, `Version.from_upload` and the version `compatibility`
 field of its API), not in the public API documentation. A version whose manifest has the key
-is marked compatible with Firefox for Android from that `strict_min_version`, even when the
-submission requests Firefox only, and AMO's API refuses to remove that afterwards. So
-while the key is in the manifest, AMO marks each Foxhand version compatible with Firefox for
-Android although it does not work there.
-
-Every submission requests Firefox only: `"compatibility": ["firefox"]` in the version object
-of the AMO v5 API, which `web-ext sign` passes through `--amo-metadata`. Without the
-`gecko_android` key that is what AMO records, and it is also AMO's default for an API
-submission that names no compatibility. With the key, AMO adds Firefox for Android
-regardless.
+is marked compatible with Firefox for Android from its `strict_min_version`, even when the
+submission requests Firefox only, and AMO's API refuses to remove that mark afterwards.

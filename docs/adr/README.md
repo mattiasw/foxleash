@@ -11,3 +11,4 @@ Records are never rewritten; a changed decision gets a new record that supersede
 | [0003](0003-e2e-tests-in-real-firefox-over-webdriver-bidi.md) | End-to-end tests start a pinned, headless Firefox, install the extension over WebDriver BiDi and call the real tools as an MCP client; no Playwright. |
 | [0004](0004-no-javascript-tool-in-v1.md) | In v1 no tool or tool parameter evaluates code strings in pages, and the extension does not request `userScripts`: every page action ships in the extension package. |
 | [0005](0005-mcp-is-the-model-boundary.md) | v1 contains no LLM, model API calls or API keys: the model lives in the MCP client, and tool names and descriptions are written for any client. |
+| [0006](0006-no-firefox-for-android-key-in-the-manifest.md) | The manifest has no `gecko_android` key, so AMO never marks Foxhand compatible with Firefox for Android; the extension build allows the one linter warning this causes and fails on any other. |

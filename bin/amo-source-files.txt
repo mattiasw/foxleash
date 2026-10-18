@@ -2,6 +2,7 @@
 README.md
 apps/extension/build.ts
 apps/extension/icons/foxhand.svg
+apps/extension/lint.ts
 apps/extension/manifest.json
 apps/extension/package.json
 apps/extension/src/background.ts

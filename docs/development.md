@@ -41,7 +41,10 @@ refuses to strip types from files it sees under `node_modules`.
 
 `npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
 version from `apps/extension/package.json`, an unminified `background.js`, and the icon. It
-then runs `web-ext lint --warnings-as-errors` on that folder.
+then lints that folder with web-ext, ignoring web-ext's `WEB_EXT` environment variables and
+config files, and fails on any error or warning except the one expected Firefox for Android
+warning on `data_collection_permissions`. See
+[ADR 0006](adr/0006-no-firefox-for-android-key-in-the-manifest.md) for why.
 
 `npm run dev` rebuilds `background.js` whenever its TypeScript source changes and runs Firefox
 through `web-ext run`, which reloads the extension after each rebuild. It writes the manifest

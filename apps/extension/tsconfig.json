@@ -3,5 +3,5 @@
   "compilerOptions": {
     "types": ["node"]
   },
-  "include": ["src", "build.ts", "dev.ts"]
+  "include": ["src", "build.ts", "dev.ts", "lint.ts", "lint.test.ts"]
 }

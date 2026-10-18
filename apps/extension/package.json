@@ -5,8 +5,8 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-exclude='src/**/*.test.ts' 'src/**/*.test.ts'",
-    "build": "node build.ts && web-ext lint --source-dir dist --warnings-as-errors",
+    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='lint.test.ts' 'src/**/*.test.ts' 'lint.test.ts'",
+    "build": "node build.ts && node lint.ts",
     "dev": "node dev.ts"
   },
   "dependencies": {
