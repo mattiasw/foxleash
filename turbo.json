@@ -5,7 +5,17 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
-    "typecheck": {},
-    "test": {}
+    "typecheck": {
+      "dependsOn": ["//#typecheck:bin"]
+    },
+    "test": {
+      "dependsOn": ["//#test:bin"]
+    },
+    "//#typecheck:bin": {
+      "inputs": ["bin/**", "packages/tsconfig/base.json"]
+    },
+    "//#test:bin": {
+      "inputs": ["bin/**"]
+    }
   }
 }
