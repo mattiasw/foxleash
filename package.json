@@ -19,6 +19,9 @@
     "test": "turbo run test",
     "build": "turbo run build",
     "dev": "npm run dev -w @foxhand/extension",
+    "setup": "node apps/server/src/main.ts install",
+    "teardown": "node apps/server/src/main.ts uninstall",
+    "doctor": "node apps/server/src/main.ts doctor",
     "check:test-integrity": "sh bin/check-test-integrity.sh"
   },
   "lint-staged": {

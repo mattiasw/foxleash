@@ -1,5 +1,9 @@
+import { homedir } from "node:os";
+import { fileURLToPath } from "node:url";
 import { hostCommand } from "./host.ts";
+import { install, uninstall } from "./install.ts";
 import { mcpCommand } from "./mcp.ts";
+import { runCommand } from "./run-command.ts";
 
 export interface CommandOptions {
   noClaude: boolean;
@@ -16,6 +20,19 @@ export interface CliDeps {
 export const COMMANDS = new Map<string, Command>();
 COMMANDS.set("host", () => hostCommand(process));
 COMMANDS.set("mcp", () => mcpCommand(process));
+COMMANDS.set("install", (options, deps) =>
+  install({
+    home: homedir(),
+    node: process.execPath,
+    main: fileURLToPath(new URL("./main.ts", import.meta.url)),
+    claude: !options.noClaude,
+    run: runCommand,
+    out: deps.stdout,
+  }),
+);
+COMMANDS.set("uninstall", (options, deps) =>
+  uninstall({ home: homedir(), claude: !options.noClaude, run: runCommand, out: deps.stdout }),
+);
 
 export const USAGE = `Usage: foxhand <command>
 

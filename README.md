@@ -42,8 +42,9 @@ npm run setup
 
 1. writes a small launcher script and registers it with Firefox as the native host
    (`~/.mozilla/native-messaging-hosts/foxhand.json`),
-2. registers the MCP server with Claude Code (`claude mcp add --scope user foxhand`),
-3. downloads the signed extension and opens it in Firefox; confirm the installation there.
+2. registers the MCP server with Claude Code (`claude mcp add -s user foxhand`). To skip
+   this, run `npm run setup -- --no-claude`. When `claude` is not on your PATH, setup
+   prints the command to run yourself.
 
 Then check that every part is connected:
 

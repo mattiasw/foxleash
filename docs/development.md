@@ -53,6 +53,14 @@ runs. It needs a desktop with Firefox 140 or later.
 
 Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
 
+`npm run setup` (the `install` subcommand) writes the launcher to
+`~/.local/share/foxhand/foxhand-host` and the native manifest to
+`~/.mozilla/native-messaging-hosts/foxhand.json`; both paths derive from `$HOME` only. The
+launcher runs this checkout's `main.ts` with the absolute path of the Node that ran setup,
+so rerun setup after moving or switching checkouts or Node versions.
+`npm run setup -- --no-claude` and `npm run teardown -- --no-claude` leave Claude Code's
+user configuration unchanged, for a checkout that should not touch it.
+
 The host listens on `<socket directory>/<pid>.sock`. The socket directory is the first of
 `$XDG_RUNTIME_DIR/foxhand` and `/run/user/<uid>/foxhand` whose base directory (that is,
 `$XDG_RUNTIME_DIR` or `/run/user/<uid>`) is a real directory owned by you with no group or
