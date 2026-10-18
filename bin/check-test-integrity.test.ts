@@ -428,6 +428,90 @@ describe("check-test-integrity.sh", () => {
     assert.match(out, REJECTED);
   });
 
+  test("catches a focus option on a test whose name holds a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from('test("x'),
+      Buffer.from([0xff]),
+      Buffer.from(`", { ${m("only", ": 1")} }, () => {\n  run();\n});\n`),
+    ]);
+    commitTestFile(dir, "bad.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+  });
+
+  test("catches a skip option on a test whose name holds a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from('test("x'),
+      Buffer.from([0xff]),
+      Buffer.from(`", { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`),
+    ]);
+    commitTestFile(dir, "bad.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+  });
+
+  test("catches a todo with a body whose name holds a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from(`${m("test.", "todo(")}"x`),
+      Buffer.from([0xff]),
+      Buffer.from('", () => {\n  run();\n});\n'),
+    ]);
+    commitTestFile(dir, "bad.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+  });
+
+  test("accepts a bodiless todo whose name holds a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from(`${m("test.", "todo(")}"x`),
+      Buffer.from([0xff]),
+      Buffer.from('");\n'),
+    ]);
+    commitTestFile(dir, "ok.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 0, out);
+    assert.match(out, PASSED);
+  });
+
+  test("accepts an empty placeholder whose skip reason holds a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from(`test("p", { ${m("skip", ': "needs ')}`),
+      Buffer.from([0xff]),
+      Buffer.from('" }, () => {});\n'),
+    ]);
+    commitTestFile(dir, "ok.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 0, out);
+    assert.match(out, PASSED);
+  });
+
+  test("catches a focus with an ideographic space before the parentheses", () => {
+    const body = Buffer.concat([
+      Buffer.from(m("test.", "only")),
+      Buffer.from([0xe3, 0x80, 0x80]),
+      Buffer.from('("t", () => {\n  run();\n});\n'),
+    ]);
+    commitTestFile(dir, "bad.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+  });
+
+  test("accepts an empty placeholder with an ideographic space before its body", () => {
+    const body = Buffer.concat([
+      Buffer.from(`test("p", { ${m("skip", ": true")} },`),
+      Buffer.from([0xe3, 0x80, 0x80]),
+      Buffer.from("() => {});\n"),
+    ]);
+    commitTestFile(dir, "ok.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 0, out);
+    assert.match(out, PASSED);
+  });
+
   const FOCUS_LINE = `${m("test.", "only(")}"t", () => {});`;
   const diffBypasses: Array<
     [string, { setup?: (repo: string) => void; env?: Record<string, string>; body?: Uint8Array }]

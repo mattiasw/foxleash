@@ -98,6 +98,9 @@ JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
     n = 0
   }
   BEGIN { n = 0; ctx = "" }
+  # JavaScript whitespace outside ASCII becomes a space: U+00A0, U+1680, U+2000 to U+200A,
+  # U+2028, U+2029, U+202F, U+205F, U+3000 and U+FEFF, as UTF-8 bytes.
+  { gsub(/\302\240|\341\232\200|\342\200[\200-\212\250\251\257]|\342\201\237|\343\200\200|\357\273\277/, " ") }
   /^>/ { added[n++] = substr($0, 2); next }
   # The bare empty line of diff.suppressBlankEmpty is a blank context line.
   /^( |$)/ {
@@ -187,16 +190,18 @@ TODO_CALL="\b${RECEIVER_TODO}${CALL}([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:s
 TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`)'
 PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${QS})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
 
-# -a: a line holding a byte that is not valid UTF-8 is still matched as text.
+# -a stops grep treating a line with a byte that is not valid UTF-8 as binary; LC_ALL=C lets
+# that byte match a bracket expression, which a UTF-8 locale never does. [[:space:]] is then
+# ASCII only, so the join pass has turned the other JavaScript whitespace into spaces.
 MARKER_STATUS=0
-BAD=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION|$TODO_CALL|$TODO_CHAIN|$BARE_TODO|$TODO_OPTION") || MARKER_STATUS=$?
+BAD=$(printf '%s\n' "$JOINED" | LC_ALL=C grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION|$TODO_CALL|$TODO_CHAIN|$BARE_TODO|$TODO_OPTION") || MARKER_STATUS=$?
 if [ "$MARKER_STATUS" -gt 1 ]; then
   echo "check-test-integrity: the marker grep failed (exit $MARKER_STATUS); gate 2 cannot judge." >&2
   exit 1
 fi
 
 OPTION_STATUS=0
-OPTION_LINES=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_OPTION") || OPTION_STATUS=$?
+OPTION_LINES=$(printf '%s\n' "$JOINED" | LC_ALL=C grep -aE "$SKIP_OPTION") || OPTION_STATUS=$?
 if [ "$OPTION_STATUS" -gt 1 ]; then
   echo "check-test-integrity: the option-object grep failed (exit $OPTION_STATUS); gate 2 cannot judge." >&2
   exit 1
@@ -205,7 +210,7 @@ fi
 BAD_OPTION=""
 if [ -n "$OPTION_LINES" ]; then
   PLACEHOLDER_STATUS=0
-  BAD_OPTION=$(printf '%s\n' "$OPTION_LINES" | grep -avE "$PLACEHOLDER") || PLACEHOLDER_STATUS=$?
+  BAD_OPTION=$(printf '%s\n' "$OPTION_LINES" | LC_ALL=C grep -avE "$PLACEHOLDER") || PLACEHOLDER_STATUS=$?
   if [ "$PLACEHOLDER_STATUS" -gt 1 ]; then
     echo "check-test-integrity: the placeholder grep failed (exit $PLACEHOLDER_STATUS); gate 2 cannot judge." >&2
     exit 1
