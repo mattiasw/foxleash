@@ -112,6 +112,66 @@ describe("check-test-integrity.sh", () => {
       `test // flaky\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
     ],
     [
+      "a skip split from its receiver by a trailing comment holding a quote",
+      `test // don't\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment holding a quote and ending in a period",
+      `test // don't retry.\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment holding a double quote and a backtick",
+      `test // say "hi" or \`hi\`\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment line",
+      `test\n  /* flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing block comment",
+      `test /* flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment holding a quote and a trailing comment",
+      `test /* don't */ // flaky\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment whose opening star is followed by a slash",
+      `test /*/ flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment after a regex literal holding quotes",
+      `x.split(/["']/), test // flaky\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip on a receiver after a string holding two slashes",
+      `run("http://example.com"), test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip on a receiver after a string holding an escaped quote and two slashes",
+      `run("a \\" // b"), test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip on a receiver with trailing spaces after a regex literal holding a quote",
+      `x(/'/), test   \n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip after a regex literal holding a quote and a string holding two slashes, on a line the next one joins",
+      `x.match(/"/) || "a//b", test${m(".", "skip(")}"t", fn)\n  .then(done);\n`,
+    ],
+    [
+      "a split skip on a receiver after a regex literal holding a quote and a string holding a URL",
+      `x(/'/, 'http://a'), test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip on a receiver after a regex literal holding a quote and a string holding two slashes",
+      `x(/'/, 'a//b'), test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a focus after a regex literal holding two slashes, above a block comment line and a joined line",
+      `const re = /[a//]/; test${m(".", "only(")}name, fn)\n  /* chained */\n  .then(done);\n`,
+    ],
+    [
       "a focus on an added line that starts with two plus signs",
       `let n = 0;\n++n && ${m("test.", "only(")}"t", () => {});\n`,
     ],
@@ -396,6 +456,13 @@ describe("check-test-integrity.sh", () => {
     assert.ok(out.includes(m("test.", 'todo("t"')), out);
   });
 
+  test("lists a refused line once", () => {
+    commitTestFile(dir, "bad.test.ts", `${m("test.", "only(")}"t", () => {});\n`);
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.equal(out.split(m("test.", 'only("t"')).length, 2, out);
+  });
+
   test("catches a focus when git is configured to always colour its output", () => {
     git(dir, "config", "color.ui", "always");
     commitTestFile(dir, "bad.test.ts", `${m("test.", "only(")}"t", () => {});\n`);
@@ -608,9 +675,33 @@ describe("check-test-integrity.sh", () => {
       false,
     ],
     [
+      "a skip edited in under an unchanged receiver line whose trailing comment holds a quote",
+      `test // don't\n  .todo("t", fn);\n`,
+      `test // don't\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line after a regex literal holding a quote and a URL",
+      `x(/'/, 'http://a'), test\n  .todo("t", fn);\n`,
+      `x(/'/, 'http://a'), test\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line and block comment line",
+      'test\n  /* flaky */\n  .todo("t", fn);\n',
+      `test\n  /* flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
       "a skip whose receiver line is edited above an unchanged skip line",
       `const q = db\n  ${m(".", "skip(")}"t", fn);\n`,
       `test\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line, with a trailing comment holding a quote, is edited above an unchanged skip line",
+      `const q = db // don't\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test // don't\n  ${m(".", "skip(")}"t", fn);\n`,
       false,
     ],
     [
@@ -708,6 +799,14 @@ describe("check-test-integrity.sh", () => {
     [
       "a skip on the test context in a test body",
       `test("t", (t) => {\n  ${m("t.", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a skip on the test context below a trailing comment holding a quote",
+      `test("t", (t) => {\n  t // don't run on CI\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a skip on another receiver below a trailing comment after a regex literal holding quotes",
+      `x.split(/["']/) // per test\n  ${m(".", "skip(")}"r");\n`,
     ],
     ["a conditional skip option", 'test("t", { skip: !process.env.X }, () => {\n  run();\n});\n'],
     [
@@ -820,6 +919,27 @@ describe("check-test-integrity.sh", () => {
       /git diff .*failed/,
     ],
     ["the added-line scanner (awk)", "awk", "exit 2", FOCUSED, /scanner \(awk\) failed/],
+    [
+      "the first join pass",
+      "awk",
+      'for a in "$@"; do [ "$a" = plain=1 ] && exit 2; done',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the second join pass",
+      "awk",
+      'for a in "$@"; do [ "$a" = plain=0 ] && exit 2; done',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the duplicate-line filter",
+      "awk",
+      'for a in "$@"; do case "$a" in *seen*) exit 2 ;; esac; done',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
     [
       "the marker grep",
       "grep",
