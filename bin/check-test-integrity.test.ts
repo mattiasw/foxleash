@@ -321,6 +321,62 @@ describe("check-test-integrity.sh", () => {
       "a bare todo on the test context",
       `test("t", (t) => {\n  ${m("t.", "todo()")};\n  run();\n});\n`,
     ],
+    ["an optional call on a skip", `${m("test.", "skip?.(")}"t", () => {\n  run();\n});\n`],
+    ["an optional call on a focus", `${m("test.", "only?.(")}"t", () => {\n  run();\n});\n`],
+    [
+      "an optional call on a describe skip",
+      `${m("describe.", "skip?.(")}"d", () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional call on a todo with a body",
+      `${m("test.", "todo?.(")}"t", () => {\n  run();\n});\n`,
+    ],
+    ["an optional call on an f-prefixed marker", `${m("fit", "?.(")}"t", () => {\n  run();\n});\n`],
+    ["an optional call on a fixme", `${m("test.", "fixme?.(")}"t", () => {\n  run();\n});\n`],
+    [
+      "an optional call with spaces around the optional chain",
+      `${m("test.", "only ?. (")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional call on an each chain after a skip",
+      `${m("test.", "skip.each?.(")}[1])("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional call on an each chain after a todo",
+      `${m("test.", "todo.each?.(")}[1])("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip each chain called as a tagged template",
+      `${m("test.", "skip.each")}\`a\`("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo each chain called as a tagged template",
+      `${m("test.", "todo.each")}\`a\`("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a bare optional skip on the test context",
+      `test("t", (t) => {\n  ${m("t.", "skip?.()")};\n});\n`,
+    ],
+    [
+      "a bare optional todo on the test context",
+      `test("t", (t) => {\n  ${m("t.", "todo?.()")};\n  run();\n});\n`,
+    ],
+    [
+      "a focus option holding a number on an optional test call",
+      `test?.("real", { ${m("only", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a number on an optional test call",
+      `test?.("real", { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional call whose optional chain starts on the next line",
+      `${m("test.", "skip")}\n?.("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional call whose parenthesis starts the next line",
+      `${m("test.", "skip?.")}\n("t", () => {\n  run();\n});\n`,
+    ],
   ];
 
   for (const [label, body] of caught) {
@@ -570,6 +626,14 @@ describe("check-test-integrity.sh", () => {
       `test("t", (t) => {\n  ${m("t.", "skip(")}"needs Firefox");\n});\n`,
     ],
     ["a conditional skip option", 'test("t", { skip: !process.env.X }, () => {\n  run();\n});\n'],
+    [
+      "a conditional skip option on an optional test call",
+      'test?.("t", { skip: !process.env.X }, () => {\n  run();\n});\n',
+    ],
+    [
+      "an optional skip on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "skip?.(")}"needs Firefox");\n});\n`,
+    ],
     ["a false skip option", 'test("t", { skip: false }, () => {\n  run();\n});\n'],
     ["a parenthesised condition", 'test("t", { skip: (isCI) }, () => {\n  run();\n});\n'],
     [
@@ -626,6 +690,7 @@ describe("check-test-integrity.sh", () => {
       'test("t", async ({ page }) => {\n  await page\n    .locator("a")\n    .click();\n});\n',
     ],
     ["a bodiless todo", `${m("test.", "todo(")}"planned");\n`],
+    ["a bodiless todo with an optional call", `${m("test.", "todo?.(")}"planned");\n`],
     ["a bodiless todo with a single-quoted name", `${m("test.", "todo(")}'planned');\n`],
     ["a bodiless todo with a template-literal name", `${m("test.", "todo(")}\`planned\`);\n`],
     [
@@ -641,6 +706,10 @@ describe("check-test-integrity.sh", () => {
     [
       "a todo on the test context in a test body",
       `test("t", (t) => {\n  ${m("t.", "todo(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "an optional todo on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "todo?.(")}"needs Firefox");\n});\n`,
     ],
     ["a conditional todo option", 'test("t", { todo: !process.env.X }, () => {\n  run();\n});\n'],
     ["a false todo option", 'test("t", { todo: false }, () => {\n  run();\n});\n'],

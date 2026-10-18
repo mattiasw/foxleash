@@ -8,9 +8,9 @@
 #      receiver is refused, as is a .todo on a test-root chain unless it is called with one
 #      quoted name that holds no backslash and closes on the line. node:test's option-object
 #      spelling is refused too: an unconditional `skip:`, `only:` or `todo:` option on a test.
-#      A member access may have whitespace before its dot or be optional (?.), and a call split
-#      over lines before a dot or a parenthesis is joined first, across blank and // comment
-#      lines.
+#      A member access may have whitespace before its dot or be optional (?.), a marker's call
+#      may be optional too (?.()), and a call split over lines before a dot or a parenthesis is
+#      joined first, across blank and // comment lines.
 #      Allowed: the conditional `{ skip: !process.env.X }` and `{ todo: !process.env.X }`
 #      options, t.skip("reason") and t.todo("reason") in a test body, a bodiless
 #      test.todo("name"), and an empty env-gated placeholder test on one line (a skip option
@@ -72,7 +72,8 @@ JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
   }
   function joins(prev, more) {
     return (prev ~ /[A-Za-z0-9_$]$/ && more ~ /^([.]|[?][.]|[(]|`)/) ||
-      (prev ~ /[)]$/ && more ~ /^[?]?[.]/)
+      (prev ~ /[)]$/ && more ~ /^[?]?[.]/) ||
+      (prev ~ /[?][.]$/ && more ~ /^[(]/)
   }
   function flush(   i, m, more, prev, head) {
     m = 0
@@ -130,6 +131,7 @@ JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
 # a test body's t.skip("reason") passes. Whitespace may come before a dot, never after it, so
 # prose such as "i.e. only (a, b)" is not a member access.
 DOT='[[:space:]]*[?]?[.]'
+CALL='[[:space:]]*([?][.][[:space:]]*)?[(]'
 IDENT='[A-Za-z_$][A-Za-z0-9_$]*'
 ROOTS='test|describe|it|suite|context|specify|concurrent'
 LINK="${DOT}${IDENT}"
@@ -137,7 +139,7 @@ MARKERS='fit|xit|xtest|xcontext|xspecify|fdescribe|xdescribe'
 RECEIVER_SKIP="(${ROOTS})(${LINK})*${DOT}skip"
 RECEIVER_TODO="(${ROOTS})(${LINK})*${DOT}todo"
 # The backtick must stay inside single quotes, or sh runs it as a command.
-SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))([[:space:]]*[(]|('"$DOT"'[A-Za-z_]+)+[[:space:]]*[(`])'
+SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))('"$CALL"'|('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`))'
 
 # The option-object patterns. A key may be quoted or have whitespace before its colon, but it
 # must start the line or follow {, , or a block comment's */, so prose such as "desktop only: 2
@@ -163,15 +165,15 @@ NBQ=$(printf '[^}\047\042\140]')
 ARG=$(printf '[^,{}()\047\042\140]')
 # A value that is never a condition: a keyword literal, a number or a string.
 LITERAL='((true|false|null|undefined|NaN|Infinity)\b|[0-9]|'"$Q"')'
-BARE_SKIP="${DOT}skip[[:space:]]*[(][[:space:]]*[)]"
+BARE_SKIP="${DOT}skip${CALL}[[:space:]]*[)]"
 KEY="(^|[{,]|[*]/)[[:space:]]*${Q}?"
 VALUE="${Q}?[[:space:]]*:[[:space:]]*((true|null|NaN)\b|${Q})"
-CALL_KEY="\b(test|it|describe|suite|context|specify)[[:space:]]*[(](${ARG}|${QS})*,[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
+CALL_KEY="\b(test|it|describe|suite|context|specify)${CALL}(${ARG}|${QS})*,[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
 CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([0-9]|[!(][[:space:]!(]*${LITERAL})"
 SKIP_OPTION="${KEY}skip${VALUE}|${CALL_KEY}skip${CALL_VALUE}"
 ONLY_OPTION="${KEY}only${VALUE}|${CALL_KEY}only${CALL_VALUE}"
 TODO_OPTION="${KEY}todo(${VALUE}|${CALL_VALUE})"
-BARE_TODO="${DOT}todo[[:space:]]*[(][[:space:]]*[)]"
+BARE_TODO="${DOT}todo${CALL}[[:space:]]*[)]"
 # A todo may hold only one quoted name, closed on its line. ERE has no lookahead, so the refused
 # shapes are spelled out: arguments that do not close on the line, a first argument that is not
 # a quoted string (NOT_NAME), a name that holds a backslash, a ${ that holds more than an
@@ -181,8 +183,8 @@ BARE_TODO="${DOT}todo[[:space:]]*[(][[:space:]]*[)]"
 # breaks the call is refused too: shorten it.
 NOT_NAME=$(printf '[^\047\042\140[:space:])]')
 OPEN_NAME=$(printf '((\042[^\042]*|\047[^\047]*|\140[^\140]*)(\\\\|$)|\140[^\140]*[$][{][A-Za-z0-9_$.[:space:]]*[^A-Za-z0-9_$.[:space:]}])')
-TODO_CALL="\b${RECEIVER_TODO}[[:space:]]*[(]([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:space:]]*${OPEN_NAME}|[[:space:]]*${QS}[[:space:]]*(\$|[^[:space:])]))"
-TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+[[:space:]]*[(`]'
+TODO_CALL="\b${RECEIVER_TODO}${CALL}([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:space:]]*${OPEN_NAME}|[[:space:]]*${QS}[[:space:]]*(\$|[^[:space:])]))"
+TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`)'
 PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${QS})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
 
 # -a: a line holding a byte that is not valid UTF-8 is still matched as text.
