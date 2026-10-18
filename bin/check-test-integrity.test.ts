@@ -104,6 +104,10 @@ describe("check-test-integrity.sh", () => {
       `test\n  // flaky on CI\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
     ],
     [
+      "a skip split from its receiver by a blank line",
+      `test\n\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
       "a skip split from its receiver by a trailing comment",
       `test // flaky\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
     ],
@@ -450,21 +454,60 @@ describe("check-test-integrity.sh", () => {
     assert.match(out, REJECTED);
   });
 
-  const caughtEdits: Array<[string, string, string]> = [
+  const caughtEdits: Array<[string, string, string, boolean]> = [
     [
       "a skip edited in under an unchanged receiver chain over two lines",
       'test\n  .sequential\n  .todo("t", fn);\n',
       `test\n  .sequential\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
     ],
     [
       "a skip edited in under an unchanged receiver line and comment line",
       'test\n  // flaky on CI\n  .todo("t", fn);\n',
       `test\n  // flaky on CI\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line is edited above an unchanged skip line",
+      `const q = db\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a focus whose receiver line is edited above its unchanged arguments",
+      'run\n("t", fn);\n',
+      `${m("f", "it")}\n("t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line is edited above an unchanged chain over two lines",
+      `const q = db\n  .sequential\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n  .sequential\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line is edited above a blank line and an unchanged skip line",
+      `const q = db\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in below a receiver line and a blank context line",
+      "test\n\nx();\n",
+      `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in below a receiver line and a blank context line under diff.suppressBlankEmpty",
+      "test\n\nx();\n",
+      `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      true,
     ],
   ];
 
-  for (const [label, before, after] of caughtEdits) {
+  for (const [label, before, after, suppressBlankEmpty] of caughtEdits) {
     test(`catches ${label}`, () => {
+      if (suppressBlankEmpty) git(dir, "config", "diff.suppressBlankEmpty", "true");
       commitChange(dir, "bad.test.ts", before, after);
       const { status, out } = runGuard(dir);
       assert.equal(status, 1, out);
@@ -492,9 +535,21 @@ describe("check-test-integrity.sh", () => {
       false,
     ],
     [
-      "an added line below a blank context line under diff.suppressBlankEmpty",
-      "const box = fit\n\nx();\n",
-      "const box = fit\n\n  .last();\n",
+      "an unchanged skip below an edited line it does not join",
+      `x();\ntest\n  ${m(".", "skip(")}"t", fn);\n`,
+      `y();\ntest\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a blank line inserted above an unchanged skip",
+      `test\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "an unchanged skip below an edited line and a blank context line under diff.suppressBlankEmpty",
+      `x();\ntest\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      `y();\ntest\n\n  ${m(".", "skip(")}"t", fn);\n`,
       true,
     ],
   ];

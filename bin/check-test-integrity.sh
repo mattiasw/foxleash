@@ -9,7 +9,8 @@
 #      quoted name that holds no backslash and closes on the line. node:test's option-object
 #      spelling is refused too: an unconditional `skip:`, `only:` or `todo:` option on a test.
 #      A member access may have whitespace before its dot or be optional (?.), and a call split
-#      over lines before a dot or a parenthesis is joined first.
+#      over lines before a dot or a parenthesis is joined first, across blank and // comment
+#      lines.
 #      Allowed: the conditional `{ skip: !process.env.X }` and `{ todo: !process.env.X }`
 #      options, t.skip("reason") and t.todo("reason") in a test body, a bodiless
 #      test.todo("name"), and an empty env-gated placeholder test on one line (a skip option
@@ -57,7 +58,10 @@ DIFF_OUT=$(unset GIT_DIFF_OPTS GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGL
 }
 
 # Joins a call split over lines back into one line. Context lines above a run of added lines
-# are merged by the same rule, so an edit under an unchanged receiver line is seen whole.
+# are merged by the same rule, so an edit under an unchanged receiver line is seen whole. Context
+# lines below an added line are joined onto it and printed too, so an edit above an unchanged
+# .skip( line is seen whole as far as the diff's context lines reach. Blank and // comment lines
+# do not break a chain.
 JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
   # Trailing whitespace and a trailing comment holding no quote are not part of the chain.
   function chainend(s) {
@@ -76,7 +80,7 @@ JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
     for (i = 0; i < n; i++) {
       more = added[i]
       sub(/^[[:space:]]+/, "", more)
-      if (more ~ /^\/\//) { merged[m++] = added[i]; continue }
+      if (more == "" || more ~ /^\/\//) { merged[m++] = added[i]; continue }
       prev = chainend(head >= 0 ? merged[head] : ctx)
       if (joins(prev, more)) {
         if (head < 0) { head = m; m++ }
@@ -88,25 +92,33 @@ JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk '
       m++
     }
     for (i = 0; i < m; i++) print merged[i]
-    if (head >= 0) ctx = merged[head]
+    # hot: ctx ends in an added line, so context lines that join it are printed.
+    if (head >= 0) { ctx = merged[head]; hot = 1 }
     n = 0
   }
   BEGIN { n = 0; ctx = "" }
   /^>/ { added[n++] = substr($0, 2); next }
-  /^ / {
+  # The bare empty line of diff.suppressBlankEmpty is a blank context line.
+  /^( |$)/ {
     flush()
     cline = substr($0, 2)
     cmore = cline
     sub(/^[[:space:]]+/, "", cmore)
-    if (cmore ~ /^\/\//) next
+    if (cmore == "" || cmore ~ /^\/\//) next
     cprev = chainend(ctx)
-    ctx = joins(cprev, cmore) ? cprev cmore : cline
+    if (joins(cprev, cmore)) {
+      ctx = cprev cmore
+      if (hot) print ctx
+    } else {
+      ctx = cline
+      hot = 0
+    }
     next
   }
   # A removed line and the no-newline marker end a run but keep the context.
   /^-/ { flush(); next }
   /^\\/ { flush(); next }
-  # Headers and the bare empty line of diff.suppressBlankEmpty also clear it.
+  # Headers clear the context.
   { flush(); ctx = "" }
   END { flush() }
 ') || {
