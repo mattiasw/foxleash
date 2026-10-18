@@ -6,13 +6,25 @@
       "outputs": ["dist/**"]
     },
     "typecheck": {
-      "dependsOn": ["//#typecheck:bin"]
+      "dependsOn": ["//#typecheck:bin", "//#typecheck:e2e"]
     },
     "test": {
       "dependsOn": ["//#test:bin"]
     },
     "//#typecheck:bin": {
-      "inputs": ["bin/**", "packages/tsconfig/base.json"]
+      "inputs": ["bin/**", "packages/tsconfig/base.json", "package-lock.json"]
+    },
+    "//#typecheck:e2e": {
+      "inputs": [
+        "e2e/**",
+        "bin/**",
+        "packages/tsconfig/base.json",
+        "packages/protocol/package.json",
+        "packages/protocol/src/**",
+        "apps/server/package.json",
+        "apps/server/src/**",
+        "package-lock.json"
+      ]
     },
     "//#test:bin": {
       "inputs": ["bin/**"]

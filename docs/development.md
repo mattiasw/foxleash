@@ -22,6 +22,7 @@ The repository is an npm workspaces monorepo run by Turborepo:
 - `apps/server/`: the `foxhand` command (MCP server, native host, installer)
 - `packages/protocol/`: messages and contracts shared by both
 - `packages/tsconfig/`: shared TypeScript configuration
+- `e2e/`: end-to-end tests in a real, headless Firefox
 
 ## Checks
 
@@ -32,10 +33,26 @@ The repository is an npm workspaces monorepo run by Turborepo:
 | Unit tests | `npm test` |
 | Build | `npm run build` |
 | AMO source archive | `npm run build:amo` |
+| End-to-end tests | `npm run e2e` |
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
 refuses to strip types from files it sees under `node_modules`.
+
+## End-to-end tests
+
+`npm run e2e` builds the extension, then starts a pinned Firefox headless with a temporary
+home directory and a temporary `XDG_RUNTIME_DIR`, so it never touches your own Firefox or
+Foxhand. It installs the native host into that home, installs the extension over WebDriver
+BiDi, serves fixture pages from a local HTTP server, and calls the real MCP tools through
+`foxhand mcp`, as an MCP client would.
+
+The suite runs on linux x64 only. The first run downloads Firefox into
+`${XDG_CACHE_HOME:-~/.cache}/foxhand-firefox` and checks it against the sha256 pinned in
+`bin/firefox-version.json`; later runs reuse it. To raise the pin, set the new version in
+that file together with the sha256 of `linux-x86_64/en-US/firefox-<version>.tar.xz` from
+Mozilla's `https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`, as a change
+of its own (see ADR 0003).
 
 ## Extension
 

@@ -25,7 +25,9 @@
     "doctor": "node apps/server/src/main.ts doctor",
     "check:test-integrity": "sh bin/check-test-integrity.sh",
     "test:bin": "node --test 'bin/**/*.test.ts'",
-    "typecheck:bin": "tsc --noEmit -p bin"
+    "typecheck:bin": "tsc --noEmit -p bin",
+    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 'e2e/**/*.test.ts'",
+    "typecheck:e2e": "tsc --noEmit -p e2e"
   },
   "lint-staged": {
     "*": "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"

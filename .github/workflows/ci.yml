@@ -33,3 +33,19 @@ jobs:
       - run: npm run build
       - name: AMO source archive
         run: npm run build:amo
+
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - uses: actions/cache@v6
+        with:
+          path: ~/.cache/foxhand-firefox
+          key: firefox-${{ runner.os }}-${{ hashFiles('bin/firefox-version.json') }}
+      - run: npm run e2e
