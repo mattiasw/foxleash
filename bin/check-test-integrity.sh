@@ -1,15 +1,19 @@
 #!/bin/sh
 # The test suite is a ratchet. Against a base ref (BASE_REF, default origin/main):
 #   1. the number of test files never drops;
-#   2. no focus or skip markers are added: .only and .fixme on any receiver, the x- and
+#   2. no focus, skip or todo markers are added: .only and .fixme on any receiver, the x- and
 #      f-prefixed forms, .each-style chains on them, every .skip( on a receiver chain rooted
 #      at test, describe, it, suite, context, specify or concurrent, and a bare .skip() on any
-#      receiver. node:test's option-object spelling is refused too: an unconditional `skip:` or
-#      `only:` option on a test. A member access may have whitespace before its dot or be
-#      optional (?.), and a call split over lines before a dot or a parenthesis is joined first.
-#      Allowed: the conditional `{ skip: !process.env.X }` option, t.skip("reason") in a test
-#      body, and an empty env-gated placeholder test on one line (a skip option followed by an
-#      empty body that closes the call).
+#      receiver. node:test runs a todo's body but never fails on it, so a bare .todo() on any
+#      receiver is refused, as is a .todo on a test-root chain unless it is called with one
+#      quoted name that holds no backslash and closes on the line. node:test's option-object
+#      spelling is refused too: an unconditional `skip:`, `only:` or `todo:` option on a test.
+#      A member access may have whitespace before its dot or be optional (?.), and a call split
+#      over lines before a dot or a parenthesis is joined first.
+#      Allowed: the conditional `{ skip: !process.env.X }` and `{ todo: !process.env.X }`
+#      options, t.skip("reason") and t.todo("reason") in a test body, a bodiless
+#      test.todo("name"), and an empty env-gated placeholder test on one line (a skip option
+#      followed by an empty body that closes the call).
 # BASE_REF=none skips the check (CI uses it for the first push of a branch).
 
 set -e
@@ -119,6 +123,7 @@ ROOTS='test|describe|it|suite|context|specify|concurrent'
 LINK="${DOT}${IDENT}"
 MARKERS='fit|xit|xtest|xcontext|xspecify|fdescribe|xdescribe'
 RECEIVER_SKIP="(${ROOTS})(${LINK})*${DOT}skip"
+RECEIVER_TODO="(${ROOTS})(${LINK})*${DOT}todo"
 # The backtick must stay inside single quotes, or sh runs it as a command.
 SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))([[:space:]]*[(]|('"$DOT"'[A-Za-z_]+)+[[:space:]]*[(`])'
 
@@ -127,10 +132,14 @@ SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))([[:space:]]
 # per row" is not a key. VALUE is true, null, NaN or a string: node:test skips on any value but
 # undefined and false. CALL_VALUE, a number or a negated or parenthesised literal, is refused
 # only in an options object that is the second argument of a test call on the same line, because
-# skip is also a pagination key. ONLY_OPTION goes to the marker grep, so no placeholder exempts a
-# focus. PLACEHOLDER matches a skipped EMPTY test, registered inside an if (!process.env.X)
-# branch: the options object ends at the first } outside a quoted value and is followed directly
-# by an empty () => {}) or async () => {}) body that closes the call.
+# skip is also a pagination key. ONLY_OPTION and TODO_OPTION go to the marker grep, so no
+# placeholder exempts a focus or a todo. todo is no pagination key, so TODO_OPTION refuses a
+# CALL_VALUE after any key; the price is that a todo: key holding a literal in plain test data,
+# at the start of a line or after {, , or */, is refused too. That is what catches a todo option
+# in an options object over several lines. PLACEHOLDER matches a skipped EMPTY test, registered
+# inside an if (!process.env.X) branch: the options object ends at the first } outside a quoted
+# value and is followed directly by an empty () => {}) or async () => {}) body that closes the
+# call.
 # The quote characters are written as printf octal (\047 ' \042 " \140 `) so they survive sh
 # quoting; a complement built from $Q, '[^'"$Q"']', would be a class followed by a literal ].
 # QS is a quoted string, closed by the quote that opened it, so "don't" is one string. NBQ also
@@ -149,11 +158,24 @@ CALL_KEY="\b(test|it|describe|suite|context|specify)[[:space:]]*[(](${ARG}|${QS}
 CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([0-9]|[!(][[:space:]!(]*${LITERAL})"
 SKIP_OPTION="${KEY}skip${VALUE}|${CALL_KEY}skip${CALL_VALUE}"
 ONLY_OPTION="${KEY}only${VALUE}|${CALL_KEY}only${CALL_VALUE}"
+TODO_OPTION="${KEY}todo(${VALUE}|${CALL_VALUE})"
+BARE_TODO="${DOT}todo[[:space:]]*[(][[:space:]]*[)]"
+# A todo may hold only one quoted name, closed on its line. ERE has no lookahead, so the refused
+# shapes are spelled out: arguments that do not close on the line, a first argument that is not
+# a quoted string (NOT_NAME), a name that holds a backslash, a ${ that holds more than an
+# identifier or member path, or does not close on its line (OPEN_NAME, since QS ends at the
+# first matching quote), and a quoted name followed by anything but ). TODO_CHAIN refuses a
+# chain after .todo, as SKIP_PATTERN does after .skip. A name long enough that the formatter
+# breaks the call is refused too: shorten it.
+NOT_NAME=$(printf '[^\047\042\140[:space:])]')
+OPEN_NAME=$(printf '((\042[^\042]*|\047[^\047]*|\140[^\140]*)(\\\\|$)|\140[^\140]*[$][{][A-Za-z0-9_$.[:space:]]*[^A-Za-z0-9_$.[:space:]}])')
+TODO_CALL="\b${RECEIVER_TODO}[[:space:]]*[(]([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:space:]]*${OPEN_NAME}|[[:space:]]*${QS}[[:space:]]*(\$|[^[:space:])]))"
+TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+[[:space:]]*[(`]'
 PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${QS})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
 
 # -a: a line holding a byte that is not valid UTF-8 is still matched as text.
 MARKER_STATUS=0
-BAD=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION") || MARKER_STATUS=$?
+BAD=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION|$TODO_CALL|$TODO_CHAIN|$BARE_TODO|$TODO_OPTION") || MARKER_STATUS=$?
 if [ "$MARKER_STATUS" -gt 1 ]; then
   echo "check-test-integrity: the marker grep failed (exit $MARKER_STATUS); gate 2 cannot judge." >&2
   exit 1
@@ -177,10 +199,10 @@ if [ -n "$OPTION_LINES" ]; then
 fi
 
 if [ -n "$BAD" ] || [ -n "$BAD_OPTION" ]; then
-  echo "check-test-integrity: focus or skip markers added:" >&2
+  echo "check-test-integrity: focus, skip or todo markers added:" >&2
   [ -z "$BAD" ] || printf '%s\n' "$BAD" >&2
   [ -z "$BAD_OPTION" ] || printf '%s\n' "$BAD_OPTION" >&2
-  echo "check-test-integrity: allowed: { skip: !process.env.X }, t.skip(\"reason\"), an empty env-gated placeholder test on one line." >&2
+  echo "check-test-integrity: allowed: { skip: !process.env.X }, t.skip(\"reason\"), test.todo(\"name\") on one line with no body, an empty env-gated placeholder test on one line." >&2
   exit 1
 fi
 

@@ -70,9 +70,10 @@ scripts, and calling `node --test` directly runs the suite with them switched of
   home directory, install the extension over WebDriver BiDi, and act as an MCP client
   calling the real tools against local fixture pages.
 - Coverage floors are a ratchet: raise them when coverage rises, never lower them.
-- Never delete a test file, and never commit `.only`, an unconditional `.skip`, or
-  `x`/`f`-prefixed tests. `bin/check-test-integrity.sh` enforces both in CI. Fix the code,
-  not the test.
+- Never delete a test file, and never commit `.only`, an unconditional `.skip`, an
+  unconditional todo on a test that has a body, or `x`/`f`-prefixed tests; a bodiless
+  `test.todo("name")` that records a planned test is fine. `bin/check-test-integrity.sh`
+  enforces both in CI. Fix the code, not the test.
 - A new regression test is verified by breaking the behaviour it guards and watching it
   fail.
 

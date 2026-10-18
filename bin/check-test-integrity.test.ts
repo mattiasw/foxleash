@@ -9,7 +9,7 @@ import { afterEach, beforeEach, describe, test } from "node:test";
 // at runtime with m(), and fixture newlines are written as escapes, never as line breaks.
 
 const SCRIPT = path.resolve(import.meta.dirname, "check-test-integrity.sh");
-const REJECTED = /focus or skip markers added/;
+const REJECTED = /focus, skip or todo markers added/;
 const PASSED = /check-test-integrity: OK/;
 
 describe("check-test-integrity.sh", () => {
@@ -57,6 +57,7 @@ describe("check-test-integrity.sh", () => {
   });
 
   const SKIP_TRUE = m("skip", ": true");
+  const TODO_TRUE = m("todo", ": true");
   const caught: Array<[string, string]> = [
     ["a skip with a space before the dot", `${m("test .", "skip(")}"t", () => {\n  run();\n});\n`],
     ["an optional-chained skip", `${m("test?.", "skip(")}"t", () => {\n  run();\n});\n`],
@@ -230,6 +231,92 @@ describe("check-test-integrity.sh", () => {
       "a skip option whose body ends in an empty callback",
       `test("real", { ${SKIP_TRUE} }, () => { run(); [1].map(() => {}); });\n`,
     ],
+    [
+      "a todo option on a test with a body",
+      `test("real", { ${TODO_TRUE} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option with a string reason",
+      `test("real", { ${m("todo", ': "flaky on CI"')} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option holding a number",
+      `test("real", { ${m("todo", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option over several lines",
+      `test("real", {\n  ${TODO_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option holding a number in an options object that comes first",
+      `test({ ${m("todo", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option holding a number in an options object over several lines",
+      `test("multi", {\n  ${m("todo", ": 1")},\n}, () => {\n  run();\n});\n`,
+    ],
+    ["a todo option on an empty test", `test("p", { ${TODO_TRUE} }, () => {});\n`],
+    ["a todo with a body", `${m("test.", "todo(")}"t", () => {\n  run();\n});\n`],
+    ["an it todo with a body", `${m("it.", "todo(")}"t", () => {\n  run();\n});\n`],
+    ["a describe todo with a body", `${m("describe.", "todo(")}"d", () => {\n  run();\n});\n`],
+    ["a todo with a body and no name", `${m("test.", "todo(")}() => {\n  run();\n});\n`],
+    ["a todo whose name is a variable", `${m("test.", "todo(")}name, () => {\n  run();\n});\n`],
+    [
+      "a todo with options and a body",
+      `${m("test.", "todo(")}"t", { timeout: 5 }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose arguments start on the next line",
+      `${m("test.", "todo(")}\n  "t",\n  () => {\n    run();\n  },\n);\n`,
+    ],
+    [
+      "a todo whose body starts on the next line",
+      `${m("test.", "todo(")}"t",\n  () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a todo whose name holds an escaped quote before a parenthesis",
+      `${m("test.", "todo(")}"a \\")", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose template-literal name nests a template",
+      `${m("test.", "todo(")}\`\${\`)\`}\`, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose template-literal name holds a backtick in an interpolated string",
+      `${m("test.", "todo(")}\`\${"}\`)"}\`, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose template-literal name runs onto the next line",
+      `${m("test.", "todo(")}\`a\nb\`, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo called through a chain",
+      `${m("test.", "todo")}.call(null, "t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose name ends its line",
+      `${m("test.", "todo(")}"t"\n  , () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a todo whose parentheses start on the next line",
+      `${m("test.", "todo")}\n("t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo whose member access starts on the next line",
+      `test\n  ${m(".", "todo(")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "an optional-chained todo with a body",
+      `${m("test?.", "todo(")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo with a space before the dot and a body",
+      `${m("test .", "todo(")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a bare todo on the test context",
+      `test("t", (t) => {\n  ${m("t.", "todo()")};\n  run();\n});\n`,
+    ],
   ];
 
   for (const [label, body] of caught) {
@@ -240,6 +327,14 @@ describe("check-test-integrity.sh", () => {
       assert.match(out, REJECTED);
     });
   }
+
+  test("lists the line of a todo that carries a body", () => {
+    commitTestFile(dir, "bad.test.ts", `${m("test.", "todo(")}"t", () => {\n  run();\n});\n`);
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+    assert.ok(out.includes(m("test.", 'todo("t"')), out);
+  });
 
   test("catches a focus when git is configured to always colour its output", () => {
     git(dir, "config", "color.ui", "always");
@@ -475,6 +570,26 @@ describe("check-test-integrity.sh", () => {
       "a locator chain split over lines",
       'test("t", async ({ page }) => {\n  await page\n    .locator("a")\n    .click();\n});\n',
     ],
+    ["a bodiless todo", `${m("test.", "todo(")}"planned");\n`],
+    ["a bodiless todo with a single-quoted name", `${m("test.", "todo(")}'planned');\n`],
+    ["a bodiless todo with a template-literal name", `${m("test.", "todo(")}\`planned\`);\n`],
+    [
+      "a bodiless todo whose template-literal name interpolates",
+      `${m("test.", "todo(")}\`planned \${x} \${ a.b }\`);\n`,
+    ],
+    ["a bodiless todo whose name holds an apostrophe", `${m("test.", "todo(")}"don't forget");\n`],
+    ["a bodiless it todo", `${m("it.", "todo(")}"planned");\n`],
+    [
+      "a bodiless todo with a trailing comment",
+      `${m("test.", "todo(")}"planned"); // trailing comment\n`,
+    ],
+    [
+      "a todo on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "todo(")}"needs Firefox");\n});\n`,
+    ],
+    ["a conditional todo option", 'test("t", { todo: !process.env.X }, () => {\n  run();\n});\n'],
+    ["a false todo option", 'test("t", { todo: false }, () => {\n  run();\n});\n'],
+    ["a parenthesised todo condition", 'test("t", { todo: (isCI) }, () => {\n  run();\n});\n'],
   ];
 
   for (const [label, body] of allowed) {
