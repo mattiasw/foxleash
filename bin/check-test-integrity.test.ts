@@ -56,6 +56,7 @@ describe("check-test-integrity.sh", () => {
     }
   });
 
+  const SKIP_TRUE = m("skip", ": true");
   const caught: Array<[string, string]> = [
     ["a skip with a space before the dot", `${m("test .", "skip(")}"t", () => {\n  run();\n});\n`],
     ["an optional-chained skip", `${m("test?.", "skip(")}"t", () => {\n  run();\n});\n`],
@@ -109,6 +110,126 @@ describe("check-test-integrity.sh", () => {
       "a focus on an added line that starts with two plus signs",
       `let n = 0;\n++n && ${m("test.", "only(")}"t", () => {});\n`,
     ],
+    ["a bare skip on this", `test("t", function () {\n  ${m("this.", "skip()")};\n  run();\n});\n`],
+    ["a bare skip on the test context", `test("t", (t) => {\n  ${m("t.", "skip()")};\n});\n`],
+    [
+      "a bare skip with a space before the dot",
+      `test("t", function () {\n  ${m("this .", "skip()")};\n});\n`,
+    ],
+    [
+      "a bare skip with a space before the parentheses",
+      `test("t", function () {\n  ${m("this.", "skip ()")};\n});\n`,
+    ],
+    [
+      "a bare skip whose parentheses start on the next line",
+      `test("t", function () {\n  ${m("this.", "skip")}\n  ();\n});\n`,
+    ],
+    [
+      "a skip option on a test with a body",
+      `test("real", { ${SKIP_TRUE} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option over several lines",
+      `test("real", {\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option with a string reason",
+      `test("real", { ${m("skip", ': "flaky on CI"')} }, () => {\n  run();\n});\n`,
+    ],
+    ["a focus option", `test("real", { ${m("only", ": true")} }, () => {\n  run();\n});\n`],
+    [
+      "a skip option holding a number",
+      `test("real", { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a number after another option",
+      `test("real", { timeout: 5, ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a negated literal",
+      `test("real", { ${m("skip", ": !0")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a focus option holding a number",
+      `test("real", { ${m("only", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a parenthesised literal",
+      `test("real", { ${m("skip", ": (true)")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a number on a test whose name holds a comma and parentheses",
+      `test("parses a, b (c)", { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding null",
+      `test("real", { ${m("skip", ": null")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding NaN in an options object over several lines",
+      `test("real", {\n  ${m("skip", ": NaN")},\n}, () => {\n  run();\n});\n`,
+    ],
+    ["a focus option on an empty test", `test("p", { ${m("only", ": true")} }, () => {});\n`],
+    [
+      "a focus option beside a skip option on an empty test",
+      `test("p", { ${SKIP_TRUE}, ${m("only", ": true")} }, () => {});\n`,
+    ],
+    [
+      "a skip option with a space before the colon",
+      `test("real", { ${m("skip", " : true")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a block comment",
+      `test("real", { /* flaky */ ${SKIP_TRUE} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option with a double-quoted key",
+      `test("real", { ${m('"skip"', ": true")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a focus option with a single-quoted key",
+      `test("real", { ${m("'only'", ": true")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a comment line ending in a period",
+      `test("real", {\n  // Flaky on CI.\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a comment line ending in a call",
+      `test("real", {\n  // Flaky, see retry().\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a comment line ending in a word",
+      `test("real", {\n  // Flaky on CI\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a trailing comment with a quote and a period",
+      `test("real", {\n  timeout: 5, // don't retry.\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a trailing comment with a quote and a call",
+      `test("real", {\n  timeout: 5, // don't call retry()\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a trailing comment with a quote and a word",
+      `test("real", {\n  timeout: 5, // don't retry\n  ${SKIP_TRUE},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option whose body only looks like a placeholder after it",
+      `test("real", { ${SKIP_TRUE} }, () => { run(); }); const f = () => {});\n`,
+    ],
+    [
+      "a skip option whose reason looks like the end of a placeholder",
+      `test("real", { ${m("skip", ': "stop }, () => {})"')} }, () => { run(); });\n`,
+    ],
+    [
+      "a skip option whose body holds an empty callback of its own",
+      `test("real", { ${SKIP_TRUE} }, () => { on({ once: true }, () => {}); });\n`,
+    ],
+    [
+      "a skip option whose body ends in an empty callback",
+      `test("real", { ${SKIP_TRUE} }, () => { run(); [1].map(() => {}); });\n`,
+    ],
   ];
 
   for (const [label, body] of caught) {
@@ -133,6 +254,18 @@ describe("check-test-integrity.sh", () => {
       Buffer.from(`${m("test.", "only(")}"t", () => {}); // `),
       Buffer.from([0xff]),
       Buffer.from("\n"),
+    ]);
+    commitTestFile(dir, "bad.test.ts", body);
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, REJECTED);
+  });
+
+  test("catches a skip option on a line holding a byte that is not valid UTF-8", () => {
+    const body = Buffer.concat([
+      Buffer.from(`test("real", { ${SKIP_TRUE} }, () => { // `),
+      Buffer.from([0xff]),
+      Buffer.from("\n  assert.ok(work());\n});\n"),
     ]);
     commitTestFile(dir, "bad.test.ts", body);
     const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
@@ -243,6 +376,55 @@ describe("check-test-integrity.sh", () => {
       `test("t", (t) => {\n  ${m("t.", "skip(")}"needs Firefox");\n});\n`,
     ],
     ["a conditional skip option", 'test("t", { skip: !process.env.X }, () => {\n  run();\n});\n'],
+    ["a false skip option", 'test("t", { skip: false }, () => {\n  run();\n});\n'],
+    ["a parenthesised condition", 'test("t", { skip: (isCI) }, () => {\n  run();\n});\n'],
+    [
+      "an env-gated empty placeholder",
+      `if (!DATABASE_URL) {\n  test("store (set DATABASE_URL to run)", { ${SKIP_TRUE} }, () => {});\n} else {\n  test("store", () => {\n    run();\n  });\n}\n`,
+    ],
+    [
+      "an empty placeholder with a string reason",
+      `test("p", { ${m("skip", ': "needs DATABASE_URL"')} }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder with a second option",
+      `test("p", { ${m("skip", ": true")}, timeout: 5 }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder after a block comment",
+      `test("p", { /* no database */ ${SKIP_TRUE} }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder with a template-literal reason",
+      `test("p", { ${m("skip", ": `set ", "$", "{V} to run`")} }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder with a reason holding a brace",
+      `test("p", { ${m("skip", ': "needs {X}"')} }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder with a reason holding an apostrophe",
+      `test("p", { ${m("skip", ': "doesn\'t run without a database"')} }, () => {});\n`,
+    ],
+    ["an empty async placeholder", `test("p", { ${SKIP_TRUE} }, async () => {});\n`],
+    ["pagination on one line", "const rows = await db.user.findMany({ skip: 10, take: 5 });\n"],
+    [
+      "pagination over several lines",
+      "const rows = await db.user.findMany({\n  where: { active: true },\n  skip: 10,\n  take: 5,\n});\n",
+    ],
+    [
+      "pagination in a matcher inside a test body",
+      'test("pages", async () => {\n  expect(args).toEqual(expect.objectContaining({ skip: 0, take: 2 }));\n});\n',
+    ],
+    [
+      "pagination in a call nested in a one-line test",
+      'it("a", () => db.find("b", { skip: 0 }));\n',
+    ],
+    ["prose with a word and a colon after a comma", "// two columns, desktop only: 2 per row\n"],
+    [
+      "prose with a quoted word after the colon",
+      "// Non-spec files only: 'findImporters' skips them\n",
+    ],
     ["prose with a word followed by parentheses", "// i.e. only (a, b) survive\n"],
     ["prose with a word followed by a dot", "// not a test bent to fit. next() runs\n"],
     [
@@ -261,6 +443,7 @@ describe("check-test-integrity.sh", () => {
   }
 
   const FOCUSED = `${m("test.", "only(")}"focused", () => {});\n`;
+  const OPTIONED = `test("real", { ${SKIP_TRUE} }, () => {\n  assert.ok(work());\n});\n`;
   const failingStages: Array<[string, string, string, string, RegExp]> = [
     [
       "git diff",
@@ -276,6 +459,20 @@ describe("check-test-integrity.sh", () => {
       `for a in "$@"; do case "$a" in ${m("*fdes", "cribe*")}) exit 2 ;; esac; done`,
       FOCUSED,
       /marker grep failed \(exit 2\)/,
+    ],
+    [
+      "the option-object grep",
+      "grep",
+      'for a in "$@"; do [ "$a" = -avE ] && break; case "$a" in *"]?skip"*) exit 2 ;; esac; done',
+      OPTIONED,
+      /option-object grep failed \(exit 2\)/,
+    ],
+    [
+      "the placeholder grep",
+      "grep",
+      'for a in "$@"; do [ "$a" = -avE ] && exit 2; done',
+      OPTIONED,
+      /placeholder grep failed \(exit 2\)/,
     ],
     [
       "the word-boundary probe",

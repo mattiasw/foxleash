@@ -2,11 +2,14 @@
 # The test suite is a ratchet. Against a base ref (BASE_REF, default origin/main):
 #   1. the number of test files never drops;
 #   2. no focus or skip markers are added: .only and .fixme on any receiver, the x- and
-#      f-prefixed forms, .each-style chains on them, and every .skip( on a receiver chain rooted
-#      at test, describe, it, suite, context, specify or concurrent. A member access may have
-#      whitespace before its dot or be optional (?.), and a call split over lines before a dot
-#      or a parenthesis is joined first. node:test's conditional skip is the
-#      `{ skip: !process.env.X }` option; t.skip() in a test body is not matched.
+#      f-prefixed forms, .each-style chains on them, every .skip( on a receiver chain rooted
+#      at test, describe, it, suite, context, specify or concurrent, and a bare .skip() on any
+#      receiver. node:test's option-object spelling is refused too: an unconditional `skip:` or
+#      `only:` option on a test. A member access may have whitespace before its dot or be
+#      optional (?.), and a call split over lines before a dot or a parenthesis is joined first.
+#      Allowed: the conditional `{ skip: !process.env.X }` option, t.skip("reason") in a test
+#      body, and an empty env-gated placeholder test on one line (a skip option followed by an
+#      empty body that closes the call).
 # BASE_REF=none skips the check (CI uses it for the first push of a branch).
 
 set -e
@@ -116,16 +119,65 @@ RECEIVER_SKIP="(${ROOTS})(${LINK})*${DOT}skip"
 # The backtick must stay inside single quotes, or sh runs it as a command.
 SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))([[:space:]]*[(]|('"$DOT"'[A-Za-z_]+)+[[:space:]]*[(`])'
 
+# The option-object patterns. A key may be quoted or have whitespace before its colon, but it
+# must start the line or follow {, , or a block comment's */, so prose such as "desktop only: 2
+# per row" is not a key. VALUE is true, null, NaN or a string: node:test skips on any value but
+# undefined and false. CALL_VALUE, a number or a negated or parenthesised literal, is refused
+# only in an options object that is the second argument of a test call on the same line, because
+# skip is also a pagination key. ONLY_OPTION goes to the marker grep, so no placeholder exempts a
+# focus. PLACEHOLDER matches a skipped EMPTY test, registered inside an if (!process.env.X)
+# branch: the options object ends at the first } outside a quoted value and is followed directly
+# by an empty () => {}) or async () => {}) body that closes the call.
+# The quote characters are written as printf octal (\047 ' \042 " \140 `) so they survive sh
+# quoting; a complement built from $Q, '[^'"$Q"']', would be a class followed by a literal ].
+# QS is a quoted string, closed by the quote that opened it, so "don't" is one string. NBQ also
+# excludes }, so the placeholder check steps over a quoted value; ARG also excludes what ends a
+# test call's first argument outside a string.
+Q=$(printf '[\047\042\140]')
+QS=$(printf '(\042[^\042]*\042|\047[^\047]*\047|\140[^\140]*\140)')
+NBQ=$(printf '[^}\047\042\140]')
+ARG=$(printf '[^,{}()\047\042\140]')
+# A value that is never a condition: a keyword literal, a number or a string.
+LITERAL='((true|false|null|undefined|NaN|Infinity)\b|[0-9]|'"$Q"')'
+BARE_SKIP="${DOT}skip[[:space:]]*[(][[:space:]]*[)]"
+KEY="(^|[{,]|[*]/)[[:space:]]*${Q}?"
+VALUE="${Q}?[[:space:]]*:[[:space:]]*((true|null|NaN)\b|${Q})"
+CALL_KEY="\b(test|it|describe|suite|context|specify)[[:space:]]*[(](${ARG}|${QS})*,[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
+CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([0-9]|[!(][[:space:]!(]*${LITERAL})"
+SKIP_OPTION="${KEY}skip${VALUE}|${CALL_KEY}skip${CALL_VALUE}"
+ONLY_OPTION="${KEY}only${VALUE}|${CALL_KEY}only${CALL_VALUE}"
+PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${QS})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
+
 # -a: a line holding a byte that is not valid UTF-8 is still matched as text.
 MARKER_STATUS=0
-BAD=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_PATTERN") || MARKER_STATUS=$?
+BAD=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION") || MARKER_STATUS=$?
 if [ "$MARKER_STATUS" -gt 1 ]; then
   echo "check-test-integrity: the marker grep failed (exit $MARKER_STATUS); gate 2 cannot judge." >&2
   exit 1
 fi
-if [ -n "$BAD" ]; then
+
+OPTION_STATUS=0
+OPTION_LINES=$(printf '%s\n' "$JOINED" | grep -aE "$SKIP_OPTION") || OPTION_STATUS=$?
+if [ "$OPTION_STATUS" -gt 1 ]; then
+  echo "check-test-integrity: the option-object grep failed (exit $OPTION_STATUS); gate 2 cannot judge." >&2
+  exit 1
+fi
+
+BAD_OPTION=""
+if [ -n "$OPTION_LINES" ]; then
+  PLACEHOLDER_STATUS=0
+  BAD_OPTION=$(printf '%s\n' "$OPTION_LINES" | grep -avE "$PLACEHOLDER") || PLACEHOLDER_STATUS=$?
+  if [ "$PLACEHOLDER_STATUS" -gt 1 ]; then
+    echo "check-test-integrity: the placeholder grep failed (exit $PLACEHOLDER_STATUS); gate 2 cannot judge." >&2
+    exit 1
+  fi
+fi
+
+if [ -n "$BAD" ] || [ -n "$BAD_OPTION" ]; then
   echo "check-test-integrity: focus or skip markers added:" >&2
-  printf '%s\n' "$BAD" >&2
+  [ -z "$BAD" ] || printf '%s\n' "$BAD" >&2
+  [ -z "$BAD_OPTION" ] || printf '%s\n' "$BAD_OPTION" >&2
+  echo "check-test-integrity: allowed: { skip: !process.env.X }, t.skip(\"reason\"), an empty env-gated placeholder test on one line." >&2
   exit 1
 fi
 
