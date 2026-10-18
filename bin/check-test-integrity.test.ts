@@ -273,6 +273,50 @@ describe("check-test-integrity.sh", () => {
     assert.match(out, REJECTED);
   });
 
+  const FOCUS_LINE = `${m("test.", "only(")}"t", () => {});`;
+  const diffBypasses: Array<
+    [string, { setup?: (repo: string) => void; env?: Record<string, string>; body?: Uint8Array }]
+  > = [
+    [
+      "a committed gitattributes file marks test files -diff",
+      { setup: (repo) => writeAttributes(repo, "*.test.ts -diff") },
+    ],
+    [
+      "the added line holds a NUL byte",
+      {
+        body: Buffer.concat([
+          Buffer.from(`${FOCUS_LINE} // `),
+          Buffer.from([0x00]),
+          Buffer.from("\n"),
+        ]),
+      },
+    ],
+    ["a diff driver is marked binary", { setup: (repo) => useDiffDriver(repo, "binary") }],
+    [
+      "diff.external is configured",
+      { setup: (repo) => git(repo, "config", "diff.external", "true") },
+    ],
+    ["GIT_EXTERNAL_DIFF is set", { env: { GIT_EXTERNAL_DIFF: "true" } }],
+    ["a diff driver has a command", { setup: (repo) => useDiffDriver(repo, "command") }],
+    ["a diff driver has a textconv", { setup: (repo) => useDiffDriver(repo, "textconv") }],
+    ["GIT_LITERAL_PATHSPECS is set", { env: { GIT_LITERAL_PATHSPECS: "1" } }],
+    ["GIT_NOGLOB_PATHSPECS is set", { env: { GIT_NOGLOB_PATHSPECS: "1" } }],
+    ["GIT_GLOB_PATHSPECS is set", { env: { GIT_GLOB_PATHSPECS: "1" } }],
+  ];
+
+  for (const [label, { setup, env, body }] of diffBypasses) {
+    test(`catches a focus when ${label}`, () => {
+      setup?.(dir);
+      // In a subdirectory: under glob pathspec magic, * does not match a slash.
+      mkdirSync(path.join(dir, "src"));
+      commitTestFile(dir, "src/bad.test.ts", body ?? `${FOCUS_LINE}\n`);
+      const { status, out } = runGuard(dir, "base", env);
+      assert.equal(status, 1, out);
+      assert.match(out, REJECTED);
+      assert.doesNotMatch(out, PASSED);
+    });
+  }
+
   const SPLIT_BEFORE = 'test\n  .todo("t", () => {\n    run();\n  });\n';
   const SPLIT_AFTER = `test\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`;
 
@@ -539,6 +583,18 @@ function makeRepo(dir: string): void {
 function commitTestFile(dir: string, name: string, content: string | Uint8Array): void {
   writeFileSync(path.join(dir, name), content);
   commitAll(dir, `add ${name}`);
+}
+
+// Committed with the test file, which commitAll stages with the rest of the tree.
+function writeAttributes(dir: string, line: string): void {
+  writeFileSync(path.join(dir, ".gitattributes"), `${line}\n`);
+}
+
+// A diff that honours the driver hides the added lines: as a command or textconv, `true` prints
+// nothing; as binary, git prints only that the files differ.
+function useDiffDriver(dir: string, setting: "binary" | "command" | "textconv"): void {
+  writeAttributes(dir, "*.test.ts diff=hide");
+  git(dir, "config", `diff.hide.${setting}`, "true");
 }
 
 function commitChange(dir: string, name: string, before: string, after: string): void {

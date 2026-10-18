@@ -44,7 +44,10 @@ fi
 
 # The join pass reads context lines, so their number is pinned; GIT_DIFF_OPTS overrides even
 # --unified. The '>' indicator keeps an added line starting with '++' apart from the '+++' header.
-DIFF_OUT=$(unset GIT_DIFF_OPTS; git diff --no-color --unified=3 --output-indicator-new='>' "$RESOLVED" HEAD -- '*.test.ts') || {
+# Gitattributes, binary detection, an external diff and textconv drivers must not change what the
+# scan sees, so the diff is always plain text of the real file contents. The pathspec variables
+# would make '*.test.ts' match nothing, or only files at the top level.
+DIFF_OUT=$(unset GIT_DIFF_OPTS GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS; git diff --no-color --text --no-ext-diff --no-textconv --unified=3 --output-indicator-new='>' "$RESOLVED" HEAD -- '*.test.ts') || {
   echo "check-test-integrity: git diff against $BASE failed; gate 2 cannot see the diff." >&2
   exit 1
 }
