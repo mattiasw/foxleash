@@ -17,3 +17,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   list, open and navigate the tabs in its Foxhand tab group in your Firefox.
 - `npm run setup` connects Firefox to Foxhand and registers Foxhand with Claude Code;
   `npm run teardown` removes both.
+- `npm run doctor` checks your setup, the Foxhand host of every running Firefox and the
+  extension, and says what to do about each problem it finds.

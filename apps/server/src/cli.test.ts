@@ -12,7 +12,7 @@ import {
 } from "./cli.ts";
 
 describe("runCli usage", () => {
-  for (const args of [[], ["nope"], ["constructor"], ["__proto__"], ["toString"], ["doctor"]]) {
+  for (const args of [[], ["nope"], ["constructor"], ["__proto__"], ["toString"]]) {
     it(`prints usage on stderr and returns 2 for ${JSON.stringify(args)}`, async () => {
       const { deps, stdout, stderr, calls } = setup();
       assert.equal(await runCli(args, deps), 2);
@@ -117,6 +117,22 @@ describe("runCli subcommands", () => {
     });
   }
 
+  it("runs doctor without arguments", async () => {
+    const { deps, calls } = setup();
+    assert.equal(await runCli(["doctor"], deps), 7);
+    assert.deepEqual(calls, [{ name: "doctor", options: { noClaude: false }, deps }]);
+  });
+
+  for (const extra of ["extra", "--no-claude"]) {
+    it(`refuses doctor ${extra} with usage and 2`, async () => {
+      const { deps, stdout, stderr, calls } = setup();
+      assert.equal(await runCli(["doctor", extra], deps), 2);
+      assert.equal(stderr(), USAGE);
+      assert.equal(stdout(), "");
+      assert.deepEqual(calls, []);
+    });
+  }
+
   it("lets a command's rejection propagate", async () => {
     const { deps } = setup({
       mcp: async () => {
@@ -144,6 +160,10 @@ describe("COMMANDS", () => {
   it("registers the mcp command", () => {
     assert.equal(typeof COMMANDS.get("mcp"), "function");
   });
+
+  it("registers the doctor command", () => {
+    assert.equal(typeof COMMANDS.get("doctor"), "function");
+  });
 });
 
 interface Call {
@@ -158,7 +178,7 @@ function setup(overrides: Record<string, Command> = {}) {
   const writes: string[] = [];
   const calls: Call[] = [];
   const commands = new Map<string, Command>();
-  for (const name of ["mcp", "host", "install", "uninstall"]) {
+  for (const name of ["mcp", "host", "install", "uninstall", "doctor"]) {
     commands.set(name, async (options, deps) => {
       calls.push({ name, options, deps });
       return 7;

@@ -19,9 +19,12 @@ import type { Log } from "./log.ts";
 import { listSockets, SocketDirError, type SocketEntry } from "./socket-dir.ts";
 
 export class BridgeError extends Error {
-  constructor(message: string) {
+  readonly code: string | undefined;
+
+  constructor(message: string, code?: string) {
     super(message);
     this.name = "BridgeError";
+    this.code = code;
   }
 }
 
@@ -338,10 +341,12 @@ export function connectToHost(
 
   function onError(error: NodeJS.ErrnoException): void {
     // After connect, an error is the peer going away (EPIPE, ECONNRESET on the queued hello).
+    const code = connected ? undefined : codeOf(error);
     fail(
       connected
         ? closedEarly(socketPath)
-        : `Cannot connect to the Foxhand native host at ${socketPath}: ${codeOf(error)}.`,
+        : `Cannot connect to the Foxhand native host at ${socketPath}: ${code}.`,
+      code,
     );
   }
 
@@ -350,10 +355,10 @@ export function connectToHost(
   }
 
   // Settling twice is harmless: a promise settles once, and destroy() is idempotent.
-  function fail(message: string): void {
+  function fail(message: string, code?: string): void {
     clearTimeout(timer);
     socket.destroy();
-    reject(new BridgeError(message));
+    reject(new BridgeError(message, code));
   }
 }
 

@@ -1,9 +1,13 @@
+import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
+import { doctor } from "./doctor.ts";
 import { hostCommand } from "./host.ts";
 import { install, uninstall } from "./install.ts";
 import { mcpCommand } from "./mcp.ts";
 import { runCommand } from "./run-command.ts";
+import { resolveSocketDir } from "./socket-dir.ts";
+import { SERVER_VERSION } from "./version.ts";
 
 export interface CommandOptions {
   noClaude: boolean;
@@ -17,6 +21,8 @@ export interface CliDeps {
   commands: ReadonlyMap<string, Command>;
 }
 
+const MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
+
 export const COMMANDS = new Map<string, Command>();
 COMMANDS.set("host", () => hostCommand(process));
 COMMANDS.set("mcp", () => mcpCommand(process));
@@ -24,7 +30,7 @@ COMMANDS.set("install", (options, deps) =>
   install({
     home: homedir(),
     node: process.execPath,
-    main: fileURLToPath(new URL("./main.ts", import.meta.url)),
+    main: MAIN,
     claude: !options.noClaude,
     run: runCommand,
     out: deps.stdout,
@@ -33,6 +39,26 @@ COMMANDS.set("install", (options, deps) =>
 COMMANDS.set("uninstall", (options, deps) =>
   uninstall({ home: homedir(), claude: !options.noClaude, run: runCommand, out: deps.stdout }),
 );
+COMMANDS.set("doctor", (_options, deps) => {
+  const uid = process.getuid?.();
+  if (uid === undefined) {
+    deps.stdout.write("FAIL platform: Foxhand runs on Linux only\n");
+    return Promise.resolve(1);
+  }
+  const { dir, skipped } = resolveSocketDir(process.env, uid);
+  return doctor({
+    home: homedir(),
+    socketDir: dir,
+    skipped,
+    uid,
+    version: SERVER_VERSION,
+    node: process.execPath,
+    main: MAIN,
+    run: runCommand,
+    spawn,
+    out: deps.stdout,
+  });
+});
 
 export const USAGE = `Usage: foxhand <command>
 

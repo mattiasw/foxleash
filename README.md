@@ -52,6 +52,9 @@ Then check that every part is connected:
 npm run doctor
 ```
 
+It lists the Foxhand host of every running Firefox and whether the extension has access to
+all websites.
+
 To update: `git pull && npm ci && npm run setup`, and confirm in Firefox if the extension
 changed. To remove: `npm run teardown`, then remove the extension in Firefox.
 

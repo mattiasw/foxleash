@@ -224,6 +224,48 @@ describe("Bridge, finding the host", () => {
 });
 
 describe("Bridge, the handshake", () => {
+  it("gives the errno code of a refused connect", LIMIT, async () => {
+    const dir = privateDir();
+    const stale = await staleSocket(dir, 101);
+    const error = await caught(connectToHost(stale, { version: VERSION, log: () => {} }));
+    assertBridgeError(
+      error,
+      `Cannot connect to the Foxhand native host at ${stale}: ECONNREFUSED.`,
+    );
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.code, "ECONNREFUSED");
+  });
+
+  it("gives no errno code for a socket error once connected", LIMIT, async () => {
+    const dir = privateDir();
+    const peerPath = path.join(dir, "103.sock");
+    // Closing with the hello still unread makes the client's next read fail with ECONNRESET.
+    const server = net.createServer({ pauseOnConnect: true }, (socket) => {
+      setTimeout(() => socket.destroy(), 50);
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(peerPath, resolve));
+    const error = await caught(connectToHost(peerPath, { version: VERSION, log: () => {} }));
+    assertBridgeError(
+      error,
+      `The Foxhand native host at ${peerPath} closed the connection before answering.`,
+    );
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.code, undefined);
+  });
+
+  it("gives no errno code for a failure once connected", LIMIT, async () => {
+    const dir = privateDir();
+    const peer = await rawPeer(dir, 102, (socket) => writeFrame(socket, {}));
+    const error = await caught(connectToHost(peer.path, { version: VERSION, log: () => {} }));
+    assertBridgeError(
+      error,
+      `The Foxhand native host at ${peer.path} did not answer with a welcome.`,
+    );
+    assert.ok(error instanceof BridgeError);
+    assert.equal(error.code, undefined);
+  });
+
   it("hands over the connection with none of its own listeners or timers", LIMIT, async () => {
     const dir = privateDir();
     const host = await fakeHost({ dir, pid: 97, respond: silence });

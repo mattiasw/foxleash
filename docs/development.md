@@ -89,6 +89,17 @@ host only on the first tool call, and exits when stdin ends. An MCP client built
 private socket directory: the SDK's default environment leaves `XDG_RUNTIME_DIR` out, and the
 server then falls back to `/run/user/<uid>/foxhand`, the running user's real Firefox.
 
+`npm run doctor` (the `doctor` subcommand) changes nothing in your setup. It reads the native
+manifest and checks its name, type, allowed extension and launcher path. It runs the launcher
+the way Firefox does, but with only `HOME`, `PATH=/usr/bin:/bin` and a private temporary
+`XDG_RUNTIME_DIR` in its environment, so the host it starts never joins the real socket
+directory: it sends one extension hello, expects a welcome, ends stdin and expects a clean
+exit, then removes the temporary directory. It runs `claude mcp get foxhand` and compares the
+registered command with this checkout. It checks the socket directory with the same rules as
+the host, and makes one `mcp` hello and welcome round trip over each socket of a running
+process, reading the extension's state from the welcome. The extension reports its access to
+all websites when it connects to the host, so that line shows the state as of that connection.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development
