@@ -251,6 +251,134 @@ describe("connection welcome", { timeout: 10000 }, () => {
   });
 });
 
+describe("connection permission changes", { timeout: 10000 }, () => {
+  it("reports a revoked and a re-granted grant on the open port", async (t) => {
+    const { fake, open } = setup(t);
+    const host = await open();
+    fake.setAllUrls(false);
+    await flush();
+    fake.setAllUrls(true);
+    await flush();
+    assert.deepEqual(host.posted, [hello(true), hello(false), hello(true)]);
+    assert.equal(fake.ports.length, 1);
+  });
+
+  it("reports nothing and opens no port while no port is open", async (t) => {
+    const { fake, timers, open, warnings } = setup(t);
+    fake.setAllUrls(false);
+    await flush();
+    assert.equal(fake.ports.length, 0);
+    assert.equal(timers.pending(), 0);
+    const first = await open();
+    first.drop();
+    fake.setAllUrls(true);
+    await flush();
+    assert.equal(fake.ports.length, 1);
+    assert.equal(first.posted.length, 1);
+    assert.equal(timers.pending(), 1);
+    assert.deepEqual(warnings(), [{ event: "disconnected", error: null }]);
+    timers.advance(500);
+    await flush();
+    assert.deepEqual(port(fake.ports, 1).posted, [hello(true)]);
+    port(fake.ports, 1).drop();
+    fake.setAllUrls(false);
+    timers.advance(999);
+    assert.equal(fake.ports.length, 2);
+    timers.advance(1);
+    assert.equal(fake.ports.length, 3);
+  });
+
+  it("posts hellos in the order their checks started", async (t) => {
+    const { fake, start } = setup(t);
+    const checks: PromiseWithResolvers<boolean>[] = [];
+    fake.browser.permissions.contains = () => {
+      const check = Promise.withResolvers<boolean>();
+      checks.push(check);
+      return check.promise;
+    };
+    start();
+    await flush();
+    fake.setAllUrls(false);
+    await flush();
+    checks[1]?.resolve(false);
+    await flush();
+    checks[0]?.resolve(true);
+    await flush();
+    checks[1]?.resolve(false);
+    await flush();
+    assert.deepEqual(
+      port(fake.ports, 0).posted.map((posted) => (posted as { allUrls?: boolean }).allUrls),
+      [true, false],
+    );
+    assert.equal(fake.ports.length, 1);
+  });
+
+  it("posts nothing on a port that closed during the re-check", async (t) => {
+    const { fake, open } = setup(t);
+    const host = await open();
+    const answer = Promise.withResolvers<boolean>();
+    fake.browser.permissions.contains = () => answer.promise;
+    fake.setAllUrls(false);
+    await flush();
+    host.drop();
+    answer.resolve(false);
+    await flush();
+    assert.equal(host.posted.length, 1);
+  });
+
+  it("posts the next port's first hello while an old port's check never answers", async (t) => {
+    const { fake, timers, start } = setup(t);
+    let calls = 0;
+    fake.browser.permissions.contains = () => {
+      calls += 1;
+      return calls === 1 ? new Promise<boolean>(() => {}) : Promise.resolve(fake.allUrls);
+    };
+    start();
+    await flush();
+    port(fake.ports, 0).drop();
+    timers.advance(500);
+    await flush();
+    assert.deepEqual(port(fake.ports, 1).posted, [hello(true)]);
+  });
+
+  it("keeps reporting after a hello Firefox refuses to post", async (t) => {
+    const { fake, open, warnings } = setup(t);
+    const host = await open();
+    const post = host.postMessage;
+    host.postMessage = () => {
+      host.postMessage = post;
+      throw new Error("Attempt to postMessage on disconnected port");
+    };
+    fake.setAllUrls(false);
+    await flush();
+    fake.setAllUrls(true);
+    await flush();
+    assert.deepEqual(host.posted, [hello(true), hello(true)]);
+    assert.deepEqual(warnings(), [
+      { event: "error", error: "Error: Attempt to postMessage on disconnected port" },
+    ]);
+  });
+
+  it("sends a repeated hello without allUrls when the re-check fails", async (t) => {
+    const { fake, open, warnings } = setup(t);
+    const host = await open();
+    fake.browser.permissions.contains = async () => {
+      throw new Error("permissions unavailable");
+    };
+    fake.setAllUrls(false);
+    await flush();
+    assert.deepEqual(host.posted[1], {
+      type: "hello",
+      role: "extension",
+      protocol: PROTOCOL_VERSION,
+      version: "0.1.0",
+    });
+    assert.deepEqual(warnings(), [
+      { event: "permission_check_failed", error: "Error: permissions unavailable" },
+    ]);
+  });
+});
+
 describe("connection reconnect", { timeout: 10000 }, () => {
   it("logs the disconnect error and reconnects after a backoff that doubles up to 10 s", async (t) => {
     const { fake, timers, start, warnings } = setup(t);
@@ -367,4 +495,14 @@ function port(ports: FakePort[], index: number): FakePort {
   const found = ports[index];
   assert.ok(found, `no port ${index}`);
   return found;
+}
+
+function hello(allUrls: boolean) {
+  return {
+    type: "hello",
+    role: "extension",
+    protocol: PROTOCOL_VERSION,
+    version: "0.1.0",
+    allUrls,
+  };
 }

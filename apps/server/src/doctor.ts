@@ -571,14 +571,10 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     report.line(
       "FAIL",
       "extension permissions",
-      "access to all websites was not granted when the extension connected; open about:addons, Foxhand, Permissions, allow it, and restart Firefox",
+      "access to all websites is not granted; open about:addons, Foxhand, Permissions, and allow it",
     );
   } else if (allUrls === true) {
-    report.line(
-      "ok",
-      "extension permissions",
-      "access to all websites granted (as of the extension's connection)",
-    );
+    report.line("ok", "extension permissions", "access to all websites granted");
   } else {
     report.line("warn", "extension permissions", "not reported by this extension version");
   }

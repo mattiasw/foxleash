@@ -32,8 +32,13 @@ export function createConnection<Handle>({
   timers,
 }: ConnectionDeps<Handle>): Connection {
   let port: Port | undefined;
+  /** The hellos queued on `port`; each one is posted after the one before it. */
+  let hellos: Promise<void> = Promise.resolve();
   let reconnectTimer: Handle | undefined;
   let delay = FIRST_RECONNECT_DELAY_MS;
+
+  browser.permissions.onAdded.addListener(permissionsChanged);
+  browser.permissions.onRemoved.addListener(permissionsChanged);
 
   return { start };
 
@@ -46,19 +51,11 @@ export function createConnection<Handle>({
     const current = openPort();
     if (current === undefined) return;
     port = current;
+    hellos = Promise.resolve();
     // Listeners first, so nothing that arrives during the permission check is lost.
     current.onMessage.addListener((message) => receive(current, message));
     current.onDisconnect.addListener(() => disconnected(current));
-    const allUrls = await hasAllUrls();
-    if (port !== current) return;
-    const hello: HelloMessage = {
-      type: "hello",
-      role: "extension",
-      protocol: PROTOCOL_VERSION,
-      version: browser.runtime.getManifest().version,
-      ...(allUrls === undefined ? {} : { allUrls }),
-    };
-    current.postMessage(hello);
+    await queueHello(current);
   }
 
   function openPort(): Port | undefined {
@@ -69,6 +66,28 @@ export function createConnection<Handle>({
       scheduleReconnect();
       return undefined;
     }
+  }
+
+  function permissionsChanged(): void {
+    if (port !== undefined) queueHello(port);
+  }
+
+  function queueHello(current: Port): Promise<void> {
+    hellos = hellos.then(() => postHello(current)).catch(logError);
+    return hellos;
+  }
+
+  async function postHello(current: Port): Promise<void> {
+    const allUrls = await hasAllUrls();
+    if (port !== current) return;
+    const hello: HelloMessage = {
+      type: "hello",
+      role: "extension",
+      protocol: PROTOCOL_VERSION,
+      version: browser.runtime.getManifest().version,
+      ...(allUrls === undefined ? {} : { allUrls }),
+    };
+    current.postMessage(hello);
   }
 
   /** Undefined when Firefox could not answer; the hello then leaves the field out. */

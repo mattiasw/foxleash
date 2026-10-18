@@ -98,7 +98,8 @@ exit, then removes the temporary directory. It runs `claude mcp get foxhand` and
 registered command with this checkout. It checks the socket directory with the same rules as
 the host, and makes one `mcp` hello and welcome round trip over each socket of a running
 process, reading the extension's state from the welcome. The extension reports its access to
-all websites when it connects to the host, so that line shows the state as of that connection.
+all websites when it connects to the host and again whenever the user grants or revokes it, so
+that line shows the current state.
 
 ## Dependency updates
 

@@ -8,6 +8,8 @@ export interface BrowserApi {
   };
   permissions: {
     contains(permissions: { origins: string[] }): Promise<boolean>;
+    onAdded: BrowserEvent<(permissions: Permissions) => void>;
+    onRemoved: BrowserEvent<(permissions: Permissions) => void>;
   };
   tabs: {
     query(queryInfo: { groupId?: number }): Promise<Tab[]>;
@@ -36,6 +38,12 @@ export interface BrowserApi {
 export interface BrowserEvent<Listener> {
   addListener(listener: Listener): void;
   removeListener(listener: Listener): void;
+}
+
+/** Firefox's `permissions.Permissions`. */
+export interface Permissions {
+  permissions?: string[];
+  origins?: string[];
 }
 
 export interface Port {

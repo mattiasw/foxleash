@@ -69,8 +69,7 @@ const REAL_LIMIT = { timeout: 20_000 };
 const SHORT = { welcomeMs: 300, exitMs: 300, killMs: 300 };
 const SETUP = "run npm run setup";
 const DEAD_PID = 2147483647;
-const PERMISSION_OK =
-  "ok extension permissions: access to all websites granted (as of the extension's connection)";
+const PERMISSION_OK = "ok extension permissions: access to all websites granted";
 const hosts: FakeHost[] = [];
 const servers: net.Server[] = [];
 let counter = 0;
@@ -888,7 +887,7 @@ describe("doctor, the extension", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["extension", "extension permissions"]), [
       extensionOk(),
-      "FAIL extension permissions: access to all websites was not granted when the extension connected; open about:addons, Foxhand, Permissions, allow it, and restart Firefox",
+      "FAIL extension permissions: access to all websites is not granted; open about:addons, Foxhand, Permissions, and allow it",
     ]);
     assert.equal(result.code, 1);
   });

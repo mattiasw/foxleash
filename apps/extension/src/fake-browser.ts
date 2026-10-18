@@ -1,6 +1,7 @@
 import type {
   BrowserApi,
   BrowserEvent,
+  Permissions,
   Port,
   Tab,
   TabChangeInfo,
@@ -21,6 +22,8 @@ export interface FakeBrowser {
   /** What `permissions.contains({ origins: ["<all_urls>"] })` answers. */
   allUrls: boolean;
   version: string;
+  /** The user granting or revoking access to all websites in about:addons. */
+  setAllUrls(granted: boolean): void;
   openTab(properties?: Partial<Omit<FakeTab, "id" | "history" | "index">>): FakeTab;
   /** The user closing a group: the group and its tabs go away. */
   closeGroup(groupId: number): void;
@@ -54,6 +57,8 @@ export function createFakeBrowser(): FakeBrowser {
     [];
   let nextTabId = 1;
   let nextGroupId = 1;
+  const onAdded = createEvent<(permissions: Permissions) => void>();
+  const onRemoved = createEvent<(permissions: Permissions) => void>();
 
   const browser: BrowserApi = {
     runtime: {
@@ -64,6 +69,8 @@ export function createFakeBrowser(): FakeBrowser {
     },
     permissions: {
       contains: async () => fake.allUrls,
+      onAdded,
+      onRemoved,
     },
     tabs: {
       query: async ({ groupId }) =>
@@ -114,6 +121,13 @@ export function createFakeBrowser(): FakeBrowser {
     currentWindowId: 1,
     allUrls: true,
     version: "0.1.0",
+    setAllUrls: (granted) => {
+      fake.allUrls = granted;
+      const changed = granted ? onAdded : onRemoved;
+      for (const listener of [...changed.listeners]) {
+        listener({ permissions: [], origins: ["<all_urls>"] });
+      }
+    },
     openTab: (properties = {}) => {
       const url = properties.url ?? "about:blank";
       const tab: FakeTab = {
