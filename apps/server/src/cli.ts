@@ -1,3 +1,5 @@
+import { hostCommand } from "./host.ts";
+
 export interface CommandOptions {
   noClaude: boolean;
 }
@@ -11,6 +13,7 @@ export interface CliDeps {
 }
 
 export const COMMANDS = new Map<string, Command>();
+COMMANDS.set("host", () => hostCommand(process));
 
 export const USAGE = `Usage: foxhand <command>
 

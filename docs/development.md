@@ -68,6 +68,12 @@ client starts the server without `XDG_RUNTIME_DIR`, as long as Firefox's `XDG_RU
 to the same private temporary directory for both processes, so they meet in a socket directory
 of their own.
 
+To run the host by hand, start `node apps/server/src/main.ts host`. It reads native messaging
+frames (a 4-byte little-endian length, then UTF-8 JSON) on stdin and writes them on stdout, and
+logs to stderr. It exits when stdin ends or on SIGTERM, SIGINT or SIGHUP, and removes its socket
+file. When Firefox starts it, its stderr shows up in Firefox's Browser Console. The socket file
+is readable and writable by you only.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development

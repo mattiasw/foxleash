@@ -11,3 +11,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Firefox extension opens and navigates tabs for your agent, keeping each session's tabs
   in its own orange "Foxhand" tab group.
+- Firefox can now start the Foxhand native host, which relays your agent's requests to the
+  extension.

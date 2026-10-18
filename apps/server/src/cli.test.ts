@@ -136,6 +136,12 @@ describe("realDeps", () => {
   });
 });
 
+describe("COMMANDS", () => {
+  it("registers the host command", () => {
+    assert.equal(typeof COMMANDS.get("host"), "function");
+  });
+});
+
 interface Call {
   name: string;
   options: CommandOptions;
