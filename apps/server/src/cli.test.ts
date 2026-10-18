@@ -140,6 +140,10 @@ describe("COMMANDS", () => {
   it("registers the host command", () => {
     assert.equal(typeof COMMANDS.get("host"), "function");
   });
+
+  it("registers the mcp command", () => {
+    assert.equal(typeof COMMANDS.get("mcp"), "function");
+  });
 });
 
 interface Call {

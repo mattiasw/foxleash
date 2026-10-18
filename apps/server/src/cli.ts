@@ -1,4 +1,5 @@
 import { hostCommand } from "./host.ts";
+import { mcpCommand } from "./mcp.ts";
 
 export interface CommandOptions {
   noClaude: boolean;
@@ -14,6 +15,7 @@ export interface CliDeps {
 
 export const COMMANDS = new Map<string, Command>();
 COMMANDS.set("host", () => hostCommand(process));
+COMMANDS.set("mcp", () => mcpCommand(process));
 
 export const USAGE = `Usage: foxhand <command>
 

@@ -74,6 +74,13 @@ logs to stderr. It exits when stdin ends or on SIGTERM, SIGINT or SIGHUP, and re
 file. When Firefox starts it, its stderr shows up in Firefox's Browser Console. The socket file
 is readable and writable by you only.
 
+To run the MCP server by hand, start `node apps/server/src/main.ts mcp`. It speaks MCP
+(newline-delimited JSON-RPC) on stdin and stdout and logs to stderr. It connects to the newest
+host only on the first tool call, and exits when stdin ends. An MCP client built on the SDK's
+`StdioClientTransport` must pass `XDG_RUNTIME_DIR` (and `HOME`) in its `env` when it wants a
+private socket directory: the SDK's default environment leaves `XDG_RUNTIME_DIR` out, and the
+server then falls back to `/run/user/<uid>/foxhand`, the running user's real Firefox.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development
