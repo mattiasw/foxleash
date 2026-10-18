@@ -1,0 +1,1575 @@
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { childEnv } from "./build-amo.ts";
+
+export type Level = "INFO" | "WARNING" | "FAIL";
+export type Finding = { level: Level; text: string };
+
+/** Every side effect of the checks; file paths are relative to `root` (absolute ones as is). */
+export type Env = {
+  root: string;
+  readFile(file: string): string;
+  /** A regular file is there. */
+  exists(file: string): boolean;
+  readdir(dir: string): string[];
+  /** Stdout with one trailing newline removed; anything but exit status 0 throws `CommandError`. */
+  sh(command: string, args: readonly string[]): string;
+  /** Stdout untouched, for content that is hashed or parsed byte for byte. */
+  shBytes(command: string, args: readonly string[]): Buffer;
+  /** The local date as YYYY-MM-DD. */
+  today(): string;
+};
+
+export type Io = { out(line: string): void; err(line: string): void };
+export type Bump = "patch" | "minor" | "major";
+export type Command =
+  | { name: "changelog" }
+  | { name: "pre-roll"; bump: Bump | undefined }
+  | { name: "post-roll"; version: string }
+  | { name: "post-bump"; version: string }
+  | { name: "pre-push" }
+  | { name: "artifacts"; version: string; unsigned: string | undefined };
+export type Usage = { usage: string };
+export type CheckResult = Usage | { findings: Finding[] };
+
+export type Entry = { line: number; text: string };
+export type ChangeType = { name: string; line: number; entries: Entry[] };
+export type Section = {
+  line: number;
+  header: string;
+  version: string | null;
+  date: string | null;
+  types: ChangeType[];
+  body: string;
+};
+export type Changelog = { preamble: string; sections: Section[]; problems: string[] };
+type ValidChangelog = { preamble: string; unreleased: Section; released: Section[] };
+type Versions = { version: string | undefined; workspaces: string[] | undefined };
+type Archive = { names: string[]; files: string[]; skipped: Set<string> };
+type Run = {
+  id: number;
+  event: string;
+  status: string;
+  conclusion: string | null;
+  started: number;
+};
+
+const SUBCOMMANDS = ["changelog", "pre-roll", "post-roll", "post-bump", "pre-push", "artifacts"];
+const BUMPS: readonly string[] = ["patch", "minor", "major"];
+const CHANGE_TYPES = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
+// Semver 2.0.0 item 2: no leading zeros, so string equality and git's version sort agree.
+const VERSION_CORE = "(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)\\.(?:0|[1-9]\\d*)";
+const VERSION = new RegExp(`^${VERSION_CORE}$`);
+const TAG = new RegExp(`^v${VERSION_CORE}$`);
+const RELEASE_HEADER = new RegExp(`^## \\[(${VERSION_CORE})\\] - (\\d{4})-(\\d{2})-(\\d{2})$`);
+const UNRELEASED_HEADER = "## [Unreleased]";
+// CommonMark: up to three spaces of indentation still open a block; a run of = or - makes the
+// line above it a heading.
+const PREAMBLE_BLOCK = /^ {0,3}(?:#{2,6}(?:[ \t]|$)|```|~~~|(?:=+|-+)[ \t]*$)/;
+const INDENTED_HEADING = /^#{1,6}(?:[ \t]|$)/;
+const WORKSPACE = /^[A-Za-z0-9_][A-Za-z0-9._-]*(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)*(?:\/\*)?$/;
+const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
+const SLUG_URL =
+  /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?$/;
+const SLUG_PART = /^[\w.-]+$/;
+const GH_WORD = /^[a-z_]+$/;
+const ENTRY_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
+// `META-INF/../x` would otherwise escape the comparison as a signature file.
+const DOT_OR_EMPTY_SEGMENT = /(?:^|\/)\.\.?(?:\/|$)|\/\//;
+const ARCHIVE_WILDCARD = /[*?[\\]/;
+const BREAKING = /breaking[\s-]+changes?/gi;
+const NEGATION = /(?:\bno|\bnot a|\bnon-?)\s*$/i;
+const ORIGIN_MAIN = "refs/remotes/origin/main";
+const CI_WORKFLOW = ".github/workflows/ci.yml";
+const SIGNATURE_FILES = ["META-INF/mozilla.rsa", "META-INF/mozilla.sf", "META-INF/manifest.mf"];
+const COMMAND_TIMEOUT_MS = 120_000;
+
+const USAGE = [
+  "usage: npm run check:release -- <subcommand>",
+  "  changelog                                CHANGELOG.md has the Keep a Changelog shape",
+  "  pre-roll [--bump=patch|minor|major]      main is synced, clean and green; the next version",
+  "  post-roll <version>                      the Unreleased entries moved to <version>",
+  "  post-bump <version>                      every version field is <version>",
+  "  pre-push                                 the release commits, the tag and the artifacts",
+  "  artifacts <version> [--unsigned <path>]  the signed XPI holds the unsigned XPI's files",
+  "exit status: 0 ok, 1 a check failed, 2 usage error, 3 a warning needs confirmation",
+];
+
+/** Parses the arguments, runs one subcommand and prints its findings; returns the exit status. */
+export function runCli(argv: readonly string[], env: Env, io: Io): number {
+  const command = parseArgs(argv);
+  if ("usage" in command) return usageError(command.usage, io);
+  const result = runCommand(command, env);
+  if ("usage" in result) return usageError(result.usage, io);
+  for (const finding of result.findings) {
+    io.out(`${finding.level}: ${escapeControls(finding.text)}`);
+  }
+  const status = exitStatus(result.findings);
+  const verdict = status === 0 ? "ok" : status === 1 ? "failed" : "needs confirmation";
+  io.out(`check-release: ${command.name} ${verdict}`);
+  return status;
+}
+
+export function parseArgs(argv: readonly string[]): Command | Usage {
+  const [name, ...rest] = argv;
+  if (name === undefined) return { usage: "no subcommand given" };
+  if (!SUBCOMMANDS.includes(name)) return { usage: `unknown subcommand ${JSON.stringify(name)}` };
+  let bump: Bump | undefined;
+  let unsigned: string | undefined;
+  const positionals: string[] = [];
+  const queue = [...rest];
+  for (let arg = queue.shift(); arg !== undefined; arg = queue.shift()) {
+    if (name === "pre-roll" && arg.startsWith("--bump=")) {
+      if (bump !== undefined) return { usage: "--bump is given twice" };
+      const value = arg.slice("--bump=".length);
+      if (!isBump(value)) {
+        return { usage: `--bump must be patch, minor or major, not ${JSON.stringify(value)}` };
+      }
+      bump = value;
+    } else if (name === "artifacts" && arg === "--unsigned") {
+      if (unsigned !== undefined) return { usage: "--unsigned is given twice" };
+      const value = queue.shift();
+      if (value === undefined || value === "") return { usage: "--unsigned needs a path" };
+      unsigned = value;
+    } else if (arg.startsWith("-")) {
+      return { usage: `unknown option ${JSON.stringify(arg)} for ${name}` };
+    } else {
+      positionals.push(arg);
+    }
+  }
+  if (name === "post-roll" || name === "post-bump" || name === "artifacts") {
+    const [version, extra] = positionals;
+    if (version === undefined) return { usage: `${name} needs a <version>` };
+    if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
+    if (!VERSION.test(version)) {
+      return { usage: `malformed version ${JSON.stringify(version)}: expected x.y.z` };
+    }
+    if (name === "artifacts") return { name, version, unsigned };
+    return { name, version };
+  }
+  const [extra] = positionals;
+  if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
+  if (name === "pre-roll") return { name, bump };
+  if (name === "pre-push") return { name };
+  return { name: "changelog" };
+}
+
+function isBump(value: string): value is Bump {
+  return BUMPS.includes(value);
+}
+
+function usageError(problem: string, io: Io): number {
+  io.err(`check-release: ${escapeControls(problem)}`);
+  for (const line of USAGE) io.err(line);
+  return 2;
+}
+
+function runCommand(command: Command, env: Env): CheckResult {
+  switch (command.name) {
+    case "changelog":
+      return { findings: checkChangelog(env) };
+    case "pre-roll":
+      return checkPreRoll(env, command.bump);
+    case "post-roll":
+      return { findings: checkPostRoll(env, command.version) };
+    case "post-bump":
+      return { findings: checkPostBump(env, command.version) };
+    case "pre-push":
+      return { findings: checkPrePush(env) };
+    case "artifacts":
+      return { findings: checkArtifacts(env, command.version, command.unsigned) };
+  }
+}
+
+/**
+ * Replaces every character that could end a line or move the cursor (C0, DEL, C1, the Unicode
+ * line and paragraph separators, the bidi controls and marks) with a `\uXXXX` escape, so a
+ * value from a file or a command can never print a line of its own.
+ */
+export function escapeControls(text: string): string {
+  let result = "";
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const control =
+      code < 0x20 ||
+      (code >= 0x7f && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029 ||
+      code === 0x061c ||
+      code === 0x200e ||
+      code === 0x200f ||
+      (code >= 0x202a && code <= 0x202e) ||
+      (code >= 0x2066 && code <= 0x2069);
+    result += control ? `\\u${code.toString(16).padStart(4, "0")}` : char;
+  }
+  return result;
+}
+
+function exitStatus(findings: readonly Finding[]): number {
+  if (findings.some((finding) => finding.level === "FAIL")) return 1;
+  if (findings.some((finding) => finding.level === "WARNING")) return 3;
+  return 0;
+}
+
+export function checkChangelog(env: Env): Finding[] {
+  const findings: Finding[] = [];
+  readChangelog(env, findings);
+  return findings;
+}
+
+export function checkPreRoll(env: Env, bump: Bump | undefined): CheckResult {
+  const findings: Finding[] = [];
+  // Read first: whether --bump is missing depends on it, and a usage error runs nothing else.
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  if (typeof tag === "string" && bump === undefined) {
+    return { usage: `--bump is required: the previous release is ${tag}` };
+  }
+  const changelog = readChangelog(env, findings);
+  const slug = attempt(findings, "origin URL", () => remoteSlug(env, findings));
+  attempt(findings, "fetch", () => fetchMain(env));
+  attempt(findings, "branch", () => checkOnMain(env, findings));
+  const head = attempt(findings, "HEAD", () => commitSha(env, "HEAD"));
+  if (head !== undefined) {
+    attempt(findings, "HEAD and origin/main", () => checkHeadIsOriginMain(env, head, findings));
+  }
+  attempt(findings, "working tree", () => checkClean(env, findings));
+  if (typeof tag === "string") {
+    attempt(findings, `tag ${tag} on origin`, () => checkTagOnOrigin(env, tag, findings));
+  }
+  const { version } = checkVersionSources(env, findings);
+  if (version !== undefined) checkReleasedAgree(findings, version, changelog, tag);
+  checkReleasedTagged(findings, tag, changelog?.released[0]);
+  if (changelog !== undefined && !hasEntries(changelog.unreleased)) {
+    findings.push(fail("the Unreleased section of CHANGELOG.md has no entries"));
+  }
+  const next =
+    version === undefined || tag === undefined
+      ? undefined
+      : nextRelease(findings, version, tag, bump, changelog);
+  if (next !== undefined) {
+    const nextTag = `v${next}`;
+    attempt(findings, `tag ${nextTag}`, () => checkNextTagFree(env, nextTag, findings));
+  }
+  if (slug !== undefined && head !== undefined) {
+    attempt(findings, "CI", () => checkCi(env, slug, head, findings));
+  }
+  findings.push(info("listing checks: not implemented yet"));
+  if (tag !== undefined) {
+    findings.push(info(tag === null ? "no previous tag: first release" : `previous tag: ${tag}`));
+  }
+  if (next !== undefined) findings.push(info(`next version: ${next}`));
+  return { findings };
+}
+
+export function checkPostRoll(env: Env, version: string): Finding[] {
+  const findings: Finding[] = [];
+  const changelog = readChangelog(env, findings);
+  if (changelog !== undefined) {
+    if (hasEntries(changelog.unreleased)) {
+      findings.push(fail("the Unreleased section of CHANGELOG.md is not empty"));
+    }
+    const expected = `## [${version}] - ${env.today()}`;
+    const [top] = changelog.released;
+    if (top === undefined) {
+      findings.push(fail(`CHANGELOG.md has no released section; expected ${expected}`));
+    } else if (top.header !== expected) {
+      findings.push(
+        fail(
+          `CHANGELOG.md:${top.line}: the top released section must read ${expected}, found ${JSON.stringify(top.header)}`,
+        ),
+      );
+    }
+  }
+  const head =
+    changelog === undefined
+      ? undefined
+      : attempt(findings, "CHANGELOG.md at HEAD", () => compareWithHead(env, changelog, findings));
+  const versions = checkVersionSources(env, findings);
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  if (versions.version !== undefined && head !== undefined && typeof tag === "string") {
+    checkRolledVersion(findings, version, versions.version, head.unreleased, "HEAD");
+  }
+  checkReleasedTagged(findings, tag, changelog?.released[1]);
+  if (versions.version !== undefined && changelog !== undefined && tag !== undefined) {
+    const below = changelog.released[1];
+    if (below?.version != null && below.version !== versions.version) {
+      findings.push(
+        fail(
+          `the section below the new one is ${below.version}, expected ${versions.version} (the root package.json version)`,
+        ),
+      );
+    }
+    if (tag !== null && tag !== `v${versions.version}`) {
+      findings.push(
+        fail(
+          `the latest tag ${tag} does not match ${versions.version} (the root package.json version)`,
+        ),
+      );
+    }
+    if (below === undefined && tag === null && version !== versions.version) {
+      findings.push(
+        fail(`the first release must be the current version ${versions.version}, not ${version}`),
+      );
+    }
+  }
+  attempt(findings, "working tree", () => checkExactChanges(env, [" M CHANGELOG.md"], findings));
+  return findings;
+}
+
+export function checkPostBump(env: Env, version: string): Finding[] {
+  const findings: Finding[] = [];
+  const changelog = readChangelog(env, findings);
+  const versions = checkVersionSources(env, findings);
+  if (versions.version !== undefined && versions.version !== version) {
+    findings.push(
+      fail(
+        `the root package.json version is ${JSON.stringify(versions.version)}, expected ${version}`,
+      ),
+    );
+  }
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  if (changelog !== undefined) {
+    const [top, below] = changelog.released;
+    checkReleasedTagged(findings, tag, below);
+    if (top?.version !== version) {
+      findings.push(
+        fail(
+          `the top released section of CHANGELOG.md is ${top?.version ?? "missing"}, expected ${version}`,
+        ),
+      );
+    }
+    if (typeof tag === "string") {
+      if (below?.version == null) {
+        findings.push(fail(`the latest tag ${tag} has no released section below ${version}`));
+      } else if (tag !== `v${below.version}`) {
+        findings.push(
+          fail(`the latest tag ${tag} does not match the section below, ${below.version}`),
+        );
+      }
+    }
+  }
+  const { workspaces } = versions;
+  if (workspaces !== undefined) {
+    attempt(findings, "working tree", () => {
+      const before = field(parseJson(env.sh("git", ["show", "HEAD:package.json"])), "version");
+      const expected =
+        before === version
+          ? []
+          : [
+              "package.json",
+              ...workspaces.map((dir) => `${dir}/package.json`),
+              "package-lock.json",
+            ].map((file) => ` M ${file}`);
+      checkExactChanges(env, expected, findings);
+    });
+  }
+  return findings;
+}
+
+export function checkPrePush(env: Env): Finding[] {
+  const findings: Finding[] = [];
+  const changelog = readChangelog(env, findings);
+  const { version, workspaces } = checkVersionSources(env, findings);
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  if (changelog !== undefined) {
+    if (hasEntries(changelog.unreleased)) {
+      findings.push(fail("the Unreleased section of CHANGELOG.md is not empty"));
+    }
+    if (changelog.released.length === 0) {
+      findings.push(fail("CHANGELOG.md has no released section"));
+    }
+  }
+  if (version !== undefined) checkReleasedAgree(findings, version, changelog, tag);
+  const slug = attempt(findings, "origin URL", () => remoteSlug(env, findings));
+  attempt(findings, "fetch", () => fetchMain(env));
+  attempt(findings, "branch", () => checkOnMain(env, findings));
+  attempt(findings, "origin/main", () => checkDescendsFromOriginMain(env, findings));
+  attempt(findings, "merge commits", () => {
+    const merges = lines(env.sh("git", ["rev-list", "--merges", `${ORIGIN_MAIN}..HEAD`]));
+    if (merges.length > 0) {
+      findings.push(fail(`the commits on top of origin/main include merges: ${merges.join(", ")}`));
+    }
+  });
+  if (version !== undefined) {
+    attempt(findings, "release commits", () =>
+      checkReleaseCommits(env, version, workspaces, findings),
+    );
+    const releaseTag = `v${version}`;
+    attempt(findings, `tag ${releaseTag}`, () => checkReleaseTag(env, releaseTag, findings));
+    attempt(findings, `tag ${releaseTag} on origin`, () => {
+      if (remoteTagShas(env, releaseTag).length > 0) {
+        findings.push(fail(`the tag ${releaseTag} is already on origin`));
+      }
+    });
+  }
+  attempt(findings, "working tree", () => checkClean(env, findings));
+  if (version !== undefined) {
+    attempt(findings, "artifacts", () => checkBuiltArtifacts(env, version, findings));
+  }
+  // The release commits are not built by CI before the push: the commit below them must be green.
+  const base = attempt(findings, "origin/main sha", () => commitSha(env, ORIGIN_MAIN));
+  if (slug !== undefined && base !== undefined) {
+    attempt(findings, "CI", () => checkCi(env, slug, base, findings));
+  }
+  return findings;
+}
+
+export function checkArtifacts(env: Env, version: string, unsigned: string | undefined): Finding[] {
+  const findings: Finding[] = [];
+  const signedPath = `web-ext-artifacts/foxhand-${version}.xpi`;
+  const unsignedPath =
+    unsigned === undefined ? `artifacts/foxhand-${version}.xpi` : path.resolve(env.root, unsigned);
+  const usable = [unsignedPath, signedPath].map(
+    (file) => attempt(findings, file, () => archiveUsable(env, file, findings)) === true,
+  );
+  if (!usable.every(Boolean)) return findings;
+
+  const unsignedArchive = attempt(findings, `listing ${unsignedPath}`, () =>
+    listArchive(env, unsignedPath, findings),
+  );
+  const signedArchive = attempt(findings, `listing ${signedPath}`, () =>
+    listArchive(env, signedPath, findings),
+  );
+  if (unsignedArchive === undefined || signedArchive === undefined) return findings;
+  for (const name of SIGNATURE_FILES) {
+    if (!signedArchive.names.includes(name)) findings.push(fail(`${signedPath} lacks ${name}`));
+  }
+
+  const skipped = new Set([...unsignedArchive.skipped, ...signedArchive.skipped]);
+  const unsignedFiles = unsignedArchive.files.filter((name) => !skipped.has(name));
+  // Case-sensitive on purpose: Firefox reads its signature only from META-INF/.
+  const signedFiles = signedArchive.files.filter(
+    (name) => !skipped.has(name) && !name.startsWith("META-INF/"),
+  );
+  const unsignedBytes = readEntries(env, unsignedPath, unsignedFiles, findings);
+  const signedBytes = readEntries(env, signedPath, signedFiles, findings);
+  const unsignedHashes = hashAll(unsignedBytes);
+  const signedHashes = hashAll(signedBytes);
+
+  findings.push(info("entry | unsigned | signed"));
+  for (const name of [...new Set([...unsignedFiles, ...signedFiles])].sort()) {
+    const unsignedHash = unsignedHashes.get(name);
+    const signedHash = signedHashes.get(name);
+    findings.push(
+      info(`${name} | ${unsignedHash?.slice(0, 12) ?? "-"} | ${signedHash?.slice(0, 12) ?? "-"}`),
+    );
+    if (!signedFiles.includes(name)) {
+      findings.push(fail(`${name} is in the unsigned XPI but not in the signed one`));
+    } else if (!unsignedFiles.includes(name)) {
+      findings.push(fail(`${name} is in the signed XPI but not in the unsigned one`));
+    } else if (
+      unsignedHash !== undefined &&
+      signedHash !== undefined &&
+      unsignedHash !== signedHash
+    ) {
+      findings.push(fail(`${name} differs between the unsigned and the signed XPI`));
+    }
+  }
+
+  const manifest = signedBytes.get("manifest.json");
+  if (manifest === undefined) {
+    if (!signedFiles.includes("manifest.json")) {
+      findings.push(fail(`${signedPath} has no manifest.json`));
+    }
+  } else {
+    attempt(findings, `${signedPath} manifest.json`, () => {
+      checkManifestVersion(manifest, `${signedPath} manifest.json`, version, findings);
+    });
+  }
+  return findings;
+}
+
+/** Runs one check; an exception becomes a FAIL naming the check, and the caller carries on. */
+function attempt<T>(findings: Finding[], name: string, check: () => T): T | undefined {
+  try {
+    return check();
+  } catch (error) {
+    findings.push(fail(`${name}: ${error instanceof Error ? error.message : String(error)}`));
+    return undefined;
+  }
+}
+
+function fail(text: string): Finding {
+  return { level: "FAIL", text };
+}
+
+function warning(text: string): Finding {
+  return { level: "WARNING", text };
+}
+
+function info(text: string): Finding {
+  return { level: "INFO", text };
+}
+
+/**
+ * The highest `v*` tag reachable from HEAD, or null when there is none. Tag names that are not
+ * `vX.Y.Z` are a FAIL each and never used.
+ */
+export function latestTag(env: Env, findings: Finding[]): string | null {
+  // --no-column: column.ui=always would print several tags on one line.
+  const output = env.sh("git", [
+    "tag",
+    "--list",
+    "--no-column",
+    "--merged",
+    "HEAD",
+    "--sort=-v:refname",
+    "v*",
+  ]);
+  let latest: string | null = null;
+  for (const name of lines(output)) {
+    if (!TAG.test(name)) {
+      findings.push(fail(`the tag ${JSON.stringify(name)} is not a release tag vX.Y.Z`));
+    } else if (latest === null || compareVersions(name.slice(1), latest.slice(1)) > 0) {
+      latest = name;
+    }
+  }
+  return latest;
+}
+
+function lines(text: string): string[] {
+  return text === "" ? [] : text.split("\n");
+}
+
+/** Compares two `x.y.z` versions numerically; negative when `a` is lower. */
+export function compareVersions(a: string, b: string): number {
+  const left = versionParts(a);
+  const right = versionParts(b);
+  for (let index = 0; index < 3; index++) {
+    const difference = (left[index] ?? 0n) - (right[index] ?? 0n);
+    if (difference !== 0n) return difference < 0n ? -1 : 1;
+  }
+  return 0;
+}
+
+function versionParts(version: string): bigint[] {
+  if (!VERSION.test(version)) throw new Error(`not a version x.y.z: ${JSON.stringify(version)}`);
+  return version.split(".").map((part) => BigInt(part));
+}
+
+/** Reads and shape-checks CHANGELOG.md; returns it only when the shape is valid. */
+function readChangelog(env: Env, findings: Finding[]): ValidChangelog | undefined {
+  const text = attempt(findings, "CHANGELOG.md", () => env.readFile("CHANGELOG.md"));
+  if (text === undefined) return undefined;
+  return validChangelog(parseChangelog(text), findings);
+}
+
+function validChangelog(changelog: Changelog, findings: Finding[]): ValidChangelog | undefined {
+  for (const problem of changelog.problems) findings.push(fail(problem));
+  const [unreleased, ...released] = changelog.sections;
+  if (changelog.problems.length > 0 || unreleased === undefined) return undefined;
+  return { preamble: changelog.preamble, unreleased, released };
+}
+
+/** Parses a Keep a Changelog file and lists every way it departs from the shape. */
+export function parseChangelog(text: string, name = "CHANGELOG.md"): Changelog {
+  const lines = text.split("\n").map((line) => (line.endsWith("\r") ? line.slice(0, -1) : line));
+  const start = lines.findIndex((line) => line.startsWith("## "));
+  const problems: string[] = [];
+  const sections: Section[] = [];
+  const problem = (index: number, reason: string): void => {
+    problems.push(`${name}:${index + 1}: ${reason}: ${JSON.stringify(lines[index])}`);
+  };
+  // A renderer sees these structures where this parser sees none: CommonMark also ends a line
+  // at a lone CR, and the text above the first section is not parsed.
+  const lineBreak = (line: string, index: number): void => {
+    if (line.includes("\r")) problem(index, "a carriage return inside the line");
+  };
+  for (const [index, line] of lines.slice(0, start === -1 ? lines.length : start).entries()) {
+    lineBreak(line, index);
+    if (PREAMBLE_BLOCK.test(line))
+      problem(index, "a heading or code fence above the first ## section");
+  }
+  if (start === -1) {
+    problems.push(`${name} has no ${UNRELEASED_HEADER} section`);
+    return { preamble: lines.join("\n"), sections, problems };
+  }
+
+  let section: Section | undefined;
+  let bodyStart = start;
+  let type: ChangeType | undefined;
+  let typeIndex = -1;
+  let entry: Entry | undefined;
+  let lastRelease: string | undefined;
+
+  const closeType = (): void => {
+    if (type !== undefined && type.entries.length === 0) {
+      problem(type.line - 1, "a change type heading with no entries");
+    }
+    type = undefined;
+    entry = undefined;
+  };
+  const closeSection = (end: number): void => {
+    closeType();
+    if (section !== undefined) section.body = lines.slice(bodyStart + 1, end).join("\n");
+  };
+
+  for (const [offset, line] of lines.slice(start).entries()) {
+    const index = start + offset;
+    lineBreak(line, index);
+    if (line.startsWith("## ")) {
+      closeSection(index);
+      section = parseSectionHeader(line, index, sections.length === 0, problem);
+      if (section.version !== null) {
+        if (lastRelease !== undefined && compareVersions(section.version, lastRelease) >= 0) {
+          problem(
+            index,
+            `version ${section.version} is not below the section above, ${lastRelease}`,
+          );
+        }
+        lastRelease = section.version;
+      }
+      sections.push(section);
+      bodyStart = index;
+      typeIndex = -1;
+    } else if (line.trim() === "") {
+      // Blank lines are allowed anywhere and do not end an entry.
+    } else if (line.startsWith("### ")) {
+      closeType();
+      const typeName = line.slice("### ".length);
+      const order = CHANGE_TYPES.indexOf(typeName);
+      const current: ChangeType = { name: typeName, line: index + 1, entries: [] };
+      type = current;
+      if (order === -1) {
+        problem(index, `unknown change type; use one of ${CHANGE_TYPES.join(", ")}`);
+      } else if (section?.types.some((known) => known.name === typeName)) {
+        problem(index, "change type repeated in this section");
+      } else if (order < typeIndex) {
+        problem(index, `change type out of order; the order is ${CHANGE_TYPES.join(", ")}`);
+      } else {
+        typeIndex = order;
+        section?.types.push(current);
+      }
+    } else if (line.startsWith("- ")) {
+      if (type === undefined) {
+        problem(index, "an entry before any ### change type heading");
+      } else if (line.slice(2).trim() === "") {
+        problem(index, "an empty entry");
+        type.entries.push({ line: index + 1, text: "" });
+        entry = undefined;
+      } else {
+        entry = { line: index + 1, text: line.slice(2) };
+        type.entries.push(entry);
+      }
+    } else if (line.startsWith(" ") || line.startsWith("\t")) {
+      if (entry === undefined) {
+        problem(index, "an indented line with no entry to continue");
+      } else if (INDENTED_HEADING.test(line.trim())) {
+        problem(index, "a heading indented inside an entry");
+      } else {
+        entry.text += `\n${line}`;
+      }
+    } else {
+      problem(index, "not a section header, change type heading, entry or continuation line");
+    }
+  }
+  closeSection(lines.length);
+  return { preamble: lines.slice(0, start).join("\n"), sections, problems };
+}
+
+function parseSectionHeader(
+  line: string,
+  index: number,
+  first: boolean,
+  problem: (index: number, reason: string) => void,
+): Section {
+  const section: Section = {
+    line: index + 1,
+    header: line,
+    version: null,
+    date: null,
+    types: [],
+    body: "",
+  };
+  if (line === UNRELEASED_HEADER) {
+    if (!first) problem(index, `a second ${UNRELEASED_HEADER} section`);
+    return section;
+  }
+  if (first) problem(index, `the first section must be ${UNRELEASED_HEADER}`);
+  const match = RELEASE_HEADER.exec(line);
+  if (match === null) {
+    problem(index, "a section header must read ## [x.y.z] - YYYY-MM-DD");
+    return section;
+  }
+  const [, version = "", year = "", month = "", day = ""] = match;
+  if (!isCalendarDate(Number(year), Number(month), Number(day))) {
+    problem(index, "not a calendar date");
+  }
+  section.version = version;
+  section.date = `${year}-${month}-${day}`;
+  return section;
+}
+
+function isCalendarDate(year: number, month: number, day: number): boolean {
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return (
+    date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day
+  );
+}
+
+/** The origin repository's `owner/name`, when the fetch and push URLs agree on one. */
+function remoteSlug(env: Env, findings: Finding[]): string | undefined {
+  const fetchUrl = env.sh("git", ["remote", "get-url", "origin"]);
+  const pushUrls = lines(env.sh("git", ["remote", "get-url", "--push", "--all", "origin"]));
+  const slug = parseSlug(fetchUrl);
+  if (slug === undefined) {
+    findings.push(
+      fail(`the origin URL ${JSON.stringify(fetchUrl)} is not a github.com repository URL`),
+    );
+  }
+  const [pushUrl, ...extra] = pushUrls;
+  if (pushUrl === undefined || extra.length > 0) {
+    findings.push(fail(`origin must have exactly one push URL, found ${JSON.stringify(pushUrls)}`));
+    return undefined;
+  }
+  const pushSlug = parseSlug(pushUrl);
+  if (pushSlug === undefined) {
+    findings.push(
+      fail(`the origin push URL ${JSON.stringify(pushUrl)} is not a github.com repository URL`),
+    );
+    return undefined;
+  }
+  if (slug === undefined) return undefined;
+  if (slug.toLowerCase() !== pushSlug.toLowerCase()) {
+    findings.push(
+      fail(
+        `origin fetches from ${JSON.stringify(fetchUrl)} but pushes to ${JSON.stringify(pushUrl)}`,
+      ),
+    );
+    return undefined;
+  }
+  return slug;
+}
+
+/** `owner/name` from a github.com remote URL, or undefined for any other form. */
+export function parseSlug(url: string): string | undefined {
+  const match = SLUG_URL.exec(url);
+  if (match === null) return undefined;
+  const [, owner = "", name = ""] = match;
+  for (const part of [owner, name]) {
+    if (!SLUG_PART.test(part) || part === "." || part === "..") return undefined;
+  }
+  return `${owner}/${name}`;
+}
+
+function fetchMain(env: Env): void {
+  // fetch.pruneTags (and fetch.prune with a tags refspec) would delete the tag a release just
+  // made; the explicit refspec makes refs/remotes/origin/main origin's main whatever
+  // remote.origin.fetch says.
+  env.sh("git", [
+    "fetch",
+    "--no-prune",
+    "--no-prune-tags",
+    "origin",
+    `+refs/heads/main:${ORIGIN_MAIN}`,
+  ]);
+}
+
+function checkOnMain(env: Env, findings: Finding[]): void {
+  const branch = env.sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
+  if (branch === "HEAD") findings.push(fail("HEAD is detached; check out main"));
+  else if (branch !== "main") findings.push(fail(`on branch ${JSON.stringify(branch)}, not main`));
+}
+
+function commitSha(env: Env, ref: string): string {
+  const sha = env.sh("git", ["rev-parse", ref]);
+  if (!SHA.test(sha)) throw new Error(`git rev-parse ${ref} printed ${JSON.stringify(sha)}`);
+  return sha;
+}
+
+// Full ref names throughout: origin/main would resolve refs/tags/origin/main or
+// refs/heads/origin/main first.
+function checkHeadIsOriginMain(env: Env, head: string, findings: Finding[]): void {
+  const originMain = env.sh("git", ["rev-parse", ORIGIN_MAIN]);
+  if (originMain === head) return;
+  const counts = env.sh("git", ["rev-list", "--left-right", "--count", `${ORIGIN_MAIN}...HEAD`]);
+  const match = /^(\d+)\t(\d+)$/.exec(counts);
+  const behind = Number(match?.[1] ?? 0);
+  const ahead = Number(match?.[2] ?? 0);
+  if (ahead > 0 && behind > 0) {
+    findings.push(fail(`HEAD and origin/main have diverged: ${ahead} ahead, ${behind} behind`));
+  } else if (ahead > 0) {
+    findings.push(fail(`HEAD is ${ahead} commit(s) ahead of origin/main; push or reset first`));
+  } else if (behind > 0) {
+    findings.push(fail(`HEAD is ${behind} commit(s) behind origin/main; pull first`));
+  } else {
+    findings.push(fail(`HEAD ${head} is not origin/main ${JSON.stringify(originMain)}`));
+  }
+}
+
+function checkClean(env: Env, findings: Finding[]): void {
+  const changes = worktreeChanges(env);
+  if (changes.status.length > 0) {
+    findings.push(
+      fail(
+        `the working tree is not clean: ${changes.status.map((line) => JSON.stringify(line)).join(", ")}`,
+      ),
+    );
+  }
+  for (const text of changes.hidden) findings.push(fail(text));
+}
+
+function checkExactChanges(env: Env, expected: readonly string[], findings: Finding[]): void {
+  const changes = worktreeChanges(env);
+  const found = [...changes.status].sort();
+  const wanted = [...expected].sort();
+  if (found.length !== wanted.length || found.some((line, index) => line !== wanted[index])) {
+    findings.push(
+      fail(
+        `git status must list exactly ${JSON.stringify(wanted)}, found ${JSON.stringify(found)}`,
+      ),
+    );
+  }
+  for (const text of changes.hidden) findings.push(fail(text));
+}
+
+/**
+ * The porcelain status lines, plus a text for each file whose changes git status hides
+ * (skip-worktree or assume-unchanged). The flags override configuration that hides changes.
+ */
+export function worktreeChanges(env: Env): { status: string[]; hidden: string[] } {
+  const status = lines(
+    env.sh("git", ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]),
+  );
+  const hidden: string[] = [];
+  for (const line of lines(env.sh("git", ["ls-files", "-v"]))) {
+    const flag = line.slice(0, 1);
+    const file = JSON.stringify(line.slice(2));
+    if (flag === "S") {
+      hidden.push(`${file} is marked skip-worktree, so git status does not show its changes`);
+    } else if (/^[a-z]$/.test(flag)) {
+      hidden.push(`${file} is marked assume-unchanged, so git status does not show its changes`);
+    }
+  }
+  return { status, hidden };
+}
+
+function checkTagOnOrigin(env: Env, tag: string, findings: Finding[]): void {
+  const remote = remoteTagShas(env, tag);
+  if (remote.length === 0) {
+    findings.push(fail(`the latest tag ${tag} is not on origin; push it first`));
+    return;
+  }
+  const local = env.sh("git", ["rev-parse", `refs/tags/${tag}`]);
+  if (remote.some((sha) => sha !== local)) {
+    findings.push(fail(`the tag ${tag} is ${local} here but ${remote.join(", ")} on origin`));
+  }
+}
+
+/**
+ * The shas origin has for exactly `refs/tags/<tag>`. ls-remote matches a pattern by its tail,
+ * so `refs/tags/x/refs/tags/<tag>` would match too.
+ */
+function remoteTagShas(env: Env, tag: string): string[] {
+  const output = env.sh("git", ["ls-remote", "--tags", "origin", `refs/tags/${tag}`]);
+  const shas: string[] = [];
+  for (const line of lines(output)) {
+    const [sha, ref] = line.split("\t");
+    if (sha !== undefined && ref === `refs/tags/${tag}`) shas.push(sha);
+  }
+  return shas;
+}
+
+/**
+ * Checks that the root, workspace, lockfile and manifest versions agree. Returns the root
+ * version when it is a valid `x.y.z`, and the resolved workspace directories.
+ */
+function checkVersionSources(env: Env, findings: Finding[]): Versions {
+  const root = attempt(findings, "package.json", () => readJson(env, "package.json"));
+  if (root === undefined) return { version: undefined, workspaces: undefined };
+  const rootVersion = field(root, "version");
+  let version: string | undefined;
+  if (typeof rootVersion !== "string") {
+    findings.push(fail("package.json has no version string"));
+  } else if (!VERSION.test(rootVersion)) {
+    findings.push(fail(`package.json has version ${JSON.stringify(rootVersion)}, not x.y.z`));
+  } else {
+    version = rootVersion;
+  }
+  const workspaces = attempt(findings, "workspaces", () =>
+    resolveWorkspaces(env, field(root, "workspaces"), findings),
+  );
+  const expect = (source: string, value: unknown): void => {
+    if (typeof value !== "string") findings.push(fail(`${source} has no version string`));
+    else if (version !== undefined && value !== version) {
+      findings.push(
+        fail(
+          `${source} has version ${JSON.stringify(value)}, expected ${version} (the root package.json version)`,
+        ),
+      );
+    }
+  };
+  for (const dir of workspaces ?? []) {
+    const file = `${dir}/package.json`;
+    attempt(findings, file, () => expect(file, field(readJson(env, file), "version")));
+  }
+  attempt(findings, "package-lock.json", () => {
+    const lock = readJson(env, "package-lock.json");
+    const packages = field(lock, "packages");
+    expect("package-lock.json version", field(lock, "version"));
+    for (const dir of ["", ...(workspaces ?? [])]) {
+      expect(
+        `package-lock.json packages[${JSON.stringify(dir)}].version`,
+        field(field(packages, dir), "version"),
+      );
+    }
+  });
+  attempt(findings, "apps/extension/manifest.json", () => {
+    const manifest = readJson(env, "apps/extension/manifest.json");
+    // The build writes the version from apps/extension/package.json, so none is fine.
+    if (isRecord(manifest) && Object.hasOwn(manifest, "version")) {
+      expect("apps/extension/manifest.json", manifest.version);
+    }
+  });
+  return { version, workspaces };
+}
+
+function readJson(env: Env, file: string): unknown {
+  const text = env.readFile(file);
+  try {
+    return JSON.parse(text);
+  } catch (error) {
+    throw new Error(
+      `${file} is not JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+}
+
+function field(value: unknown, key: string): unknown {
+  return isRecord(value) && Object.hasOwn(value, key) ? value[key] : undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Expands the root `workspaces` (literal paths and `<dir>/*` only) to the sorted directories
+ * that hold a package.json. Anything else, which could reach outside the checkout, is a FAIL.
+ */
+function resolveWorkspaces(env: Env, workspaces: unknown, findings: Finding[]): string[] {
+  if (!Array.isArray(workspaces)) {
+    findings.push(fail("package.json workspaces is not an array"));
+    return [];
+  }
+  const dirs = new Set<string>();
+  for (const entry of workspaces) {
+    if (typeof entry !== "string" || !WORKSPACE.test(entry)) {
+      findings.push(
+        fail(`unsupported workspaces entry ${JSON.stringify(entry)}; use a path or <dir>/*`),
+      );
+    } else if (entry.endsWith("/*")) {
+      const parent = entry.slice(0, -2);
+      const found = env
+        .readdir(parent)
+        .filter((name) => env.exists(`${parent}/${name}/package.json`))
+        .map((name) => `${parent}/${name}`);
+      if (found.length === 0) findings.push(fail(`workspaces entry ${entry} matches no package`));
+      for (const dir of found) dirs.add(dir);
+    } else if (env.exists(`${entry}/package.json`)) {
+      dirs.add(entry);
+    } else {
+      findings.push(fail(`workspaces entry ${entry} has no package.json`));
+    }
+  }
+  return [...dirs].sort();
+}
+
+function checkReleasedAgree(
+  findings: Finding[],
+  version: string,
+  changelog: ValidChangelog | undefined,
+  tag: string | null | undefined,
+): void {
+  const top = changelog?.released[0];
+  if (top?.version != null && top.version !== version) {
+    findings.push(
+      fail(
+        `the top released section of CHANGELOG.md is ${top.version}, expected ${version} (the root package.json version)`,
+      ),
+    );
+  }
+  if (typeof tag === "string" && tag !== `v${version}`) {
+    findings.push(
+      fail(`the latest tag ${tag} does not match ${version} (the root package.json version)`),
+    );
+  }
+}
+
+/** A released section with no `v*` tag reachable from HEAD is a release that was never tagged. */
+function checkReleasedTagged(
+  findings: Finding[],
+  tag: string | null | undefined,
+  section: Section | undefined,
+): void {
+  if (tag === null && section?.version != null) {
+    findings.push(
+      fail(
+        `CHANGELOG.md:${section.line}: ${section.version} is released, but no v* tag is reachable from HEAD`,
+      ),
+    );
+  }
+}
+
+/** The shape check guarantees that every change type heading has entries. */
+function hasEntries(section: Section): boolean {
+  return section.types.length > 0;
+}
+
+/** Decides the next version from the previous tag, --bump and the Unreleased changes. */
+function nextRelease(
+  findings: Finding[],
+  version: string,
+  tag: string | null,
+  bump: Bump | undefined,
+  changelog: ValidChangelog | undefined,
+): string | undefined {
+  if (tag === null) {
+    if (bump !== undefined) {
+      findings.push(fail(`the first release is the current version ${version}; omit --bump`));
+    }
+    return version;
+  }
+  if (bump === undefined || changelog === undefined) return undefined;
+  const zeroMajor = versionParts(version)[0] === 0n;
+  const types = changelog.unreleased.types.map((type) => type.name);
+  const required = minimumBump(version, types);
+  if (required !== requiredBump(types)) {
+    findings.push(
+      info(
+        "Removed entries need a major bump, which is minor before 1.0.0; --bump=major releases 1.0.0",
+      ),
+    );
+  }
+  const requested = BUMPS.indexOf(bump);
+  if (requested < BUMPS.indexOf(required)) {
+    findings.push(
+      fail(`--bump=${bump} is smaller than the ${required} bump the Unreleased changes need`),
+    );
+  } else if (requested > BUMPS.indexOf(required)) {
+    findings.push(
+      warning(`--bump=${bump} is bigger than the ${required} bump the Unreleased changes need`),
+    );
+  }
+  if (requested < BUMPS.indexOf(zeroMajor ? "minor" : "major")) {
+    for (const entry of breakingChangeEntries(changelog.unreleased)) {
+      findings.push(
+        warning(
+          `CHANGELOG.md:${entry.line}: the entry mentions a breaking change but --bump=${bump}: ${JSON.stringify(entry.text)}`,
+        ),
+      );
+    }
+  }
+  return nextVersion(version, bump);
+}
+
+/** The rolled version must be what pre-roll allowed: the required bump of V or a bigger one. */
+function checkRolledVersion(
+  findings: Finding[],
+  version: string,
+  current: string,
+  unreleased: Section,
+  source: string,
+): void {
+  const required = minimumBump(
+    current,
+    unreleased.types.map((type) => type.name),
+  );
+  const allowed = BUMPS.slice(BUMPS.indexOf(required))
+    .filter(isBump)
+    .map((bump) => nextVersion(current, bump));
+  if (!allowed.includes(version)) {
+    findings.push(
+      fail(
+        `${version} is not a ${required} bump or bigger from ${current}, which the Unreleased changes at ${source} need: expected ${allowed.join(" or ")}`,
+      ),
+    );
+  }
+}
+
+/** The required bump, where semver 2.0.0 item 4 lets anything change while the major is 0. */
+function minimumBump(version: string, types: readonly string[]): Bump {
+  const required = requiredBump(types);
+  return required === "major" && versionParts(version)[0] === 0n ? "minor" : required;
+}
+
+/** The smallest bump the change types allow: Removed is major, Added or Deprecated minor. */
+export function requiredBump(types: readonly string[]): Bump {
+  if (types.includes("Removed")) return "major";
+  if (types.includes("Added") || types.includes("Deprecated")) return "minor";
+  return "patch";
+}
+
+/** The entries that mention a breaking change without negating it, whitespace collapsed. */
+export function breakingChangeEntries(section: Section): Entry[] {
+  const found: Entry[] = [];
+  for (const type of section.types) {
+    for (const entry of type.entries) {
+      const text = entry.text.replace(/\s+/g, " ").trim();
+      const breaking = [...text.matchAll(BREAKING)].some(
+        (match) => !NEGATION.test(text.slice(0, match.index)),
+      );
+      if (breaking) found.push({ line: entry.line, text });
+    }
+  }
+  return found;
+}
+
+export function nextVersion(version: string, bump: Bump): string {
+  const [major = 0n, minor = 0n, patch = 0n] = versionParts(version);
+  if (bump === "major") return `${major + 1n}.0.0`;
+  if (bump === "minor") return `${major}.${minor + 1n}.0`;
+  return `${major}.${minor}.${patch + 1n}`;
+}
+
+function checkNextTagFree(env: Env, tag: string, findings: Finding[]): void {
+  if (env.sh("git", ["tag", "--list", tag]) !== "") {
+    findings.push(fail(`the tag ${tag} already exists here; delete it with git tag -d ${tag}`));
+  }
+  if (remoteTagShas(env, tag).length > 0) {
+    findings.push(fail(`the tag ${tag} already exists on origin`));
+  }
+}
+
+/** The newest CI run of ci.yml on main for HEAD must have succeeded. */
+function checkCi(env: Env, slug: string, head: string, findings: Finding[]): void {
+  const output = env.sh("gh", [
+    "api",
+    "--hostname",
+    "github.com",
+    `repos/${slug}/actions/runs?head_sha=${head}&per_page=100`,
+  ]);
+  const runs = mainCiRuns(JSON.parse(output), slug, head);
+  const short = head.slice(0, 12);
+  if (typeof runs === "string") {
+    findings.push(fail(runs));
+    return;
+  }
+  const [newest] = runs.sort((a, b) => b.started - a.started || b.id - a.id);
+  if (newest === undefined) {
+    findings.push(
+      fail(
+        `no CI run on main for ${short}; start one with gh workflow run ci.yml --ref main --repo ${slug}, then gh run watch`,
+      ),
+    );
+    return;
+  }
+  const name = `CI run ${newest.id} (${newest.event})`;
+  if (newest.status !== "completed") {
+    findings.push(
+      fail(
+        `${name} for ${short} is still ${newest.status}; wait with gh run watch ${newest.id} --exit-status`,
+      ),
+    );
+  } else if (newest.conclusion === "success") {
+    findings.push(info(`${name} green for ${short}`));
+  } else if (newest.conclusion === "cancelled") {
+    findings.push(
+      fail(
+        `${name} for ${short} was cancelled; rerun it with gh run rerun ${newest.id}, then gh run watch ${newest.id} --exit-status`,
+      ),
+    );
+  } else {
+    findings.push(fail(`${name} for ${short} failed: ${newest.conclusion ?? "no conclusion"}`));
+  }
+}
+
+/**
+ * The runs of this repository's ci.yml on main for `head`, any event: Dependabot's auto-merge
+ * starts CI on main with workflow_dispatch. A string is the reason the response is unusable.
+ */
+export function mainCiRuns(response: unknown, slug: string, head: string): Run[] | string {
+  const runs = field(response, "workflow_runs");
+  if (!Array.isArray(runs) || !runs.every(isRecord)) {
+    return "unexpected gh api response: workflow_runs is not a list of runs";
+  }
+  const result: Run[] = [];
+  for (const run of runs) {
+    const repository = field(run.head_repository, "full_name");
+    const matches =
+      run.name === "CI" &&
+      run.path === CI_WORKFLOW &&
+      run.head_branch === "main" &&
+      run.head_sha === head &&
+      typeof repository === "string" &&
+      repository.toLowerCase() === slug.toLowerCase();
+    if (!matches) continue;
+    const { id, event, status, conclusion } = run;
+    const started = typeof run.run_started_at === "string" ? Date.parse(run.run_started_at) : NaN;
+    if (
+      typeof id !== "number" ||
+      !Number.isSafeInteger(id) ||
+      typeof event !== "string" ||
+      !GH_WORD.test(event) ||
+      typeof status !== "string" ||
+      !GH_WORD.test(status) ||
+      !(conclusion === null || (typeof conclusion === "string" && GH_WORD.test(conclusion))) ||
+      Number.isNaN(started)
+    ) {
+      return `unexpected gh api response: a CI run for ${head.slice(0, 12)} has unexpected fields`;
+    }
+    result.push({ id, event, status, conclusion, started });
+  }
+  return result;
+}
+
+function checkDescendsFromOriginMain(env: Env, findings: Finding[]): void {
+  try {
+    env.sh("git", ["merge-base", "--is-ancestor", ORIGIN_MAIN, "HEAD"]);
+  } catch (error) {
+    if (!(error instanceof CommandError) || error.status !== 1) throw error;
+    findings.push(fail("HEAD does not descend from origin/main; rebase on it first"));
+  }
+}
+
+function checkReleaseCommits(
+  env: Env,
+  version: string,
+  workspaces: readonly string[] | undefined,
+  findings: Finding[],
+): void {
+  // --no-show-signature: log.showSignature would add signature lines to the output.
+  const subjects = lines(
+    env.sh("git", ["log", "--no-show-signature", "--format=%s", `${ORIGIN_MAIN}..HEAD`]),
+  );
+  const released = field(
+    parseJson(env.sh("git", ["show", `${ORIGIN_MAIN}:package.json`])),
+    "version",
+  );
+  const changelogCommit = `Update changelog for ${version}`;
+  const expected =
+    released === version ? [changelogCommit] : [`Bump version to ${version}`, changelogCommit];
+  if (
+    subjects.length !== expected.length ||
+    subjects.some((subject, index) => subject !== expected[index])
+  ) {
+    findings.push(
+      fail(
+        `the commits on top of origin/main must be ${JSON.stringify(expected)} (newest first), found ${JSON.stringify(subjects)}`,
+      ),
+    );
+  }
+  if (workspaces === undefined) return;
+  const versionFiles = released === version ? [] : versionFileNames(workspaces);
+  checkReleaseChanges(env, version, workspaces, versionFiles, findings);
+  if (released !== version) checkReleasedBump(env, version, released, findings);
+}
+
+/** The bump on top of origin/main must be what its Unreleased changes allow, as at post-roll. */
+function checkReleasedBump(
+  env: Env,
+  version: string,
+  released: unknown,
+  findings: Finding[],
+): void {
+  if (typeof released !== "string" || !VERSION.test(released)) {
+    findings.push(
+      fail(`${ORIGIN_MAIN}:package.json has version ${JSON.stringify(released)}, not x.y.z`),
+    );
+    return;
+  }
+  const text = env.sh("git", ["show", `${ORIGIN_MAIN}:CHANGELOG.md`]);
+  const origin = validChangelog(parseChangelog(text, "origin/main:CHANGELOG.md"), findings);
+  if (origin !== undefined) {
+    checkRolledVersion(findings, version, released, origin.unreleased, "origin/main");
+  }
+}
+
+function versionFileNames(workspaces: readonly string[]): string[] {
+  return ["package.json", ...workspaces.map((dir) => `${dir}/package.json`), "package-lock.json"];
+}
+
+/**
+ * A subject can name any change, so the content is checked too: only CHANGELOG.md and the
+ * version fields may differ from origin/main, which CI has built.
+ */
+function checkReleaseChanges(
+  env: Env,
+  version: string,
+  workspaces: readonly string[],
+  versionFiles: readonly string[],
+  findings: Finding[],
+): void {
+  const changed = lines(
+    env.sh("git", ["diff-tree", "-r", "--name-only", "--no-renames", ORIGIN_MAIN, "HEAD"]),
+  ).sort();
+  const expected = ["CHANGELOG.md", ...versionFiles].sort();
+  if (changed.length !== expected.length || changed.some((file, i) => file !== expected[i])) {
+    findings.push(
+      fail(
+        `the release commits must change exactly ${JSON.stringify(expected)}, found ${JSON.stringify(changed)}`,
+      ),
+    );
+  }
+  for (const file of versionFiles.filter((name) => changed.includes(name))) {
+    const before = env.sh("git", ["show", `${ORIGIN_MAIN}:${file}`]);
+    const after = env.sh("git", ["show", `HEAD:${file}`]);
+    // The text too: JSON.parse keeps the last of two equal keys, where a bundler reads the first.
+    const same =
+      onlyVersionLinesDiffer(before, after, version) &&
+      isDeepStrictEqual(
+        withVersion(parseJson(before), file, version, workspaces),
+        parseJson(after),
+      );
+    if (!same) findings.push(fail(`${file} changes more than its version since origin/main`));
+  }
+}
+
+/** Every line is unchanged, or a `"version": ...` line whose value became `version`. */
+function onlyVersionLinesDiffer(before: string, after: string, version: string): boolean {
+  const old = before.split("\n");
+  const now = after.split("\n");
+  return (
+    old.length === now.length &&
+    old.every((line, index) => {
+      const match = /^(\s*)"version": "[^"\\]*"(,?)$/.exec(line);
+      const updated = match && `${match[1]}"version": ${JSON.stringify(version)}${match[2]}`;
+      return now[index] === line || now[index] === updated;
+    })
+  );
+}
+
+/** A copy of a version file's JSON with every version field this tool checks set to `version`. */
+function withVersion(
+  json: unknown,
+  file: string,
+  version: string,
+  workspaces: readonly string[],
+): unknown {
+  const copy = structuredClone(json);
+  const set = (value: unknown): void => {
+    if (isRecord(value) && Object.hasOwn(value, "version")) value.version = version;
+  };
+  set(copy);
+  if (file === "package-lock.json") {
+    const packages = field(copy, "packages");
+    for (const dir of ["", ...workspaces]) set(field(packages, dir));
+  }
+  return copy;
+}
+
+function parseJson(text: string): unknown {
+  return JSON.parse(text);
+}
+
+function checkReleaseTag(env: Env, tag: string, findings: Finding[]): void {
+  const tags = lines(env.sh("git", ["tag", "--points-at", "HEAD", "--no-column"]));
+  if (tags.length !== 1 || tags[0] !== tag) {
+    findings.push(fail(`HEAD must carry exactly the tag ${tag}, found ${JSON.stringify(tags)}`));
+  }
+  if (!tags.includes(tag)) return;
+  const kind = env.sh("git", ["cat-file", "-t", `refs/tags/${tag}`]);
+  if (kind !== "tag") {
+    findings.push(fail(`the tag ${tag} is not annotated; recreate it with git tag -a ${tag}`));
+  }
+}
+
+function checkBuiltArtifacts(env: Env, version: string, findings: Finding[]): void {
+  const xpi = `artifacts/foxhand-${version}.xpi`;
+  const source = `artifacts/foxhand-source-${version}.zip`;
+  if (!env.exists(source)) findings.push(fail(`${source} is missing; run npm run build:amo`));
+  if (!env.exists(xpi)) {
+    findings.push(fail(`${xpi} is missing; run npm run build:amo`));
+    return;
+  }
+  const manifest = env.shBytes("unzip", ["-UU", "-p", xpi, "manifest.json"]);
+  checkManifestVersion(manifest, `${xpi} manifest.json`, version, findings);
+}
+
+function checkManifestVersion(
+  bytes: Buffer,
+  name: string,
+  version: string,
+  findings: Finding[],
+): void {
+  const found = field(JSON.parse(bytes.toString("utf8")), "version");
+  if (found !== version) {
+    findings.push(fail(`${name} has version ${JSON.stringify(found)}, expected ${version}`));
+  }
+}
+
+/** unzip reads `<path>.zip` for a missing path and expands wildcards in the archive name. */
+function archiveUsable(env: Env, file: string, findings: Finding[]): boolean {
+  if (ARCHIVE_WILDCARD.test(file)) {
+    findings.push(fail(`the archive path ${JSON.stringify(file)} holds a wildcard character`));
+    return false;
+  }
+  if (!env.exists(file)) {
+    findings.push(fail(`${file} does not exist`));
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Lists an archive's entries. A name that could act as an unzip option or pattern, that has a
+ * `.`, `..` or empty segment, or that is listed twice, is a FAIL and skipped, so it never
+ * becomes an argument.
+ */
+function listArchive(env: Env, file: string, findings: Finding[]): Archive {
+  // -UU: the raw entry names, as Firefox reads them, not an Info-ZIP Unicode Path field.
+  const names = lines(env.sh("unzip", ["-Z1", "-UU", file]));
+  const skipped = new Set<string>();
+  const seen = new Set<string>();
+  for (const name of names) {
+    if (!ENTRY_NAME.test(name) || DOT_OR_EMPTY_SEGMENT.test(name)) {
+      findings.push(fail(`${file}: unsafe entry name ${JSON.stringify(name)}`));
+      skipped.add(name);
+    } else if (seen.has(name)) {
+      findings.push(fail(`${file}: the entry ${name} is listed twice`));
+      skipped.add(name);
+    }
+    seen.add(name);
+  }
+  const files = [...seen].filter((name) => !skipped.has(name) && !name.endsWith("/"));
+  return { names, files, skipped };
+}
+
+function readEntries(
+  env: Env,
+  file: string,
+  names: readonly string[],
+  findings: Finding[],
+): Map<string, Buffer> {
+  const entries = new Map<string, Buffer>();
+  for (const name of names) {
+    const bytes = attempt(findings, `${file} ${name}`, () =>
+      env.shBytes("unzip", ["-UU", "-p", file, name]),
+    );
+    if (bytes !== undefined) entries.set(name, bytes);
+  }
+  return entries;
+}
+
+function hashAll(entries: Map<string, Buffer>): Map<string, string> {
+  const hashes = new Map<string, string>();
+  for (const [name, bytes] of entries) {
+    hashes.set(name, createHash("sha256").update(bytes).digest("hex"));
+  }
+  return hashes;
+}
+
+/**
+ * Compares the roll with HEAD: entries moved unchanged, nothing else in the file edited. Returns
+ * HEAD's changelog when its shape is valid.
+ */
+function compareWithHead(
+  env: Env,
+  changelog: ValidChangelog,
+  findings: Finding[],
+): ValidChangelog | undefined {
+  const headText = env.sh("git", ["show", "HEAD:CHANGELOG.md"]);
+  const head = validChangelog(parseChangelog(headText, "HEAD:CHANGELOG.md"), findings);
+  if (head === undefined) return undefined;
+  if (changelog.preamble !== head.preamble) {
+    findings.push(fail("the text above the first section of CHANGELOG.md differs from HEAD"));
+  }
+  const [top, ...older] = changelog.released;
+  if (top !== undefined && top.body.trim() !== head.unreleased.body.trim()) {
+    findings.push(
+      fail(
+        `CHANGELOG.md:${top.line}: the ${JSON.stringify(top.header)} entries differ from the Unreleased entries at HEAD`,
+      ),
+    );
+  }
+  if (older.length !== head.released.length) {
+    findings.push(
+      fail(
+        `CHANGELOG.md has ${older.length} sections below the new one, HEAD has ${head.released.length} released sections`,
+      ),
+    );
+    return head;
+  }
+  older.forEach((section, index) => {
+    const before = head.released[index];
+    if (before?.header !== section.header || before.body.trim() !== section.body.trim()) {
+      findings.push(
+        fail(
+          `CHANGELOG.md:${section.line}: the section ${JSON.stringify(section.header)} differs from HEAD`,
+        ),
+      );
+    }
+  });
+  return head;
+}
+
+/** A failed command: `status` is null when it was killed by a signal or did not start. */
+export class CommandError extends Error {
+  command: string;
+  status: number | null;
+  stderr: string;
+
+  constructor(command: string, status: number | null, stderr: string, cause?: string) {
+    super(`\`${command}\` failed (${cause ?? `status ${status}`}): ${stderr.trim()}`);
+    this.name = "CommandError";
+    this.command = command;
+    this.status = status;
+    this.stderr = stderr;
+  }
+}
+
+/** The environment of a real checkout at `root`. */
+export function realEnv(root: string): Env {
+  return {
+    root,
+    readFile(file) {
+      return readFileSync(path.resolve(root, file), "utf8");
+    },
+    exists(file) {
+      return statSync(path.resolve(root, file), { throwIfNoEntry: false })?.isFile() ?? false;
+    },
+    readdir(dir) {
+      return readdirSync(path.resolve(root, dir));
+    },
+    sh(command, args) {
+      const stdout = spawnChecked(root, command, args).toString("utf8");
+      return stdout.endsWith("\n") ? stdout.slice(0, -1) : stdout;
+    },
+    shBytes(command, args) {
+      return spawnChecked(root, command, args);
+    },
+    today() {
+      return localDate(new Date());
+    },
+  };
+}
+
+function spawnChecked(root: string, command: string, args: readonly string[]): Buffer {
+  const result = spawnSync(command, args, {
+    cwd: root,
+    // A stalled network command or a credential prompt becomes a FAIL, not a hang. Replace refs
+    // would show the checks other commits than the ones a push sends.
+    env: { ...childEnv(process.env), GIT_TERMINAL_PROMPT: "0", GIT_NO_REPLACE_OBJECTS: "1" },
+    stdio: ["ignore", "pipe", "pipe"],
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: COMMAND_TIMEOUT_MS,
+  });
+  if (result.status === 0 && result.error === undefined) return result.stdout;
+  const stderr = Buffer.isBuffer(result.stderr) ? result.stderr.toString("utf8") : "";
+  const cause = result.error
+    ? `error ${result.error.message}`
+    : result.signal
+      ? `signal ${result.signal}`
+      : `status ${result.status}`;
+  throw new CommandError([command, ...args].join(" "), result.status, stderr, cause);
+}
+
+/** YYYY-MM-DD in the local time zone. */
+export function localDate(date: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+if (import.meta.main) {
+  process.exitCode = runCli(
+    process.argv.slice(2),
+    realEnv(path.resolve(import.meta.dirname, "..")),
+    {
+      out: (line) => process.stdout.write(`${line}\n`),
+      err: (line) => process.stderr.write(`${line}\n`),
+    },
+  );
+}

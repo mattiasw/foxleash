@@ -32,6 +32,7 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Unit tests (with coverage floors) | `npm test` |
 | Build the extension | `npm run build` |
 | Build the AMO source archive | `npm run build:amo` |
+| Release checks | `npm run check:release -- <subcommand>` |
 | End-to-end tests | `npm run e2e` |
 | Fast gate (run before every commit) | `npm run lint && npx turbo run typecheck test --force` |
 | Install on this machine | `npm run setup` |

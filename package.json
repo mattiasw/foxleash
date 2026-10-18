@@ -19,6 +19,7 @@
     "test": "turbo run test",
     "build": "turbo run build",
     "build:amo": "node bin/build-amo.ts",
+    "check:release": "node bin/check-release.ts",
     "dev": "npm run dev -w @foxhand/extension",
     "setup": "node apps/server/src/main.ts install",
     "teardown": "node apps/server/src/main.ts uninstall",

@@ -33,6 +33,7 @@ The repository is an npm workspaces monorepo run by Turborepo:
 | Unit tests | `npm test` |
 | Build | `npm run build` |
 | AMO source archive | `npm run build:amo` |
+| Release checks | `npm run check:release -- <subcommand>` |
 | End-to-end tests | `npm run e2e` |
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
@@ -96,6 +97,47 @@ When you add, move or delete a file that the extension build reads, edit
 `bin/amo-source-files.txt` in the same commit, one path per line in `LC_ALL=C sort` order,
 and `git add` it: the check reads the staged list. When the command reports a tracked file
 it cannot classify, add a ship or exclude rule for it in `bin/build-amo.ts`.
+
+## Release checks
+
+`npm run check:release -- <subcommand>` checks one stage of a release. Each subcommand runs
+all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding:
+
+- `changelog`: `CHANGELOG.md` has the Keep a Changelog shape: `## [Unreleased]` first, then
+  `## [x.y.z] - YYYY-MM-DD` sections with real dates and descending versions, each holding
+  only `### Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security` headings, in
+  that order, with `- ` entries and their indented continuation lines.
+- `pre-roll [--bump=patch|minor|major]`: the changelog shape; HEAD is `main`, equal to
+  origin's `main`, with a clean working tree; every version field agrees; the latest tag is
+  on origin; Unreleased has entries; the bump is at least what the change types need
+  (`Removed` major, `Added` or `Deprecated` minor, else patch; before 1.0.0 a major change
+  needs only minor); the next tag exists neither here nor on origin; and the newest CI run of
+  `ci.yml` on `main` for HEAD succeeded. The first release takes no `--bump`; every later one
+  needs it.
+- `post-roll <version>`: Unreleased is empty, the top section is `## [<version>] - <today>`
+  with exactly HEAD's Unreleased entries, the rest of the file is unchanged, `<version>` is
+  at least the bump those entries need, and `CHANGELOG.md` is the only modified file.
+- `post-bump <version>`: every version field is `<version>`, and the only modified files are
+  the root and workspace `package.json` files and `package-lock.json` (none when HEAD
+  already has `<version>`).
+- `pre-push`: with `<version>` the root `package.json` version, HEAD is `main`, and on top of
+  origin's `main`, whose newest CI run succeeded, sit only `Update changelog for <version>`
+  and, after a bump, `Bump version to <version>`; together they change only `CHANGELOG.md`
+  and the version fields, by at least the bump origin's Unreleased entries need; HEAD carries
+  exactly the annotated tag `v<version>`, which origin does not have yet; the working tree is
+  clean; and `npm run build:amo` has built the XPI and source archive of that version.
+- `artifacts <version> [--unsigned <path>]`: the signed XPI in `web-ext-artifacts/` holds the
+  signature files and exactly the files of the unsigned XPI (default
+  `artifacts/foxhand-<version>.xpi`), byte for byte, and its manifest has `<version>`.
+
+The version fields are the root and workspace `package.json` files and `package-lock.json`.
+The extension's built manifest takes its version from `apps/extension/package.json`; the
+source `apps/extension/manifest.json` has no `version`.
+
+The exit status is 0 when every check passes, 1 when one fails, 2 on a usage error, and 3
+when nothing fails but a warning (such as a bigger bump than the changes need, or a
+breaking change mentioned in a smaller bump) needs your confirmation. CI runs the
+`changelog` check.
 
 ## Server
 
