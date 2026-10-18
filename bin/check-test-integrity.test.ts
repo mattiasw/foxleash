@@ -296,6 +296,30 @@ describe("check-test-integrity.sh", () => {
       `test("real", { ${SKIP_TRUE} }, () => { run(); [1].map(() => {}); });\n`,
     ],
     [
+      "a skip option joined to a placeholder-shaped call on the next line",
+      `test("real", { ${SKIP_TRUE} }, () => { run(); })\n  .then(() => ({ ${m("skip", ": 0")} }, () => {}));\n`,
+    ],
+    [
+      "a skip option joined to a placeholder-shaped call across a blank line",
+      `test("real", { ${SKIP_TRUE} }, () => { run(); })\n\n  .then(() => ({ ${m("skip", ": 0")} }, () => {}));\n`,
+    ],
+    [
+      "a skip option after an empty placeholder on the same line",
+      `test("p", { skip: !process.env.X }, () => {}); test("real", { ${SKIP_TRUE} }, () => { run(); });\n`,
+    ],
+    [
+      "a skip option whose reason holds an escaped quote before an empty callback",
+      `test("real", { ${m("skip", ": 'it\\'s flaky'")} }, () => { on({ a: 'b\\'c' }, () => {}); });\n`,
+    ],
+    [
+      "a skip option with a block comment holding a quote before an empty callback",
+      `test("real", { ${SKIP_TRUE} /* don't */ }, () => { on({ /* it's */ }, () => {}); });\n`,
+    ],
+    [
+      "a skip option before a nested object followed by an empty callback",
+      `test("real", { ${SKIP_TRUE}, fn: on({ a: 1 }, () => {}) }, () => { run(); });\n`,
+    ],
+    [
       "a todo option on a test with a body",
       `test("real", { ${TODO_TRUE} }, () => {\n  run();\n});\n`,
     ],
@@ -848,6 +872,22 @@ describe("check-test-integrity.sh", () => {
       `test("p", { ${m("skip", ': "doesn\'t run without a database"')} }, () => {});\n`,
     ],
     ["an empty async placeholder", `test("p", { ${SKIP_TRUE} }, async () => {});\n`],
+    [
+      "two empty placeholders on one line",
+      `test("p", { ${SKIP_TRUE} }, () => {}); test("q", { ${SKIP_TRUE} }, async () => {});\n`,
+    ],
+    [
+      "pagination after an empty placeholder with a second option",
+      'test("p", { timeout: 5, skip: !process.env.X }, () => {}); const page = { limit: 10, skip: 1 };\n',
+    ],
+    [
+      "an empty placeholder whose reason holds an escaped quote",
+      `test("p", { ${m("skip", ": 'it\\'s off'")} }, () => {});\n`,
+    ],
+    [
+      "an empty placeholder with a block comment holding a quote",
+      `test("p", { ${SKIP_TRUE} /* don't */ }, () => {});\n`,
+    ],
     ["pagination on one line", "const rows = await db.user.findMany({ skip: 10, take: 5 });\n"],
     [
       "pagination over several lines",
@@ -950,16 +990,16 @@ describe("check-test-integrity.sh", () => {
     [
       "the option-object grep",
       "grep",
-      'for a in "$@"; do [ "$a" = -avE ] && break; case "$a" in *"]?skip"*) exit 2 ;; esac; done',
+      'for a in "$@"; do case "$a" in *"]?skip"*) exit 2 ;; esac; done',
       OPTIONED,
       /option-object grep failed \(exit 2\)/,
     ],
     [
-      "the placeholder grep",
-      "grep",
-      'for a in "$@"; do [ "$a" = -avE ] && exit 2; done',
+      "the placeholder strip (sed)",
+      "sed",
+      "exit 1",
       OPTIONED,
-      /placeholder grep failed \(exit 2\)/,
+      /placeholder strip \(sed\) failed \(exit 1\)/,
     ],
     [
       "the word-boundary probe",

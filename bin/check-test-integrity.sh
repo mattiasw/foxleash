@@ -203,17 +203,22 @@ SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))('"$CALL"'|(
 # CALL_VALUE after any key; the price is that a todo: key holding a literal in plain test data,
 # at the start of a line or after {, , or */, is refused too. That is what catches a todo option
 # in an options object over several lines. PLACEHOLDER matches a skipped EMPTY test, registered
-# inside an if (!process.env.X) branch: the options object ends at the first } outside a quoted
-# value and is followed directly by an empty () => {}) or async () => {}) body that closes the
-# call.
+# inside an if (!process.env.X) branch: the options object holds no nested object, ends at the
+# first } outside a quoted value and is followed directly by an empty () => {}) or
+# async () => {}) body that closes the call. Each placeholder is replaced with } before the
+# skip-option grep, so it exempts only itself, not another skip option on its joined line, and
+# no key match runs across it. PLACEHOLDER must hold no #, the sed delimiter.
 # The quote characters are written as printf octal (\047 ' \042 " \140 `) so they survive sh
 # quoting; a complement built from $Q, '[^'"$Q"']', would be a class followed by a literal ].
-# QS is a quoted string, closed by the quote that opened it, so "don't" is one string. NBQ also
-# excludes }, so the placeholder check steps over a quoted value; ARG also excludes what ends a
-# test call's first argument outside a string.
+# QS is a quoted string, closed by the quote that opened it, so "don't" is one string. The
+# placeholder steps over quoted values with ESC_QS, which also reads backslash escapes, and over
+# block comments; NBQ excludes quotes, braces and /, so it steps over no nested object, regex or
+# line comment. ARG excludes what ends a test call's first argument outside a string.
 Q=$(printf '[\047\042\140]')
 QS=$(printf '(\042[^\042]*\042|\047[^\047]*\047|\140[^\140]*\140)')
-NBQ=$(printf '[^}\047\042\140]')
+ESC_QS=$(printf '(\042([^\042\\\\]|\\\\.)*\042|\047([^\047\\\\]|\\\\.)*\047|\140([^\140\\\\]|\\\\.)*\140)')
+COMMENT='/[*]([^*]|[*]+[^*/])*[*]+/'
+NBQ=$(printf '[^{}/\047\042\140]')
 ARG=$(printf '[^,{}()\047\042\140]')
 # A value that is never a condition: a keyword literal, a number or a string.
 LITERAL='((true|false|null|undefined|NaN|Infinity)\b|[0-9]|'"$Q"')'
@@ -237,7 +242,7 @@ NOT_NAME=$(printf '[^\047\042\140[:space:])]')
 OPEN_NAME=$(printf '((\042[^\042]*|\047[^\047]*|\140[^\140]*)(\\\\|$)|\140[^\140]*[$][{][A-Za-z0-9_$.[:space:]]*[^A-Za-z0-9_$.[:space:]}])')
 TODO_CALL="\b${RECEIVER_TODO}${CALL}([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:space:]]*${OPEN_NAME}|[[:space:]]*${QS}[[:space:]]*(\$|[^[:space:])]))"
 TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`)'
-PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${QS})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
+PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${ESC_QS}|${COMMENT})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
 
 # -a stops grep treating a line with a byte that is not valid UTF-8 as binary; LC_ALL=C lets
 # that byte match a bracket expression, which a UTF-8 locale never does. [[:space:]] is then
@@ -249,21 +254,18 @@ if [ "$MARKER_STATUS" -gt 1 ]; then
   exit 1
 fi
 
-OPTION_STATUS=0
-OPTION_LINES=$(printf '%s\n' "$JOINED" | LC_ALL=C grep -aE "$SKIP_OPTION") || OPTION_STATUS=$?
-if [ "$OPTION_STATUS" -gt 1 ]; then
-  echo "check-test-integrity: the option-object grep failed (exit $OPTION_STATUS); gate 2 cannot judge." >&2
+STRIP_STATUS=0
+STRIPPED=$(printf '%s\n' "$JOINED" | LC_ALL=C sed -E "s#$PLACEHOLDER#}#g") || STRIP_STATUS=$?
+if [ "$STRIP_STATUS" -ne 0 ]; then
+  echo "check-test-integrity: the placeholder strip (sed) failed (exit $STRIP_STATUS); gate 2 cannot judge." >&2
   exit 1
 fi
 
-BAD_OPTION=""
-if [ -n "$OPTION_LINES" ]; then
-  PLACEHOLDER_STATUS=0
-  BAD_OPTION=$(printf '%s\n' "$OPTION_LINES" | LC_ALL=C grep -avE "$PLACEHOLDER") || PLACEHOLDER_STATUS=$?
-  if [ "$PLACEHOLDER_STATUS" -gt 1 ]; then
-    echo "check-test-integrity: the placeholder grep failed (exit $PLACEHOLDER_STATUS); gate 2 cannot judge." >&2
-    exit 1
-  fi
+OPTION_STATUS=0
+BAD_OPTION=$(printf '%s\n' "$STRIPPED" | LC_ALL=C grep -aE "$SKIP_OPTION") || OPTION_STATUS=$?
+if [ "$OPTION_STATUS" -gt 1 ]; then
+  echo "check-test-integrity: the option-object grep failed (exit $OPTION_STATUS); gate 2 cannot judge." >&2
+  exit 1
 fi
 
 if [ -n "$BAD" ] || [ -n "$BAD_OPTION" ]; then
