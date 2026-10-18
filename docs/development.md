@@ -49,6 +49,25 @@ profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
 `~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
 runs. It needs a desktop with Firefox 140 or later.
 
+## Server
+
+Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
+
+The host listens on `<socket directory>/<pid>.sock`. The socket directory is the first of
+`$XDG_RUNTIME_DIR/foxhand` and `/run/user/<uid>/foxhand` whose base directory (that is,
+`$XDG_RUNTIME_DIR` or `/run/user/<uid>`) is a real directory owned by you with no group or
+other permission bits, else `/tmp/foxhand-<uid>`.
+
+Foxhand creates the socket directory with mode 0700. It refuses one that is a symlink, belongs
+to another user, or has group or other permission bits, and it never changes an existing
+directory's mode or owner.
+
+The host and the MCP server pick the directory the same way, so they meet even when an MCP
+client starts the server without `XDG_RUNTIME_DIR`, as long as Firefox's `XDG_RUNTIME_DIR` is
+`/run/user/<uid>` or unset (the usual desktop session). A test harness sets `XDG_RUNTIME_DIR`
+to the same private temporary directory for both processes, so they meet in a socket directory
+of their own.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development

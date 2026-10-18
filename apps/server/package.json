@@ -3,6 +3,10 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit -p .",
+    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-coverage-exclude='src/**/*.test.ts' 'src/**/*.test.ts'"
+  },
   "dependencies": {
     "@foxhand/protocol": "*",
     "@modelcontextprotocol/sdk": "^1.32.1",
