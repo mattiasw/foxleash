@@ -9,12 +9,8 @@ on:
     # decides whether to merge.
     branches: ["dependabot/**"]
 
-permissions:
-  actions: read
-  checks: read
-  contents: write
-  pull-requests: write
-  statuses: read
+# Per-job permissions only, so no token holds both contents: write and actions: write.
+permissions: {}
 
 # One merge attempt per head sha at a time, so a re-run cannot race another into `gh pr merge`.
 concurrency:
@@ -27,8 +23,17 @@ jobs:
     if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 10
+    permissions:
+      actions: read
+      checks: read
+      contents: write
+      pull-requests: write
+      statuses: read
+    outputs:
+      merged: ${{ steps.merge.outputs.merged }}
     steps:
       - name: Check all checks passed and merge
+        id: merge
         # GitHub context values reach the script only through env:, never interpolated into
         # run:, so a crafted branch or workflow name cannot inject a command.
         env:
@@ -103,18 +108,40 @@ jobs:
           BLOCKING=$(echo "$CHECKS" | jq '[.[] | select(.bucket != "pass" and .bucket != "skipping")] | length')
           if [ "$BLOCKING" != "0" ]; then
             echo "Checks still pending or failing, not merging:"
-            echo "$CHECKS" | jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name): \(.bucket)"'
+            # Names printed as JSON, so a name holding a newline cannot start a line with a
+            # workflow command such as one setting the merged output.
+            echo "$CHECKS" | jq -r '.[] | select(.bucket != "pass" and .bucket != "skipping") | "\(.name | tojson): \(.bucket)"'
             exit 0
           fi
 
           echo "All checks passed, merging PR #$PR"
           # Merge only the commit that was checked.
-          if ! gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
+          if gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
+            echo "merged=true" >> "$GITHUB_OUTPUT"
+          else
             PR_STATE=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
             if [ "$PR_STATE" = "MERGED" ]; then
-              echo "PR #$PR was already merged by another run."
+              # gh can fail after this run's merge landed (deleting the branch, a lost response).
+              echo "PR #$PR is merged."
+              echo "merged=true" >> "$GITHUB_OUTPUT"
             else
               echo "::error::Failed to merge PR #$PR (state: $PR_STATE)."
               exit 1
             fi
           fi
+
+  # A merge made with GITHUB_TOKEN starts no push run on main; a workflow_dispatch made with it
+  # does start one.
+  ci-on-main:
+    needs: automerge
+    if: needs.automerge.outputs.merged == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write
+    steps:
+      - name: Run CI on main
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: gh workflow run ci.yml --ref main --repo "$REPO"

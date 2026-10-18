@@ -95,4 +95,5 @@ Dependabot opens pull requests every Thursday: npm updates grouped into one for 
 and one for production dependencies, and one per GitHub Action. It proposes a new release only
 once it is 3 days old; security updates skip that wait. The `Auto-merge Dependabot` workflow
 squash-merges such a pull request once CI and all of its checks pass; one that fails stays open
-for a person to fix.
+for a person to fix. After merging, the workflow starts CI on `main` itself, because a merge made
+with its own token starts no push run. The CI run it starts tests the updates merged together.
