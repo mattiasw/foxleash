@@ -31,6 +31,7 @@ The repository is an npm workspaces monorepo run by Turborepo:
 | Type check | `npm run typecheck` |
 | Unit tests | `npm test` |
 | Build | `npm run build` |
+| AMO source archive | `npm run build:amo` |
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
@@ -48,6 +49,33 @@ and the icon once at start, so restart it after changing them. Firefox uses a pe
 profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
 `~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
 runs. It needs a desktop with Firefox 140 or later.
+
+## AMO source archive
+
+Mozilla reviewers rebuild the extension from a source archive. `npm run build:amo` builds
+`artifacts/foxhand-source-<version>.zip`, then extracts it into a temporary directory and
+runs `npm ci && npm run build` there, as a reviewer would. From that clean copy it builds
+`artifacts/foxhand-<version>.xpi`. It fails unless:
+
+- every tracked file matches a ship or exclude rule in `bin/build-amo.ts`;
+- the archive's files are exactly the ones in `bin/amo-source-files.txt`, read from the git
+  index;
+- no tracked symlink or submodule sits at or above a shipped path, and no shipped file is
+  reached through a symlink in the working tree;
+- no `node_modules` folder sits above the temporary directory, where the clean build could
+  load packages a reviewer does not have;
+- the clean rebuild is identical to the normal build in `apps/extension/dist/`.
+
+The two files appear in `artifacts/` only when every check passes.
+
+The archive ships `bin/amo-source-readme.md` as its `README.md`, with the exact Node and npm
+versions of the build filled in. The command needs `git`, `zip`, `unzip`, `diff` and network
+access for `npm ci`.
+
+When you add, move or delete a file that the extension build reads, edit
+`bin/amo-source-files.txt` in the same commit, one path per line in `LC_ALL=C sort` order,
+and `git add` it: the check reads the staged list. When the command reports a tracked file
+it cannot classify, add a ship or exclude rule for it in `bin/build-amo.ts`.
 
 ## Server
 

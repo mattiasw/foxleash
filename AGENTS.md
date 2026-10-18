@@ -31,6 +31,7 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Type check | `npm run typecheck` |
 | Unit tests (with coverage floors) | `npm test` |
 | Build the extension | `npm run build` |
+| Build the AMO source archive | `npm run build:amo` |
 | End-to-end tests | `npm run e2e` |
 | Fast gate (run before every commit) | `npm run lint && npx turbo run typecheck test --force` |
 | Install on this machine | `npm run setup` |
@@ -124,11 +125,11 @@ listing change and a decision, not a routine edit.
 
 ## AMO source archive
 
-Mozilla reviewers rebuild the extension from a source archive. `bin/build-amo` builds it
-from an exact, committed file list (`bin/amo-source-files.txt`), rebuilds the extension
-inside a clean copy and compares the result with the normal build. When you add, move or
-delete a file that the extension build reads, update the list in the same commit; the
-build fails on any file it cannot classify.
+Mozilla reviewers rebuild the extension from a source archive. `bin/build-amo.ts`, run by
+`npm run build:amo`, builds it from an exact, committed file list
+(`bin/amo-source-files.txt`), rebuilds the extension inside a clean copy and compares the
+result with the normal build. When you add, move or delete a file that the extension build
+reads, update the list in the same commit; the build fails on any file it cannot classify.
 
 ## Security
 
