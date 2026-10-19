@@ -27,7 +27,7 @@
       ]
     },
     "//#test:bin": {
-      "inputs": ["bin/**"]
+      "inputs": ["bin/**", ".github/workflows/dependabot-automerge.yml"]
     }
   }
 }

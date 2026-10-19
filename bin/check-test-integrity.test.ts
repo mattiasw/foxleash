@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, test } from "node:test";
@@ -56,6 +65,33 @@ describe("check-test-integrity.sh", () => {
     }
   });
 
+  // Option values spelled as literals: none is a condition, so each fixes the test's fate in the
+  // source, whatever the environment.
+  const SKIP_LITERALS = [
+    "-1",
+    "+1",
+    ".5",
+    "-.5",
+    "0x1",
+    "1e3",
+    "1_000",
+    "1n",
+    "Infinity",
+    "-Infinity",
+    "-true",
+    '+"1"',
+    "!-1",
+    "-(1)",
+    "!void 0",
+    "(-1)",
+    "!-(1)",
+    "-!0",
+    "- 1",
+    "~0",
+    "-~0",
+  ];
+  const ONLY_LITERALS = ["-1", ".5", "Infinity", "+true", "!void 0", "~0"];
+  const TODO_LITERALS = ["-1", ".5", "Infinity", "-true", "!void 0"];
   const SKIP_TRUE = m("skip", ": true");
   const TODO_TRUE = m("todo", ": true");
   const caught: Array<[string, string]> = [
@@ -461,6 +497,54 @@ describe("check-test-integrity.sh", () => {
       "an optional call whose parenthesis starts the next line",
       `${m("test.", "skip?.")}\n("t", () => {\n  run();\n});\n`,
     ],
+    ...SKIP_LITERALS.map((value): [string, string] => [
+      `a skip option holding ${value}`,
+      `test("real", { ${m("skip", ": ", value)} }, () => {\n  run();\n});\n`,
+    ]),
+    ...ONLY_LITERALS.map((value): [string, string] => [
+      `a focus option holding ${value}`,
+      `test("real", { ${m("only", ": ", value)} }, () => {\n  run();\n});\n`,
+    ]),
+    ...TODO_LITERALS.map((value): [string, string] => [
+      `a todo option holding ${value}`,
+      `test("real", { ${m("todo", ": ", value)} }, () => {\n  run();\n});\n`,
+    ]),
+    [
+      "a todo option holding a negative number in an options object over several lines",
+      `test("real", {\n  ${m("todo", ": -1")},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a todo option holding void 0 negated in an options object over several lines",
+      `test("real", {\n  ${m("todo", ": !void 0")},\n}, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option in an options object that comes first",
+      `test({ ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option holding a negative number in an options object that comes first",
+      `test({ ${m("skip", ": -1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a focus option in an options object that comes first",
+      `test({ ${m("only", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a focus option in an options object that comes first on an optional test call",
+      `test?.({ ${m("only", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option in an options object that comes first after a space",
+      `test( { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip option after a name holding an escaped quote",
+      `test('it\\'s "x"', { ${m("skip", ": 1")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "a focus option after a template-literal name holding an escaped backtick",
+      `test(\`a \\\` b\`, { ${m("only", ": -1")} }, () => {\n  run();\n});\n`,
+    ],
   ];
 
   for (const [label, body] of caught) {
@@ -632,6 +716,7 @@ describe("check-test-integrity.sh", () => {
     ["GIT_LITERAL_PATHSPECS is set", { env: { GIT_LITERAL_PATHSPECS: "1" } }],
     ["GIT_NOGLOB_PATHSPECS is set", { env: { GIT_NOGLOB_PATHSPECS: "1" } }],
     ["GIT_GLOB_PATHSPECS is set", { env: { GIT_GLOB_PATHSPECS: "1" } }],
+    ["GIT_ICASE_PATHSPECS is set", { env: { GIT_ICASE_PATHSPECS: "1" } }],
   ];
 
   for (const [label, { setup, env, body }] of diffBypasses) {
@@ -646,6 +731,14 @@ describe("check-test-integrity.sh", () => {
       assert.doesNotMatch(out, PASSED);
     });
   }
+
+  test("GIT_ICASE_PATHSPECS does not change the verdict", () => {
+    // Top level, so the case-insensitive match is the only thing that could reach this file.
+    commitTestFile(dir, "notes.TEST.TS", `${FOCUS_LINE}\n`);
+    const plain = runGuard(dir);
+    const icase = runGuard(dir, "base", { GIT_ICASE_PATHSPECS: "1" });
+    assert.equal(icase.status, plain.status, `${plain.out}\n${icase.out}`);
+  });
 
   const SPLIT_BEFORE = 'test\n  .todo("t", () => {\n    run();\n  });\n';
   const SPLIT_AFTER = `test\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`;
@@ -753,6 +846,18 @@ describe("check-test-integrity.sh", () => {
       false,
     ],
     [
+      "a link added between an unchanged root and an unchanged skip",
+      `test\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n  .sequential\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a receiver edited into a test root above an unchanged comment line and skip link",
+      `const q = db\n  // flaky\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n  // flaky\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
       "a skip edited in below a receiver line and a blank context line under diff.suppressBlankEmpty",
       "test\n\nx();\n",
       `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
@@ -799,6 +904,24 @@ describe("check-test-integrity.sh", () => {
       "a blank line inserted above an unchanged skip",
       `test\n  ${m(".", "skip(")}"t", fn);\n`,
       `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a body line edited below an unchanged one-line call",
+      'test("t", () => {\n  run(1);\n});\n',
+      'test("t", () => {\n  run(2);\n});\n',
+      false,
+    ],
+    [
+      "an edit two lines below an unchanged legacy skip",
+      `${m("it.", "skip(")}"legacy", () => {});\ntest("t", () => {\n  run(1);\n});\n`,
+      `${m("it.", "skip(")}"legacy", () => {});\ntest("t", () => {\n  run(2);\n});\n`,
+      false,
+    ],
+    [
+      "an edit below an unchanged comment that mentions an unclosed skip",
+      `describe("d", () => {\n  // never wrap this in ${m("test.", "skip(")} again\n  test("t", () => {\n    run(1);\n  });\n});\n`,
+      `describe("d", () => {\n  // never wrap this in ${m("test.", "skip(")} again\n  test("t", () => {\n    run(2);\n  });\n});\n`,
       false,
     ],
     [
@@ -937,6 +1060,28 @@ describe("check-test-integrity.sh", () => {
     ["a conditional todo option", 'test("t", { todo: !process.env.X }, () => {\n  run();\n});\n'],
     ["a false todo option", 'test("t", { todo: false }, () => {\n  run();\n});\n'],
     ["a parenthesised todo condition", 'test("t", { todo: (isCI) }, () => {\n  run();\n});\n'],
+    ...["-offset", "!-(offset)", "InfinityMode", "!voidable", "void 0", "~offset", "!void$x"].map(
+      (value): [string, string] => [
+        `a skip option holding the condition ${value}`,
+        `test("t", { skip: ${value} }, () => {\n  run();\n});\n`,
+      ],
+    ),
+    [
+      "a todo option holding a negated name",
+      'test("t", { todo: -offset }, () => {\n  run();\n});\n',
+    ],
+    [
+      "a focus option holding a negated name",
+      'test("t", { only: -offset }, () => {\n  run();\n});\n',
+    ],
+    [
+      "a conditional skip option in an options object that comes first",
+      "test({ skip: !process.env.X }, () => {\n  run();\n});\n",
+    ],
+    [
+      "pagination holding a negative number outside a test call",
+      "const rows = await db.user.findMany({ skip: -1, take: 5 });\n",
+    ],
   ];
 
   for (const [label, body] of allowed) {
@@ -1002,6 +1147,27 @@ describe("check-test-integrity.sh", () => {
       /placeholder strip \(sed\) failed \(exit 1\)/,
     ],
     [
+      "the base listing (git ls-tree)",
+      "git",
+      'for a in "$@"; do [ "$a" = ls-tree ] && exit 128; done',
+      'test("clean", () => {});\n',
+      /cannot list the files at/,
+    ],
+    [
+      "the index listing (git ls-files)",
+      "git",
+      'for a in "$@"; do [ "$a" = ls-files ] && exit 128; done',
+      'test("clean", () => {});\n',
+      /cannot list the files in the index/,
+    ],
+    [
+      "the test-file count (grep)",
+      "grep",
+      'for a in "$@"; do case "$a" in *"100[0-7]"*) exit 2 ;; esac; done',
+      'test("clean", () => {});\n',
+      /test-file count \(grep\) failed/,
+    ],
+    [
       "the word-boundary probe",
       "grep",
       `for a in "$@"; do [ "$a" = '\\bfit[(]' ] && exit 1; done`,
@@ -1035,6 +1201,99 @@ describe("check-test-integrity.sh", () => {
     const { status, out } = runGuard(dir);
     assert.equal(status, 1, out);
     assert.match(out, /test files dropped from 1/);
+  });
+
+  test("fails when a test file is turned into a symlink", () => {
+    writeFileSync(path.join(dir, "keep.ts"), "export const kept = 1;\n");
+    unlinkSync(path.join(dir, "base.test.ts"));
+    symlinkSync("keep.ts", path.join(dir, "base.test.ts"));
+    commitAll(dir, "link base");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 1/);
+  });
+
+  test("fails when a test file is turned into a submodule", () => {
+    const head = git(dir, "rev-parse", "HEAD").trim();
+    git(dir, "rm", "-q", "base.test.ts");
+    git(dir, "update-index", "--add", "--cacheinfo", `160000,${head},base.test.ts`);
+    // Not commitAll: add -A would drop the gitlink, which has no directory in the work tree.
+    git(dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "submodule base");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 1/);
+  });
+
+  test("fails when a test file whose name holds a non-ASCII character is deleted", () => {
+    commitTestFile(dir, "\u00fc.test.ts", 'test("u", () => {});\n');
+    git(dir, "branch", "-f", "base", "main");
+    git(dir, "rm", "-q", "\u00fc.test.ts");
+    commitAll(dir, "drop it");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 2/);
+  });
+
+  test("allows renaming a test file to another name with a non-ASCII character", () => {
+    commitTestFile(dir, "\u00fc.test.ts", 'test("u", () => {});\n');
+    git(dir, "branch", "-f", "base", "main");
+    git(dir, "mv", "\u00fc.test.ts", "\u00f6.test.ts");
+    commitAll(dir, "rename it");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 0, out);
+    assert.match(out, PASSED);
+  });
+
+  test("fails when a test file whose name git quotes is deleted", () => {
+    commitTestFile(dir, 'q".test.ts', 'test("q", () => {});\n');
+    git(dir, "branch", "-f", "base", "main");
+    git(dir, "rm", "-q", 'q".test.ts');
+    commitAll(dir, "drop it");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 2/);
+  });
+
+  test("fails when a test file whose name holds a byte that is not valid UTF-8 is deleted", () => {
+    // A spawn argument cannot carry the byte, so the file is made and removed through a Buffer
+    // path and staged by add -A.
+    const name = Buffer.concat([
+      Buffer.from(`${dir}/`),
+      Buffer.from([0xff]),
+      Buffer.from(".test.ts"),
+    ]);
+    writeFileSync(name, 'test("x", () => {});\n');
+    commitAll(dir, "add it");
+    git(dir, "branch", "-f", "base", "main");
+    unlinkSync(name);
+    commitAll(dir, "drop it");
+    const { status, out } = runGuard(dir, "base", { LC_ALL: "C.UTF-8" });
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 2/);
+  });
+
+  test("fails when a test file is deleted beside one left unmerged", () => {
+    writeFileSync(path.join(dir, "a.test.ts"), 'test("a", () => {});\n');
+    commitTestFile(dir, "c.test.ts", 'test("c", () => {});\n');
+    git(dir, "branch", "-f", "base", "main");
+    git(dir, "checkout", "-q", "-b", "other");
+    commitTestFile(dir, "c.test.ts", 'test("c2", () => {});\n');
+    git(dir, "checkout", "-q", "main");
+    commitTestFile(dir, "c.test.ts", 'test("c3", () => {});\n');
+    const merge = spawnSync("git", ["merge", "-q", "other"], { cwd: dir, env: gitEnv() });
+    assert.equal(merge.status, 1, "the merge should stop on a conflict");
+    git(dir, "rm", "-q", "a.test.ts");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, /test files dropped from 3 \(base\) to 1\./);
+  });
+
+  test("allows a test file made executable", () => {
+    chmodSync(path.join(dir, "base.test.ts"), 0o755);
+    commitAll(dir, "make it executable");
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 0, out);
+    assert.match(out, PASSED);
   });
 
   test("skips when the base ref is none", () => {

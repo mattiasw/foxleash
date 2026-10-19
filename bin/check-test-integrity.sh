@@ -1,6 +1,7 @@
 #!/bin/sh
 # The test suite is a ratchet. Against a base ref (BASE_REF, default origin/main):
-#   1. the number of test files never drops;
+#   1. the number of test files never drops (a symlink or submodule at a *.test.ts path is
+#      not a test file);
 #   2. no focus, skip or todo markers are added: .only and .fixme on any receiver, the x- and
 #      f-prefixed forms, .each-style chains on them, every .skip( on a receiver chain rooted
 #      at test, describe, it, suite, context, specify or concurrent, and a bare .skip() on any
@@ -34,9 +35,35 @@ else
   exit 1
 fi
 
-TEST_FILES='[.]test[.]ts$'
-BASE_COUNT=$(git ls-tree -r --name-only "$RESOLVED" | grep -Ec "$TEST_FILES" || true)
-HEAD_COUNT=$(git ls-files | grep -Ec "$TEST_FILES" || true)
+# Gate 1 counts regular files only (mode 100xxx), so a test file turned into a symlink (120000)
+# or a submodule (160000) at the same path counts as removed. core.quotePath=false lists a
+# non-ASCII name as its bytes; a name git still C-quotes (a control character, " or \) ends in
+# a quote, hence "?. The count reads bytes (LC_ALL=C), and each listing is captured first, so a
+# failing git is an error rather than a count of 0.
+TAB=$(printf '\t')
+TEST_FILES='[.]test[.]ts"?$'
+BASE_LIST=$(git -c core.quotePath=false ls-tree -r "$RESOLVED") || {
+  echo "check-test-integrity: cannot list the files at $BASE; gate 1 cannot count." >&2
+  exit 1
+}
+HEAD_LIST=$(git -c core.quotePath=false ls-files -s) || {
+  echo "check-test-integrity: cannot list the files in the index; gate 1 cannot count." >&2
+  exit 1
+}
+
+# grep -c exits 1 when it counts nothing, so only a status above 1 is a failure.
+count_test_files() {
+  COUNT_STATUS=0
+  COUNT=$(printf '%s\n' "$1" | LC_ALL=C grep -acE "$2.*$TEST_FILES") || COUNT_STATUS=$?
+  [ "$COUNT_STATUS" -le 1 ] || return 1
+  printf '%s\n' "$COUNT"
+}
+
+BASE_COUNT=$(count_test_files "$BASE_LIST" "^100[0-7]{3} blob [0-9a-f]+$TAB") &&
+  HEAD_COUNT=$(count_test_files "$HEAD_LIST" "^100[0-7]{3} [0-9a-f]+ 0$TAB") || {
+  echo "check-test-integrity: the test-file count (grep) failed; gate 1 cannot count." >&2
+  exit 1
+}
 if [ "$HEAD_COUNT" -lt "$BASE_COUNT" ]; then
   echo "check-test-integrity: test files dropped from $BASE_COUNT ($BASE) to $HEAD_COUNT." >&2
   exit 1
@@ -51,8 +78,9 @@ fi
 # --unified. The '>' indicator keeps an added line starting with '++' apart from the '+++' header.
 # Gitattributes, binary detection, an external diff and textconv drivers must not change what the
 # scan sees, so the diff is always plain text of the real file contents. The pathspec variables
-# would make '*.test.ts' match nothing, or only files at the top level.
-DIFF_OUT=$(unset GIT_DIFF_OPTS GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS; git diff --no-color --text --no-ext-diff --no-textconv --unified=3 --output-indicator-new='>' "$RESOLVED" HEAD -- '*.test.ts') || {
+# would make '*.test.ts' match nothing, or only files at the top level, or also files whose name
+# matches only ignoring case.
+DIFF_OUT=$(unset GIT_DIFF_OPTS GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGLOB_PATHSPECS GIT_ICASE_PATHSPECS; git diff --no-color --text --no-ext-diff --no-textconv --unified=3 --output-indicator-new='>' "$RESOLVED" HEAD -- '*.test.ts') || {
   echo "check-test-integrity: git diff against $BASE failed; gate 2 cannot see the diff." >&2
   exit 1
 }
@@ -196,9 +224,10 @@ SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))('"$CALL"'|(
 # The option-object patterns. A key may be quoted or have whitespace before its colon, but it
 # must start the line or follow {, , or a block comment's */, so prose such as "desktop only: 2
 # per row" is not a key. VALUE is true, null, NaN or a string: node:test skips on any value but
-# undefined and false. CALL_VALUE, a number or a negated or parenthesised literal, is refused
-# only in an options object that is the second argument of a test call on the same line, because
-# skip is also a pagination key. ONLY_OPTION and TODO_OPTION go to the marker grep, so no
+# undefined and false. CALL_VALUE, a number (which may start with a sign or .), Infinity, or a
+# literal after a run of signs, ~, ! and ( (-1, .5, -true, ~0, !void 0, (true)), is refused only
+# in an options object that is the first or second argument of a test call on the same line,
+# because skip is also a pagination key. ONLY_OPTION and TODO_OPTION go to the marker grep, so no
 # placeholder exempts a focus or a todo. todo is no pagination key, so TODO_OPTION refuses a
 # CALL_VALUE after any key; the price is that a todo: key holding a literal in plain test data,
 # at the start of a line or after {, , or */, is refused too. That is what catches a todo option
@@ -213,20 +242,25 @@ SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))('"$CALL"'|(
 # QS is a quoted string, closed by the quote that opened it, so "don't" is one string. The
 # placeholder steps over quoted values with ESC_QS, which also reads backslash escapes, and over
 # block comments; NBQ excludes quotes, braces and /, so it steps over no nested object, regex or
-# line comment. ARG excludes what ends a test call's first argument outside a string.
+# line comment. ARG excludes what ends a test call's first argument outside a string, and
+# its strings are read with ESC_QS, so an escaped quote in a test name does not end one.
 Q=$(printf '[\047\042\140]')
 QS=$(printf '(\042[^\042]*\042|\047[^\047]*\047|\140[^\140]*\140)')
 ESC_QS=$(printf '(\042([^\042\\\\]|\\\\.)*\042|\047([^\047\\\\]|\\\\.)*\047|\140([^\140\\\\]|\\\\.)*\140)')
 COMMENT='/[*]([^*]|[*]+[^*/])*[*]+/'
 NBQ=$(printf '[^{}/\047\042\140]')
 ARG=$(printf '[^,{}()\047\042\140]')
-# A value that is never a condition: a keyword literal, a number or a string.
-LITERAL='((true|false|null|undefined|NaN|Infinity)\b|[0-9]|'"$Q"')'
+# The void keyword only when the byte after it cannot continue an identifier: \b would not do,
+# since $ continues an identifier (void$x and voidable are names).
+VOID_KEYWORD='void[^A-Za-z0-9_$]'
+# A value that is never a condition: a keyword literal, the void keyword, a number (which may
+# start with .) or a string.
+LITERAL='((true|false|null|undefined|NaN|Infinity)\b|'"$VOID_KEYWORD"'|[.]?[0-9]|'"$Q"')'
 BARE_SKIP="${DOT}skip${CALL}[[:space:]]*[)]"
 KEY="(^|[{,]|[*]/)[[:space:]]*${Q}?"
 VALUE="${Q}?[[:space:]]*:[[:space:]]*((true|null|NaN)\b|${Q})"
-CALL_KEY="\b(test|it|describe|suite|context|specify)${CALL}(${ARG}|${QS})*,[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
-CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([0-9]|[!(][[:space:]!(]*${LITERAL})"
+CALL_KEY="\b(test|it|describe|suite|context|specify)${CALL}((${ARG}|${ESC_QS})*,)?[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
+CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([.]?[0-9]|Infinity\b|[-+~!(][-+~[:space:]!(]*${LITERAL})"
 SKIP_OPTION="${KEY}skip${VALUE}|${CALL_KEY}skip${CALL_VALUE}"
 ONLY_OPTION="${KEY}only${VALUE}|${CALL_KEY}only${CALL_VALUE}"
 TODO_OPTION="${KEY}todo(${VALUE}|${CALL_VALUE})"

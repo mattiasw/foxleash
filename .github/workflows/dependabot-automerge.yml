@@ -19,8 +19,11 @@ concurrency:
 
 jobs:
   automerge:
-    # Only a pull_request run tests the PR merged with main.
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'pull_request'
+    # Any successful completion re-checks; only a pull_request run vouches for the merge (the
+    # required-workflow check below counts no other event). An event filter here would skip a
+    # later completion, such as a workflow_dispatch run finishing after the pull_request run, and
+    # the PR would wait for its next push.
+    if: github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -59,18 +62,21 @@ jobs:
             exit 1
           fi
 
-          # Find the Dependabot PR for this commit.
+          # Find the Dependabot PR for this commit. gh lists 30 PRs unless told otherwise, so
+          # with more open an older Dependabot PR would never be found.
           PR=$(gh pr list --repo "$REPO" \
-            --state open --json number,headRefOid,author \
+            --state open --limit 1000 --json number,headRefOid,author \
             --jq ".[] | select(.headRefOid == \"$SHA\" and (.author.login == \"dependabot[bot]\" or .author.login == \"app/dependabot\")) | .number")
           if [ -z "$PR" ]; then
             echo "No open Dependabot PR found for $SHA"
             exit 0
           fi
 
-          # A run still in progress means "not ready"; a required workflow with no run at all
-          # for this sha is an error (the names drifted), not a wait that never ends. Runs from
-          # fork PRs with the same sha do not count: a later one could hide a failed run.
+          # Only pull_request runs count: a push or workflow_dispatch run tests the branch head,
+          # not its merge with main. A run still in progress means "not ready"; a required
+          # workflow with no pull_request run for this sha is an error (its trigger no longer
+          # fires, or the names drifted), not a wait that never ends. Runs from fork PRs with
+          # the same sha do not count: a later one could hide a failed run.
           if ! WORKFLOW_RUNS=$(gh api \
             "repos/$REPO/actions/runs?head_sha=$SHA&per_page=100" \
             --jq '.workflow_runs'); then
@@ -81,12 +87,12 @@ jobs:
           for REQUIRED_WORKFLOW in "${REQUIRED_WORKFLOWS[@]}"; do
             WORKFLOW_CONCLUSION=$(echo "$WORKFLOW_RUNS" | jq -r \
               --arg WORKFLOW_NAME "$REQUIRED_WORKFLOW" \
-              'map(select(.name == $WORKFLOW_NAME and .head_repository.id == .repository.id))
+              'map(select(.name == $WORKFLOW_NAME and .event == "pull_request" and .head_repository.id == .repository.id))
                 | if length == 0 then "not started"
                   else (sort_by(.run_started_at // .created_at) | last | .conclusion // "in progress")
                   end')
             if [ "$WORKFLOW_CONCLUSION" = "not started" ]; then
-              echo "::error::Required workflow \"$REQUIRED_WORKFLOW\" has no run for $SHA; the workflow names are out of sync."
+              echo "::error::Required workflow \"$REQUIRED_WORKFLOW\" has no pull_request run for $SHA; its pull_request trigger no longer fires or the workflow names are out of sync."
               exit 1
             fi
             if [ "$WORKFLOW_CONCLUSION" != "success" ]; then
@@ -115,15 +121,20 @@ jobs:
           fi
 
           echo "All checks passed, merging PR #$PR"
-          # Merge only the commit that was checked.
+          # Merge only the commit that was checked: GitHub refuses the merge when the branch
+          # moved since $SHA, so an untested head is never merged on another commit's green run.
           if gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
             echo "merged=true" >> "$GITHUB_OUTPUT"
           else
-            PR_STATE=$(gh pr view "$PR" --repo "$REPO" --json state --jq .state)
+            # Two steps, so a failing gh pr view fails the step instead of reading as no state.
+            PR_INFO=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid --jq '.state + " " + .headRefOid')
+            read -r PR_STATE PR_HEAD <<< "$PR_INFO"
             if [ "$PR_STATE" = "MERGED" ]; then
               # gh can fail after this run's merge landed (deleting the branch, a lost response).
               echo "PR #$PR is merged."
               echo "merged=true" >> "$GITHUB_OUTPUT"
+            elif [ "$PR_STATE" = "OPEN" ] && [ -n "$PR_HEAD" ] && [ "$PR_HEAD" != "$SHA" ]; then
+              echo "::notice::PR #$PR's head moved to $PR_HEAD since its checks ran on $SHA; the new head's CI run retries the merge."
             else
               echo "::error::Failed to merge PR #$PR (state: $PR_STATE)."
               exit 1
