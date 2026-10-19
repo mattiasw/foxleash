@@ -6,6 +6,7 @@ web-ext-artifacts/
 amo-dist/
 artifacts/
 *.log
+/foxhand-probe-*
 
 # Local agent instructions and settings
 CLAUDE.local.md

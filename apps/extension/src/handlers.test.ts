@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { MethodName, TabInfo } from "@foxhand/protocol";
+import type { MethodName, ProbeResult, TabInfo } from "@foxhand/protocol";
 import type { Tab } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -9,7 +9,7 @@ import {
   type FakePort,
   flush,
 } from "./fake-browser.ts";
-import { createHandlers, ToolError } from "./handlers.ts";
+import { createHandlers, PROBE_CUTOFF_MS, PROBE_TIMEOUT_MS, ToolError } from "./handlers.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite } from "./settings.ts";
 import {
@@ -1153,13 +1153,239 @@ describe("approval", { timeout: 10000 }, () => {
   });
 });
 
+describe("probe_input", { timeout: 10000 }, () => {
+  const RESULT: ProbeResult = {
+    userAgent: "Mozilla/5.0 Firefox/150.0",
+    checks: [
+      {
+        check: "tab_focus",
+        target: "probe",
+        element: "input type=text",
+        strategy: "tab_keydown",
+        outcome: "no_effect",
+        delivered: true,
+        trustedOnly: true,
+        detail: "focus did not move",
+      },
+    ],
+  };
+
+  for (const tabId of ["1", -1, 1.5, undefined]) {
+    it(`refuses the tab id ${String(tabId)}`, async () => {
+      const { fake, call, open } = setup();
+      await open("s1");
+      await assert.rejects(call("s1", "probe_input", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "probe_input needs a tab id that is a whole number of 0 or more.",
+      });
+      assert.deepEqual(fake.injections, []);
+    });
+  }
+
+  it("takes 0 as a tab id", async () => {
+    const { call, open } = setup();
+    await open("s1");
+    await assert.rejects(call("s1", "probe_input", { tabId: 0 }), { code: "tab_not_found" });
+  });
+
+  it("refuses a tab that does not exist", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    await assert.rejects(call("s1", "probe_input", { tabId: 99 }), {
+      code: "tab_not_found",
+      message: "Tab 99 does not exist.",
+    });
+    assert.deepEqual(fake.injections, []);
+  });
+
+  it("refuses a tab outside the session's group, on an allowed site", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const outside = fake.openTab({ url: "https://a.example/" });
+    await rejectsWith(call("s1", "probe_input", { tabId: outside.id }), "tab_not_in_group");
+    await rejectsWith(call("s2", "probe_input", { tabId: outside.id }), "tab_not_in_group");
+    assert.deepEqual(fake.injections, []);
+  });
+
+  it("refuses the tab that shows the session's open prompt", async () => {
+    const { fake, call, promptOf } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/" });
+    const prompt = await promptOf("s1");
+    await assert.rejects(call("s1", "probe_input", { tabId: prompt.tabId }), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${prompt.tabId} whether to allow https://a.example. Try again after the user has answered.`,
+    });
+    assert.deepEqual(fake.injections, []);
+    void opened.catch(() => {});
+  });
+
+  for (const url of ["about:blank", "moz-extension://abc/options.html", "file:///home/x.html"]) {
+    it(`refuses a tab that shows ${url}`, async () => {
+      const { fake, call, open } = setup();
+      const tab = await open("s1");
+      fake.navigateByUser(tab.id, url);
+      await flush();
+      await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
+        code: "page_not_web",
+        message: `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
+      });
+      assert.deepEqual(fake.injections, []);
+    });
+  }
+
+  it("refuses an unapproved site without asking", async (t) => {
+    const { fake, call, open, access } = setup();
+    const tab = await open("s1");
+    fake.navigateByUser(tab.id, "https://a.example/x");
+    await flush();
+    const update = t.mock.method(fake.browser.tabs, "update");
+    await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
+      code: "site_not_approved",
+      message:
+        "Foxhand acts on https://a.example only after the user allowed it; open it with tab_open or navigate to ask.",
+    });
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/x");
+    assert.deepEqual(fake.injections, []);
+  });
+
+  it("refuses a blocklisted site, also when the user granted it", async () => {
+    const { fake, call, open, grant } = setup();
+    const tab = await open("s1");
+    fake.navigateByUser(tab.id, "https://www.paypal.com/");
+    await flush();
+    const blocked = {
+      code: "site_blocked",
+      message:
+        "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+    };
+    await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), blocked);
+    await grant("https://www.paypal.com");
+    await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), blocked);
+    assert.deepEqual(fake.injections, []);
+  });
+
+  it("runs the bundled probe in the tab's isolated world and returns frame 0's result", async () => {
+    const { fake, call, open, grant, probe, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/page");
+    const timersBefore = timers.pending();
+    fake.injectionResults = [
+      { frameId: 4, result: { userAgent: "frame 4", checks: [] } },
+      { frameId: 0, result: RESULT },
+    ];
+    const before = Date.now();
+    assert.deepEqual(await call("s1", "probe_input", { tabId: tab.id }), RESULT);
+    const after = Date.now();
+    assert.equal(fake.injections.length, 1);
+    const [injection] = fake.injections;
+    assert.equal(injection?.func, probe);
+    const cutoff = injection?.args[1];
+    assert.ok(
+      typeof cutoff === "number" &&
+        cutoff >= before + PROBE_CUTOFF_MS &&
+        cutoff <= after + PROBE_CUTOFF_MS,
+      String(cutoff),
+    );
+    assert.deepEqual(injection, {
+      tabId: tab.id,
+      func: probe,
+      args: ["https://a.example", cutoff],
+      world: "ISOLATED",
+    });
+    assert.equal(timers.pending(), timersBefore);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/page");
+  });
+
+  it("fails once when Firefox refuses the injection, without its error text", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/secret-path");
+    fake.failNextInjection(new Error("Missing host permission for https://a.example/secret-path"));
+    await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
+      code: "probe_failed",
+      message: `Foxhand could not run its input probe in tab ${tab.id}.`,
+    });
+    fake.injectionResults = [{ frameId: 0, result: RESULT }];
+    assert.deepEqual(await call("s1", "probe_input", { tabId: tab.id }), RESULT);
+  });
+
+  const failures: {
+    name: string;
+    frames: { frameId: number; result?: unknown; error?: unknown }[];
+  }[] = [
+    { name: "an error in frame 0", frames: [{ frameId: 0, error: new Error("boom") }] },
+    { name: "an error with a result", frames: [{ frameId: 0, result: RESULT, error: "boom" }] },
+    { name: "no frame 0", frames: [{ frameId: 2, result: RESULT }] },
+    { name: "no frames", frames: [] },
+    { name: "an undefined result", frames: [{ frameId: 0 }] },
+  ];
+  for (const { name, frames } of failures) {
+    it(`fails on ${name}`, async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.injectionResults = frames;
+      await rejectsWith(call("s1", "probe_input", { tabId: tab.id }), "probe_failed", name);
+    });
+  }
+
+  it("refuses when the probe finds the tab on another site", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.injectionResults = [{ frameId: 0, result: null }];
+    await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
+      code: "site_not_approved",
+      message: `Tab ${tab.id} no longer shows https://a.example.`,
+    });
+  });
+
+  it("fails an injection that never settles once the probe timeout passes", async (t) => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    t.mock.method(fake.browser.scripting, "executeScript", () => new Promise(() => {}));
+    let settled = false;
+    const probed = call("s1", "probe_input", { tabId: tab.id });
+    probed.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flush();
+    timers.advance(PROBE_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(settled, false);
+    timers.advance(1);
+    await rejectsWith(probed, "probe_failed");
+  });
+
+  it("bounds the injection below the host's 60 s request timeout", () => {
+    assert.equal(PROBE_TIMEOUT_MS, 30_000);
+  });
+
+  it("stops the probe acting 5 s before the injection timeout", () => {
+    assert.equal(PROBE_TIMEOUT_MS - PROBE_CUTOFF_MS, 5_000);
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
-  const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access });
+  const probe = async function probe(_site: string): Promise<ProbeResult | null> {
+    return null;
+  };
+  const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access, probe });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
     handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
@@ -1214,7 +1440,21 @@ function setup() {
     return shown;
   }
 
-  return { fake, timers, sessions, call, open, list, navigate, grant, promptOf, page, timeOut };
+  return {
+    fake,
+    timers,
+    sessions,
+    access,
+    probe,
+    call,
+    open,
+    list,
+    navigate,
+    grant,
+    promptOf,
+    page,
+    timeOut,
+  };
 }
 
 function loadsOf(fake: { tabUpdates: { url?: string }[] }, url: string): number {

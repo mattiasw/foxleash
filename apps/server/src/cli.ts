@@ -5,12 +5,17 @@ import { doctor } from "./doctor.ts";
 import { hostCommand } from "./host.ts";
 import { install, uninstall } from "./install.ts";
 import { mcpCommand } from "./mcp.ts";
+import { probeCommand } from "./probe.ts";
 import { runCommand } from "./run-command.ts";
 import { resolveSocketDir } from "./socket-dir.ts";
 import { SERVER_VERSION } from "./version.ts";
 
 export interface CommandOptions {
   noClaude: boolean;
+  /** probe's report path, without its extension. */
+  out?: string;
+  /** probe's http(s) URLs, in order. */
+  urls?: string[];
 }
 
 export type Command = (options: CommandOptions, deps: CliDeps) => Promise<number>;
@@ -60,6 +65,15 @@ COMMANDS.set("doctor", (_options, deps) => {
   });
 });
 
+COMMANDS.set("probe", (options, deps) =>
+  probeCommand({
+    urls: options.urls ?? [],
+    out: options.out,
+    stdout: deps.stdout,
+    stderr: deps.stderr,
+  }),
+);
+
 export const USAGE = `Usage: foxhand <command>
 
 Commands:
@@ -68,8 +82,11 @@ Commands:
   install [--no-claude]    Set up the native host and add Foxhand to Claude Code
   uninstall [--no-claude]  Remove the native host and Foxhand from Claude Code
   doctor                   Check the installation and the connection to Firefox
+  probe [--out <path>] <url>...
+                           Measure which synthetic input works on each page
 
 --no-claude leaves your Claude Code configuration unchanged.
+probe writes <path>.json and .md, by default ./foxhand-probe-<date>-<time>.
 `;
 
 export async function runCli(args: string[], deps: CliDeps): Promise<number> {
@@ -106,10 +123,37 @@ function parseOptions(name: string, rest: string[]): CommandOptions | undefined 
   if (name === "host") {
     return { noClaude: false };
   }
+  if (name === "probe") {
+    return probeOptions(rest);
+  }
   if (rest.length === 0) {
     return { noClaude: false };
   }
   const noClaude =
     (name === "install" || name === "uninstall") && rest.length === 1 && rest[0] === "--no-claude";
   return noClaude ? { noClaude } : undefined;
+}
+
+/** `[--out <path>] <url>...`: at least one http or https URL, and --out at most once. */
+function probeOptions(rest: string[]): CommandOptions | undefined {
+  const urls: string[] = [];
+  let out: string | undefined;
+  const queue = [...rest];
+  for (let arg = queue.shift(); arg !== undefined; arg = queue.shift()) {
+    if (arg === "--out") {
+      const value = queue.shift();
+      if (out !== undefined || value === undefined || value === "") return undefined;
+      out = value;
+    } else if (arg.startsWith("-")) {
+      return undefined;
+    } else {
+      const parsed = URL.parse(arg);
+      if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
+        return undefined;
+      }
+      urls.push(arg);
+    }
+  }
+  if (urls.length === 0) return undefined;
+  return out === undefined ? { noClaude: false, urls } : { noClaude: false, urls, out };
 }

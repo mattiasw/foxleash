@@ -266,6 +266,44 @@ process, reading the extension's state from the welcome. The extension reports i
 all websites when it connects to the host and again whenever the user grants or revokes it, so
 that line shows the current state.
 
+## Probing synthetic input
+
+`npm run probe -- <url>...` (the `probe` subcommand) measures which kinds of synthetic input
+work on real pages, to tune how Foxhand clicks and types. With Firefox running and the
+extension connected, it opens each URL in a new tab in the probe's own Foxhand tab group.
+When Firefox asks in that tab whether to allow the site, answer there; the probe waits up to
+10 minutes per URL. It then runs a fixed check bundled in the extension in the page and moves
+on to the next URL.
+
+It writes two reports, `<path>.json` and `<path>.md`, and never replaces an existing file.
+`--out <path>` sets the path without its extension; by default it is
+`foxhand-probe-<date>-<time>` in the current folder. Through npm, the current folder and so a
+relative `--out` path are the Foxhand folder.
+
+What the probe does in a page:
+
+- It types short markers such as `fxsetter` into the first text field (never a password field,
+  nor one marked for a password or a one-time code), the first editable area and the first
+  rich editor (such as Gmail's compose window or a Google Docs document) it finds. It restores
+  a text field's value afterwards, but not an editor's text, so run it on a scratch document or
+  a draft. The page reacts to the markers as it would to your typing, for example by searching
+  for them.
+- It clicks only an expand or collapse toggle, and then clicks it back, and a link to a
+  place on the same page.
+- It never submits a form itself, never presses Enter or Tab in the page's own elements, and
+  never follows a link off the page. It tests those on elements of its own, which it removes
+  again.
+- The report holds no page text: per element, only its tag name, type, role, editor kind and
+  up to three class names.
+
+To run it in your everyday Firefox profile, for example against your own logged-in sites:
+
+1. `npm run build`, then `npm run setup` to install the native host.
+2. In Firefox, open `about:debugging`, choose This Firefox, then Load Temporary Add-on, and
+   pick `apps/extension/dist/manifest.json`. Firefox removes the add-on again when it
+   restarts.
+3. Run `npm run probe -- <url>...` and allow each site in its tab when Foxhand asks.
+
 ## Dependency updates
 
 Dependabot opens pull requests every Thursday: npm updates grouped into one for development

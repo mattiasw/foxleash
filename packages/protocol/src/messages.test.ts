@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { inspect } from "node:util";
-import { type Message, type Params, parseMessage, type Request } from "./index.ts";
+import {
+  type Message,
+  type Params,
+  type ProbeCheckName,
+  type ProbeOutcome,
+  parseMessage,
+  type Request,
+} from "./index.ts";
 
 type Fields = Record<string, unknown>;
 
@@ -62,7 +69,7 @@ describe("parseMessage accepts", () => {
         extension: { connected: true, protocol: 1, version: "0.2.0" },
       },
     },
-    ...(["tabs_list", "tab_open", "navigate"] as const).map((method) => ({
+    ...(["tabs_list", "tab_open", "navigate", "probe_input"] as const).map((method) => ({
       name: `a ${method} request`,
       input: { ...request, method, params: { tabId: 2 } },
       expected: { type: "request", id: "r1", session: "s1", method, params: { tabId: 2 } } as const,
@@ -200,6 +207,26 @@ describe("parseMessage accepts", () => {
       { tabId: 1, url: "https://example.com/", action: "back" },
     ];
     assert.equal(params.length, 3);
+  });
+
+  it("the probe's check names and outcomes, all of them (compile-time)", () => {
+    const checks: Record<ProbeCheckName, true> = {
+      click_button: true,
+      click_link: true,
+      type_input: true,
+      type_contenteditable: true,
+      type_rich_editor: true,
+      enter_in_form: true,
+      tab_focus: true,
+    };
+    const outcomes: Record<ProbeOutcome, true> = {
+      worked: true,
+      no_effect: true,
+      no_target: true,
+      unknown: true,
+      error: true,
+    };
+    assert.equal(Object.keys(checks).length + Object.keys(outcomes).length, 12);
   });
 });
 

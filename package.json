@@ -24,6 +24,7 @@
     "setup": "node apps/server/src/main.ts install",
     "teardown": "node apps/server/src/main.ts uninstall",
     "doctor": "node apps/server/src/main.ts doctor",
+    "probe": "node apps/server/src/main.ts probe",
     "check:test-integrity": "sh bin/check-test-integrity.sh",
     "test:bin": "node --test 'bin/**/*.test.ts'",
     "typecheck:bin": "tsc --noEmit -p bin",

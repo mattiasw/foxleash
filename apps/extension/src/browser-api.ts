@@ -66,6 +66,21 @@ export interface BrowserApi {
     };
     onChanged: BrowserEvent<(changes: Record<string, StorageChange>, areaName: string) => void>;
   };
+  scripting: {
+    executeScript<Args extends unknown[], Result>(injection: {
+      target: { tabId: number };
+      func: (...args: Args) => Result;
+      args: Args;
+      world: "ISOLATED";
+    }): Promise<InjectionResult<Awaited<Result>>[]>;
+  };
+}
+
+/** One frame's outcome of `scripting.executeScript`. */
+export interface InjectionResult<T> {
+  frameId: number;
+  result?: T;
+  error?: unknown;
 }
 
 export interface BrowserEvent<Listener> {

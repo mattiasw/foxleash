@@ -7,6 +7,36 @@ export interface TabInfo {
 
 export type NavigateAction = "back" | "forward" | "reload";
 
+export type ProbeCheckName =
+  | "click_button"
+  | "click_link"
+  | "type_input"
+  | "type_contenteditable"
+  | "type_rich_editor"
+  | "enter_in_form"
+  | "tab_focus";
+
+export type ProbeOutcome = "worked" | "no_effect" | "no_target" | "unknown" | "error";
+
+export interface ProbeCheck {
+  check: ProbeCheckName;
+  target: "probe" | "site";
+  /** Built from tag, type, role, editor kind and at most three class names; never page text. */
+  element?: string;
+  strategy: string;
+  outcome: ProbeOutcome;
+  /** A probe listener at window capture saw the event the strategy dispatched or caused. */
+  delivered: boolean;
+  /** Delivered, yet no effect: an effect only trusted input produces, or the page ignored it. */
+  trustedOnly: boolean;
+  detail: string;
+}
+
+export interface ProbeResult {
+  userAgent: string;
+  checks: ProbeCheck[];
+}
+
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
   tab_open: { params: { url?: string }; result: { tab: TabInfo } };
@@ -16,6 +46,8 @@ export interface Methods {
       | { tabId: number; action: NavigateAction; url?: never };
     result: { tab: TabInfo };
   };
+  /** Not an MCP tool: only `foxhand probe` calls it. */
+  probe_input: { params: { tabId: number }; result: ProbeResult };
 }
 
 export type MethodName = keyof Methods;
@@ -31,6 +63,7 @@ export const METHOD_NAMES = [
   "tabs_list",
   "tab_open",
   "navigate",
+  "probe_input",
 ] as const satisfies readonly MethodName[];
 
 // Fails to compile when a key of `Methods` is missing from `METHOD_NAMES`.

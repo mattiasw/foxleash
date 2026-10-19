@@ -1,6 +1,7 @@
 import type {
   BrowserApi,
   BrowserEvent,
+  InjectionResult,
   MessageSender,
   Permissions,
   Port,
@@ -37,6 +38,12 @@ export interface FakeBrowser {
   windowUpdates: { windowId: number; drawAttention?: boolean }[];
   /** Makes the next `storage.local.set` reject, once. */
   failNextSet(): void;
+  /** Every `scripting.executeScript` call, in order. */
+  injections: Injection[];
+  /** What each `scripting.executeScript` call resolves to. */
+  injectionResults: InjectionResult<unknown>[];
+  /** Makes the next `scripting.executeScript` reject with `error`, once. */
+  failNextInjection(error: unknown): void;
   /** The user granting or revoking access to all websites in about:addons. */
   setAllUrls(granted: boolean): void;
   openTab(properties?: Partial<Omit<FakeTab, "id" | "history" | "index">>): FakeTab;
@@ -79,6 +86,13 @@ export interface FakeTab {
   index: number;
 }
 
+export interface Injection {
+  tabId: number;
+  func: unknown;
+  args: unknown[];
+  world: string;
+}
+
 export interface TabUpdate {
   tabId: number;
   url?: string;
@@ -116,6 +130,7 @@ export function createFakeBrowser(): FakeBrowser {
     createEvent<(message: unknown, sender: MessageSender) => Promise<unknown> | undefined>();
   const onTabRemoved = createEvent<(tabId: number) => void>();
   let failSet = false;
+  let injectionFailure: { error: unknown } | undefined;
 
   const browser: BrowserApi = {
     runtime: {
@@ -238,6 +253,22 @@ export function createFakeBrowser(): FakeBrowser {
       },
       onChanged: onStorageChanged,
     },
+    scripting: {
+      executeScript: async function executeScript<Args extends unknown[], Result>(injection: {
+        target: { tabId: number };
+        func: (...args: Args) => Result;
+        args: Args;
+        world: "ISOLATED";
+      }): Promise<InjectionResult<Awaited<Result>>[]> {
+        const { target, func, args, world } = injection;
+        fake.injections.push({ tabId: target.tabId, func, args, world });
+        const failure = injectionFailure;
+        injectionFailure = undefined;
+        if (failure !== undefined) throw failure.error;
+        // The fake runs no page, so what each frame returned is the test's to say.
+        return structuredClone(fake.injectionResults) as InjectionResult<Awaited<Result>>[];
+      },
+    },
   };
 
   const fake: FakeBrowser = {
@@ -255,6 +286,11 @@ export function createFakeBrowser(): FakeBrowser {
     windowUpdates: [],
     failNextSet: () => {
       failSet = true;
+    },
+    injections: [],
+    injectionResults: [{ frameId: 0, result: null }],
+    failNextInjection: (error) => {
+      injectionFailure = { error };
     },
     setAllUrls: (granted) => {
       fake.allUrls = granted;

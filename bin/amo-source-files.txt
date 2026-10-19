@@ -17,6 +17,7 @@ apps/extension/src/log.ts
 apps/extension/src/options.html
 apps/extension/src/options.ts
 apps/extension/src/pages.css
+apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts
 apps/extension/src/session-groups.ts
 apps/extension/src/settings.ts

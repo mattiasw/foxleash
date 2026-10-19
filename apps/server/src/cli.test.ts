@@ -51,8 +51,11 @@ describe("runCli usage", () => {
         "  install [--no-claude]    Set up the native host and add Foxhand to Claude Code",
         "  uninstall [--no-claude]  Remove the native host and Foxhand from Claude Code",
         "  doctor                   Check the installation and the connection to Firefox",
+        "  probe [--out <path>] <url>...",
+        "                           Measure which synthetic input works on each page",
         "",
         "--no-claude leaves your Claude Code configuration unchanged.",
+        "probe writes <path>.json and .md, by default ./foxhand-probe-<date>-<time>.",
         "",
       ].join("\n"),
     );
@@ -133,6 +136,56 @@ describe("runCli subcommands", () => {
     });
   }
 
+  for (const rest of [
+    [],
+    ["--out"],
+    ["https://a.example/", "--out"],
+    ["--out", "", "https://a.example/"],
+    ["--out", "/tmp/x", "--out", "/tmp/y", "https://a.example/"],
+    ["--out", "/tmp/x"],
+    ["--verbose", "https://a.example/"],
+    ["-h", "https://a.example/"],
+    ["ftp://x"],
+    ["https://a.example/", "not a url"],
+    ["file:///etc/passwd"],
+    ["javascript:alert(1)"],
+  ]) {
+    it(`refuses probe ${JSON.stringify(rest)} with usage and 2`, async () => {
+      const { deps, stdout, stderr, calls } = setup();
+      assert.equal(await runCli(["probe", ...rest], deps), 2);
+      assert.equal(stderr(), USAGE);
+      assert.equal(stdout(), "");
+      assert.deepEqual(calls, []);
+    });
+  }
+
+  it("passes probe its URLs in order and --out wherever it stands", async () => {
+    const { deps, calls } = setup();
+    assert.equal(
+      await runCli(["probe", "https://a.example/", "--out", "/tmp/x", "http://b.example/"], deps),
+      7,
+    );
+    assert.deepEqual(calls, [
+      {
+        name: "probe",
+        options: {
+          noClaude: false,
+          urls: ["https://a.example/", "http://b.example/"],
+          out: "/tmp/x",
+        },
+        deps,
+      },
+    ]);
+  });
+
+  it("passes probe no out without --out, and the URLs as given", async () => {
+    const { deps, calls } = setup();
+    assert.equal(await runCli(["probe", "HTTPS://A.example"], deps), 7);
+    assert.deepEqual(calls, [
+      { name: "probe", options: { noClaude: false, urls: ["HTTPS://A.example"] }, deps },
+    ]);
+  });
+
   it("lets a command's rejection propagate", async () => {
     const { deps } = setup({
       mcp: async () => {
@@ -164,6 +217,10 @@ describe("COMMANDS", () => {
   it("registers the doctor command", () => {
     assert.equal(typeof COMMANDS.get("doctor"), "function");
   });
+
+  it("registers the probe command", () => {
+    assert.equal(typeof COMMANDS.get("probe"), "function");
+  });
 });
 
 interface Call {
@@ -178,7 +235,7 @@ function setup(overrides: Record<string, Command> = {}) {
   const writes: string[] = [];
   const calls: Call[] = [];
   const commands = new Map<string, Command>();
-  for (const name of ["mcp", "host", "install", "uninstall", "doctor"]) {
+  for (const name of ["mcp", "host", "install", "uninstall", "doctor", "probe"]) {
     commands.set(name, async (options, deps) => {
       calls.push({ name, options, deps });
       return 7;

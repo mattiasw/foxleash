@@ -1,11 +1,12 @@
 import type {
   MethodName,
   NavigateAction,
+  ProbeResult,
   RequestMessage,
   Result,
   TabInfo,
 } from "@foxhand/protocol";
-import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
+import type { BrowserApi, InjectionResult, Tab, Timers } from "./browser-api.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { siteOf } from "./site.ts";
 import {
@@ -34,6 +35,11 @@ export interface HandlerDeps<Handle> {
   groups: SessionGroups;
   timers: Timers<Handle>;
   access: SiteAccess;
+  /**
+   * The bundled page function `probe_input` runs, given the approved site and the time (ms since
+   * the epoch) after which it must not act.
+   */
+  probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
 }
 
 type Params = Record<string, unknown>;
@@ -50,13 +56,27 @@ const NAVIGATE_ACTIONS: readonly unknown[] = [
   "reload",
 ] satisfies NavigateAction[];
 
+/** Below the host's request timeout, which shuts the host down when it fires. */
+export const PROBE_TIMEOUT_MS = 30_000;
+/**
+ * When the probe must stop acting, counted from the request: before PROBE_TIMEOUT_MS by more than
+ * its longest check, since Firefox may start it late, once the page is idle.
+ */
+export const PROBE_CUTOFF_MS = 25_000;
+
 export function createHandlers<Handle>({
   browser,
   groups,
   timers,
   access,
+  probe,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
-  const handlers: Handlers = { tabs_list: tabsList, tab_open: tabOpen, navigate };
+  const handlers: Handlers = {
+    tabs_list: tabsList,
+    tab_open: tabOpen,
+    navigate,
+    probe_input: probeInput,
+  };
 
   return async function handleRequest(request) {
     return handlers[request.method](request.session, request.params);
@@ -157,13 +177,72 @@ export function createHandlers<Handle>({
     }
     if (target.action !== "reload" || tab.url === "about:blank") return undefined;
     const url = tab.url ?? "";
-    if (siteOf(url) === undefined) {
+    if (siteOf(url) === undefined) throw pageNotWeb(tab.id);
+    return { decision: await access.check(session, url), url };
+  }
+
+  /**
+   * Runs the bundled input probe in a tab on a site the session may act on. Never asks: the
+   * site must already be allowed, through tab_open or navigate and the user's click.
+   */
+  async function probeInput(session: string, params: Params): Promise<Result<"probe_input">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
       throw new ToolError(
-        "page_not_web",
-        `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
+        "invalid_params",
+        "probe_input needs a tab id that is a whole number of 0 or more.",
       );
     }
-    return { decision: await access.check(session, url), url };
+    const tab = await existingTab(tabId);
+    const group = await groups.groupOf(session);
+    if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    const prompt = access.openPrompt(session);
+    if (prompt?.tabId === tabId) throw approvalPending(prompt.tabId, prompt.site);
+    const url = tab.url ?? "";
+    const site = siteOf(url);
+    if (site === undefined) throw pageNotWeb(tabId);
+    const view = await access.view(session);
+    if (view.blocked(url)) throw siteBlocked(site);
+    if (!view.allowed(url)) {
+      throw new ToolError(
+        "site_not_approved",
+        `Foxhand acts on ${site} only after the user allowed it; open it with tab_open or navigate to ask.`,
+      );
+    }
+    const frames = await injectProbe(tabId, site);
+    const top = frames.find((frame) => frame.frameId === 0);
+    if (top === undefined || top.error !== undefined || top.result === undefined) {
+      throw probeFailed(tabId);
+    }
+    // The probe found the tab on another site than the one checked here.
+    if (top.result === null) {
+      throw new ToolError("site_not_approved", `Tab ${tabId} no longer shows ${site}.`);
+    }
+    return top.result;
+  }
+
+  async function injectProbe(
+    tabId: number,
+    site: string,
+  ): Promise<InjectionResult<ProbeResult | null>[]> {
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(() => reject(probeFailed(tabId)), PROBE_TIMEOUT_MS);
+    try {
+      return await Promise.race([
+        browser.scripting.executeScript({
+          target: { tabId },
+          func: probe,
+          args: [site, Date.now() + PROBE_CUTOFF_MS],
+          world: "ISOLATED",
+        }),
+        timedOut,
+      ]);
+    } catch {
+      // Firefox's own error text can repeat the page's URL.
+      throw probeFailed(tabId);
+    } finally {
+      timers.clearTimeout(timer);
+    }
   }
 
   async function approveAndLoad(
@@ -279,6 +358,17 @@ function isNavigateAction(value: unknown): value is NavigateAction {
 
 function own(params: Params, key: string): unknown {
   return Object.hasOwn(params, key) ? params[key] : undefined;
+}
+
+function pageNotWeb(tabId: number): ToolError {
+  return new ToolError(
+    "page_not_web",
+    `Foxhand acts only on http and https pages, and tab ${tabId} shows another kind of page.`,
+  );
+}
+
+function probeFailed(tabId: number): ToolError {
+  return new ToolError("probe_failed", `Foxhand could not run its input probe in tab ${tabId}.`);
 }
 
 function notInGroup(tabId: number): ToolError {

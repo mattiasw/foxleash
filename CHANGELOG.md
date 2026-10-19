@@ -34,3 +34,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   opens the settings.
 - The settings page lets you edit the blocklist, and see and forget what you allowed or
   refused for each running agent session, and the prompts you closed without an answer.
+- `npm run probe -- <url>...` opens each page in its own Foxhand tab group after you allow
+  the site, and writes a JSON and a Markdown report of which synthetic clicks, typing and key
+  presses work there.
