@@ -59,7 +59,10 @@ const CALL_TIMEOUT_MS = 45_000;
 
 export interface ToolResult {
   isError: boolean;
+  /** The first text item. */
   text: string;
+  /** Every text item, in order. */
+  texts: string[];
 }
 
 export interface Session {
@@ -89,6 +92,8 @@ export interface Harness {
   waitForArmed(context: string): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
+  /** Calls a tool and returns its result, whether it failed or not. */
+  call(session: Session, name: string, args?: Record<string, unknown>): Promise<ToolResult>;
   /** Calls a tool that must succeed and returns its parsed JSON. */
   ok(session: Session, name: string, args?: Record<string, unknown>): Promise<unknown>;
   /** Calls a tool that must fail and returns its text. */
@@ -343,6 +348,10 @@ export function createHarness(): Harness {
       }
     },
 
+    call(session, name, args = {}) {
+      return call(session, name, args);
+    },
+
     async ok(session, name, args = {}) {
       const result = await call(session, name, args);
       if (result.isError) {
@@ -496,7 +505,7 @@ function killHostIfOurs(pid: number, run: string): void {
   }
 }
 
-/** Calls a tool and returns whether it failed and its first text content. */
+/** Calls a tool and returns whether it failed and its text content. */
 async function callTool(
   session: Session,
   name: string,
@@ -507,14 +516,12 @@ async function callTool(
   });
   assert.ok(isRecord(result), `${name} returned ${JSON.stringify(result)}`);
   const content: unknown[] = Array.isArray(result.content) ? result.content : [];
-  const first: unknown = content.find(
-    (item: unknown) => isRecord(item) && item.type === "text" && typeof item.text === "string",
+  const texts = content.flatMap((item: unknown) =>
+    isRecord(item) && item.type === "text" && typeof item.text === "string" ? [item.text] : [],
   );
-  assert.ok(
-    isRecord(first) && typeof first.text === "string",
-    `${name} returned no text: ${JSON.stringify(result)}`,
-  );
-  return { isError: result.isError === true, text: first.text };
+  const first = texts[0];
+  assert.ok(first !== undefined, `${name} returned no text: ${JSON.stringify(result)}`);
+  return { isError: result.isError === true, text: first, texts };
 }
 
 /** A success result's JSON, from inside its untrusted frame. */

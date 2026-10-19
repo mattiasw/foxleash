@@ -36,14 +36,19 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the three tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the four tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
-    assert.deepEqual(tools.map((tool) => tool.name).sort(), ["navigate", "tab_open", "tabs_list"]);
+    assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "navigate",
+      "read_page",
+      "tab_open",
+      "tabs_list",
+    ]);
     for (const tool of tools) {
       assert.ok(tool.description !== undefined && tool.description.length > 0, tool.name);
       assert.equal(tool.description.includes(EM_DASH), false, tool.name);
-      assert.ok(tool.description.includes(REDACTED_TABS), tool.name);
+      assert.equal(tool.description.includes(REDACTED_TABS), tool.name !== "read_page", tool.name);
     }
     const navigate = tools.find((tool) => tool.name === "navigate");
     assert.deepEqual(navigate?.inputSchema.required, ["tabId"]);
@@ -54,6 +59,133 @@ describe("tools", () => {
     }
     const tabsList = tools.find((tool) => tool.name === "tabs_list");
     assert.equal(tabsList?.description?.includes(ASKS_FIRST), false);
+    const readPage = tools.find((tool) => tool.name === "read_page");
+    assert.equal(readPage?.description?.includes(ASKS_FIRST), false);
+    assert.deepEqual(readPage?.inputSchema.required, ["tabId"]);
+    for (const words of [
+      "protected, never their value",
+      "50,000 characters",
+      "read_page never asks",
+    ]) {
+      assert.ok(readPage?.description?.includes(words), words);
+    }
+  });
+
+  it("passes read_page only the arguments given", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ tree: "", truncated: false }));
+    await client.callTool({ name: "read_page", arguments: { tabId: 2 } });
+    await client.callTool({
+      name: "read_page",
+      arguments: { tabId: 0, filter: "interactive", depth: 1, ref: "0a1b2c3d-4" },
+    });
+    assert.deepEqual(calls, [
+      { method: "read_page", params: { tabId: 2 } },
+      {
+        method: "read_page",
+        params: { tabId: 0, filter: "interactive", depth: 1, ref: "0a1b2c3d-4" },
+      },
+    ]);
+    assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
+  });
+
+  it("refuses read_page arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ tree: "", truncated: false }));
+    const prefix =
+      "MCP error -32602: Input validation error: Invalid arguments for tool read_page: ";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: -1 }, "Too small: expected number to be >=0 at tabId"],
+      [{ tabId: 1, depth: 0 }, "Too small: expected number to be >=1 at depth"],
+      [{ tabId: 1, depth: 1.5 }, "Invalid input: expected int, received number at depth"],
+      [
+        { tabId: 1, filter: "links" },
+        'Invalid option: expected one of "all"|"interactive" at filter',
+      ],
+      [{ tabId: 1, ref: 4 }, "Invalid input: expected string, received number at ref"],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "read_page", arguments: args });
+      assert.deepEqual(output, {
+        content: [{ type: "text", text: prefix + reason }],
+        isError: true,
+      });
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("returns read_page's tree as one untrusted frame, not as JSON", LIMIT, async () => {
+    const tree = 'main [0a1b2c3d-1]\n  link "Docs" [0a1b2c3d-2] href="https://example.com/"';
+    const { client } = await start(() => ({ tree, truncated: false, extra: 1 }));
+    const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), tree);
+  });
+
+  it("adds Foxhand's note outside the frame when the tree was cut", LIMIT, async () => {
+    const { client } = await start(() => ({ tree: "main", truncated: true }));
+    const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+    const content = record(output).content;
+    assert.ok(Array.isArray(content) && content.length === 2);
+    assert.equal(unframed({ content: [content[0]] }), "main");
+    assert.deepEqual(content[1], {
+      type: "text",
+      text: "The page tree was cut at 50,000 characters. Read a part of it with ref, or use filter interactive or a smaller depth.",
+    });
+    assert.equal(output.isError, undefined);
+  });
+
+  it("refuses a read_page result that is not a page tree", LIMIT, async () => {
+    const results: unknown[] = [
+      null,
+      "main",
+      ["main", false],
+      { tree: 1, truncated: false },
+      { tree: "main" },
+      { truncated: false },
+      { tree: "main", truncated: "no" },
+      JSON.parse('{"__proto__":{"tree":"main","truncated":false}}'),
+    ];
+    for (const result of results) {
+      const { client } = await start(() => result);
+      const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+      assert.deepEqual(
+        output,
+        {
+          content: [{ type: "text", text: "Firefox returned a page tree Foxhand cannot read." }],
+          isError: true,
+        },
+        JSON.stringify(result),
+      );
+    }
+  });
+
+  it("refuses a read_page tree over 8 MiB as JSON text", LIMIT, async () => {
+    const overhead = Buffer.byteLength(JSON.stringify(untrusted("", () => SOME_ID)));
+    const page = { tree: "a".repeat(MAX_RESULT_BYTES - overhead), truncated: false };
+    const { client } = await start(() => page);
+    const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+    assert.equal(unframed(output), page.tree);
+    page.tree += "a";
+    assert.deepEqual(await client.callTool({ name: "read_page", arguments: { tabId: 1 } }), {
+      content: [{ type: "text", text: "The result from Firefox is too large to return." }],
+      isError: true,
+    });
+  });
+
+  it("returns read_page's bridge and host errors as for the other tools", LIMIT, async () => {
+    const sentence = "The Foxhand native host did not answer in time.";
+    const bridged = await start(() => {
+      throw new BridgeError(sentence);
+    });
+    assert.deepEqual(
+      await bridged.client.callTool({ name: "read_page", arguments: { tabId: 1 } }),
+      { content: [{ type: "text", text: sentence }], isError: true },
+    );
+    const hosted = await start(() => {
+      throw new HostError("site_not_approved", "Foxhand is not allowed on https://a.example.");
+    });
+    const output = await hosted.client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), "Foxhand is not allowed on https://a.example.");
   });
 
   it("returns tabs_list's result as untrusted text", LIMIT, async () => {

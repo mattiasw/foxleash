@@ -7,7 +7,11 @@ import type {
   TabInfo,
 } from "@foxhand/protocol";
 import type { BrowserApi, InjectionResult, Tab, Timers } from "./browser-api.ts";
+import { ownField } from "./page-messages.ts";
+import type { PageScripts } from "./page-scripts.ts";
+import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import type { SessionGroups } from "./session-groups.ts";
+import { isRecord } from "./settings.ts";
 import { siteOf } from "./site.ts";
 import {
   type Approval,
@@ -40,6 +44,8 @@ export interface HandlerDeps<Handle> {
    * the epoch) after which it must not act.
    */
   probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
+  /** Requests to Foxhand's content script; `import type`, since page-scripts.ts imports this file. */
+  pages: Pick<PageScripts, "request">;
 }
 
 type Params = Record<string, unknown>;
@@ -70,11 +76,13 @@ export function createHandlers<Handle>({
   timers,
   access,
   probe,
+  pages,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = {
     tabs_list: tabsList,
     tab_open: tabOpen,
     navigate,
+    read_page: readPage,
     probe_input: probeInput,
   };
 
@@ -179,6 +187,34 @@ export function createHandlers<Handle>({
     const url = tab.url ?? "";
     if (siteOf(url) === undefined) throw pageNotWeb(tab.id);
     return { decision: await access.check(session, url), url };
+  }
+
+  /** Reads the page in a tab through the content script, which runs only after the site gate. */
+  async function readPage(session: string, params: Params): Promise<Result<"read_page">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "read_page needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const options = readPageOptions(params);
+    if (typeof options === "string") throw new ToolError("invalid_params", options);
+    const reply = await pages.request(session, tabId, "read_page", options);
+    // The reply comes from the page's content process: own fields only, and the cap again.
+    const tree = isRecord(reply) ? ownField(reply, "tree") : undefined;
+    const truncated = isRecord(reply) ? ownField(reply, "truncated") : undefined;
+    if (
+      typeof tree !== "string" ||
+      tree.length > READ_PAGE_MAX_CHARS ||
+      typeof truncated !== "boolean"
+    ) {
+      throw new ToolError(
+        "page_error",
+        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+      );
+    }
+    return { tree, truncated };
   }
 
   /**

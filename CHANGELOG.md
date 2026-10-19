@@ -40,3 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   presses work there.
 - Tool results put page content between a start line and an end line that carry the same
   random id, so text in a page cannot pass for the end of it.
+- Your agent can read a page's structure with the `read_page` tool: its elements with their
+  roles, names and states, its visible text, and a reference to each element. The values of
+  password, one-time code and card number fields are never read out, only whether they are
+  filled.

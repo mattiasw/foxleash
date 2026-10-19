@@ -10,6 +10,7 @@ import {
   flush,
 } from "./fake-browser.ts";
 import { createHandlers, PROBE_CUTOFF_MS, PROBE_TIMEOUT_MS, ToolError } from "./handlers.ts";
+import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite } from "./settings.ts";
 import {
@@ -1375,6 +1376,120 @@ describe("probe_input", { timeout: 10000 }, () => {
   });
 });
 
+describe("read_page", { timeout: 10000 }, () => {
+  it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+      await assert.rejects(call("s1", "read_page", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "read_page needs a tab id that is a whole number of 0 or more.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("refuses bad options with their sentence before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    const cases: [Record<string, unknown>, string][] = [
+      [{ filter: "links" }, "read_page needs filter to be all or interactive."],
+      [{ filter: 1 }, "read_page needs filter to be all or interactive."],
+      [{ depth: 0 }, "read_page needs depth to be a whole number of 1 or more."],
+      [{ depth: 1.5 }, "read_page needs depth to be a whole number of 1 or more."],
+      [{ depth: "2" }, "read_page needs depth to be a whole number of 1 or more."],
+      [{ ref: 7 }, "read_page needs ref to be a string."],
+    ];
+    for (const [options, message] of cases) {
+      await assert.rejects(call("s1", "read_page", { tabId: 3, ...options }), {
+        code: "invalid_params",
+        message,
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page for read_page with only the options given", async () => {
+    const { call, pageCalls } = setup();
+    await call("s1", "read_page", { tabId: 3 });
+    await call("s2", "read_page", {
+      tabId: 0,
+      filter: "interactive",
+      depth: 2,
+      ref: "0a1b2c3d-4",
+      extra: true,
+    });
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: 3, type: "read_page", params: { filter: "all" } },
+      {
+        session: "s2",
+        tabId: 0,
+        type: "read_page",
+        params: { filter: "interactive", depth: 2, ref: "0a1b2c3d-4" },
+      },
+    ]);
+    assert.deepEqual(Object.keys(pageCalls[0]?.params ?? {}), ["filter"]);
+  });
+
+  it("returns only the tree and whether it was cut", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ tree: "main [0a1b2c3d-1]", truncated: true, extra: "page text" }));
+    assert.deepEqual(await call("s1", "read_page", { tabId: 3 }), {
+      tree: "main [0a1b2c3d-1]",
+      truncated: true,
+    });
+  });
+
+  it("refuses a reply it cannot read as page_error", async () => {
+    const { call, replyWith } = setup();
+    const replies: unknown[] = [
+      undefined,
+      null,
+      "tree",
+      [],
+      { tree: 1, truncated: false },
+      { tree: "a" },
+      { truncated: false },
+      { tree: "a", truncated: "yes" },
+      Object.create({ tree: "a", truncated: false }),
+    ];
+    for (const reply of replies) {
+      replyWith(async () => reply);
+      await assert.rejects(call("s1", "read_page", { tabId: 3 }), {
+        code: "page_error",
+        message: "Foxhand could not complete the request in the page in tab 3.",
+      });
+    }
+  });
+
+  it("refuses a tree longer than the cap as page_error", async () => {
+    const { call, replyWith } = setup();
+    const fits = "a".repeat(READ_PAGE_MAX_CHARS);
+    replyWith(async () => ({ tree: fits, truncated: true }));
+    assert.deepEqual(await call("s1", "read_page", { tabId: 3 }), { tree: fits, truncated: true });
+    replyWith(async () => ({ tree: `${fits}a`, truncated: true }));
+    await rejectsWith(call("s1", "read_page", { tabId: 3 }), "page_error");
+  });
+
+  it("passes the page's refusal through unchanged", async () => {
+    const { call, replyWith } = setup();
+    const refusal = new ToolError(
+      "stale_ref",
+      "Element 0a1b2c3d-4 is from a page the tab no longer shows.",
+    );
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(
+      call("s1", "read_page", { tabId: 3 }),
+      (error: unknown) => error === refusal,
+    );
+  });
+});
+
+interface PageCall {
+  session: string;
+  tabId: number;
+  type: string;
+  params: Record<string, unknown>;
+}
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -1384,7 +1499,22 @@ function setup() {
   const probe = async function probe(_site: string): Promise<ProbeResult | null> {
     return null;
   };
-  const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access, probe });
+  const pageCalls: PageCall[] = [];
+  let pageReply: () => Promise<unknown> = async () => ({ tree: "", truncated: false });
+  const pages = {
+    async request(session: string, tabId: number, type: string, params: Record<string, unknown>) {
+      pageCalls.push({ session, tabId, type, params });
+      return pageReply();
+    },
+  };
+  const handleRequest = createHandlers({
+    browser: fake.browser,
+    groups,
+    timers,
+    access,
+    probe,
+    pages,
+  });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
     handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
@@ -1439,12 +1569,19 @@ function setup() {
     return shown;
   }
 
+  /** What the fake content script answers from now on. */
+  function replyWith(reply: () => Promise<unknown>): void {
+    pageReply = reply;
+  }
+
   return {
     fake,
     timers,
     sessions,
     access,
     probe,
+    pageCalls,
+    replyWith,
     call,
     open,
     list,

@@ -1,6 +1,7 @@
 import type { BrowserApi } from "./browser-api.ts";
 import { createElementRefs } from "./element-refs.ts";
 import { handlePageMessage, type PageHandlers } from "./page-messages.ts";
+import { readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
 
 declare const browser: Pick<BrowserApi, "runtime">;
@@ -14,12 +15,14 @@ if (!Object.hasOwn(globalThis, STARTED)) {
   const bytes = crypto.getRandomValues(new Uint8Array(4));
   const docId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   // An element the page moved into another document, such as a frame's, is not this one's.
-  // biome-ignore lint/correctness/noUnusedVariables: the page tools' handlers will close over it.
   const refs = createElementRefs<Element>(
     docId,
     (element) => element.isConnected && element.ownerDocument === document,
   );
-  const handlers: PageHandlers = {};
+  const passwordFields = new WeakSet<Element>();
+  const handlers: PageHandlers = {
+    read_page: (params) => readPage(params, { refs, passwordFields }),
+  };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),
   );

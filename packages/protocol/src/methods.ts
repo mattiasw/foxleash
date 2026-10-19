@@ -46,6 +46,10 @@ export interface Methods {
       | { tabId: number; action: NavigateAction; url?: never };
     result: { tab: TabInfo };
   };
+  read_page: {
+    params: { tabId: number; filter?: "all" | "interactive"; depth?: number; ref?: string };
+    result: { tree: string; truncated: boolean };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -63,6 +67,7 @@ export const METHOD_NAMES = [
   "tabs_list",
   "tab_open",
   "navigate",
+  "read_page",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

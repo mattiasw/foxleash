@@ -710,14 +710,15 @@ function setup() {
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+  const pages = createPageScripts({ browser: fake.browser, groups, access, timers });
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
     timers,
     access,
     probe: async () => null,
+    pages,
   });
-  const pages = createPageScripts({ browser: fake.browser, groups, access, timers });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
     handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
