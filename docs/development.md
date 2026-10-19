@@ -80,16 +80,16 @@ trusted, and the prompt ignores it.
 ## Extension
 
 `npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
-version from `apps/extension/package.json`, unminified `background.js`, `options.js` and
-`approve.js`, the settings page `options.html` and the approval prompt `approve.html` with
-their shared `pages.css`, and the icon. It
-then lints that folder with web-ext, ignoring web-ext's `WEB_EXT` environment variables and
-config files, and fails on any error or warning except the one expected Firefox for Android
-warning on `data_collection_permissions`. See
+version from `apps/extension/package.json`, unminified `background.js`, `options.js`,
+`approve.js` and `content.js`, the script Foxhand injects into the pages of the agent's tabs,
+the settings page `options.html` and the approval prompt `approve.html` with their shared
+`pages.css`, and the icon. It then lints that folder with web-ext, ignoring web-ext's
+`WEB_EXT` environment variables and config files, and fails on any error or warning except
+the one expected Firefox for Android warning on `data_collection_permissions`. See
 [ADR 0006](adr/0006-no-firefox-for-android-key-in-the-manifest.md) for why.
 
-`npm run dev` rebuilds `background.js`, `options.js` and `approve.js` whenever their
-TypeScript source changes and runs Firefox through `web-ext run`, which reloads the
+`npm run dev` rebuilds `background.js`, `options.js`, `approve.js` and `content.js` whenever
+their TypeScript source changes and runs Firefox through `web-ext run`, which reloads the
 extension after each rebuild. It writes the manifest, the icon and the pages (`src/*.html`
 and `src/*.css`) once at start, so restart it after changing them. Firefox uses a persistent
 profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default

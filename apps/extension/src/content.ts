@@ -1,0 +1,28 @@
+import type { BrowserApi } from "./browser-api.ts";
+import { createElementRefs } from "./element-refs.ts";
+import { handlePageMessage, type PageHandlers } from "./page-messages.ts";
+import { siteOf } from "./site.ts";
+
+declare const browser: Pick<BrowserApi, "runtime">;
+
+// Set once per document on the content scripts' own global, which the page cannot see.
+const STARTED = "foxhandPageScript";
+
+// The background injects this on every request; only the first run in a document sets up.
+if (!Object.hasOwn(globalThis, STARTED)) {
+  // Not crypto.randomUUID, which plain http pages lack (secure contexts only).
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  const docId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  // An element the page moved into another document, such as a frame's, is not this one's.
+  // biome-ignore lint/correctness/noUnusedVariables: the page tools' handlers will close over it.
+  const refs = createElementRefs<Element>(
+    docId,
+    (element) => element.isConnected && element.ownerDocument === document,
+  );
+  const handlers: PageHandlers = {};
+  browser.runtime.onMessage.addListener((message) =>
+    handlePageMessage(message, { site: siteOf(location.href), handlers }),
+  );
+  // Last, so a throw above leaves the next injection free to try again.
+  Object.defineProperty(globalThis, STARTED, { value: true });
+}

@@ -10,12 +10,16 @@ apps/extension/src/approve.ts
 apps/extension/src/background.ts
 apps/extension/src/browser-api.ts
 apps/extension/src/connection.ts
+apps/extension/src/content.ts
 apps/extension/src/default-blocklist.ts
+apps/extension/src/element-refs.ts
 apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
 apps/extension/src/log.ts
 apps/extension/src/options.html
 apps/extension/src/options.ts
+apps/extension/src/page-messages.ts
+apps/extension/src/page-scripts.ts
 apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts

@@ -3,10 +3,15 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { PROTOCOL_VERSION, protocolMismatch } from "@foxhand/protocol";
-import { untrusted } from "../apps/server/src/tools.ts";
 import { SERVER_VERSION } from "../apps/server/src/version.ts";
 import { isRecord } from "./firefox.ts";
-import { createHarness, EXTENSION_DIST, type Harness, type Session } from "./harness.ts";
+import {
+  createHarness,
+  EXTENSION_DIST,
+  type Harness,
+  type Session,
+  untrustedContent,
+} from "./harness.ts";
 
 // Copied from apps/server/src/bridge.ts, where it is private.
 const NO_HOST =
@@ -35,7 +40,7 @@ describe("without Firefox", () => {
 describe("with an extension that speaks a newer protocol", () => {
   let harness: Harness;
   let session: Session;
-  let expected: string;
+  let mismatch: string;
 
   before(
     async () => {
@@ -56,12 +61,12 @@ describe("with an extension that speaks a newer protocol", () => {
       );
       const manifest: unknown = JSON.parse(readFileSync(join(extension, "manifest.json"), "utf8"));
       assert.ok(isRecord(manifest) && typeof manifest.version === "string");
-      const mismatch = protocolMismatch(
+      const sentence = protocolMismatch(
         { part: "host", protocol: PROTOCOL_VERSION, version: SERVER_VERSION },
         { part: "extension", protocol: PROTOCOL_VERSION + 1, version: manifest.version },
       );
-      assert.ok(mismatch !== null);
-      expected = untrusted(mismatch);
+      assert.ok(sentence !== null);
+      mismatch = sentence;
 
       harness.install();
       await harness.startFirefox(extension);
@@ -80,7 +85,10 @@ describe("with an extension that speaks a newer protocol", () => {
   // waitUntilReady's host and ready waits take up to 60 s between them, the default test timeout.
   test("a tool call says which part is older", { timeout: 120_000 }, async () => {
     // Until the extension has said hello the call finds no host, or a host without an extension.
-    await harness.waitUntilReady(session, (result) => result.isError && result.text === expected);
-    assert.equal(await harness.refused(session, "tabs_list"), expected);
+    await harness.waitUntilReady(
+      session,
+      (result) => result.isError && untrustedContent(result.text) === mismatch,
+    );
+    assert.equal(untrustedContent(await harness.refused(session, "tabs_list")), mismatch);
   });
 });

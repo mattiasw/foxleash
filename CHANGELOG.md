@@ -37,3 +37,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `npm run probe -- <url>...` opens each page in its own Foxhand tab group after you allow
   the site, and writes a JSON and a Markdown report of which synthetic clicks, typing and key
   presses work there.
+- Tool results put page content between a start line and an end line that carry the same
+  random id, so text in a page cannot pass for the end of it.

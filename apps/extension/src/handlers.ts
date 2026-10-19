@@ -193,22 +193,7 @@ export function createHandlers<Handle>({
         "probe_input needs a tab id that is a whole number of 0 or more.",
       );
     }
-    const tab = await existingTab(tabId);
-    const group = await groups.groupOf(session);
-    if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
-    const prompt = access.openPrompt(session);
-    if (prompt?.tabId === tabId) throw approvalPending(prompt.tabId, prompt.site);
-    const url = tab.url ?? "";
-    const site = siteOf(url);
-    if (site === undefined) throw pageNotWeb(tabId);
-    const view = await access.view(session);
-    if (view.blocked(url)) throw siteBlocked(site);
-    if (!view.allowed(url)) {
-      throw new ToolError(
-        "site_not_approved",
-        `Foxhand acts on ${site} only after the user allowed it; open it with tab_open or navigate to ask.`,
-      );
-    }
+    const site = await allowedPageSite({ browser, groups, access }, session, tabId);
     const frames = await injectProbe(tabId, site);
     const top = frames.find((frame) => frame.frameId === 0);
     if (top === undefined || top.error !== undefined || top.result === undefined) {
@@ -293,7 +278,7 @@ export function createHandlers<Handle>({
     try {
       return await browser.tabs.get(tabId);
     } catch {
-      throw new ToolError("tab_not_found", `Tab ${tabId} does not exist.`);
+      throw tabNotFound(tabId);
     }
   }
 
@@ -308,6 +293,40 @@ export function createHandlers<Handle>({
         return browser.tabs.reload(tabId);
     }
   }
+}
+
+export interface PageGateDeps {
+  browser: Pick<BrowserApi, "tabs">;
+  groups: Pick<SessionGroups, "groupOf">;
+  access: Pick<SiteAccess, "view" | "openPrompt">;
+}
+
+/**
+ * The site of the web page in a tab of the session's group that the session may read and act
+ * in. Never asks: the site must already be allowed, through tab_open or navigate.
+ */
+export async function allowedPageSite(
+  { browser, groups, access }: PageGateDeps,
+  session: string,
+  tabId: number,
+): Promise<string> {
+  let tab: Tab;
+  try {
+    tab = await browser.tabs.get(tabId);
+  } catch {
+    throw tabNotFound(tabId);
+  }
+  const group = await groups.groupOf(session);
+  if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+  const prompt = access.openPrompt(session);
+  if (prompt?.tabId === tabId) throw approvalPending(prompt.tabId, prompt.site);
+  const url = tab.url ?? "";
+  const site = siteOf(url);
+  if (site === undefined) throw pageNotWeb(tabId);
+  const view = await access.view(session);
+  if (view.blocked(url)) throw siteBlocked(site);
+  if (!view.allowed(url)) throw siteNotApproved(site, tabId);
+  return site;
 }
 
 /** The http(s) URL to load, or undefined for about:blank. */
@@ -358,6 +377,17 @@ function isNavigateAction(value: unknown): value is NavigateAction {
 
 function own(params: Params, key: string): unknown {
   return Object.hasOwn(params, key) ? params[key] : undefined;
+}
+
+function tabNotFound(tabId: number): ToolError {
+  return new ToolError("tab_not_found", `Tab ${tabId} does not exist.`);
+}
+
+function siteNotApproved(site: string, tabId: number): ToolError {
+  return new ToolError(
+    "site_not_approved",
+    `Foxhand is not allowed on ${site} in this session; call navigate with tab ${tabId} and action reload to ask the user.`,
+  );
 }
 
 function pageNotWeb(tabId: number): ToolError {

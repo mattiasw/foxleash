@@ -16,7 +16,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { EXTENSION_ID, type TabInfo } from "@foxhand/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { UNTRUSTED_LINE } from "../apps/server/src/tools.ts";
+import { UNTRUSTED_FRAME } from "../apps/server/src/tools.ts";
 import { ensureFirefox } from "../bin/install-firefox.ts";
 import {
   describeOutput,
@@ -513,11 +513,16 @@ async function callTool(
   return { isError: result.isError === true, text: first.text };
 }
 
-/** A success result's JSON: the untrusted-content line, a newline, then the JSON. */
+/** A success result's JSON, from inside its untrusted frame. */
 export function parseResult(text: string): unknown {
-  const prefix = `${UNTRUSTED_LINE}\n`;
-  assert.ok(text.startsWith(prefix), `the result does not start with the untrusted line:\n${text}`);
-  return JSON.parse(text.slice(prefix.length));
+  const content = untrustedContent(text);
+  assert.ok(content !== undefined, `the result is not one untrusted frame:\n${text}`);
+  return JSON.parse(content);
+}
+
+/** The text inside an untrusted frame whose start and end lines carry the same id. */
+export function untrustedContent(text: string): string | undefined {
+  return UNTRUSTED_FRAME.exec(text)?.[2];
 }
 
 export function tabOf(value: unknown): TabInfo {

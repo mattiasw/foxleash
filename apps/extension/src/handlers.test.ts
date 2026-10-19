@@ -1242,8 +1242,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     const update = t.mock.method(fake.browser.tabs, "update");
     await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
       code: "site_not_approved",
-      message:
-        "Foxhand acts on https://a.example only after the user allowed it; open it with tab_open or navigate to ask.",
+      message: `Foxhand is not allowed on https://a.example in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
     });
     await flush();
     assert.equal(access.openPrompt("s1"), undefined);
@@ -1283,7 +1282,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     assert.equal(fake.injections.length, 1);
     const [injection] = fake.injections;
     assert.equal(injection?.func, probe);
-    const cutoff = injection?.args[1];
+    const cutoff = injection?.args?.[1];
     assert.ok(
       typeof cutoff === "number" &&
         cutoff >= before + PROBE_CUTOFF_MS &&

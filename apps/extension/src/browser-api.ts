@@ -39,6 +39,8 @@ export interface BrowserApi {
     goForward(tabId: number): Promise<void>;
     reload(tabId: number): Promise<void>;
     remove(tabIds: number[]): Promise<void>;
+    /** Rejects when no content script listens in the frame, or its page unloads before replying. */
+    sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
     group(options: {
       tabIds: number[];
       groupId?: number;
@@ -73,6 +75,11 @@ export interface BrowserApi {
       args: Args;
       world: "ISOLATED";
     }): Promise<InjectionResult<Awaited<Result>>[]>;
+    executeScript(injection: {
+      target: { tabId: number; frameIds?: number[] };
+      files: string[];
+      injectImmediately?: boolean;
+    }): Promise<InjectionResult<unknown>[]>;
   };
 }
 

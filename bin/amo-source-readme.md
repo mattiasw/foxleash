@@ -21,7 +21,7 @@ npm ci && npm run build
 ```
 
 The unminified extension appears in `apps/extension/dist/`: `background.js`, bundled by
-esbuild from `apps/extension/src/` and `packages/protocol/src/`; `options.js` and
-`approve.js`, bundled from `apps/extension/src/`; `options.html`, the settings page, and
+esbuild from `apps/extension/src/` and `packages/protocol/src/`; `options.js`, `approve.js`
+and `content.js`, bundled from `apps/extension/src/`; `options.html`, the settings page, and
 `approve.html`, the page that asks the user to approve a site, both styled by `pages.css`;
 plus `manifest.json` and the icon.

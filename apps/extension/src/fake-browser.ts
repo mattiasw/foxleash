@@ -38,12 +38,20 @@ export interface FakeBrowser {
   windowUpdates: { windowId: number; drawAttention?: boolean }[];
   /** Makes the next `storage.local.set` reject, once. */
   failNextSet(): void;
-  /** Every `scripting.executeScript` call, in order. */
+  /** Every `scripting.executeScript` call, in order, with only the keys it was given. */
   injections: Injection[];
   /** What each `scripting.executeScript` call resolves to. */
   injectionResults: InjectionResult<unknown>[];
   /** Makes the next `scripting.executeScript` reject with `error`, once. */
   failNextInjection(error: unknown): void;
+  /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
+  tabMessages: TabMessage[];
+  /**
+   * Installs the content script that answers `tabs.sendMessage` in the tab's top frame, or
+   * removes it. The fake runs no page, so an injection installs nothing. A load in the tab, and
+   * closing it, removes it, rejecting every reply still pending from it.
+   */
+  setContentScript(tabId: number, handler: ContentScript | undefined): void;
   /** The user granting or revoking access to all websites in about:addons. */
   setAllUrls(granted: boolean): void;
   openTab(properties?: Partial<Omit<FakeTab, "id" | "history" | "index">>): FakeTab;
@@ -88,10 +96,22 @@ export interface FakeTab {
 
 export interface Injection {
   tabId: number;
-  func: unknown;
-  args: unknown[];
-  world: string;
+  func?: unknown;
+  args?: unknown[];
+  world?: string;
+  frameIds?: number[];
+  files?: string[];
+  injectImmediately?: boolean;
 }
+
+export interface TabMessage {
+  tabId: number;
+  message: unknown;
+  frameId?: number;
+}
+
+/** A content script's `runtime.onMessage` listener: a promise to reply, undefined not to. */
+export type ContentScript = (message: unknown) => Promise<unknown> | undefined;
 
 export interface TabUpdate {
   tabId: number;
@@ -131,6 +151,10 @@ export function createFakeBrowser(): FakeBrowser {
   const onTabRemoved = createEvent<(tabId: number) => void>();
   let failSet = false;
   let injectionFailure: { error: unknown } | undefined;
+  const contentScripts = new Map<
+    number,
+    { handler: ContentScript; pending: Set<(error: Error) => void> }
+  >();
 
   const browser: BrowserApi = {
     runtime: {
@@ -197,6 +221,24 @@ export function createFakeBrowser(): FakeBrowser {
         load(tab, tab.url);
       },
       remove: async (tabIds) => removeTabs(tabIds.map(tabOf)),
+      sendMessage: (tabId, message, options) => {
+        const call: TabMessage = { tabId, message };
+        if (options?.frameId !== undefined) call.frameId = options.frameId;
+        fake.tabMessages.push(call);
+        const script = contentScripts.get(tabId);
+        if (script === undefined || (options?.frameId ?? 0) !== 0) {
+          return Promise.reject(
+            new Error("Could not establish connection. Receiving end does not exist."),
+          );
+        }
+        const { promise, resolve, reject } = Promise.withResolvers<unknown>();
+        script.pending.add(reject);
+        // Both directions are structured clones in Firefox; a value that cannot be cloned rejects.
+        const reply = (async () =>
+          structuredClone(await script.handler(structuredClone(message))))();
+        reply.then(resolve, reject).finally(() => script.pending.delete(reject));
+        return promise;
+      },
       group: async ({ tabIds, groupId, createProperties }) => {
         const group =
           groupId === undefined ? createGroup(createProperties?.windowId) : groupOf(groupId);
@@ -254,20 +296,7 @@ export function createFakeBrowser(): FakeBrowser {
       onChanged: onStorageChanged,
     },
     scripting: {
-      executeScript: async function executeScript<Args extends unknown[], Result>(injection: {
-        target: { tabId: number };
-        func: (...args: Args) => Result;
-        args: Args;
-        world: "ISOLATED";
-      }): Promise<InjectionResult<Awaited<Result>>[]> {
-        const { target, func, args, world } = injection;
-        fake.injections.push({ tabId: target.tabId, func, args, world });
-        const failure = injectionFailure;
-        injectionFailure = undefined;
-        if (failure !== undefined) throw failure.error;
-        // The fake runs no page, so what each frame returned is the test's to say.
-        return structuredClone(fake.injectionResults) as InjectionResult<Awaited<Result>>[];
-      },
+      executeScript,
     },
   };
 
@@ -291,6 +320,11 @@ export function createFakeBrowser(): FakeBrowser {
     injectionResults: [{ frameId: 0, result: null }],
     failNextInjection: (error) => {
       injectionFailure = { error };
+    },
+    tabMessages: [],
+    setContentScript: (tabId, handler) => {
+      dropContentScript(tabId);
+      if (handler !== undefined) contentScripts.set(tabId, { handler, pending: new Set() });
     },
     setAllUrls: (granted) => {
       fake.allUrls = granted;
@@ -323,6 +357,7 @@ export function createFakeBrowser(): FakeBrowser {
       for (const tab of fake.tabs.values()) {
         if (tab.groupId !== groupId) continue;
         fake.tabs.delete(tab.id);
+        dropContentScript(tab.id);
         for (const listener of [...onTabRemoved.listeners]) listener(tab.id);
       }
     },
@@ -368,6 +403,44 @@ export function createFakeBrowser(): FakeBrowser {
   };
   return fake;
 
+  function executeScript<Args extends unknown[], Result>(injection: {
+    target: { tabId: number };
+    func: (...args: Args) => Result;
+    args: Args;
+    world: "ISOLATED";
+  }): Promise<InjectionResult<Awaited<Result>>[]>;
+  function executeScript(injection: {
+    target: { tabId: number; frameIds?: number[] };
+    files: string[];
+    injectImmediately?: boolean;
+  }): Promise<InjectionResult<unknown>[]>;
+  async function executeScript(injection: {
+    target: { tabId: number; frameIds?: number[] };
+    func?: unknown;
+    args?: unknown[];
+    world?: string;
+    files?: string[];
+    injectImmediately?: boolean;
+  }): Promise<InjectionResult<unknown>[]> {
+    const { target, ...given } = injection;
+    const call: Injection = { tabId: target.tabId, ...given };
+    if (target.frameIds !== undefined) call.frameIds = target.frameIds;
+    fake.injections.push(call);
+    const failure = injectionFailure;
+    injectionFailure = undefined;
+    if (failure !== undefined) throw failure.error;
+    // The fake runs no page, so what each frame returned is the test's to say.
+    return structuredClone(fake.injectionResults);
+  }
+
+  /** The document went away: its content script with it, and the replies it still owed. */
+  function dropContentScript(tabId: number): void {
+    const script = contentScripts.get(tabId);
+    if (script === undefined) return;
+    contentScripts.delete(tabId);
+    for (const reject of script.pending) reject(new Error("Message manager disconnected"));
+  }
+
   function emitStorage(changes: Record<string, StorageChange>, areaName: string): void {
     for (const listener of [...onStorageChanged.listeners]) listener(changes, areaName);
   }
@@ -406,7 +479,10 @@ export function createFakeBrowser(): FakeBrowser {
   }
 
   function removeTabs(removed: FakeTab[]): void {
-    for (const tab of removed) fake.tabs.delete(tab.id);
+    for (const tab of removed) {
+      fake.tabs.delete(tab.id);
+      dropContentScript(tab.id);
+    }
     for (const { groupId } of removed) {
       const empty = ![...fake.tabs.values()].some((tab) => tab.groupId === groupId);
       if (empty) fake.groups.delete(groupId);
@@ -437,6 +513,7 @@ export function createFakeBrowser(): FakeBrowser {
   function load(tab: FakeTab, url: string): void {
     const changed = tab.url !== url;
     tab.url = url;
+    dropContentScript(tab.id);
     tab.status = "loading";
     // Firefox resets a tab's per-tab action values when it navigates.
     fake.badgeText.delete(tab.id);
