@@ -56,7 +56,7 @@ The agent can:
 - read the console and network activity,
 - upload files from allowed folders.
 
-Each agent session works in its own orange tab group titled Foxhand, and Foxhand acts only on tabs in that group, including tabs you move into it.
+Each agent session works in its own orange tab group titled Foxhand, and Foxhand acts only on tabs in that group, including tabs you move into it. When the agent session ends, Foxhand closes its group if the group holds only blank tabs, so pages you may still be reading stay open.
 
 Foxhand acts in your logged-in browser. The main risk is prompt injection: a web page can contain instructions aimed at the AI model, such as an instruction to send the contents of the page somewhere. Models can be fooled by these, and no defense is complete. Foxhand limits what a fooled agent can do:
 

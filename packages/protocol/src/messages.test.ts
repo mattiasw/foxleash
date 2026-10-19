@@ -19,6 +19,7 @@ const failure = {
   ok: false,
   error: { code: "no_tab", message: "No tab with id 4." },
 };
+const sessionEnd = { type: "session_end", session: "s1" };
 
 class Envelope {
   type = "hello";
@@ -128,6 +129,16 @@ describe("parseMessage accepts", () => {
         } as const,
       },
     ]),
+    {
+      name: "a session end",
+      input: sessionEnd,
+      expected: { type: "session_end", session: "s1" },
+    },
+    {
+      name: "a session end with a 256-character session",
+      input: { ...sessionEnd, session: "s".repeat(256) },
+      expected: { type: "session_end", session: "s".repeat(256) },
+    },
     {
       name: "a 256-character token",
       input: { ...request, session: "s".repeat(256) },
@@ -241,6 +252,7 @@ describe("parseMessage rejects", () => {
     { base: request, path: ["session"], id: "r1" },
     { base: success, path: ["id"] },
     { base: failure, path: ["error", "code"] },
+    { base: sessionEnd, path: ["session"] },
   ];
   for (const { base, path, id } of tokenFields) {
     it(`a ${base.type} whose ${path.join(".")} is not a token`, () => {
@@ -335,6 +347,13 @@ describe("parseMessage rejects", () => {
     });
   }
 
+  it("a session_end without an id on the failure, even when it carries one", () => {
+    assert.deepEqual(parseMessage({ ...sessionEnd, id: "r1", session: "a b" }), {
+      ok: false,
+      error: "invalid session",
+    });
+  });
+
   it("a response without an id on the failure, even when its id is valid", () => {
     assert.deepEqual(parseMessage({ ...failure, error: { code: "x" } }), {
       ok: false,
@@ -390,6 +409,13 @@ describe("parseMessage returns only validated fields", () => {
     const message = parsed(connectedWelcome);
     assert.ok(message.type === "welcome");
     assert.notEqual(message.extension, connectedWelcome.extension);
+  });
+
+  it("builds a fresh session end without unknown fields", () => {
+    const input = { ...sessionEnd, id: "r1", extra: 1 };
+    const message = parsed(input);
+    assert.deepEqual(message, { type: "session_end", session: "s1" });
+    assert.notEqual(message, input);
   });
 
   it("builds a fresh response error", () => {

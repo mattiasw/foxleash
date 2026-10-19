@@ -13,7 +13,12 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
 
 const groups = createSessionGroups(browser);
 const handleRequest = createHandlers({ browser, groups, timers });
-const connection = createConnection({ browser, handleRequest, timers });
+const connection = createConnection({
+  browser,
+  handleRequest,
+  endSession: (session) => groups.endSession(session),
+  timers,
+});
 
 connection.start();
 // Firefox starts an event page at browser launch only when it listens for one of these.

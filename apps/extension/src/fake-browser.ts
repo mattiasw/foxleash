@@ -73,9 +73,10 @@ export function createFakeBrowser(): FakeBrowser {
       onRemoved,
     },
     tabs: {
-      query: async ({ groupId }) =>
+      query: async ({ groupId, windowId }) =>
         [...fake.tabs.values()]
           .filter((tab) => groupId === undefined || tab.groupId === groupId)
+          .filter((tab) => windowId === undefined || tab.windowId === windowId)
           .map(snapshot),
       get: async (tabId) => snapshot(tabOf(tabId)),
       create: async ({ url, active, windowId }) =>
@@ -93,10 +94,21 @@ export function createFakeBrowser(): FakeBrowser {
         const tab = tabOf(tabId);
         load(tab, tab.url);
       },
+      remove: async (tabIds) => {
+        const removed = tabIds.map(tabOf);
+        for (const tab of removed) fake.tabs.delete(tab.id);
+        for (const { groupId } of removed) {
+          const empty = ![...fake.tabs.values()].some((tab) => tab.groupId === groupId);
+          if (empty) fake.groups.delete(groupId);
+        }
+      },
       group: async ({ tabIds, groupId, createProperties }) => {
         const group =
           groupId === undefined ? createGroup(createProperties?.windowId) : groupOf(groupId);
-        for (const tab of tabIds.map(tabOf)) tab.groupId = group.id;
+        for (const tab of tabIds.map(tabOf)) {
+          tab.groupId = group.id;
+          tab.windowId = group.windowId;
+        }
         return group.id;
       },
       onUpdated: {

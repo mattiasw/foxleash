@@ -14,6 +14,7 @@ import { ToolError } from "./handlers.ts";
 export interface ConnectionDeps<Handle> {
   browser: BrowserApi;
   handleRequest: (request: RequestMessage) => Promise<unknown>;
+  endSession: (session: string) => Promise<void>;
   timers: Timers<Handle>;
 }
 
@@ -29,6 +30,7 @@ const MAX_RECONNECT_DELAY_MS = 10000;
 export function createConnection<Handle>({
   browser,
   handleRequest,
+  endSession,
   timers,
 }: ConnectionDeps<Handle>): Connection {
   let port: Port | undefined;
@@ -122,6 +124,7 @@ export function createConnection<Handle>({
     const message = parsed.message;
     if (message.type === "request") answer(current, message).catch(logError);
     else if (message.type === "welcome") welcomed(message);
+    else if (message.type === "session_end") endSession(message.session).catch(logError);
     else warn({ event: "unexpected_message", type: message.type });
   }
 

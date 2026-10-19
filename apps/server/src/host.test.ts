@@ -724,6 +724,131 @@ describe("runHost, socket side", () => {
   });
 });
 
+describe("runHost, session end", () => {
+  it("tells Firefox when a bound connection closes", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const client = await greet(h);
+    await relay(h, client, "r1");
+    await end(client);
+    assert.deepEqual(await h.out.next(), { type: "session_end", session: "s1" });
+    await until(() => h.logs.some((line) => line.message === "c1 disconnected"));
+    assert.deepEqual(h.logs.slice(-2), [
+      { message: "c1 session ended", detail: undefined },
+      { message: "c1 disconnected", detail: undefined },
+    ]);
+    await finish(h);
+  });
+
+  it("sends nothing for a connection that never sent a request", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const client = await greet(h);
+    await end(client);
+    await assertNothingSent(h, "c1", 1);
+    await finish(h);
+  });
+
+  it("ends only the owner's session, once, when a refused connection closes", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const owner = await greet(h);
+    owner.send(request("r1", { session: "shared" }));
+    const forwarded = await h.out.next();
+    writeFrame(h.stdin, { type: "response", id: forwarded.id, ok: true, result: null });
+    await owner.frames.next();
+    const refused = await greet(h);
+    refused.send(request("r2", { session: "shared" }));
+    assert.equal(record((await refused.frames.next()).error).code, "session_in_use");
+    await end(refused);
+    await assertNothingSent(h, "c2", 2);
+    await end(owner);
+    assert.deepEqual(await h.out.next(), { type: "session_end", session: "shared" });
+    await until(() => h.logs.some((line) => line.message === "c1 disconnected"));
+    await tick();
+    assert.equal(h.out.received(), 3);
+    await finish(h);
+  });
+
+  it("sends nothing when the connection closes before the extension's hello", LIMIT, async () => {
+    const h = start();
+    const client = await greet(h);
+    client.send(request("r1"));
+    assert.equal(record((await client.frames.next()).error).code, "extension_disconnected");
+    await end(client);
+    await assertNothingSent(h, "c1", 0);
+    await finish(h);
+  });
+
+  it("sends nothing while the extension speaks another protocol", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, { protocol: PROTOCOL_VERSION + 1 });
+    const client = await greet(h);
+    client.send(request("r1"));
+    assert.equal(record((await client.frames.next()).error).code, "protocol_mismatch");
+    await end(client);
+    await assertNothingSent(h, "c1", 1);
+    await finish(h);
+  });
+
+  it("sends nothing for the connections that close() ends", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const client = await greet(h);
+    await relay(h, client, "r1");
+    h.host.close("signal");
+    assert.equal(await within(h.host.done), 0);
+    await assertNothingSent(h, "c1", 2);
+  });
+
+  it("logs and ignores a session_end from Firefox", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    writeFrame(h.stdin, { type: "session_end", session: "s1" });
+    const client = await greet(h);
+    await relay(h, client, "r1");
+    assert.ok(
+      h.logs.some(
+        (line) =>
+          line.message === "ignored a message from Firefox in the wrong direction" &&
+          line.detail === "session_end",
+      ),
+    );
+    await finish(h, client);
+  });
+
+  it("drops an MCP peer that sends a session_end", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const client = await greet(h);
+    client.send({ type: "session_end", session: "s1" });
+    await within(client.closed);
+    await assertNothingSent(h, "c1", 1);
+    assert.ok(
+      h.logs.some(
+        (line) =>
+          line.message === "dropped c1: sent a message in the wrong direction" &&
+          line.detail === "session_end",
+      ),
+    );
+    await finish(h);
+  });
+
+  it("ends only its own session when a bound peer sends another's session_end", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    const client = await greet(h);
+    await relay(h, client, "r1");
+    client.send({ type: "session_end", session: "other" });
+    await within(client.closed);
+    assert.deepEqual(await h.out.next(), { type: "session_end", session: "s1" });
+    await until(() => h.logs.some((line) => line.message === "c1 disconnected"));
+    await tick();
+    assert.equal(h.out.received(), 3);
+    await finish(h);
+  });
+});
+
 describe("runHost, closing", () => {
   it("leaves stdin destroyed and is idempotent", LIMIT, async () => {
     const h = start();
@@ -1207,6 +1332,17 @@ async function finish(h: Harness, ...clients: Client[]): Promise<void> {
   await Promise.all(clients.map(end));
   h.host.close("test finished");
   assert.equal(await within(h.host.done), 0);
+}
+
+/** The host writes a session_end before it logs the disconnect, so waiting for that line is enough. */
+async function assertNothingSent(h: Harness, label: string, frames: number): Promise<void> {
+  await until(() => h.logs.some((line) => line.message === `${label} disconnected`));
+  await tick();
+  assert.equal(h.out.received(), frames);
+  assert.equal(
+    h.logs.some((line) => line.message === `${label} session ended`),
+    false,
+  );
 }
 
 function badFrameLines(h: Harness): LogLine[] {

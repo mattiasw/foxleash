@@ -251,6 +251,43 @@ describe("connection welcome", { timeout: 10000 }, () => {
   });
 });
 
+describe("connection session end", { timeout: 10000 }, () => {
+  it("ends the session the host names and posts nothing", async (t) => {
+    const { open, warnings, ended } = setup(t);
+    const host = await open();
+    host.deliver({ type: "session_end", session: "s1" });
+    await flush();
+    assert.deepEqual(ended, ["s1"]);
+    assert.equal(host.posted.length, 1);
+    assert.deepEqual(warnings(), []);
+  });
+
+  it("logs a session end that fails", async (t) => {
+    const { open, warnings } = setup(t, undefined, async () => {
+      throw new Error("tabs gone");
+    });
+    const host = await open();
+    host.deliver({ type: "session_end", session: "s1" });
+    await flush();
+    assert.equal(host.posted.length, 1);
+    assert.deepEqual(warnings(), [{ event: "error", error: "Error: tabs gone" }]);
+  });
+
+  it("logs a session end with an invalid session and ends nothing", async (t) => {
+    const { open, warnings, ended } = setup(t);
+    const host = await open();
+    host.deliver({ type: "session_end", session: "a b" });
+    host.deliver({ type: "session_end" });
+    await flush();
+    assert.deepEqual(ended, []);
+    assert.equal(host.posted.length, 1);
+    assert.deepEqual(warnings(), [
+      { event: "invalid_message", error: "invalid session" },
+      { event: "invalid_message", error: "invalid session" },
+    ]);
+  });
+});
+
 describe("connection permission changes", { timeout: 10000 }, () => {
   it("reports a revoked and a re-granted grant on the open port", async (t) => {
     const { fake, open } = setup(t);
@@ -471,11 +508,17 @@ describe("connection reconnect", { timeout: 10000 }, () => {
 function setup(
   t: TestContext,
   handleRequest: (request: RequestMessage) => Promise<unknown> = async () => null,
+  onEndSession: (session: string) => Promise<void> = async () => {},
 ) {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const warn = t.mock.method(console, "warn", () => {});
-  const connection = createConnection({ browser: fake.browser, handleRequest, timers });
+  const ended: string[] = [];
+  const endSession = (session: string) => {
+    ended.push(session);
+    return onEndSession(session);
+  };
+  const connection = createConnection({ browser: fake.browser, handleRequest, endSession, timers });
   const start = () => connection.start();
 
   async function open(): Promise<FakePort> {
@@ -488,7 +531,7 @@ function setup(
     return warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
   }
 
-  return { fake, timers, start, open, warnings };
+  return { fake, timers, start, open, warnings, ended };
 }
 
 function port(ports: FakePort[], index: number): FakePort {

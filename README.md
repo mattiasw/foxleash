@@ -69,7 +69,9 @@ once, always, or not at all. You can see and revoke your answers in the extensio
 settings.
 
 Each agent session's tabs open in an orange tab group titled Foxhand, and Foxhand acts only
-on tabs in that group, including tabs you move into it.
+on tabs in that group, including tabs you move into it. When the agent session ends, Foxhand
+closes its group if the group holds only blank tabs, so pages you may still be reading stay
+open.
 
 ## Security
 

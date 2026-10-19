@@ -9,6 +9,7 @@ import {
   protocolMismatch,
   type RequestMessage,
   type ResponseMessage,
+  type SessionEndMessage,
   type WelcomeMessage,
 } from "@foxhand/protocol";
 import {
@@ -537,11 +538,21 @@ export function runHost(options: HostOptions): Host {
     }
     if (conn.session !== null && sessions.get(conn.session) === conn) {
       sessions.delete(conn.session);
+      sendSessionEnd(conn.label, conn.session);
     }
     if (conn.badFrames > 1) {
       log(`${conn.label} sent more bad frames`, { count: conn.badFrames - 1 });
     }
     log(`${conn.label} disconnected`);
+  }
+
+  function sendSessionEnd(label: string, session: string): void {
+    if (closed || !extension.greeted || extensionMismatch !== null) {
+      return;
+    }
+    const message: SessionEndMessage = { type: "session_end", session };
+    stdout.write(encodeFrame(JSON.stringify(message)));
+    log(`${label} session ended`);
   }
 
   function close(reason: string): void {

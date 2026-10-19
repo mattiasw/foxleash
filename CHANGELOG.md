@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Firefox extension opens and navigates tabs for your agent, keeping each session's tabs
   in its own orange "Foxhand" tab group.
+- When an agent session ends, its Foxhand tab group closes if it holds only blank tabs;
+  groups with pages stay open.
 - Firefox can now start the Foxhand native host, which relays your agent's requests to the
   extension.
 - An MCP server gives your agent the `tabs_list`, `tab_open` and `navigate` tools, so it can

@@ -47,7 +47,18 @@ export type ResponseMessage =
   | { type: "response"; id: string; ok: true; result: unknown }
   | { type: "response"; id: string; ok: false; error: ResponseError };
 
-export type Message = HelloMessage | WelcomeMessage | RequestMessage | ResponseMessage;
+/** Sent by the host when the MCP connection bound to `session` closes. */
+export interface SessionEndMessage {
+  type: "session_end";
+  session: string;
+}
+
+export type Message =
+  | HelloMessage
+  | WelcomeMessage
+  | RequestMessage
+  | ResponseMessage
+  | SessionEndMessage;
 
 export type ParseResult =
   | { ok: true; message: Message }
@@ -67,6 +78,8 @@ export function parseMessage(value: unknown): ParseResult {
       return parseRequest(value);
     case "response":
       return parseResponse(value);
+    case "session_end":
+      return parseSessionEnd(value);
     default:
       return fail("type");
   }
@@ -156,6 +169,12 @@ function parseResponse(fields: Fields): ParseResult {
   const message = own(error, "message");
   if (typeof message !== "string") return fail("error.message");
   return { ok: true, message: { type: "response", id, ok, error: { code, message } } };
+}
+
+function parseSessionEnd(fields: Fields): ParseResult {
+  const session = own(fields, "session");
+  if (!isToken(session)) return fail("session");
+  return { ok: true, message: { type: "session_end", session } };
 }
 
 function fail(field: string, id?: string): ParseResult {

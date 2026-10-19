@@ -12,13 +12,14 @@ export interface BrowserApi {
     onRemoved: BrowserEvent<(permissions: Permissions) => void>;
   };
   tabs: {
-    query(queryInfo: { groupId?: number }): Promise<Tab[]>;
+    query(queryInfo: { groupId?: number; windowId?: number }): Promise<Tab[]>;
     get(tabId: number): Promise<Tab>;
     create(createProperties: { url: string; active: boolean; windowId?: number }): Promise<Tab>;
     update(tabId: number, updateProperties: { url: string }): Promise<Tab>;
     goBack(tabId: number): Promise<void>;
     goForward(tabId: number): Promise<void>;
     reload(tabId: number): Promise<void>;
+    remove(tabIds: number[]): Promise<void>;
     group(options: {
       tabIds: number[];
       groupId?: number;

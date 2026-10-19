@@ -18,6 +18,7 @@ export type {
   ResponseError,
   ResponseMessage,
   Role,
+  SessionEndMessage,
   WelcomeMessage,
 } from "./messages.ts";
 export { parseMessage } from "./messages.ts";
