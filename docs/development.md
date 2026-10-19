@@ -200,20 +200,23 @@ taking its version from `apps/extension/package.json`.
    `Bump version to x.y.z`. The first release has no bump and no such commit.
 4. Run `npm run lint`, `npx turbo run typecheck test --force` and `npm run build:amo`, which
    builds `artifacts/foxhand-source-x.y.z.zip` and `artifacts/foxhand-x.y.z.xpi`.
-5. Create the annotated tag with `git tag -a vx.y.z -m "vx.y.z"`, run
-   `npm run check:release -- pre-push`, then push the release branch to origin's `main` and
-   the tag together with
+5. Create the annotated tag with `git tag -a vx.y.z -m "vx.y.z"` and run
+   `npm run check:release -- pre-push`. Then check that every entry of
+   `artifacts/foxhand-x.y.z.xpi` survives the trip to `web-ext sign`: none that web-ext's
+   default ignores would leave out (a path component that starts with `.`, is
+   `node_modules`, or ends in `.xpi` or `.zip`) and none the `artifacts` check refuses as
+   unsafe. On a match, stop before pushing: the tag is still local, so deleting it and the
+   release branch undoes the release, and the fix is a build change. Otherwise push the
+   release branch to origin's `main` and the tag together with
    `git push --atomic --no-follow-tags origin refs/heads/release/x.y.z:refs/heads/main refs/tags/vx.y.z`.
    Then move local `main` to the pushed commit with `git switch main`,
    `git merge --ff-only release/x.y.z` and `git branch -d release/x.y.z`.
 6. Once CI has passed on the pushed commit, sign the XPI from the clean copy,
    `artifacts/foxhand-x.y.z.xpi`, as an unlisted version on addons.mozilla.org.
    `web-ext sign` takes a directory, so extract the XPI and pass that directory as
-   `--source-dir`. Before extracting, check that every entry of the XPI survives the trip:
-   none that web-ext's default ignores would leave out (a path component that starts with
-   `.`, is `node_modules`, or ends in `.xpi` or `.zip`) and none the `artifacts` check
-   refuses as unsafe. Then extract it, stop on any unzip warning, and check that the
-   folder holds exactly the XPI's files, as regular files (web-ext follows a symbolic link).
+   `--source-dir`. Before extracting, check the entry names again as in step 5. Then
+   extract it, stop on any unzip warning, and check that the folder holds exactly the XPI's
+   files, as regular files (web-ext follows a symbolic link).
    Run `web-ext sign` with `--channel unlisted`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
    attached by `--upload-source-code artifacts/foxhand-source-x.y.z.zip`, and with
