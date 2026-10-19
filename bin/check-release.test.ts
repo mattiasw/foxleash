@@ -89,6 +89,7 @@ const SHOW_PACKAGE = key("git", "show", "HEAD:package.json");
 const SHOW_ORIGIN_PACKAGE = key("git", "show", "refs/remotes/origin/main:package.json");
 const ANCESTOR = key("git", "merge-base", "--is-ancestor", "refs/remotes/origin/main", "HEAD");
 const MERGES = key("git", "rev-list", "--merges", "refs/remotes/origin/main..HEAD");
+const MAIN_AHEAD = key("git", "rev-list", "refs/remotes/origin/main..refs/heads/main");
 const LOG = key(
   "git",
   "log",
@@ -383,6 +384,8 @@ function prePushTree(release: "first" | "second"): Tree {
   const released = packageFiles("0.1.0");
   Object.assign(tree.commands, {
     [TAGS]: release === "first" ? "v0.1.0" : "v0.2.0\nv0.1.0",
+    [BRANCH]: `release/${version}`,
+    [MAIN_AHEAD]: "",
     [STATUS]: "",
     [REV_HEAD]: HEAD,
     [REV_ORIGIN]: OTHER,
@@ -2479,8 +2482,32 @@ describe("pre-push", () => {
       (t) => (t.commands[PUSH_URL] = "git@github.com:owner/fork.git"),
       /^origin fetches from .* but pushes to/,
     ],
-    ["another branch", (t) => (t.commands[BRANCH] = "release"), /^on branch "release", not main$/],
-    ["a detached HEAD", (t) => (t.commands[BRANCH] = "HEAD"), /^HEAD is detached; check out main$/],
+    ["main", (t) => (t.commands[BRANCH] = "main"), /^on branch "main", not release\/0\.2\.0$/],
+    [
+      "another version's release branch",
+      (t) => (t.commands[BRANCH] = "release/0.1.0"),
+      /^on branch "release\/0\.1\.0", not release\/0\.2\.0$/,
+    ],
+    [
+      "a branch named release",
+      (t) => (t.commands[BRANCH] = "release"),
+      /^on branch "release", not release\/0\.2\.0$/,
+    ],
+    [
+      "an ambiguous name",
+      (t) => (t.commands[BRANCH] = "heads/release/0.2.0"),
+      /^on branch "heads\/release\/0\.2\.0", not release\/0\.2\.0$/,
+    ],
+    [
+      "a detached HEAD",
+      (t) => (t.commands[BRANCH] = "HEAD"),
+      /^HEAD is detached; check out release\/0\.2\.0$/,
+    ],
+    [
+      "local main ahead of origin/main",
+      (t) => (t.commands[MAIN_AHEAD] = `${HEAD}\n${OTHER}`),
+      new RegExp(`^local main has commits that origin/main does not: ${HEAD}, ${OTHER}$`),
+    ],
     [
       "a failed CI run on origin/main",
       (t) => (t.commands[ghRuns(OTHER)] = runs(ciRun({ head_sha: OTHER, conclusion: "failure" }))),
@@ -2614,6 +2641,18 @@ describe("pre-push", () => {
       texts(findings, "INFO").includes(`CI run 101 (push) green for ${OTHER.slice(0, 12)}`),
     );
     assert.ok(!env.calls.some((call) => call.join(" ").includes(`head_sha=${HEAD}`)));
+  });
+
+  test("a version that is not x.y.z skips the branch check", () => {
+    const tree = prePushTree("second");
+    Object.assign(tree.files, packageFiles("0.2.0", { "package.json": "0.2" }));
+    tree.commands[BRANCH] = "main";
+    const fails = texts(checkPrePush(fakeEnv(tree)), "FAIL");
+    assert.ok(fails.includes('package.json has version "0.2", not x.y.z'), JSON.stringify(fails));
+    assert.ok(
+      !fails.some((text) => text.startsWith("on branch") || text.startsWith("HEAD is detached")),
+      JSON.stringify(fails),
+    );
   });
 
   test("a missing tag skips the annotation check", () => {
@@ -3193,6 +3232,7 @@ describe("real git", () => {
     git(dir, "tag", "-a", "v0.1.0", "-m", "v0.1.0");
     withOrigin(dir);
     git(dir, "push", "-q", "origin", "refs/tags/v0.1.0");
+    git(dir, "switch", "-q", "--no-track", "-c", "release/0.2.0");
     commit(dir, "Update changelog for 0.2.0", {
       "CHANGELOG.md": changelog(
         "## [Unreleased]",
@@ -3216,6 +3256,33 @@ describe("real git", () => {
     assertClean(checkPrePush(github(secondRelease())));
   });
 
+  test("pre-push fails when the release commits are on main", () => {
+    const dir = secondRelease();
+    git(dir, "checkout", "-q", "main");
+    git(dir, "merge", "-q", "--ff-only", "release/0.2.0");
+    const fails = texts(checkPrePush(github(dir)), "FAIL");
+    assert.equal(fails.length, 2, JSON.stringify(fails));
+    assert.ok(fails.includes('on branch "main", not release/0.2.0'), JSON.stringify(fails));
+    assert.ok(
+      fails.some((text) => text.startsWith("local main has commits that origin/main does not: ")),
+      JSON.stringify(fails),
+    );
+  });
+
+  test("pre-push fails when local main also holds the release commits", () => {
+    const dir = secondRelease();
+    git(dir, "checkout", "-q", "main");
+    git(dir, "merge", "-q", "--ff-only", "release/0.2.0");
+    git(dir, "checkout", "-q", "release/0.2.0");
+    const ahead = git(dir, "rev-list", "refs/remotes/origin/main..refs/heads/main");
+    assertOnlyFail(
+      checkPrePush(github(dir)),
+      new RegExp(
+        `^local main has commits that origin/main does not: ${ahead.split("\n").join(", ")}$`,
+      ),
+    );
+  });
+
   test("pre-push fails on a lightweight tag", () => {
     const dir = secondRelease();
     git(dir, "tag", "-d", "v0.2.0");
@@ -3234,7 +3301,7 @@ describe("real git", () => {
     git(dir, "checkout", "-q", "-b", "side", "HEAD~2");
     commit(dir, "Elsewhere", { "x.txt": "x\n" });
     git(dir, "push", "-q", "origin", "HEAD:refs/heads/main");
-    git(dir, "checkout", "-q", "main");
+    git(dir, "checkout", "-q", "release/0.2.0");
     const fails = texts(checkPrePush(github(dir)), "FAIL");
     assert.ok(
       fails.includes("HEAD does not descend from origin/main; rebase on it first"),
@@ -3246,7 +3313,7 @@ describe("real git", () => {
     const dir = secondRelease();
     git(dir, "checkout", "-q", "-b", "side", "HEAD~2");
     commit(dir, "Side", { "x.txt": "x\n" });
-    git(dir, "checkout", "-q", "main");
+    git(dir, "checkout", "-q", "release/0.2.0");
     git(dir, "merge", "-q", "--no-ff", "-m", "Merge side", "side");
     git(dir, "tag", "-d", "v0.2.0");
     git(dir, "tag", "-a", "v0.2.0", "-m", "v0.2.0");

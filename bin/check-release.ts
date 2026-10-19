@@ -279,7 +279,7 @@ export function checkPreRoll(env: Env, bump: Bump | undefined): CheckResult {
   const changelog = readChangelog(env, findings);
   const slug = attempt(findings, "origin URL", () => remoteSlug(env, findings));
   attempt(findings, "fetch", () => fetchMain(env));
-  attempt(findings, "branch", () => checkOnMain(env, findings));
+  attempt(findings, "branch", () => checkOnBranch(env, "main", findings));
   const head = attempt(findings, "HEAD", () => commitSha(env, "HEAD"));
   if (head !== undefined) {
     attempt(findings, "HEAD and origin/main", () => checkHeadIsOriginMain(env, head, findings));
@@ -887,7 +887,15 @@ export function checkPrePush(env: Env): Finding[] {
   if (version !== undefined) checkReleasedAgree(findings, version, changelog, tag);
   const slug = attempt(findings, "origin URL", () => remoteSlug(env, findings));
   attempt(findings, "fetch", () => fetchMain(env));
-  attempt(findings, "branch", () => checkOnMain(env, findings));
+  if (version !== undefined) {
+    attempt(findings, "branch", () => checkOnBranch(env, `release/${version}`, findings));
+  }
+  attempt(findings, "local main", () => {
+    const ahead = lines(env.sh("git", ["rev-list", `${ORIGIN_MAIN}..refs/heads/main`]));
+    if (ahead.length > 0) {
+      findings.push(fail(`local main has commits that origin/main does not: ${ahead.join(", ")}`));
+    }
+  });
   attempt(findings, "origin/main", () => checkDescendsFromOriginMain(env, findings));
   attempt(findings, "merge commits", () => {
     const merges = lines(env.sh("git", ["rev-list", "--merges", `${ORIGIN_MAIN}..HEAD`]));
@@ -1270,10 +1278,12 @@ function fetchMain(env: Env): void {
   ]);
 }
 
-function checkOnMain(env: Env, findings: Finding[]): void {
+function checkOnBranch(env: Env, expected: string, findings: Finding[]): void {
   const branch = env.sh("git", ["rev-parse", "--abbrev-ref", "HEAD"]);
-  if (branch === "HEAD") findings.push(fail("HEAD is detached; check out main"));
-  else if (branch !== "main") findings.push(fail(`on branch ${JSON.stringify(branch)}, not main`));
+  if (branch === "HEAD") findings.push(fail(`HEAD is detached; check out ${expected}`));
+  else if (branch !== expected) {
+    findings.push(fail(`on branch ${JSON.stringify(branch)}, not ${expected}`));
+  }
 }
 
 function commitSha(env: Env, ref: string): string {
