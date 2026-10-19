@@ -185,7 +185,7 @@ function classify(file: string): "ship" | "exclude" | "unclassified" {
   if (!SHIPPED_TREES.some((tree) => file.startsWith(tree))) return "unclassified";
   if (file.endsWith(".test.ts") || EXCLUDED_IN_SHIPPED_TREES.has(file)) return "exclude";
   // Unknown extensions fail closed until they get a rule.
-  return /\.(ts|json|svg)$/.test(file) ? "ship" : "unclassified";
+  return /\.(ts|json|svg|html|css)$/.test(file) ? "ship" : "unclassified";
 }
 
 function splitNul(text: string): string[] {

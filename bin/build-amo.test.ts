@@ -83,6 +83,19 @@ describe("partitionTrackedFiles", () => {
     assert.deepEqual(ship, ["apps/extension/src/B.ts", "apps/extension/src/b.ts"]);
   });
 
+  test("ships the extension's html and css, and fails closed on other extensions", () => {
+    const input = [
+      "apps/extension/src/x.txt",
+      "apps/extension/src/x.html",
+      "apps/extension/src/x.css",
+      "apps/extension/src/x.htm",
+    ];
+    assert.deepEqual(partitionTrackedFiles(input), {
+      ship: ["apps/extension/src/x.css", "apps/extension/src/x.html"],
+      unclassified: ["apps/extension/src/x.txt", "apps/extension/src/x.htm"],
+    });
+  });
+
   test("calls new files outside every rule unclassified", () => {
     const input = [
       "LICENSE.txt",

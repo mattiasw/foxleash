@@ -142,6 +142,8 @@ permission prompts can be switched off:
 
 - A session acts on a site only after the user approved that site in the browser. Only a
   user click grants approval; nothing arriving over native messaging can.
+- A site is the URL's origin (scheme, host and port). Tabs on sites the session is not
+  approved for reach the agent redacted to their site, with no title (ADR 0007).
 - Financial and health sites are blocked by default.
 - `upload_file` reads only from allowed folders and refuses dotfiles and key files.
 - Tool results mark page content as untrusted.

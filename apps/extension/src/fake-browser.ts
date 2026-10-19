@@ -3,6 +3,7 @@ import type {
   BrowserEvent,
   Permissions,
   Port,
+  StorageChange,
   Tab,
   TabChangeInfo,
   TabGroup,
@@ -28,6 +29,8 @@ export interface FakeBrowser {
   /** The user closing a group: the group and its tabs go away. */
   closeGroup(groupId: number): void;
   emitStatus(tabId: number, status: string): void;
+  /** Fires `storage.onChanged` with no changes, as for a storage area the fake does not keep. */
+  emitStorageChanged(areaName: string): void;
   listenerCount(): number;
 }
 
@@ -59,6 +62,9 @@ export function createFakeBrowser(): FakeBrowser {
   let nextGroupId = 1;
   const onAdded = createEvent<(permissions: Permissions) => void>();
   const onRemoved = createEvent<(permissions: Permissions) => void>();
+  const stored = new Map<string, unknown>();
+  const onStorageChanged =
+    createEvent<(changes: Record<string, StorageChange>, areaName: string) => void>();
 
   const browser: BrowserApi = {
     runtime: {
@@ -123,6 +129,29 @@ export function createFakeBrowser(): FakeBrowser {
       get: async (groupId) => ({ ...groupOf(groupId) }),
       update: async (groupId, properties) => ({ ...Object.assign(groupOf(groupId), properties) }),
     },
+    storage: {
+      local: {
+        get: async () =>
+          Object.fromEntries([...stored].map(([key, value]) => [key, structuredClone(value)])),
+        set: async (items) => {
+          const changes = new Map<string, StorageChange>();
+          for (const [key, value] of Object.entries(items)) {
+            const change: StorageChange = { newValue: structuredClone(value) };
+            if (stored.has(key)) change.oldValue = stored.get(key);
+            stored.set(key, change.newValue);
+            changes.set(key, change);
+          }
+          emitStorage(Object.fromEntries(changes), "local");
+        },
+        remove: async (key) => {
+          if (!stored.has(key)) return;
+          const oldValue = stored.get(key);
+          stored.delete(key);
+          emitStorage(Object.fromEntries([[key, { oldValue }]]), "local");
+        },
+      },
+      onChanged: onStorageChanged,
+    },
   };
 
   const fake: FakeBrowser = {
@@ -173,9 +202,14 @@ export function createFakeBrowser(): FakeBrowser {
       tab.status = status;
       emit(tab, { status });
     },
+    emitStorageChanged: (areaName) => emitStorage({}, areaName),
     listenerCount: () => updatedListeners.length,
   };
   return fake;
+
+  function emitStorage(changes: Record<string, StorageChange>, areaName: string): void {
+    for (const listener of [...onStorageChanged.listeners]) listener(changes, areaName);
+  }
 
   function connectNative(): Port {
     const onMessage = createEvent<(message: unknown) => void>();

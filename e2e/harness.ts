@@ -13,16 +13,25 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { EXTENSION_ID } from "@foxhand/protocol";
+import { EXTENSION_ID, type TabInfo } from "@foxhand/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { UNTRUSTED_LINE } from "../apps/server/src/tools.ts";
 import { ensureFirefox } from "../bin/install-firefox.ts";
-import { describeOutput, type Firefox, isRecord, launchFirefox } from "./firefox.ts";
+import {
+  describeOutput,
+  type Firefox,
+  isRecord,
+  launchFirefox,
+  PAGE_TIMEOUT_MS,
+  pollUntil,
+} from "./firefox.ts";
 
 export const CHECKOUT = join(import.meta.dirname, "..");
 export const EXTENSION_DIST = join(CHECKOUT, "apps", "extension", "dist");
 const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
+const SETTINGS_PAGE = "options.html";
+const SETTINGS_TITLE = "Foxhand settings";
 
 // The longest socket path the host can make must fit in sun_path (108 bytes with its NUL).
 const MAX_SOCKET_PATH_BYTES = 107;
@@ -56,6 +65,13 @@ export interface Harness {
   /** Installs the native host into the temp home only (`install --no-claude`). */
   install(): void;
   startFirefox(extensionDir: string): Promise<Firefox>;
+  /**
+   * Writes `entries` into the extension's storage.local from its settings page, in the Firefox
+   * started last. The only way tests write settings: the extension has no test hook.
+   */
+  seedSettings(entries: Record<string, unknown>): Promise<void>;
+  /** Opens the settings page in a new tab, waits for its first render, and returns the tab. */
+  settingsPage(): Promise<string>;
   connect(overrides?: Record<string, string>): Promise<Session>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
@@ -116,6 +132,24 @@ export function createHarness(): Harness {
         cause: error,
       });
     }
+  }
+
+  function currentFirefox(): Firefox {
+    const firefox = firefoxes.at(-1);
+    if (firefox === undefined) throw new Error("start Firefox first");
+    return firefox;
+  }
+
+  /** Opens the settings page and checks it is ours, so a wrong extension UUID fails here. */
+  async function openSettingsPage(firefox: Firefox): Promise<string> {
+    const context = await firefox.openContext(firefox.extensionUrl(SETTINGS_PAGE));
+    const title = await firefox.evaluate(context, "document.title");
+    assert.equal(
+      title,
+      SETTINGS_TITLE,
+      `the settings page is titled ${String(title)}${diagnostics()}`,
+    );
+    return context;
   }
 
   async function waitForHost(): Promise<number> {
@@ -180,6 +214,42 @@ export function createHarness(): Harness {
       }
       assert.equal(id, EXTENSION_ID, `Firefox installed the extension as ${id}${diagnostics()}`);
       return firefox;
+    },
+
+    async seedSettings(entries) {
+      assertOpen();
+      const firefox = currentFirefox();
+      const context = await openSettingsPage(firefox);
+      try {
+        // JSON.parse keeps an own __proto__ key, which an object literal would make a prototype.
+        const json = JSON.stringify(JSON.stringify(entries));
+        const stored = await firefox.evaluate(
+          context,
+          `browser.storage.local.set(JSON.parse(${json})).then(() => true)`,
+        );
+        assert.equal(stored, true, `storage.local.set returned ${String(stored)}`);
+      } finally {
+        await firefox.closeContext(context);
+      }
+    },
+
+    async settingsPage() {
+      assertOpen();
+      const firefox = currentFirefox();
+      const context = await openSettingsPage(firefox);
+      // Its first storage read can still be pending once the document has loaded.
+      await pollUntil(
+        async () => {
+          const rendered = await firefox.evaluate(
+            context,
+            '!document.getElementById("sites").hidden || !document.getElementById("sites-empty").hidden',
+          );
+          return rendered === true ? true : undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        "the settings page to show its sites",
+      );
+      return context;
     },
 
     async connect(overrides = {}) {
@@ -395,4 +465,30 @@ export function parseResult(text: string): unknown {
   const prefix = `${UNTRUSTED_LINE}\n`;
   assert.ok(text.startsWith(prefix), `the result does not start with the untrusted line:\n${text}`);
   return JSON.parse(text.slice(prefix.length));
+}
+
+export function tabOf(value: unknown): TabInfo {
+  assert.ok(isRecord(value), `expected { tab }, got ${JSON.stringify(value)}`);
+  return checkTab(value.tab);
+}
+
+export function tabsOf(value: unknown): TabInfo[] {
+  assert.ok(
+    isRecord(value) && Array.isArray(value.tabs),
+    `expected { tabs }, got ${JSON.stringify(value)}`,
+  );
+  const tabs: unknown[] = value.tabs;
+  return tabs.map(checkTab);
+}
+
+export function checkTab(value: unknown): TabInfo {
+  assert.ok(
+    isRecord(value) &&
+      typeof value.id === "number" &&
+      typeof value.url === "string" &&
+      typeof value.title === "string" &&
+      typeof value.active === "boolean",
+    `expected a tab, got ${JSON.stringify(value)}`,
+  );
+  return { id: value.id, url: value.url, title: value.title, active: value.active };
 }

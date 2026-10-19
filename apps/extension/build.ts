@@ -1,4 +1,4 @@
-import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, cp, mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { type BuildOptions, build as bundle } from "esbuild";
 
@@ -6,8 +6,9 @@ const root = import.meta.dirname;
 export const dist = join(root, "dist");
 
 export const esbuildOptions: BuildOptions = {
-  entryPoints: [join(root, "src", "background.ts")],
-  outfile: join(dist, "background.js"),
+  entryPoints: [join(root, "src", "background.ts"), join(root, "src", "options.ts")],
+  outdir: dist,
+  entryNames: "[name]",
   bundle: true,
   format: "iife",
   // Mozilla's reviewers read the output.
@@ -21,7 +22,7 @@ export async function build(): Promise<void> {
   await bundle(esbuildOptions);
 }
 
-/** Empties `dist/` and writes everything except the bundle: the manifest and the icons. */
+/** Empties `dist/` and writes everything except the bundles: the manifest, the icons and the pages. */
 export async function prepareDist(): Promise<void> {
   await rm(dist, { recursive: true, force: true });
   await mkdir(dist, { recursive: true });
@@ -33,6 +34,8 @@ export async function prepareDist(): Promise<void> {
     `${JSON.stringify({ ...manifest, version }, null, 2)}\n`,
   );
   await cp(join(root, "icons"), join(dist, "icons"), { recursive: true });
+  const pages = (await readdir(join(root, "src"))).filter((file) => /\.(html|css)$/.test(file));
+  for (const page of pages) await copyFile(join(root, "src", page), join(dist, page));
 }
 
 async function readJsonObject(file: string): Promise<Record<string, unknown>> {

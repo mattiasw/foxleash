@@ -10,6 +10,7 @@ import {
 } from "@foxhand/protocol";
 import type { BrowserApi, Port, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
+import { warn } from "./log.ts";
 
 export interface ConnectionDeps<Handle> {
   browser: BrowserApi;
@@ -191,8 +192,4 @@ export function createConnection<Handle>({
 
 function logError(error: unknown): void {
   warn({ event: "error", error: String(error) });
-}
-
-function warn(fields: Record<string, unknown>): void {
-  console.warn(JSON.stringify(fields));
 }

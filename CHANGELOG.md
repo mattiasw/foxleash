@@ -21,3 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `npm run teardown` removes both.
 - `npm run doctor` checks your setup, the Foxhand host of every running Firefox and the
   extension, and says what to do about each problem it finds.
+- Tabs on sites you have not approved show your agent only the site's address, not the
+  page's path, query or title, and tabs showing a local file only that they are local files.
+- The extension's settings page lists the sites you allowed always and lets you revoke each
+  one.

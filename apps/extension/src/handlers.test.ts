@@ -5,6 +5,8 @@ import type { Tab } from "./browser-api.ts";
 import { createFakeBrowser, createFakeTimers, flush } from "./fake-browser.ts";
 import { createHandlers, ToolError } from "./handlers.ts";
 import { createSessionGroups } from "./session-groups.ts";
+import { grantSite } from "./settings.ts";
+import { createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
   it("returns only the tabs in the session's group", async () => {
@@ -48,7 +50,8 @@ describe("tabs_list", { timeout: 10000 }, () => {
 
 describe("tab_open", { timeout: 10000 }, () => {
   it("opens the url in a new active tab in an orange group titled Foxhand", async () => {
-    const { fake, open } = setup();
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
     fake.openTab({ active: true });
     const tab = await open("s1", "https://example.com/path?q=1");
     assert.deepEqual(tab, {
@@ -74,14 +77,16 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("opens the parsed URL, so what was checked is what is opened", async () => {
-    const { fake, open } = setup();
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
     const tab = await open("s1", "HTTPS://EXAMPLE.com:443/a/../b");
     assert.equal(tab.url, "https://example.com/b");
     assert.equal(fake.tabs.get(tab.id)?.url, "https://example.com/b");
   });
 
   it("opens an http URL", async () => {
-    const { open } = setup();
+    const { open, grant } = setup();
+    await grant("http://example.com");
     assert.equal((await open("s1", "http://example.com/")).url, "http://example.com/");
   });
 
@@ -92,7 +97,7 @@ describe("tab_open", { timeout: 10000 }, () => {
       assert.deepEqual(tab, {
         id: tab.id,
         url: "about:blank",
-        title: "Title of about:blank",
+        title: "",
         active: true,
       });
       assert.notEqual(fake.tabs.get(tab.id)?.groupId, -1);
@@ -203,7 +208,8 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("ignores params it does not take", async () => {
-    const { open, call } = setup();
+    const { open, call, grant } = setup();
+    await grant("https://example.com");
     await open("s1");
     const result = await call("s1", "tab_open", { url: "https://example.com/", extra: 1 });
     assert.ok("tab" in result);
@@ -229,7 +235,8 @@ describe("tab_open", { timeout: 10000 }, () => {
 
 describe("navigate", { timeout: 10000 }, () => {
   it("loads a url in a tab of the session's group", async () => {
-    const { navigate, open } = setup();
+    const { navigate, open, grant } = setup();
+    await grant("https://b.example");
     const tab = await open("s1", "https://a.example/");
     assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/" }), {
       id: tab.id,
@@ -240,7 +247,9 @@ describe("navigate", { timeout: 10000 }, () => {
   });
 
   it("goes back, forward and reloads", async () => {
-    const { fake, navigate, open } = setup();
+    const { fake, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
     const tab = await open("s1", "https://a.example/");
     await navigate("s1", { tabId: tab.id, url: "https://b.example/" });
     assert.equal(
@@ -510,11 +519,84 @@ describe("sessions", { timeout: 10000 }, () => {
   });
 });
 
+describe("site access", { timeout: 10000 }, () => {
+  it("shows a tab the user moved in from an unapproved site only as its site", async () => {
+    const { fake, list, open } = setup();
+    const tab = await open("s1");
+    const moved = fake.openTab({ url: "https://moved.example:8443/inbox?id=7#top" });
+    moved.groupId = groupIdOf(fake, tab.id);
+    const listed = await list("s1");
+    assert.deepEqual(listed[1], {
+      id: moved.id,
+      url: "https://moved.example:8443",
+      title: "",
+      active: false,
+    });
+  });
+
+  it("opens an unapproved site and returns only its site, with the same keys", async () => {
+    const { fake, open } = setup();
+    const tab = await open("s1", "https://example.com/path?q=1");
+    assert.deepEqual(tab, { id: tab.id, url: "https://example.com", title: "", active: true });
+    assert.deepEqual(Object.keys(tab).sort(), ["active", "id", "title", "url"]);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://example.com/path?q=1");
+  });
+
+  it("navigates to an unapproved site and returns only its site", async () => {
+    const { navigate, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/secret" }), {
+      id: tab.id,
+      url: "https://b.example",
+      title: "",
+      active: true,
+    });
+  });
+
+  it("shows a site granted for a session in full to that session only", async () => {
+    const { list, open, sessions } = setup();
+    sessions.set("s1", { allowed: new Set(["https://a.example"]) });
+    const first = await open("s1", "https://a.example/page");
+    assert.deepEqual(first, {
+      id: first.id,
+      url: "https://a.example/page",
+      title: "Title of https://a.example/page",
+      active: true,
+    });
+    const second = await open("s2", "https://a.example/page");
+    assert.deepEqual(second, { id: second.id, url: "https://a.example", title: "", active: true });
+    assert.deepEqual(
+      (await list("s2")).map(({ url }) => url),
+      ["https://a.example"],
+    );
+  });
+
+  it("hides the title of an approved tab that is still loading", async () => {
+    const { fake, list, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.emitStatus(tab.id, "loading");
+    assert.deepEqual(await list("s1"), [{ ...tab, title: "" }]);
+  });
+
+  it("fails the call instead of showing tabs when the settings cannot be read", async () => {
+    const { fake, call, open } = setup();
+    await open("s1", "https://a.example/");
+    fake.browser.storage.local.get = async () => {
+      throw new Error("storage is unavailable");
+    };
+    await assert.rejects(call("s1", "tabs_list"), /storage is unavailable/);
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
-  const handleRequest = createHandlers({ browser: fake.browser, groups, timers });
+  const sessions: SessionMemory = new Map();
+  const access = createSiteAccess({ browser: fake.browser, sessions });
+  const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
     handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
@@ -537,7 +619,11 @@ function setup() {
     return result.tab;
   }
 
-  return { fake, timers, call, open, list, navigate };
+  function grant(site: string): Promise<void> {
+    return grantSite(fake.browser, site);
+  }
+
+  return { fake, timers, sessions, call, open, list, navigate, grant };
 }
 
 function groupIdOf(fake: { tabs: Map<number, Tab> }, tabId: number): number {

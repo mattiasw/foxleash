@@ -71,7 +71,7 @@ Firefox gives extensions no way to produce real user input, so all clicks and ke
 
 Foxhand runs on Linux only, with Firefox desktop 140 or later. It does not work on Firefox for Android.
 
-What the agent asks for goes from the extension to the Foxhand program on your computer and from there to the agent, which may send it on to its model provider. The URLs and titles of the tabs in the agent's group reach the agent whether or not you approved their sites. Apart from what the agent opens, types, uploads and submits in web pages on your behalf, Foxhand itself sends nothing anywhere else.
+What the agent asks for goes from the extension to the Foxhand program on your computer and from there to the agent, which may send it on to its model provider. For a tab in the agent's group on a site you approved, the agent gets its URL and title. For any other tab in its group it gets only the site's address (scheme, host and port), with no path, query or title, and for a local file or another page that is not a website, only the kind of address, such as file:. Apart from what the agent opens, types, uploads and submits in web pages on your behalf, Foxhand itself sends nothing anywhere else.
 
 ## Permissions
 
@@ -98,21 +98,21 @@ What the agent can reach:
 
 - Only tabs in the agent's Foxhand tab group, such as tabs it opened there and tabs you moved into it.
 - Page content (page text, form fields, screenshots, console messages and network requests) comes only from what a tab showed or loaded while its page was on a site you approved with a click in the browser. It can include what that page loads or shows from other sites, blocklisted ones included. The agent cannot approve a site.
-- The URLs and titles of the tabs in the group go to the agent whether or not you approved their sites.
+- For a tab on a site you approved, the agent gets its URL and title. For any other tab in the group it gets only the site's address (scheme, host and port), with no path, query or title, and for a local file or another page that is not a website, only the kind of address, such as file:.
 - Foxhand lets the agent open web addresses without asking you. Whatever it puts in an address, types or submits in a page goes to that website, and to wherever that page sends it, as it would if you did it yourself.
-- A built-in list of common financial and health sites is blocked by default: Foxhand does not read or act in a tab's page while it shows one of them, though the tab's URL and title still reach the agent. You can edit the list.
+- A built-in list of common financial and health sites is blocked by default: Foxhand does not read or act in a tab's page while it shows one of them. You can edit the list.
 
 Foxhand itself sends nothing anywhere else. It has no servers, no accounts, no analytics and no telemetry. The extension talks only to the Foxhand program on your computer, and neither the extension nor the program makes network connections of its own: the program talks to Firefox through native messaging and to the agent through the agent's standard input and output, and its two parts talk to each other through a local socket. Foxhand contains no AI model.
 
 The extension declares these kinds of data to Firefox:
 
 - Website content (websiteContent): page text and structure, form fields, screenshots, console messages, and the network requests a page makes (URLs, methods, status and headers).
-- Browsing activity (browsingActivity): the URLs and titles of the tabs in the agent's tab group, and where their navigations end.
-- Authentication information (authenticationInfo): declared because the tab URLs and titles, network request URLs and headers, console messages and page content the agent reads can carry account details, passwords or sign-in tokens, even though the Cookie, Set-Cookie and Authorization headers are redacted. Tab URLs and titles reach the agent whether or not you approved their sites.
+- Browsing activity (browsingActivity): the URLs and titles of the tabs on sites you approved in the agent's tab group, the site address of its other tabs, and where their navigations end.
+- Authentication information (authenticationInfo): declared because the URLs and titles of tabs on sites you approved, network request URLs and headers, console messages and page content the agent reads can carry account details, passwords or sign-in tokens, even though the Cookie, Set-Cookie and Authorization headers are redacted. Other tabs in the group show the agent only their site's address.
 
 When the agent uploads a file, the Foxhand program reads it only from folders you allowed and refuses dotfiles and files named like keys. The extension hands it to the page's file field. The page then sends it to that site as a manual upload would.
 
-The extension keeps your settings, such as the sites you approved and the blocklist, in its local storage in your Firefox profile, which Firefox does not sync.
+The extension keeps your settings, such as the sites you approved and the blocklist, in its local storage in your Firefox profile, which Firefox does not sync. The extension's settings page, in the Firefox add-ons manager, lists the sites you allowed always and lets you revoke each one.
 
 ## Compatibility
 

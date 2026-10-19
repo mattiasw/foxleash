@@ -9,7 +9,14 @@ apps/extension/src/background.ts
 apps/extension/src/browser-api.ts
 apps/extension/src/connection.ts
 apps/extension/src/handlers.ts
+apps/extension/src/log.ts
+apps/extension/src/options.html
+apps/extension/src/options.ts
+apps/extension/src/pages.css
 apps/extension/src/session-groups.ts
+apps/extension/src/settings.ts
+apps/extension/src/site-access.ts
+apps/extension/src/site.ts
 apps/extension/src/wait-for-load.ts
 apps/extension/tsconfig.json
 package-lock.json

@@ -53,6 +53,12 @@
     {
       "listing": "It never runs code received from outside the extension",
       "evidence": [{ "file": "apps/extension/manifest.json", "lacks": "userScripts" }]
+    },
+    {
+      "listing": "only the site's address (scheme, host and port), with no path, query or title",
+      "evidence": [
+        { "file": "apps/extension/src/site-access.ts", "contains": "redactedUrl(tab.url)" }
+      ]
     }
   ]
 }

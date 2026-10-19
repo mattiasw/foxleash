@@ -21,5 +21,6 @@ npm ci && npm run build
 ```
 
 The unminified extension appears in `apps/extension/dist/`: `background.js`, bundled by
-esbuild from `apps/extension/src/` and `packages/protocol/src/`, plus `manifest.json` and
-the icon.
+esbuild from `apps/extension/src/` and `packages/protocol/src/`; `options.js`, bundled from
+`apps/extension/src/`; `options.html` and `pages.css`, the settings page; plus
+`manifest.json` and the icon.

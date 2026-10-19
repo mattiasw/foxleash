@@ -2,6 +2,7 @@ import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createHandlers } from "./handlers.ts";
 import { createSessionGroups } from "./session-groups.ts";
+import { createSiteAccess } from "./site-access.ts";
 
 declare const browser: BrowserApi;
 
@@ -12,7 +13,8 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
 };
 
 const groups = createSessionGroups(browser);
-const handleRequest = createHandlers({ browser, groups, timers });
+const access = createSiteAccess({ browser, sessions: new Map() });
+const handleRequest = createHandlers({ browser, groups, timers, access });
 const connection = createConnection({
   browser,
   handleRequest,

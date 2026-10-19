@@ -14,6 +14,8 @@ const SLOW_HOLD_MS = 1500;
 const COUNTER_PREFIX = "Counter ";
 
 export interface FixtureServer {
+  /** The server's site, `http://127.0.0.1:<port>`, as the extension names it. */
+  site: string;
   url(path: string): string;
   close(): Promise<void>;
 }
@@ -56,6 +58,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const origin = `http://127.0.0.1:${address.port}`;
 
   return {
+    site: origin,
     url: (path) => `${origin}${path}`,
     close: async () => {
       for (const timer of timers) clearTimeout(timer);

@@ -1,7 +1,5 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { TabInfo } from "@foxhand/protocol";
-import { isRecord } from "./firefox.ts";
 import {
   counterTitle,
   type FixtureServer,
@@ -9,7 +7,14 @@ import {
   startFixtureServer,
   TITLES,
 } from "./fixture-server.ts";
-import { createHarness, EXTENSION_DIST, type Harness, type Session } from "./harness.ts";
+import {
+  createHarness,
+  EXTENSION_DIST,
+  type Harness,
+  type Session,
+  tabOf,
+  tabsOf,
+} from "./harness.ts";
 
 // One Firefox for the file: the tests run in order and build on each other's tabs.
 describe("tabs in real Firefox", () => {
@@ -24,6 +29,9 @@ describe("tabs in real Firefox", () => {
       harness.install();
       fixtures = await startFixtureServer();
       await harness.startFirefox(EXTENSION_DIST);
+      await harness.seedSettings({
+        [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
+      });
       session = await harness.connect();
       await harness.waitUntilReady(session);
     },
@@ -96,29 +104,3 @@ describe("tabs in real Firefox", () => {
     );
   });
 });
-
-function tabOf(value: unknown): TabInfo {
-  assert.ok(isRecord(value), `expected { tab }, got ${JSON.stringify(value)}`);
-  return checkTab(value.tab);
-}
-
-function tabsOf(value: unknown): TabInfo[] {
-  assert.ok(
-    isRecord(value) && Array.isArray(value.tabs),
-    `expected { tabs }, got ${JSON.stringify(value)}`,
-  );
-  const tabs: unknown[] = value.tabs;
-  return tabs.map(checkTab);
-}
-
-function checkTab(value: unknown): TabInfo {
-  assert.ok(
-    isRecord(value) &&
-      typeof value.id === "number" &&
-      typeof value.url === "string" &&
-      typeof value.title === "string" &&
-      typeof value.active === "boolean",
-    `expected a tab, got ${JSON.stringify(value)}`,
-  );
-  return { id: value.id, url: value.url, title: value.title, active: value.active };
-}

@@ -55,18 +55,33 @@ that file together with the sha256 of `linux-x86_64/en-US/firefox-<version>.tar.
 Mozilla's `https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`, as a change
 of its own (see ADR 0003).
 
+The tests also act in the extension's own pages, which WebDriver reaches only with system
+access, so the test Firefox starts with `--marionette` and `--remote-allow-system-access`
+(see [ADR 0008](adr/0008-e2e-tests-act-in-extension-pages-through-bidi-and-marionette.md)).
+The harness opens the session over Marionette (`WebDriver:NewSession` with
+`webSocketUrl: true`) and connects BiDi to the WebSocket URL it returns. BiDi installs the
+extension, opens, navigates and closes tabs and evaluates script in them; Marionette only
+clicks (`WebDriver:FindElement` and `WebDriver:ElementClick`), because BiDi has no input in
+extension pages and a click from script is not trusted. The profile pins the extension's
+internal UUID (`EXTENSION_UUID` in `e2e/firefox.ts`) with the `extensions.webextensions.uuids`
+pref, so the settings page is `moz-extension://<EXTENSION_UUID>/options.html`.
+`harness.seedSettings` writes `storage.local` from that page and is the only way tests write
+settings: the extension has no test hook.
+
 ## Extension
 
 `npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
-version from `apps/extension/package.json`, an unminified `background.js`, and the icon. It
+version from `apps/extension/package.json`, unminified `background.js` and `options.js`, the
+settings page `options.html` with its `pages.css`, and the icon. It
 then lints that folder with web-ext, ignoring web-ext's `WEB_EXT` environment variables and
 config files, and fails on any error or warning except the one expected Firefox for Android
 warning on `data_collection_permissions`. See
 [ADR 0006](adr/0006-no-firefox-for-android-key-in-the-manifest.md) for why.
 
-`npm run dev` rebuilds `background.js` whenever its TypeScript source changes and runs Firefox
-through `web-ext run`, which reloads the extension after each rebuild. It writes the manifest
-and the icon once at start, so restart it after changing them. Firefox uses a persistent
+`npm run dev` rebuilds `background.js` and `options.js` whenever their TypeScript source
+changes and runs Firefox through `web-ext run`, which reloads the extension after each
+rebuild. It writes the manifest, the icon and the pages (`src/*.html` and `src/*.css`) once at
+start, so restart it after changing them. Firefox uses a persistent
 profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
 `~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
 runs. It needs a desktop with Firefox 140 or later.

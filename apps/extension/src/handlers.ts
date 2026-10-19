@@ -1,12 +1,7 @@
-import type {
-  MethodName,
-  NavigateAction,
-  RequestMessage,
-  Result,
-  TabInfo,
-} from "@foxhand/protocol";
+import type { MethodName, NavigateAction, RequestMessage, Result } from "@foxhand/protocol";
 import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
 import type { SessionGroups } from "./session-groups.ts";
+import type { SiteAccess } from "./site-access.ts";
 import { waitForLoad } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
@@ -23,6 +18,7 @@ export interface HandlerDeps<Handle> {
   browser: BrowserApi;
   groups: SessionGroups;
   timers: Timers<Handle>;
+  access: SiteAccess;
 }
 
 type Params = Record<string, unknown>;
@@ -43,6 +39,7 @@ export function createHandlers<Handle>({
   browser,
   groups,
   timers,
+  access,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = { tabs_list: tabsList, tab_open: tabOpen, navigate };
 
@@ -55,7 +52,8 @@ export function createHandlers<Handle>({
     // Firefox's tabs.query without a groupId returns every tab in the browser.
     if (group === undefined) return { tabs: [] };
     const tabs = await browser.tabs.query({ groupId: group.id });
-    return { tabs: tabs.map(toTabInfo) };
+    const view = await access.view(session);
+    return { tabs: tabs.map(view.tabInfo) };
   }
 
   async function tabOpen(session: string, params: Params): Promise<Result<"tab_open">> {
@@ -68,11 +66,16 @@ export function createHandlers<Handle>({
         : { url: "about:blank", active: true, windowId: group.windowId },
     );
     await groups.ensureGroup(session, tab);
-    if (url === undefined) return { tab: toTabInfo(await browser.tabs.get(tab.id)) };
+    if (url === undefined) {
+      const current = await browser.tabs.get(tab.id);
+      const view = await access.view(session);
+      return { tab: view.tabInfo(current) };
+    }
     const loaded = await waitForLoad(browser, timers, tab.id, () =>
       browser.tabs.update(tab.id, { url }),
     );
-    return { tab: toTabInfo(loaded) };
+    const view = await access.view(session);
+    return { tab: view.tabInfo(loaded) };
   }
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {
@@ -93,7 +96,8 @@ export function createHandlers<Handle>({
       );
     }
     const loaded = await waitForLoad(browser, timers, tabId, () => startNavigation(tabId, target));
-    return { tab: toTabInfo(loaded) };
+    const view = await access.view(session);
+    return { tab: view.tabInfo(loaded) };
   }
 
   async function existingTab(tabId: number): Promise<Tab> {
@@ -164,8 +168,4 @@ function isNavigateAction(value: unknown): value is NavigateAction {
 
 function own(params: Params, key: string): unknown {
   return Object.hasOwn(params, key) ? params[key] : undefined;
-}
-
-function toTabInfo(tab: Tab): TabInfo {
-  return { id: tab.id, url: tab.url ?? "", title: tab.title ?? "", active: tab.active };
 }

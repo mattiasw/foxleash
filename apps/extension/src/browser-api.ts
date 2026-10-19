@@ -34,6 +34,14 @@ export interface BrowserApi {
     get(groupId: number): Promise<TabGroup>;
     update(groupId: number, updateProperties: { title: string; color: string }): Promise<TabGroup>;
   };
+  storage: {
+    local: {
+      get(keys: null): Promise<Record<string, unknown>>;
+      set(items: Record<string, unknown>): Promise<void>;
+      remove(keys: string): Promise<void>;
+    };
+    onChanged: BrowserEvent<(changes: Record<string, StorageChange>, areaName: string) => void>;
+  };
 }
 
 export interface BrowserEvent<Listener> {
@@ -45,6 +53,12 @@ export interface BrowserEvent<Listener> {
 export interface Permissions {
   permissions?: string[];
   origins?: string[];
+}
+
+/** Firefox's `storage.StorageChange`. */
+export interface StorageChange {
+  oldValue?: unknown;
+  newValue?: unknown;
 }
 
 export interface Port {

@@ -66,7 +66,11 @@ Ask your agent to do something in the browser, for example:
 
 The first time a session acts on a site, Foxhand asks you in that tab whether to allow it:
 once, always, or not at all. You can see and revoke your answers in the extension's
-settings.
+settings: its settings page in the Firefox add-ons manager lists the sites you allowed
+always, each with a Revoke button.
+
+For a tab on a site you have not approved, the agent sees only the site's address (scheme,
+host and port), with no path, query or title. A local file shows only as `file:`.
 
 Each agent session's tabs open in an orange tab group titled Foxhand, and Foxhand acts only
 on tabs in that group, including tabs you move into it. When the agent session ends, Foxhand
@@ -83,6 +87,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser. The approval can
   only come from your click, not from the agent.
+- Tabs on sites you have not approved show the agent only the site's address, with no path,
+  query or title, and a local file only as `file:`. The sites you allowed always are listed
+  in the extension's settings page in the add-ons manager, each with a Revoke button.
 - Financial and health sites are blocked by default. You can edit the list.
 - File uploads only read from allowed folders (the agent's working folder and
   `~/Downloads` by default) and never dotfiles or key files.
