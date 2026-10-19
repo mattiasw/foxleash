@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
@@ -11,6 +11,7 @@ import {
   CommandError,
   checkArtifacts,
   checkChangelog,
+  checkListing,
   checkPostBump,
   checkPostRoll,
   checkPrePush,
@@ -20,6 +21,7 @@ import {
   escapeControls,
   type Finding,
   latestTag,
+  listingBullets,
   localDate,
   mainCiRuns,
   nextVersion,
@@ -127,8 +129,100 @@ const ENTRIES = [
 ].join("\n");
 const OLD_SECTION = "## [0.1.0] - 2026-10-01\n\n### Added\n\n- The first release.";
 
+const MANIFEST = "apps/extension/manifest.json";
+const LISTING = "docs/amo/listing.md";
+const CLAIMS = "docs/amo/listing-claims.json";
+const AMO_SOURCES = "bin/amo-source-files.txt";
+const FIXTURE_MANIFEST = {
+  manifest_version: 3,
+  name: "Foxhand",
+  browser_specific_settings: {
+    gecko: { data_collection_permissions: { required: ["websiteContent"] } },
+  },
+  permissions: ["tabs", "storage"],
+  host_permissions: ["<all_urls>"],
+};
+const FIXTURE_LISTING = [
+  "# AMO listing",
+  "",
+  "## Description",
+  "",
+  "Foxhand lets an agent use Firefox.",
+  "",
+  "The agent can:",
+  "",
+  "- open tabs and navigate them,",
+  "- read pages.",
+  "",
+  "Each session acts only on tabs in its group. Foxhand limits what a fooled agent can do:",
+  "",
+  "- The approval can only come from your click.",
+  "- Tool results mark page content as untrusted.",
+  "",
+  "## Permissions",
+  "",
+  "Why Foxhand requests each permission in its manifest:",
+  "",
+  "- tabs: lists the agent's tabs.",
+  "- storage: keeps the settings.",
+  "- <all_urls>: works on any approved site.",
+  "",
+  "## Data collection and handling",
+  "",
+  "- Website content (websiteContent): page text.",
+  "- Browsing activity (browsingActivity): tab URLs.",
+  "",
+  "## Compatibility",
+  "",
+  "Linux only; this is not about (authenticationInfo).",
+  "",
+].join("\n");
+const FIXTURE_CLAIMS = {
+  note: "The claims of the fixture listing.",
+  capabilities: [
+    { listing: "open tabs and navigate them", tools: ["tabs_list", "navigate"] },
+    { listing: "read pages", tools: ["read_page"] },
+  ],
+  safeguards: [
+    {
+      listing: "The approval can only come from your click",
+      evidence: [{ file: "src/approval.ts", contains: "approvedByClick" }],
+    },
+    {
+      listing: "Tool results mark page content as untrusted",
+      evidence: [
+        { file: "src/tools.ts", contains: "untrusted" },
+        { file: MANIFEST, lacks: "userScripts" },
+      ],
+    },
+    {
+      listing: "acts only on tabs in its group",
+      evidence: [{ file: "src/tools.ts", contains: "group" }],
+    },
+  ],
+};
+const FIXTURE_TOOLS = ["navigate", "read_page", "tabs_list"];
+const EVIDENCE_FILES: Record<string, string> = {
+  "src/approval.ts": "export const approvedByClick = true;\n",
+  "src/tools.ts": "// Marks page content as untrusted, in the session's group only.\n",
+};
+const stagedEntry = (file: string, mode = "100644"): string =>
+  `${mode} ${"d".repeat(40)} 0\t${file}\0`;
+const lsStaged = (file: string): string => key("git", "ls-files", "-s", "-z", "--", file);
+const diffSince = (tag: string, file: string): string =>
+  key(
+    "git",
+    "diff",
+    "--no-color",
+    "--no-ext-diff",
+    "--no-textconv",
+    `refs/tags/${tag}`,
+    "--",
+    file,
+  );
+
 type Reply = string | Buffer | CommandError;
-type Tree = { files: Record<string, string>; commands: Record<string, Reply> };
+type Tree = { files: Record<string, string>; commands: Record<string, Reply>; tools?: string[] };
 type FakeEnv = Env & { calls: string[][] };
 
 function changelog(...sections: string[]): string {
@@ -147,7 +241,7 @@ function packageFiles(version: string, overrides: Record<string, string> = {}): 
       version: at("package.json"),
       workspaces: ["apps/*", "packages/*"],
     }),
-    "apps/extension/manifest.json": json({ manifest_version: 3, name: "Foxhand" }),
+    [MANIFEST]: json(FIXTURE_MANIFEST),
     "package-lock.json": json({
       name: "fixture",
       version: at("lock"),
@@ -186,14 +280,38 @@ function runs(...list: Record<string, unknown>[]): string {
   return JSON.stringify({ total_count: list.length, workflow_runs: list });
 }
 
+/** The listing, its claims, their evidence and the tools, all in agreement. */
+function listingFiles(): Tree["files"] {
+  return { [LISTING]: FIXTURE_LISTING, [CLAIMS]: json(FIXTURE_CLAIMS), ...EVIDENCE_FILES };
+}
+
+function listingCommands(): Tree["commands"] {
+  return Object.fromEntries(
+    [MANIFEST, ...Object.keys(EVIDENCE_FILES)].map((file) => [lsStaged(file), stagedEntry(file)]),
+  );
+}
+
+/** The replies of the drift check when nothing changed since `tag`. */
+function driftCommands(tag: string): Tree["commands"] {
+  return {
+    [diffSince(tag, MANIFEST)]: "",
+    [diffSince(tag, LISTING)]: "",
+    [diffSince(tag, AMO_SOURCES)]: "",
+    [show(`refs/tags/${tag}`, MANIFEST)]: json(FIXTURE_MANIFEST),
+  };
+}
+
 /** Clean, synced main with a green CI run and no tag: the state before the first release. */
 function firstReleaseTree(): Tree {
   return {
+    tools: [...FIXTURE_TOOLS],
     files: {
       ...packageFiles("0.1.0"),
+      ...listingFiles(),
       "CHANGELOG.md": changelog(`## [Unreleased]\n\n${ENTRIES}`),
     },
     commands: {
+      ...listingCommands(),
       [TAGS]: "",
       [URL]: ORIGIN_URL,
       [PUSH_URL]: ORIGIN_URL,
@@ -220,6 +338,7 @@ function secondReleaseTree(): Tree {
     [revTag("v0.1.0")]: TAG_SHA,
     [tagList("v0.2.0")]: "",
     [lsRemote("v0.2.0")]: "",
+    ...driftCommands("v0.1.0"),
   });
   return tree;
 }
@@ -334,6 +453,10 @@ function fakeEnv(tree: Tree): FakeEnv {
     },
     today() {
       return TODAY;
+    },
+    listTools() {
+      if (tree.tools === undefined) throw new Error("no tools scripted in the test");
+      return tree.tools;
     },
   };
 }
@@ -619,7 +742,7 @@ describe("pre-roll", () => {
     assertClean(findings);
     assert.deepEqual(texts(findings, "INFO"), [
       `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
-      "listing checks: not implemented yet",
+      "no previous tag: drift check skipped",
       "no previous tag: first release",
       "next version: 0.1.0",
     ]);
@@ -910,6 +1033,7 @@ describe("pre-roll", () => {
       [TAGS]: "v0.0.9",
       [lsRemote("v0.0.9")]: `${TAG_SHA}\trefs/tags/v0.0.9`,
       [revTag("v0.0.9")]: TAG_SHA,
+      ...driftCommands("v0.0.9"),
     });
     assertOnlyFail(
       preRoll(tree, "minor"),
@@ -1005,6 +1129,7 @@ describe("bump rules in pre-roll", () => {
         [lsRemote(`v${nextVersion(version, "minor")}`)]: "",
         [tagList(`v${nextVersion(version, "patch")}`)]: "",
         [lsRemote(`v${nextVersion(version, "patch")}`)]: "",
+        ...driftCommands(tag),
       });
     }
     return tree;
@@ -1127,14 +1252,14 @@ describe("version sources", () => {
 
   test("a stale manifest version fails, a matching one passes", () => {
     const tree = firstReleaseTree();
-    tree.files["apps/extension/manifest.json"] = json({ manifest_version: 3, version: "0.0.1" });
+    tree.files[MANIFEST] = json({ ...FIXTURE_MANIFEST, version: "0.0.1" });
     assertOnlyFail(
       preRoll(tree),
       /^apps\/extension\/manifest\.json has version "0\.0\.1", expected 0\.1\.0/,
     );
-    tree.files["apps/extension/manifest.json"] = json({ manifest_version: 3, version: "0.1.0" });
+    tree.files[MANIFEST] = json({ ...FIXTURE_MANIFEST, version: "0.1.0" });
     assertClean(preRoll(tree));
-    tree.files["apps/extension/manifest.json"] = json({ manifest_version: 3, version: 1 });
+    tree.files[MANIFEST] = json({ ...FIXTURE_MANIFEST, version: 1 });
     assertOnlyFail(preRoll(tree), /^apps\/extension\/manifest\.json has no version string$/);
   });
 
@@ -1230,6 +1355,747 @@ describe("version sources", () => {
     assertClean(preRoll(tree));
     tree.files["packages/protocol/package.json"] = json({ version: "0.0.1" });
     assertOnlyFail(preRoll(tree), /^packages\/protocol\/package\.json has version "0\.0\.1"/);
+  });
+});
+
+describe("listing", () => {
+  function listing(tree: Tree): Finding[] {
+    return checkListing(fakeEnv(tree));
+  }
+
+  function withListing(tree: Tree, edit: (text: string) => string): Tree {
+    const before = tree.files[LISTING] ?? "";
+    const after = edit(before);
+    assert.notEqual(after, before, "the edit changed nothing");
+    tree.files[LISTING] = after;
+    return tree;
+  }
+
+  function withClaims(tree: Tree, claims: unknown): Tree {
+    tree.files[CLAIMS] = json(claims);
+    return tree;
+  }
+
+  function withManifest(tree: Tree, changes: Record<string, unknown>): Tree {
+    tree.files[MANIFEST] = json({ ...FIXTURE_MANIFEST, ...changes });
+    return tree;
+  }
+
+  function claimsCopy(): typeof FIXTURE_CLAIMS {
+    return structuredClone(FIXTURE_CLAIMS);
+  }
+
+  const notJson = /^listing claims: docs\/amo\/listing-claims\.json is not JSON: /;
+  const missingCookies =
+    'the manifest requests "cookies", but the Permissions section of docs/amo/listing.md has no "- cookies:" bullet';
+
+  test("passes when the listing, the claims, the manifest and the tools agree", () => {
+    const findings = listing(firstReleaseTree());
+    assert.deepEqual(findings, [{ level: "INFO", text: "no previous tag: drift check skipped" }]);
+  });
+
+  test("a registered tool missing from the claims and a claimed tool not registered fail, sorted", () => {
+    const tree = firstReleaseTree();
+    tree.tools = ["zoom", "navigate", "click"];
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'the server registers the tool "click", which no capability in docs/amo/listing-claims.json lists: add it there, and describe a new capability in docs/amo/listing.md',
+      'the server registers the tool "zoom", which no capability in docs/amo/listing-claims.json lists: add it there, and describe a new capability in docs/amo/listing.md',
+      'docs/amo/listing-claims.json lists the tool "read_page", which the server does not register: build it, or remove it from the claims file and the capability from docs/amo/listing.md',
+      'docs/amo/listing-claims.json lists the tool "tabs_list", which the server does not register: build it, or remove it from the claims file and the capability from docs/amo/listing.md',
+    ]);
+  });
+
+  test("a tool claimed by two capabilities counts once", () => {
+    const claims = claimsCopy();
+    claims.capabilities[0]?.tools.push("read_page");
+    const tree = withClaims(firstReleaseTree(), claims);
+    tree.tools = ["navigate", "tabs_list"];
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing-claims.json lists the tool "read_page", which the server does not register: build it, or remove it from the claims file and the capability from docs/amo/listing.md',
+    ]);
+  });
+
+  test("a claim string absent from the listing fails, for a capability and a safeguard", () => {
+    const claims = claimsCopy();
+    const [capability] = claims.capabilities;
+    const safeguard = claims.safeguards[2];
+    assert.ok(capability && safeguard);
+    capability.listing = "open windows";
+    safeguard.listing = "acts only on approved tabs";
+    assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
+      'docs/amo/listing-claims.json: the capability "open windows" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
+      'docs/amo/listing-claims.json: "acts only on approved tabs" does not occur in docs/amo/listing.md',
+      'docs/amo/listing.md line 9 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("an uncovered bullet in either list fails with its line number", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text
+        .replace("- read pages.", "- read pages,\n- take screenshots.")
+        .replace("as untrusted.", "as untrusted.\n- Uploads are limited."),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md line 11 "take screenshots." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 17 "Uploads are limited." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("a claim string that occurs only outside the bullets does not cover a bullet", () => {
+    const claims = claimsCopy();
+    const [, read] = claims.capabilities;
+    assert.ok(read);
+    read.listing = "lets an agent use Firefox";
+    assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
+      'docs/amo/listing-claims.json: the capability "lets an agent use Firefox" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
+      'docs/amo/listing.md line 10 "read pages." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("a capability claim counts only in the capability list", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace("- read pages.\n", "").replace("Linux only;", "It can read pages. Linux only;"),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing-claims.json: the capability "read pages" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
+    ]);
+  });
+
+  test("a bullet needs a claim from its own list", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text
+        .replace("- read pages.", "- read pages,\n- acts only on tabs in its group.")
+        .replace("as untrusted.", "as untrusted.\n- It can read pages only in approved tabs."),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md line 11 "acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 17 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("a list item with another marker needs its own claim", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace("as untrusted.", "as untrusted.\n* It can run code from any page."),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md line 16 "It can run code from any page." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("a claim may span a wrapped line", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace("mark page content as", "mark page content\n  as"),
+    );
+    assertClean(listing(tree));
+  });
+
+  test("a wrapped bullet does not end the list", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        "- read pages.",
+        "- read pages,\n  including hidden fields,\n- run code from the page.",
+      ),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md line 12 "run code from the page." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("listingBullets reads both lists of a listing in the real layout", () => {
+    const text = [
+      "# AMO listing",
+      "",
+      "The agent can: not at the end of this line.",
+      "The agent can:",
+      "",
+      "- open tabs and navigate them,",
+      "- read pages,",
+      "  ",
+      "- click, type and fill in forms,",
+      "- take screenshots,",
+      "- read the console and network activity,",
+      "- upload files from allowed folders.",
+      "",
+      "Not a bullet, so the list ends here.",
+      "- not in the list",
+      "",
+      "A long paragraph that ends with the intro. Foxhand limits what a fooled agent can do:",
+      "",
+      "- One.",
+      "- Two.",
+      "",
+      "- Three.",
+      "- Four.",
+      "",
+      "## Permissions",
+      "",
+      "- tabs: not in the list either.",
+    ].join("\r\n");
+    const capabilities = listingBullets(text, "The agent can:");
+    assert.deepEqual(capabilities, [
+      { line: 6, text: "open tabs and navigate them," },
+      { line: 7, text: "read pages," },
+      { line: 9, text: "click, type and fill in forms," },
+      { line: 10, text: "take screenshots," },
+      { line: 11, text: "read the console and network activity," },
+      { line: 12, text: "upload files from allowed folders." },
+    ]);
+    const safeguards = listingBullets(text, "Foxhand limits what a fooled agent can do:");
+    assert.deepEqual(
+      Array.isArray(safeguards) && safeguards.map((bullet) => [bullet.line, bullet.text]),
+      [
+        [19, "One."],
+        [20, "Two."],
+        [22, "Three."],
+        [23, "Four."],
+      ],
+    );
+  });
+
+  test("listingBullets joins the lines of a wrapped bullet, as Markdown does", () => {
+    const text = [
+      "The agent can:",
+      "",
+      "- read pages,",
+      "  including hidden fields,",
+      "",
+      "  and frames,",
+      "- click, type",
+      "and fill in forms,",
+      "- take screenshots.",
+      "## Permissions",
+      "- tabs: not in the list.",
+    ].join("\n");
+    assert.deepEqual(listingBullets(text, "The agent can:"), [
+      { line: 3, text: "read pages, including hidden fields, and frames," },
+      { line: 7, text: "click, type and fill in forms," },
+      { line: 9, text: "take screenshots." },
+    ]);
+  });
+
+  test("listingBullets ends a list only where Markdown does", () => {
+    const text = [
+      "The agent can:",
+      "",
+      "- read pages,",
+      "#1 priority, and",
+      "####### no heading either,",
+      "\u00a0",
+      "- click,",
+      "\t",
+      "\tand type,",
+      "- scroll.",
+      "#",
+      "- not in the list",
+    ].join("\n");
+    assert.deepEqual(listingBullets(text, "The agent can:"), [
+      { line: 3, text: "read pages, #1 priority, and ####### no heading either, " },
+      { line: 7, text: "click, and type," },
+      { line: 10, text: "scroll." },
+    ]);
+  });
+
+  test("listingBullets takes every kind of list item as its own bullet", () => {
+    const text = [
+      "The agent can:",
+      "",
+      "- open tabs,",
+      "* run code,",
+      "+ read pages,",
+      "1. click,",
+      "10) type,",
+      "-\tscroll,",
+      " - hover,",
+      "  - drag,",
+      "-x and **bold** continue it,",
+      "-",
+    ].join("\n");
+    assert.deepEqual(listingBullets(text, "The agent can:"), [
+      { line: 3, text: "open tabs," },
+      { line: 4, text: "run code," },
+      { line: 5, text: "read pages," },
+      { line: 6, text: "click," },
+      { line: 7, text: "type," },
+      { line: 8, text: "scroll," },
+      { line: 9, text: "hover," },
+      { line: 10, text: "drag, -x and **bold** continue it," },
+      { line: 12, text: "" },
+    ]);
+  });
+
+  test("listingBullets reports a missing intro and an intro with no list", () => {
+    assert.equal(
+      listingBullets("The agent can do this:\n- a", "The agent can:"),
+      'docs/amo/listing.md has no line ending with "The agent can:"',
+    );
+    assert.equal(
+      listingBullets("The agent can:\n\nNothing.\n- a", "The agent can:"),
+      'docs/amo/listing.md: no bullet list follows "The agent can:"',
+    );
+    assert.equal(
+      listingBullets("The agent can:\n", "The agent can:"),
+      'docs/amo/listing.md: no bullet list follows "The agent can:"',
+    );
+  });
+
+  test("a missing intro and an intro with no bullets fail in the check", () => {
+    const missing = withListing(firstReleaseTree(), (text) =>
+      text.replace("The agent can:", "The agent:"),
+    );
+    assert.deepEqual(texts(listing(missing), "FAIL"), [
+      'docs/amo/listing.md has no line ending with "The agent can:"',
+    ]);
+    const empty = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        "- open tabs and navigate them,\n- read pages.",
+        "It can open tabs and navigate them, and read pages.",
+      ),
+    );
+    assert.deepEqual(texts(listing(empty), "FAIL"), [
+      'docs/amo/listing.md: no bullet list follows "The agent can:"',
+    ]);
+  });
+
+  test("a claims file that is not JSON fails, and the permission checks still run", () => {
+    const tree = withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] });
+    tree.files[CLAIMS] = "{";
+    const fails = texts(listing(tree), "FAIL");
+    assert.equal(fails.length, 2, JSON.stringify(fails));
+    assert.match(fails[0] ?? "", notJson);
+    assert.equal(fails[1], missingCookies);
+  });
+
+  test("with bad claims, the intros, the tools and the permissions are still checked", () => {
+    const tree = withListing(
+      withManifest(withClaims(firstReleaseTree(), { note: "x" }), {
+        permissions: ["tabs", "storage", "cookies"],
+      }),
+      (text) => text.replace("The agent can:", "The agent:"),
+    );
+    delete tree.tools;
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing-claims.json: the top level has no "capabilities"',
+      'docs/amo/listing-claims.json: the top level has no "safeguards"',
+      "registered tools: no tools scripted in the test",
+      'docs/amo/listing.md has no line ending with "The agent can:"',
+      missingCookies,
+    ]);
+  });
+
+  test("every shape problem of the claims file is its own FAIL, and nothing is read", () => {
+    const tree = withManifest(
+      withClaims(firstReleaseTree(), {
+        note: 7,
+        capabilities: [
+          { listing: "", tools: [] },
+          { listing: "read pages", tools: ["read_page", ""] },
+          "open tabs",
+          { listing: "x", tools: ["x"], extra: true },
+          { listing: " ", tools: ["x"] },
+        ],
+        safeguards: [
+          { listing: "The approval can only come from your click", evidence: "none" },
+          {
+            listing: 3,
+            evidence: [
+              { file: "src/tools.ts", contain: "untrusted" },
+              { file: "/etc/passwd", contains: "root" },
+              { file: "src/../../secret", contains: "x" },
+              { file: "src/tools.ts", contains: "a", lacks: "b" },
+              { file: "", lacks: 5 },
+              null,
+            ],
+          },
+          { evidence: [] },
+        ],
+      }),
+      { permissions: ["tabs", "storage", "cookies"] },
+    );
+    const env = fakeEnv(tree);
+    assert.deepEqual(texts(checkListing(env), "FAIL"), [
+      "docs/amo/listing-claims.json: note must be a string",
+      "docs/amo/listing-claims.json: capabilities[0].listing must be a non-empty string",
+      "docs/amo/listing-claims.json: capabilities[0].tools must be a non-empty array of non-empty strings",
+      "docs/amo/listing-claims.json: capabilities[1].tools must be a non-empty array of non-empty strings",
+      'docs/amo/listing-claims.json: capabilities[2] must be an object with "listing", "tools"',
+      'docs/amo/listing-claims.json: capabilities[3] has the unknown key "extra"',
+      "docs/amo/listing-claims.json: capabilities[4].listing must be a non-empty string",
+      "docs/amo/listing-claims.json: safeguards[0].evidence must be an array",
+      "docs/amo/listing-claims.json: safeguards[1].listing must be a non-empty string",
+      'docs/amo/listing-claims.json: safeguards[1].evidence[0] has the unknown key "contain"',
+      'docs/amo/listing-claims.json: safeguards[1].evidence[0] needs a string "file" and exactly one of "contains" or "lacks"',
+      "docs/amo/listing-claims.json: safeguards[1].evidence[1].file must be a relative path inside the checkout",
+      "docs/amo/listing-claims.json: safeguards[1].evidence[2].file must be a relative path inside the checkout",
+      'docs/amo/listing-claims.json: safeguards[1].evidence[3] needs a string "file" and exactly one of "contains" or "lacks"',
+      "docs/amo/listing-claims.json: safeguards[1].evidence[4].file must be a non-empty string",
+      "docs/amo/listing-claims.json: safeguards[1].evidence[4].lacks must be a non-empty string",
+      'docs/amo/listing-claims.json: safeguards[1].evidence[5] needs a string "file" and exactly one of "contains" or "lacks"',
+      'docs/amo/listing-claims.json: safeguards[2] has no "listing"',
+      missingCookies,
+    ]);
+    assert.ok(!env.calls.some(([command, verb]) => command === "git" && verb === "ls-files"));
+  });
+
+  test("a claims file of the wrong top-level shape fails", () => {
+    for (const [claims, problem] of [
+      [[], 'the top level must be an object with "note", "capabilities", "safeguards"'],
+      [
+        { note: "x", capabilities: {}, safeguards: [], notes: "" },
+        'the top level has the unknown key "notes"',
+      ],
+    ] as const) {
+      assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
+        `docs/amo/listing-claims.json: ${problem}`,
+      ]);
+    }
+    assert.deepEqual(
+      texts(
+        listing(withClaims(firstReleaseTree(), { note: "x", capabilities: {}, safeguards: [] })),
+        "FAIL",
+      ),
+      ["docs/amo/listing-claims.json: capabilities must be an array"],
+    );
+  });
+
+  test("a capability with no tools fails, and the permission checks still run", () => {
+    const claims = claimsCopy();
+    const [open] = claims.capabilities;
+    assert.ok(open);
+    open.tools = [];
+    const tree = withManifest(withClaims(firstReleaseTree(), claims), {
+      permissions: ["tabs", "storage", "cookies"],
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "docs/amo/listing-claims.json: capabilities[0].tools must be a non-empty array of non-empty strings",
+      missingCookies,
+    ]);
+  });
+
+  test("safeguard evidence: empty, a missing string, a present string, an untracked file", () => {
+    const claims = {
+      ...claimsCopy(),
+      safeguards: [
+        { listing: "The approval can only come from your click", evidence: [] },
+        {
+          listing: "Tool results mark page content as untrusted",
+          evidence: [
+            { file: "src/tools.ts", contains: "trusted data" },
+            { file: "src/tools.ts", lacks: "session's group" },
+            { file: "src/new.ts", contains: "x" },
+            { file: "src/link.ts", contains: "x" },
+            { file: "src/gone.ts", contains: "x" },
+            { file: "src/other.ts", contains: "x" },
+            { file: "src/conflict.ts", contains: "x" },
+            { file: "src/approval.ts", lacks: "eval" },
+          ],
+        },
+      ],
+    };
+    const tree = withClaims(firstReleaseTree(), claims);
+    Object.assign(tree.files, {
+      "src/new.ts": "x",
+      "src/link.ts": "x",
+      "src/other.ts": "x",
+      "src/conflict.ts": "x",
+    });
+    Object.assign(tree.commands, {
+      [lsStaged("src/new.ts")]: "",
+      [lsStaged("src/link.ts")]: stagedEntry("src/link.ts", "120000"),
+      [lsStaged("src/gone.ts")]: stagedEntry("src/gone.ts"),
+      [lsStaged("src/other.ts")]: `${stagedEntry("src/other.ts/x")}${stagedEntry("src/other.tsx")}`,
+      [lsStaged("src/conflict.ts")]: `100644 ${"d".repeat(40)} 2\tsrc/conflict.ts\0`,
+    });
+    const name = 'safeguard "Tool results mark page content as untrusted"';
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'safeguard "The approval can only come from your click" has no evidence in the build yet',
+      `${name}: src/tools.ts does not contain "trusted data"`,
+      `${name}: src/tools.ts contains "session's group", which it must not`,
+      `${name}: src/new.ts is not a tracked regular file`,
+      `${name}: src/link.ts is not a tracked regular file`,
+      `${name}: src/gone.ts is not a tracked regular file`,
+      `${name}: src/other.ts is not a tracked regular file`,
+      `${name}: src/conflict.ts is not a tracked regular file`,
+    ]);
+  });
+
+  test("a tracked executable file and a SHA-256 entry count as evidence", () => {
+    const tree = firstReleaseTree();
+    tree.commands[lsStaged("src/approval.ts")] = `100755 ${"e".repeat(64)} 0\tsrc/approval.ts\0`;
+    tree.commands[lsStaged("src/tools.ts")] = `100644 ${"e".repeat(64)} 0\tsrc/tools.ts\0`;
+    assertClean(listing(tree));
+  });
+
+  test("a failing git ls-files is a FAIL naming the safeguard", () => {
+    const tree = firstReleaseTree();
+    tree.commands[lsStaged("src/approval.ts")] = new CommandError("git ls-files", 128, "fatal: x");
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'safeguard "The approval can only come from your click": `git ls-files` failed (status 128): fatal: x',
+    ]);
+  });
+
+  test("every manifest permission and category needs its explanation, and the reverse", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      permissions: ["tabs", "cookies"],
+      host_permissions: ["<all_urls>", "https://*.example.com/*"],
+      optional_permissions: ["downloads"],
+      browser_specific_settings: {
+        gecko: {
+          data_collection_permissions: {
+            required: ["websiteContent", "locationInfo"],
+            optional: ["browsingActivity", "authenticationInfo"],
+          },
+        },
+      },
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      missingCookies,
+      'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
+      'the manifest requests "downloads", but the Permissions section of docs/amo/listing.md has no "- downloads:" bullet',
+      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'the manifest declares the data collection category "locationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(locationInfo)"',
+      'the manifest declares the data collection category "authenticationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(authenticationInfo)"',
+    ]);
+  });
+
+  test("an optional host permission needs its bullet, and a URL pattern can have one", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      optional_host_permissions: ["https://*.example.com/*"],
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
+    ]);
+    withListing(tree, (text) =>
+      text.replace("- storage:", "- https://*.example.com/*: the example site.\n- storage:"),
+    );
+    assertClean(listing(tree));
+  });
+
+  test("a permission bullet is a name, a colon and a space or the line end", () => {
+    const tree = withListing(
+      withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] }),
+      (text) => text.replace("- storage:", "- cookies:\n- storage:"),
+    );
+    assertClean(listing(tree));
+    withListing(tree, (text) => text.replace("- cookies:\n", "- cookies:x\n"));
+    assert.deepEqual(texts(listing(tree), "FAIL"), [missingCookies]);
+  });
+
+  test("a bullet outside the Permissions section explains no permission", () => {
+    const tree = withListing(
+      withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] }),
+      (text) => text.replace("Linux only;", "- cookies: not here.\n\nLinux only;"),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [missingCookies]);
+  });
+
+  test("a manifest value of the wrong shape fails and is not used", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      permissions: "tabs",
+      host_permissions: ["<all_urls>", 7],
+      browser_specific_settings: {
+        gecko: { data_collection_permissions: { required: "websiteContent", optional: [null] } },
+      },
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "apps/extension/manifest.json: permissions must be absent or an array of strings",
+      "apps/extension/manifest.json: host_permissions must be absent or an array of strings",
+      "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.required must be absent or an array of strings",
+      "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.optional must be absent or an array of strings",
+      'docs/amo/listing.md line 21 explains the permission "tabs", which the manifest does not request',
+      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 23 explains the permission "<all_urls>", which the manifest does not request',
+    ]);
+  });
+
+  test("a missing section heading fails; a heading must be the whole line", () => {
+    const tree = withListing(
+      withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] }),
+      (text) =>
+        text
+          .replace("## Permissions\n", "## Permissions here\n")
+          .replace("## Data collection and handling\n", "## Data collection and handling.\n"),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md has no "## Permissions" section',
+      'docs/amo/listing.md has no "## Data collection and handling" section',
+    ]);
+  });
+
+  test("a listing with CRLF line endings passes", () => {
+    const tree = withListing(firstReleaseTree(), (text) => text.replaceAll("\n", "\r\n"));
+    assertClean(listing(tree));
+  });
+
+  test("a missing listing is one FAIL, and the tools are still compared", () => {
+    const tree = firstReleaseTree();
+    delete tree.files[LISTING];
+    tree.tools = [...FIXTURE_TOOLS, "click"];
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "listing text: ENOENT: docs/amo/listing.md",
+      'the server registers the tool "click", which no capability in docs/amo/listing-claims.json lists: add it there, and describe a new capability in docs/amo/listing.md',
+    ]);
+  });
+
+  test("a failing tool list is a FAIL, and the other checks still run", () => {
+    const claims = claimsCopy();
+    const [open, read] = claims.capabilities;
+    const [approval] = claims.safeguards;
+    assert.ok(open && read && approval);
+    open.listing = "open every tab";
+    approval.evidence = [];
+    const tree = withListing(
+      withManifest(withClaims(firstReleaseTree(), claims), {
+        permissions: ["tabs", "storage", "cookies"],
+      }),
+      (text) => text.replace("- read pages.", "- read pages,\n- take screenshots."),
+    );
+    delete tree.tools;
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "registered tools: no tools scripted in the test",
+      'docs/amo/listing-claims.json: the capability "open every tab" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
+      'docs/amo/listing.md line 9 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 11 "take screenshots." has no claim in docs/amo/listing-claims.json',
+      'safeguard "The approval can only come from your click" has no evidence in the build yet',
+      missingCookies,
+    ]);
+  });
+
+  test("a missing manifest is a FAIL and skips the permission checks", () => {
+    const tree = firstReleaseTree();
+    delete tree.files[MANIFEST];
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "listing manifest: ENOENT: apps/extension/manifest.json",
+      'safeguard "Tool results mark page content as untrusted": apps/extension/manifest.json is not a tracked regular file',
+    ]);
+  });
+
+  test("a failing tag listing is one FAIL and skips the drift check", () => {
+    const tree = firstReleaseTree();
+    tree.commands[TAGS] = new CommandError("git tag", 128, "fatal: broken");
+    const findings = listing(tree);
+    assert.deepEqual(findings, [
+      { level: "FAIL", text: "latest tag: `git tag` failed (status 128): fatal: broken" },
+    ]);
+  });
+
+  test("with a tag, the three diffs print and an unchanged manifest passes", () => {
+    const tree = firstReleaseTree();
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[diffSince("v0.1.0", AMO_SOURCES)] = "+src/a.js\n-src/b.js";
+    assert.deepEqual(listing(tree), [
+      { level: "INFO", text: "manifest since v0.1.0: no change" },
+      { level: "INFO", text: "listing since v0.1.0: no change" },
+      { level: "INFO", text: "AMO source files since v0.1.0:" },
+      { level: "INFO", text: "+src/a.js" },
+      { level: "INFO", text: "-src/b.js" },
+    ]);
+  });
+
+  test("names every changed declaration, in order, when the listing did not change", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      optional_permissions: ["tabs"],
+      optional_host_permissions: ["<all_urls>"],
+      content_scripts: [{ matches: ["<all_urls>"], js: ["a.js"] }],
+    });
+    Object.assign(tree.commands, {
+      [TAGS]: "v0.1.0",
+      ...driftCommands("v0.1.0"),
+      [show("refs/tags/v0.1.0", MANIFEST)]: json({ manifest_version: 3 }),
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "the manifest's permissions, host_permissions, optional_permissions, optional_host_permissions, content_scripts matches, data_collection_permissions changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match",
+    ]);
+    tree.commands[diffSince("v0.1.0", LISTING)] = "+a line";
+    assertClean(listing(tree));
+  });
+
+  test("a type change of a declaration counts as a change", () => {
+    const tree = firstReleaseTree();
+    Object.assign(tree.commands, {
+      [TAGS]: "v0.1.0",
+      ...driftCommands("v0.1.0"),
+      [show("refs/tags/v0.1.0", MANIFEST)]: json({
+        ...FIXTURE_MANIFEST,
+        content_scripts: "none",
+        browser_specific_settings: { gecko: { data_collection_permissions: [] } },
+      }),
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "the manifest's content_scripts matches, data_collection_permissions changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match",
+    ]);
+  });
+
+  test("a failing git show is its own FAIL, and the three diffs still print", () => {
+    const tree = firstReleaseTree();
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", MANIFEST)] = new CommandError(
+      "git show",
+      128,
+      "fatal: no",
+    );
+    const findings = listing(tree);
+    assert.deepEqual(texts(findings, "FAIL"), [
+      "apps/extension/manifest.json at v0.1.0: `git show` failed (status 128): fatal: no",
+    ]);
+    assert.deepEqual(texts(findings, "INFO"), [
+      "manifest since v0.1.0: no change",
+      "listing since v0.1.0: no change",
+      "AMO source files since v0.1.0: no change",
+    ]);
+  });
+
+  test("a failing git diff is its own FAIL and skips only the comparison that needs it", () => {
+    const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[diffSince("v0.1.0", LISTING)] = new CommandError("git diff", 128, "fatal: no");
+    const findings = listing(tree);
+    assert.deepEqual(texts(findings, "FAIL"), [
+      "docs/amo/listing.md since v0.1.0: `git diff` failed (status 128): fatal: no",
+    ]);
+    assert.deepEqual(texts(findings, "INFO"), [
+      "manifest since v0.1.0: no change",
+      "AMO source files since v0.1.0: no change",
+    ]);
+  });
+
+  test("an unreadable manifest skips the drift comparison, and the diffs still print", () => {
+    const tree = firstReleaseTree();
+    tree.files[MANIFEST] = "{";
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    const findings = listing(tree);
+    const fails = texts(findings, "FAIL");
+    assert.equal(fails.length, 1, JSON.stringify(fails));
+    assert.match(fails[0] ?? "", /^listing manifest: apps\/extension\/manifest\.json is not JSON/);
+    assert.equal(texts(findings, "INFO").length, 3);
+  });
+
+  test("pre-roll runs the listing checks and keeps every other check", () => {
+    const tree = secondReleaseTree();
+    tree.commands[BRANCH] = "feature";
+    tree.tools = [...FIXTURE_TOOLS, "click"];
+    const findings = preRoll(tree, "minor");
+    assert.deepEqual(texts(findings, "FAIL"), [
+      'on branch "feature", not main',
+      'the server registers the tool "click", which no capability in docs/amo/listing-claims.json lists: add it there, and describe a new capability in docs/amo/listing.md',
+    ]);
+    assert.deepEqual(texts(findings, "INFO"), [
+      `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
+      "manifest since v0.1.0: no change",
+      "listing since v0.1.0: no change",
+      "AMO source files since v0.1.0: no change",
+      "previous tag: v0.1.0",
+      "next version: 0.2.0",
+    ]);
+  });
+
+  test("pre-roll with a failing tag listing runs the listing checks without the drift part", () => {
+    const tree = secondReleaseTree();
+    tree.commands[TAGS] = new CommandError("git tag", 128, "fatal: broken");
+    tree.tools = [...FIXTURE_TOOLS, "click"];
+    const findings = preRoll(tree, "minor");
+    assert.equal(texts(findings, "FAIL").length, 2, JSON.stringify(texts(findings, "FAIL")));
+    assertFail(findings, /^the server registers the tool "click"/);
+    assert.deepEqual(texts(findings, "INFO"), [`CI run 101 (push) green for ${HEAD.slice(0, 12)}`]);
   });
 });
 
@@ -2185,6 +3051,7 @@ describe("real git", () => {
         }
         return env.sh(command, args);
       },
+      listTools: () => [...FIXTURE_TOOLS],
     };
   }
 
@@ -2267,6 +3134,7 @@ describe("real git", () => {
   function releaseFiles(version: string, log: string): Record<string, string> {
     return {
       ...packageFiles(version),
+      ...listingFiles(),
       ".gitignore": "artifacts/\n",
       "CHANGELOG.md": log,
     };
@@ -2410,6 +3278,205 @@ describe("real git", () => {
     assertClean(checkPrePush(github(dir)));
     assert.equal(git(dir, "tag", "--list", "v0.2.0"), "v0.2.0");
   });
+
+  /** A repository holding the listing fixture, tagged v0.1.0. */
+  function listingRepo(): string {
+    const dir = repo({
+      ...listingFiles(),
+      [MANIFEST]: json(FIXTURE_MANIFEST),
+      [AMO_SOURCES]: "apps/extension/manifest.json\n",
+    });
+    git(dir, "tag", "v0.1.0");
+    return dir;
+  }
+
+  function listingAt(dir: string): Finding[] {
+    return checkListing({ ...realEnv(dir), listTools: () => [...FIXTURE_TOOLS] });
+  }
+
+  function driftFail(keys: string): string {
+    return `the manifest's ${keys} changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match`;
+  }
+
+  const withoutStorage = {
+    [MANIFEST]: json({ ...FIXTURE_MANIFEST, permissions: ["tabs"] }),
+  };
+  const storageBullet = "- storage: keeps the settings.\n";
+
+  test("drift: a permissions change without a listing change fails and prints the diffs", () => {
+    const dir = listingRepo();
+    commit(dir, "Drop storage", withoutStorage);
+    const findings = listingAt(dir);
+    assert.deepEqual(texts(findings, "FAIL"), [
+      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      driftFail("permissions"),
+    ]);
+    const lines = texts(findings, "INFO");
+    assert.equal(lines[0], "manifest since v0.1.0:");
+    assert.ok(lines.includes('-    "storage"'), JSON.stringify(lines));
+    assert.ok(lines.includes('-    "tabs",') && lines.includes('+    "tabs"'));
+    assert.ok(lines.includes("listing since v0.1.0: no change"));
+    assert.equal(lines.at(-1), "AMO source files since v0.1.0: no change");
+  });
+
+  test("drift: a permissions change with its listing change passes and shows both diffs", () => {
+    const dir = listingRepo();
+    commit(dir, "Drop storage", {
+      ...withoutStorage,
+      [LISTING]: FIXTURE_LISTING.replace(storageBullet, ""),
+    });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    const lines = texts(findings, "INFO");
+    assert.ok(lines.includes("manifest since v0.1.0:"));
+    assert.ok(lines.includes("listing since v0.1.0:"));
+    assert.ok(lines.includes(`-${storageBullet.trim()}`), JSON.stringify(lines));
+    assert.ok(lines.includes('-    "storage"'));
+  });
+
+  test("drift: a ref that shadows the tag's name is not read", () => {
+    const dir = listingRepo();
+    commit(dir, "Drop storage", withoutStorage);
+    git(dir, "update-ref", "refs/v0.1.0", "HEAD");
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      driftFail("permissions"),
+    ]);
+  });
+
+  test("drift: compares the tag with the working tree, not with HEAD", () => {
+    const dir = listingRepo();
+    write(dir, { ...withoutStorage, [LISTING]: FIXTURE_LISTING.replace(storageBullet, "") });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    assert.ok(texts(findings, "INFO").includes(`-${storageBullet.trim()}`));
+    assert.ok(texts(findings, "INFO").includes('-    "storage"'));
+    write(dir, { [LISTING]: FIXTURE_LISTING });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      driftFail("permissions"),
+    ]);
+  });
+
+  test("drift: a diff driver or textconv in the config does not change the diff", () => {
+    const dir = listingRepo();
+    git(dir, "config", "diff.hide.textconv", "true");
+    git(dir, "config", "diff.external", "true");
+    write(dir, { ".git/info/attributes": "*.json diff=hide\n" });
+    commit(dir, "Drop storage", withoutStorage);
+    assert.ok(texts(listingAt(dir), "INFO").includes('-    "storage"'));
+  });
+
+  const driftCases: [string, Record<string, unknown>][] = [
+    ["host_permissions", { host_permissions: ["<all_urls>", "tabs"] }],
+    ["optional_host_permissions", { optional_host_permissions: ["<all_urls>"] }],
+    ["content_scripts matches", { content_scripts: [{ js: ["a.js"], matches: ["<all_urls>"] }] }],
+    [
+      "data_collection_permissions",
+      {
+        browser_specific_settings: {
+          gecko: {
+            data_collection_permissions: { required: ["websiteContent", "browsingActivity"] },
+          },
+        },
+      },
+    ],
+  ];
+  for (const [name, change] of driftCases) {
+    test(`drift: a change of ${name} counts`, () => {
+      const dir = listingRepo();
+      commit(dir, "Change", { [MANIFEST]: json({ ...FIXTURE_MANIFEST, ...change }) });
+      const findings = listingAt(dir);
+      assert.deepEqual(texts(findings, "FAIL"), [driftFail(name)]);
+      assert.ok(texts(findings, "INFO").some((line) => /^\+ /.test(line)));
+      assert.ok(texts(findings, "INFO").includes("listing since v0.1.0: no change"));
+      assert.ok(texts(findings, "INFO").includes("AMO source files since v0.1.0: no change"));
+      commit(dir, "Explain", { [LISTING]: `${FIXTURE_LISTING}\nThe change is explained.\n` });
+      const explained = listingAt(dir);
+      assertClean(explained);
+      assert.ok(texts(explained, "INFO").includes("+The change is explained."));
+    });
+  }
+
+  test("drift: an absent key and an empty value are no change", () => {
+    const dir = listingRepo();
+    commit(dir, "Empty", {
+      [MANIFEST]: json({
+        ...FIXTURE_MANIFEST,
+        optional_permissions: [],
+        optional_host_permissions: [],
+        content_scripts: [],
+        browser_specific_settings: {
+          gecko: {
+            data_collection_permissions: { required: ["websiteContent"], optional: [] },
+          },
+        },
+      }),
+      [AMO_SOURCES]: "apps/extension/manifest.json\napps/extension/src/a.ts\n",
+    });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    assert.ok(texts(findings, "INFO").includes("+apps/extension/src/a.ts"));
+    commit(dir, "Scripts", {
+      [MANIFEST]: json({ ...FIXTURE_MANIFEST, content_scripts: [{ js: ["a.js"] }] }),
+    });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [driftFail("content_scripts matches")]);
+  });
+
+  test("a committed symlink is not evidence", () => {
+    const dir = listingRepo();
+    symlinkSync("tools.ts", path.join(dir, "src/link.ts"));
+    const claims = structuredClone(FIXTURE_CLAIMS);
+    claims.safeguards[0]?.evidence.push({ file: "src/link.ts", contains: "untrusted" });
+    commit(dir, "Link", { [CLAIMS]: json(claims) });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      'safeguard "The approval can only come from your click": src/link.ts is not a tracked regular file',
+    ]);
+  });
+
+  test("the real listTools returns the tools the server registers", () => {
+    const tools = realEnv(path.resolve(import.meta.dirname, "..")).listTools();
+    assert.ok(Array.isArray(tools) && tools.every((name) => typeof name === "string"));
+    for (const name of ["tabs_list", "tab_open", "navigate"]) assert.ok(tools.includes(name));
+  });
+
+  test("listTools refuses output that is not a JSON array of strings", () => {
+    const dir = repo();
+    const tools = (body: string): string[] => {
+      write(dir, { "apps/server/src/tools.ts": body });
+      return realEnv(dir).listTools();
+    };
+    assert.deepEqual(
+      tools("export function registerTools(server) { server.registerTool('a'); }\n"),
+      ["a"],
+    );
+    assert.throws(
+      () => tools("export function registerTools(server) { server.registerTool(7); }\n"),
+      { message: 'the tool list is not a JSON array of strings: "[7]"' },
+    );
+    assert.throws(
+      () =>
+        tools(
+          "export function registerTools() { process.stdout.write('x'.repeat(300)); process.exit(0); }\n",
+        ),
+      { message: `the tool list is not a JSON array of strings: "${"x".repeat(200)}..."` },
+    );
+    assert.throws(
+      () =>
+        tools('export function registerTools() { process.stdout.write("{}"); process.exit(0); }\n'),
+      {
+        message: 'the tool list is not a JSON array of strings: "{}"',
+      },
+    );
+    assert.throws(
+      () =>
+        tools(
+          "export function registerTools() { process.stdout.write('y'.repeat(200)); process.exit(0); }\n",
+        ),
+      { message: `the tool list is not a JSON array of strings: "${"y".repeat(200)}"` },
+    );
+    assert.throws(() => tools("export const nothing = 1;\n"), CommandError);
+  });
 });
 
 describe("runCli", () => {
@@ -2428,7 +3495,7 @@ describe("runCli", () => {
     assert.equal(status, 0);
     assert.deepEqual(err, []);
     assert.deepEqual(out.slice(-4), [
-      "INFO: listing checks: not implemented yet",
+      "INFO: no previous tag: drift check skipped",
       "INFO: no previous tag: first release",
       "INFO: next version: 0.1.0",
       "check-release: pre-roll ok",
@@ -2479,6 +3546,19 @@ describe("runCli", () => {
     ]);
   });
 
+  test("listing prints its findings and the verdict", () => {
+    assert.deepEqual(cli(firstReleaseTree(), "listing"), {
+      status: 0,
+      out: ["INFO: no previous tag: drift check skipped", "check-release: listing ok"],
+      err: [],
+    });
+    const tree = firstReleaseTree();
+    tree.tools = ["navigate", "read_page"];
+    const { status, out } = cli(tree, "listing");
+    assert.equal(status, 1);
+    assert.equal(out.at(-1), "check-release: listing failed");
+  });
+
   test("each finding prints as one line, whatever it holds", () => {
     const tree: Tree = {
       files: {
@@ -2527,6 +3607,8 @@ describe("runCli", () => {
     [["pre-roll", "--bump", "minor"], 'unknown option "--bump" for pre-roll'],
     [["pre-push", "--bump=minor"], 'unknown option "--bump=minor" for pre-push'],
     [["pre-push", "extra"], 'unexpected argument "extra"'],
+    [["listing", "extra"], 'unexpected argument "extra"'],
+    [["listing", "--bump=minor"], 'unknown option "--bump=minor" for listing'],
     [["changelog", "--verbose"], 'unknown option "--verbose" for changelog'],
     [["artifacts", "1.0.0", "--unsigned"], "--unsigned needs a path"],
     [["artifacts", "1.0.0", "--unsigned", ""], "--unsigned needs a path"],
@@ -2556,6 +3638,7 @@ describe("runCli", () => {
     assert.deepEqual(parseArgs(["post-roll", "0.2.0"]), { name: "post-roll", version: "0.2.0" });
     assert.deepEqual(parseArgs(["post-bump", "0.2.0"]), { name: "post-bump", version: "0.2.0" });
     assert.deepEqual(parseArgs(["pre-push"]), { name: "pre-push" });
+    assert.deepEqual(parseArgs(["listing"]), { name: "listing" });
     assert.deepEqual(parseArgs(["artifacts", "1.0.0", "--unsigned", "x.xpi"]), {
       name: "artifacts",
       version: "1.0.0",

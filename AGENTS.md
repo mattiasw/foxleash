@@ -119,7 +119,9 @@ misleading". So any change to:
 
 updates `apps/extension/manifest.json` and `docs/amo/listing.md` in the same commit. The
 release check refuses a release where the manifest's permissions or data declarations
-changed but the listing did not.
+changed but the listing did not. A new, renamed or removed tool, or a new safeguard, also
+updates `docs/amo/listing-claims.json`, which the release check compares with the listing
+and with the tools the server registers.
 
 Firefox does not show users host permissions that an update adds, so adding one is a
 listing change and a decision, not a routine edit.

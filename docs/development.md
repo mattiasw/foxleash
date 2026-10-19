@@ -107,13 +107,25 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `## [x.y.z] - YYYY-MM-DD` sections with real dates and descending versions, each holding
   only `### Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security` headings, in
   that order, with `- ` entries and their indented continuation lines.
+- `listing`: `docs/amo/listing-claims.json` maps each capability and safeguard that
+  `docs/amo/listing.md` states to the tools and code that provide it. Every capability claim
+  occurs in a bullet of the listing's capability list and every safeguard claim in the
+  listing, and every bullet of the capability list has a capability claim and every bullet
+  of the safeguard list a safeguard claim; the tools the server registers are exactly the
+  claimed ones; each safeguard's evidence holds (a tracked file contains, or lacks, a
+  string), and a safeguard with no evidence fails, because it is not built yet; every
+  permission and data collection category in the manifest is explained in the listing, and
+  every permission the listing explains is in the manifest. With a previous tag, it prints
+  the diffs of the manifest, the listing and `bin/amo-source-files.txt` between that tag and
+  the working tree, and fails when the manifest's permissions, content script matches or
+  data declarations changed but the listing did not.
 - `pre-roll [--bump=patch|minor|major]`: the changelog shape; HEAD is `main`, equal to
   origin's `main`, with a clean working tree; every version field agrees; the latest tag is
   on origin; Unreleased has entries; the bump is at least what the change types need
   (`Removed` major, `Added` or `Deprecated` minor, else patch; before 1.0.0 a major change
   needs only minor); the next tag exists neither here nor on origin; and the newest CI run of
-  `ci.yml` on `main` for HEAD succeeded. The first release takes no `--bump`; every later one
-  needs it.
+  `ci.yml` on `main` for HEAD succeeded. It also runs the `listing` checks. The first release
+  takes no `--bump`; every later one needs it.
 - `post-roll <version>`: Unreleased is empty, the top section is `## [<version>] - <today>`
   with exactly HEAD's Unreleased entries, the rest of the file is unchanged, `<version>` is
   at least the bump those entries need, and `CHANGELOG.md` is the only modified file.

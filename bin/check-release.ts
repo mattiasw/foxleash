@@ -21,12 +21,15 @@ export type Env = {
   shBytes(command: string, args: readonly string[]): Buffer;
   /** The local date as YYYY-MM-DD. */
   today(): string;
+  /** The names of the tools that `registerTools` in `apps/server/src/tools.ts` registers. */
+  listTools(): string[];
 };
 
 export type Io = { out(line: string): void; err(line: string): void };
 export type Bump = "patch" | "minor" | "major";
 export type Command =
   | { name: "changelog" }
+  | { name: "listing" }
   | { name: "pre-roll"; bump: Bump | undefined }
   | { name: "post-roll"; version: string }
   | { name: "post-bump"; version: string }
@@ -49,6 +52,10 @@ export type Changelog = { preamble: string; sections: Section[]; problems: strin
 type ValidChangelog = { preamble: string; unreleased: Section; released: Section[] };
 type Versions = { version: string | undefined; workspaces: string[] | undefined };
 type Archive = { names: string[]; files: string[]; skipped: Set<string> };
+type Capability = { listing: string; tools: string[] };
+type Evidence = { file: string; contains: string } | { file: string; lacks: string };
+type Safeguard = { listing: string; evidence: Evidence[] };
+type Claims = { capabilities: Capability[]; safeguards: Safeguard[] };
 type Run = {
   id: number;
   event: string;
@@ -57,7 +64,15 @@ type Run = {
   started: number;
 };
 
-const SUBCOMMANDS = ["changelog", "pre-roll", "post-roll", "post-bump", "pre-push", "artifacts"];
+const SUBCOMMANDS = [
+  "changelog",
+  "listing",
+  "pre-roll",
+  "post-roll",
+  "post-bump",
+  "pre-push",
+  "artifacts",
+];
 const BUMPS: readonly string[] = ["patch", "minor", "major"];
 const CHANGE_TYPES = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
 // Semver 2.0.0 item 2: no leading zeros, so string equality and git's version sort agree.
@@ -86,10 +101,41 @@ const ORIGIN_MAIN = "refs/remotes/origin/main";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const SIGNATURE_FILES = ["META-INF/mozilla.rsa", "META-INF/mozilla.sf", "META-INF/manifest.mf"];
 const COMMAND_TIMEOUT_MS = 120_000;
+const LISTING = "docs/amo/listing.md";
+const CLAIMS = "docs/amo/listing-claims.json";
+const MANIFEST = "apps/extension/manifest.json";
+const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
+const CAPABILITIES_INTRO = "The agent can:";
+const SAFEGUARDS_INTRO = "Foxhand limits what a fooled agent can do:";
+const PERMISSIONS_HEADING = "## Permissions";
+const DATA_HEADING = "## Data collection and handling";
+const PERMISSION_KEYS = [
+  "permissions",
+  "host_permissions",
+  "optional_permissions",
+  "optional_host_permissions",
+];
+const DATA_KEYS = ["required", "optional"];
+// `- https://*.example.com/*: ...` names the whole URL pattern, not `https`.
+const PERMISSION_BULLET = /^- (\S+):(?: |$)/;
+// A CommonMark list item marker, at any indentation.
+const LIST_ITEM = /^[ \t]*(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
+const HEADING = /^#{1,6}(?:[ \t]|$)/;
+const TRACKED_REGULAR_FILE = /^100(?:644|755) (?:[0-9a-f]{40}|[0-9a-f]{64}) 0\t/;
+const LIST_TOOLS_SCRIPT = [
+  'import { registerTools } from "./apps/server/src/tools.ts";',
+  "const names = [];",
+  "registerTools(",
+  "  { registerTool(name) { names.push(name); } },",
+  '  { call: () => Promise.reject(new Error("no bridge")) },',
+  ");",
+  "process.stdout.write(JSON.stringify(names));",
+].join("\n");
 
 const USAGE = [
   "usage: npm run check:release -- <subcommand>",
   "  changelog                                CHANGELOG.md has the Keep a Changelog shape",
+  "  listing                                  the manifest, the AMO listing and the tools agree",
   "  pre-roll [--bump=patch|minor|major]      main is synced, clean and green; the next version",
   "  post-roll <version>                      the Unreleased entries moved to <version>",
   "  post-bump <version>                      every version field is <version>",
@@ -154,6 +200,7 @@ export function parseArgs(argv: readonly string[]): Command | Usage {
   if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
   if (name === "pre-roll") return { name, bump };
   if (name === "pre-push") return { name };
+  if (name === "listing") return { name };
   return { name: "changelog" };
 }
 
@@ -171,6 +218,8 @@ function runCommand(command: Command, env: Env): CheckResult {
   switch (command.name) {
     case "changelog":
       return { findings: checkChangelog(env) };
+    case "listing":
+      return { findings: checkListing(env) };
     case "pre-roll":
       return checkPreRoll(env, command.bump);
     case "post-roll":
@@ -256,12 +305,465 @@ export function checkPreRoll(env: Env, bump: Bump | undefined): CheckResult {
   if (slug !== undefined && head !== undefined) {
     attempt(findings, "CI", () => checkCi(env, slug, head, findings));
   }
-  findings.push(info("listing checks: not implemented yet"));
+  checkListingAgrees(env, tag, findings);
   if (tag !== undefined) {
     findings.push(info(tag === null ? "no previous tag: first release" : `previous tag: ${tag}`));
   }
   if (next !== undefined) findings.push(info(`next version: ${next}`));
   return { findings };
+}
+
+export function checkListing(env: Env): Finding[] {
+  const findings: Finding[] = [];
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  checkListingAgrees(env, tag, findings);
+  return findings;
+}
+
+/**
+ * The listing, the claims file, the manifest and the registered tools agree, and, with a
+ * previous tag, the manifest's declarations did not change without the listing. `tag` is
+ * undefined when listing the tags failed, which is already a FAIL.
+ */
+function checkListingAgrees(env: Env, tag: string | null | undefined, findings: Finding[]): void {
+  const listing = attempt(findings, "listing text", () => env.readFile(LISTING));
+  const claims = readClaims(env, findings);
+  const manifest = attempt(findings, "listing manifest", () => readJson(env, MANIFEST));
+  const tools = attempt(findings, "registered tools", () => env.listTools());
+  const capabilityBullets = bulletList(listing, CAPABILITIES_INTRO, findings);
+  const safeguardBullets = bulletList(listing, SAFEGUARDS_INTRO, findings);
+  if (claims !== undefined) {
+    const capabilities = claims.capabilities.map((claim) => claim.listing);
+    const safeguards = claims.safeguards.map((claim) => claim.listing);
+    if (capabilityBullets !== undefined) {
+      checkCapabilitiesListed(capabilityBullets, capabilities, findings);
+    }
+    if (listing !== undefined) checkClaimsOccur(listing, safeguards, findings);
+    checkBulletsClaimed(capabilityBullets ?? [], capabilities, findings);
+    checkBulletsClaimed(safeguardBullets ?? [], safeguards, findings);
+    if (tools !== undefined) checkToolsClaimed(tools, claims.capabilities, findings);
+    checkSafeguards(env, claims.safeguards, findings);
+  }
+  if (listing !== undefined && manifest !== undefined) {
+    checkPermissionsExplained(listing, manifest, findings);
+  }
+  checkListingDrift(env, tag, manifest, findings);
+}
+
+function readClaims(env: Env, findings: Finding[]): Claims | undefined {
+  const value = attempt(findings, "listing claims", () => readJson(env, CLAIMS));
+  if (value === undefined) return undefined;
+  const claims = parseClaims(value);
+  if (Array.isArray(claims)) {
+    for (const problem of claims) findings.push(fail(`${CLAIMS}: ${problem}`));
+    return undefined;
+  }
+  return claims;
+}
+
+/** The claims file's content, or its shape problems, each naming the JSON path. */
+function parseClaims(value: unknown): Claims | string[] {
+  const problems: string[] = [];
+  if (!hasExactKeys(value, ["note", "capabilities", "safeguards"], "the top level", problems)) {
+    return problems;
+  }
+  if (typeof value.note !== "string") problems.push("note must be a string");
+  const capabilities = arrayAt(value.capabilities, "capabilities", problems).filter(
+    (capability, index) => isCapability(capability, `capabilities[${index}]`, problems),
+  );
+  const safeguards = arrayAt(value.safeguards, "safeguards", problems).filter((safeguard, index) =>
+    isSafeguard(safeguard, `safeguards[${index}]`, problems),
+  );
+  return problems.length > 0 ? problems : { capabilities, safeguards };
+}
+
+function hasExactKeys(
+  value: unknown,
+  keys: readonly string[],
+  where: string,
+  problems: string[],
+): value is Record<string, unknown> {
+  if (!isRecord(value)) {
+    problems.push(`${where} must be an object with ${keys.map(quote).join(", ")}`);
+    return false;
+  }
+  const before = problems.length;
+  for (const key of Object.keys(value)) {
+    if (!keys.includes(key)) problems.push(`${where} has the unknown key ${quote(key)}`);
+  }
+  for (const key of keys) {
+    if (!Object.hasOwn(value, key)) problems.push(`${where} has no ${quote(key)}`);
+  }
+  return problems.length === before;
+}
+
+function quote(text: string): string {
+  return JSON.stringify(text);
+}
+
+function arrayAt(value: unknown, where: string, problems: string[]): unknown[] {
+  if (Array.isArray(value)) return value;
+  problems.push(`${where} must be an array`);
+  return [];
+}
+
+function isCapability(value: unknown, where: string, problems: string[]): value is Capability {
+  const before = problems.length;
+  if (hasExactKeys(value, ["listing", "tools"], where, problems)) {
+    checkText(value.listing, `${where}.listing`, problems);
+    const { tools } = value;
+    if (
+      !Array.isArray(tools) ||
+      tools.length === 0 ||
+      !tools.every((tool) => typeof tool === "string" && tool !== "")
+    ) {
+      problems.push(`${where}.tools must be a non-empty array of non-empty strings`);
+    }
+  }
+  return problems.length === before;
+}
+
+function checkText(value: unknown, where: string, problems: string[]): void {
+  if (typeof value !== "string" || value.trim() === "") {
+    problems.push(`${where} must be a non-empty string`);
+  }
+}
+
+function isSafeguard(value: unknown, where: string, problems: string[]): value is Safeguard {
+  const before = problems.length;
+  if (hasExactKeys(value, ["listing", "evidence"], where, problems)) {
+    checkText(value.listing, `${where}.listing`, problems);
+    arrayAt(value.evidence, `${where}.evidence`, problems).forEach((entry, index) => {
+      checkEvidenceShape(entry, `${where}.evidence[${index}]`, problems);
+    });
+  }
+  return problems.length === before;
+}
+
+function checkEvidenceShape(value: unknown, where: string, problems: string[]): void {
+  const shape = `${where} needs a string "file" and exactly one of "contains" or "lacks"`;
+  if (!isRecord(value)) {
+    problems.push(shape);
+    return;
+  }
+  for (const key of Object.keys(value)) {
+    if (!["file", "contains", "lacks"].includes(key)) {
+      problems.push(`${where} has the unknown key ${quote(key)}`);
+    }
+  }
+  if (Object.hasOwn(value, "contains") === Object.hasOwn(value, "lacks")) problems.push(shape);
+  for (const key of ["file", "contains", "lacks"]) {
+    if (key === "file" || Object.hasOwn(value, key)) {
+      checkText(value[key], `${where}.${key}`, problems);
+    }
+  }
+  const { file } = value;
+  if (typeof file === "string" && (path.isAbsolute(file) || DOT_OR_EMPTY_SEGMENT.test(file))) {
+    problems.push(`${where}.file must be a relative path inside the checkout`);
+  }
+}
+
+function bulletList(
+  listing: string | undefined,
+  intro: string,
+  findings: Finding[],
+): Entry[] | undefined {
+  if (listing === undefined) return undefined;
+  const found = listingBullets(listing, intro);
+  if (typeof found === "string") {
+    findings.push(fail(found));
+    return undefined;
+  }
+  return found;
+}
+
+/**
+ * The items of the list that follows the first line ending with `intro`, nested ones
+ * included, with their 1-based line numbers, or the problem that stops finding them. As in
+ * Markdown, a wrapped item's other lines (indented, or unindented right below it) join its text.
+ */
+export function listingBullets(text: string, intro: string): Entry[] | string {
+  const all = text.split(/\r?\n/);
+  const start = all.findIndex((line) => line.endsWith(intro));
+  if (start === -1) return `${LISTING} has no line ending with ${quote(intro)}`;
+  const bullets: Entry[] = [];
+  // The bullet that an unindented line continues: none after a blank line.
+  let open: Entry | undefined;
+  for (const [offset, line] of all.slice(start + 1).entries()) {
+    const item = LIST_ITEM.exec(line);
+    const continued = /^[ \t]/.test(line) ? bullets.at(-1) : open;
+    if (/^[ \t]*$/.test(line)) {
+      open = undefined;
+    } else if (item !== null) {
+      open = { line: start + offset + 2, text: line.slice(item[0].length) };
+      bullets.push(open);
+    } else if (continued !== undefined && !HEADING.test(line)) {
+      continued.text += ` ${line.trim()}`;
+    } else {
+      break;
+    }
+  }
+  if (bullets.length === 0) return `${LISTING}: no bullet list follows ${quote(intro)}`;
+  return bullets;
+}
+
+function checkCapabilitiesListed(
+  bullets: readonly Entry[],
+  strings: readonly string[],
+  findings: Finding[],
+): void {
+  for (const text of strings) {
+    if (!bullets.some((bullet) => bullet.text.includes(text))) {
+      findings.push(
+        fail(
+          `${CLAIMS}: the capability ${quote(text)} is in no bullet of the list after ${quote(CAPABILITIES_INTRO)} in ${LISTING}`,
+        ),
+      );
+    }
+  }
+}
+
+function checkClaimsOccur(listing: string, strings: readonly string[], findings: Finding[]): void {
+  // A claim may span a wrapped line.
+  const flat = listing.replace(/\s+/g, " ");
+  for (const text of strings) {
+    if (!flat.includes(text)) {
+      findings.push(fail(`${CLAIMS}: ${quote(text)} does not occur in ${LISTING}`));
+    }
+  }
+}
+
+function checkBulletsClaimed(
+  bullets: readonly Entry[],
+  strings: readonly string[],
+  findings: Finding[],
+): void {
+  for (const bullet of bullets) {
+    if (!strings.some((text) => bullet.text.includes(text))) {
+      findings.push(
+        fail(`${LISTING} line ${bullet.line} ${quote(bullet.text)} has no claim in ${CLAIMS}`),
+      );
+    }
+  }
+}
+
+function checkToolsClaimed(
+  tools: readonly string[],
+  capabilities: readonly Capability[],
+  findings: Finding[],
+): void {
+  const registered = new Set(tools);
+  const claimed = new Set(capabilities.flatMap((capability) => capability.tools));
+  for (const name of [...registered].filter((tool) => !claimed.has(tool)).sort()) {
+    findings.push(
+      fail(
+        `the server registers the tool ${quote(name)}, which no capability in ${CLAIMS} lists: add it there, and describe a new capability in ${LISTING}`,
+      ),
+    );
+  }
+  for (const name of [...claimed].filter((tool) => !registered.has(tool)).sort()) {
+    findings.push(
+      fail(
+        `${CLAIMS} lists the tool ${quote(name)}, which the server does not register: build it, or remove it from the claims file and the capability from ${LISTING}`,
+      ),
+    );
+  }
+}
+
+function checkSafeguards(env: Env, safeguards: readonly Safeguard[], findings: Finding[]): void {
+  for (const safeguard of safeguards) {
+    const name = `safeguard ${quote(safeguard.listing)}`;
+    if (safeguard.evidence.length === 0) {
+      findings.push(fail(`${name} has no evidence in the build yet`));
+    }
+    for (const evidence of safeguard.evidence) {
+      attempt(findings, name, () => checkEvidence(env, name, evidence, findings));
+    }
+  }
+}
+
+function checkEvidence(env: Env, name: string, evidence: Evidence, findings: Finding[]): void {
+  const { file } = evidence;
+  if (!isTrackedRegularFile(env, file)) {
+    findings.push(fail(`${name}: ${file} is not a tracked regular file`));
+    return;
+  }
+  const text = env.readFile(file);
+  if ("contains" in evidence) {
+    if (!text.includes(evidence.contains)) {
+      findings.push(fail(`${name}: ${file} does not contain ${quote(evidence.contains)}`));
+    }
+  } else if (text.includes(evidence.lacks)) {
+    findings.push(fail(`${name}: ${file} contains ${quote(evidence.lacks)}, which it must not`));
+  }
+}
+
+/** A symlink (mode 120000) could point the read outside the checkout. */
+function isTrackedRegularFile(env: Env, file: string): boolean {
+  const entries = env.sh("git", ["ls-files", "-s", "-z", "--", file]).split("\0");
+  const tracked = entries.some((entry) => {
+    const match = TRACKED_REGULAR_FILE.exec(entry);
+    return match !== null && entry.slice(match[0].length) === file;
+  });
+  return tracked && env.exists(file);
+}
+
+function checkPermissionsExplained(listing: string, manifest: unknown, findings: Finding[]): void {
+  const requested: string[] = [];
+  for (const key of PERMISSION_KEYS) {
+    requested.push(...stringList(field(manifest, key), key, findings));
+  }
+  const declared: string[] = [];
+  const data = dataCollection(manifest);
+  for (const key of DATA_KEYS) {
+    const where = `browser_specific_settings.gecko.data_collection_permissions.${key}`;
+    declared.push(...stringList(field(data, key), where, findings));
+  }
+  const all = listing.split(/\r?\n/);
+  const permissions = sectionLines(all, PERMISSIONS_HEADING, findings);
+  if (permissions !== undefined) {
+    const explained = new Map<string, number>();
+    for (const line of permissions) {
+      const name = PERMISSION_BULLET.exec(line.text)?.[1];
+      if (name !== undefined && !explained.has(name)) explained.set(name, line.line);
+    }
+    for (const name of requested) {
+      if (!explained.has(name)) {
+        findings.push(
+          fail(
+            `the manifest requests ${quote(name)}, but the Permissions section of ${LISTING} has no ${quote(`- ${name}:`)} bullet`,
+          ),
+        );
+      }
+    }
+    for (const [name, line] of explained) {
+      if (!requested.includes(name)) {
+        findings.push(
+          fail(
+            `${LISTING} line ${line} explains the permission ${quote(name)}, which the manifest does not request`,
+          ),
+        );
+      }
+    }
+  }
+  const dataSection = sectionLines(all, DATA_HEADING, findings);
+  if (dataSection !== undefined) {
+    const text = dataSection.map((line) => line.text).join("\n");
+    for (const name of declared) {
+      if (!text.includes(`(${name})`)) {
+        findings.push(
+          fail(
+            `the manifest declares the data collection category ${quote(name)}, but the Data collection and handling section of ${LISTING} does not name it as ${quote(`(${name})`)}`,
+          ),
+        );
+      }
+    }
+  }
+}
+
+function dataCollection(manifest: unknown): unknown {
+  const gecko = field(field(manifest, "browser_specific_settings"), "gecko");
+  return field(gecko, "data_collection_permissions");
+}
+
+/** An absent value is empty; a value of another shape is a FAIL and is not used. */
+function stringList(value: unknown, key: string, findings: Finding[]): string[] {
+  if (value === undefined) return [];
+  if (Array.isArray(value) && value.every((item) => typeof item === "string")) return value;
+  findings.push(fail(`${MANIFEST}: ${key} must be absent or an array of strings`));
+  return [];
+}
+
+/** The lines after `heading` up to the next `## ` heading, numbered from 1. */
+function sectionLines(
+  all: readonly string[],
+  heading: string,
+  findings: Finding[],
+): Entry[] | undefined {
+  const start = all.indexOf(heading);
+  if (start === -1) {
+    findings.push(fail(`${LISTING} has no ${quote(heading)} section`));
+    return undefined;
+  }
+  const section: Entry[] = [];
+  for (const [offset, text] of all.slice(start + 1).entries()) {
+    if (text.startsWith("## ")) break;
+    section.push({ line: start + offset + 2, text });
+  }
+  return section;
+}
+
+function checkListingDrift(
+  env: Env,
+  tag: string | null | undefined,
+  manifest: unknown,
+  findings: Finding[],
+): void {
+  if (tag === undefined) return;
+  if (tag === null) {
+    findings.push(info("no previous tag: drift check skipped"));
+    return;
+  }
+  printDiff(env, tag, MANIFEST, `manifest since ${tag}:`, findings);
+  const listingDiff = printDiff(env, tag, LISTING, `listing since ${tag}:`, findings);
+  printDiff(env, tag, AMO_SOURCE_FILES, `AMO source files since ${tag}:`, findings);
+  const tagged = attempt(findings, `${MANIFEST} at ${tag}`, () =>
+    parseJson(env.sh("git", ["show", `refs/tags/${tag}:${MANIFEST}`])),
+  );
+  if (tagged === undefined || manifest === undefined || listingDiff !== "") return;
+  const before = declarations(tagged);
+  const now = declarations(manifest);
+  const changed = Object.keys(before).filter((name) => !isDeepStrictEqual(before[name], now[name]));
+  if (changed.length > 0) {
+    findings.push(
+      fail(
+        `the manifest's ${changed.join(", ")} changed since ${tag}, but ${LISTING} did not: update the listing to match`,
+      ),
+    );
+  }
+}
+
+/** Prints the diff of `file` from `tag` to the working tree, and returns it. */
+function printDiff(
+  env: Env,
+  tag: string,
+  file: string,
+  header: string,
+  findings: Finding[],
+): string | undefined {
+  const diff = attempt(findings, `${file} since ${tag}`, () =>
+    env.sh("git", [
+      "diff",
+      "--no-color",
+      "--no-ext-diff",
+      "--no-textconv",
+      `refs/tags/${tag}`,
+      "--",
+      file,
+    ]),
+  );
+  if (diff === "") {
+    findings.push(info(`${header} no change`));
+  } else if (diff !== undefined) {
+    findings.push(info(header));
+    for (const line of lines(diff)) findings.push(info(line));
+  }
+  return diff;
+}
+
+/** The manifest values the listing explains, in FAIL order, with an absent value as empty. */
+function declarations(manifest: unknown): Record<string, unknown> {
+  const values: Record<string, unknown> = {};
+  for (const key of PERMISSION_KEYS) values[key] = field(manifest, key) ?? [];
+  const scripts = field(manifest, "content_scripts") ?? [];
+  values["content_scripts matches"] = Array.isArray(scripts)
+    ? scripts.map((script) => field(script, "matches") ?? [])
+    : scripts;
+  const data = dataCollection(manifest) ?? {};
+  values.data_collection_permissions = isRecord(data)
+    ? { ...data, required: field(data, "required") ?? [], optional: field(data, "optional") ?? [] }
+    : data;
+  return values;
 }
 
 export function checkPostRoll(env: Env, version: string): Finding[] {
@@ -1534,6 +2036,10 @@ export function realEnv(root: string): Env {
     today() {
       return localDate(new Date());
     },
+    listTools() {
+      const args = ["--input-type=module", "-e", LIST_TOOLS_SCRIPT];
+      return toolNames(spawnChecked(root, process.execPath, args).toString("utf8"));
+    },
   };
 }
 
@@ -1555,6 +2061,17 @@ function spawnChecked(root: string, command: string, args: readonly string[]): B
       ? `signal ${result.signal}`
       : `status ${result.status}`;
   throw new CommandError([command, ...args].join(" "), result.status, stderr, cause);
+}
+
+function toolNames(output: string): string[] {
+  try {
+    const names: unknown = JSON.parse(output);
+    if (Array.isArray(names) && names.every((name) => typeof name === "string")) return names;
+  } catch {
+    // Not JSON: the error below quotes what came back.
+  }
+  const shown = output.length > 200 ? `${output.slice(0, 200)}...` : output;
+  throw new Error(`the tool list is not a JSON array of strings: ${quote(shown)}`);
 }
 
 /** YYYY-MM-DD in the local time zone. */
