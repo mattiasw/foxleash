@@ -176,6 +176,44 @@ when nothing fails but a warning (such as a bigger bump than the changes need, o
 breaking change mentioned in a smaller bump) needs your confirmation. CI runs the
 `changelog` check.
 
+## Releasing
+
+A release is cut on `main` and runs the release checks in this order: `pre-roll`,
+`post-roll <version>`, `post-bump <version>`, `pre-push`, `artifacts <version>`. What each
+one verifies is in [Release checks](#release-checks), as are the version fields: the root
+and workspace `package.json` files and `package-lock.json`, with the extension's manifest
+taking its version from `apps/extension/package.json`.
+
+1. Run `npm run check:release -- pre-roll --bump=<patch|minor|major>`. It prints the next
+   version, `x.y.z` below. The first release, 0.1.0, runs `pre-roll` without `--bump`.
+2. Roll the changelog: move the entries under `## [Unreleased]` unchanged into a new
+   `## [x.y.z] - YYYY-MM-DD` section, dated today, and leave an empty `## [Unreleased]`
+   above it. Run `npm run check:release -- post-roll x.y.z` and commit `CHANGELOG.md` as
+   `Update changelog for x.y.z`.
+3. Bump the version with
+   `npm version <patch|minor|major> --workspaces --include-workspace-root --no-git-tag-version --ignore-scripts`,
+   run `npm run check:release -- post-bump x.y.z` and commit the six version files as
+   `Bump version to x.y.z`. The first release has no bump and no such commit.
+4. Run `npm run lint`, `npx turbo run typecheck test --force` and `npm run build:amo`, which
+   builds `artifacts/foxhand-source-x.y.z.zip` and `artifacts/foxhand-x.y.z.xpi`.
+5. Create the annotated tag with `git tag -a vx.y.z -m "vx.y.z"`, run
+   `npm run check:release -- pre-push`, then push the branch and the tag together with
+   `git push --atomic origin main vx.y.z`.
+6. Once CI has passed on the pushed commit, sign the XPI from the clean copy,
+   `artifacts/foxhand-x.y.z.xpi`, as an unlisted version on addons.mozilla.org.
+   `web-ext sign` takes a directory, so extract the XPI and pass that directory as
+   `--source-dir`. Run it with `--channel unlisted`, with `WEB_EXT_API_KEY` and `WEB_EXT_API_SECRET` (an AMO
+   API key pair) in the environment, with the source archive attached by
+   `--upload-source-code artifacts/foxhand-source-x.y.z.zip`, and with `--amo-metadata`
+   naming a JSON file whose `version` object carries `"compatibility": ["firefox"]` and
+   `approval_notes`. The approval notes are the body of the Permissions section of
+   `docs/amo/listing.md`, which goes with every version; the compatibility follows its
+   Compatibility section.
+7. Put the signed XPI in `web-ext-artifacts/foxhand-x.y.z.xpi` and run
+   `npm run check:release -- artifacts x.y.z`.
+8. Create a draft GitHub release for the tag `vx.y.z` with `foxhand-x.y.z.xpi` attached,
+   review it and publish it.
+
 ## Server
 
 Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
