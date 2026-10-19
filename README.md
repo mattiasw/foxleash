@@ -90,7 +90,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title, and a local file only as `file:`. The sites you allowed always are listed
   in the extension's settings page in the add-ons manager, each with a Revoke button.
-- Financial and health sites are blocked by default. You can edit the list.
+- Financial and health sites are blocked by default. You can edit the list. Foxhand checks
+  the blocklist before it opens or reloads a page, and shows the agent a tab on a blocked
+  site only as the site's address.
 - File uploads only read from allowed folders (the agent's working folder and
   `~/Downloads` by default) and never dotfiles or key files.
 - Tool results mark page content as untrusted, and the agent is told not to follow

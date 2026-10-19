@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { redactedUrl, siteOf } from "./site.ts";
+import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
+import {
+  hostOf,
+  matchesDomain,
+  normalizeDomain,
+  parseBlocklist,
+  redactedUrl,
+  siteOf,
+} from "./site.ts";
 
 const SITES: [string, string | undefined][] = [
   ["https://example.com/path?q=1#top", "https://example.com"],
@@ -74,4 +82,162 @@ describe("redactedUrl", () => {
       assert.equal(redactedUrl(url), redacted);
     });
   }
+});
+
+describe("hostOf", () => {
+  const cases: [string, string][] = [
+    ["http://[::1]:80", "[::1]"],
+    ["https://a.example:8443", "a.example"],
+    ["https://a.example", "a.example"],
+    ["http://[::ffff:7f00:1]", "127.0.0.1"],
+    ["http://[::ffff:c0a8:101]", "192.168.1.1"],
+    ["http://[::ffff:ffff:ffff]", "255.255.255.255"],
+    ["http://[::ffff:0:7f00:1]", "[::ffff:0:7f00:1]"],
+    ["http://[64:ff9b::7f00:1]", "[64:ff9b::7f00:1]"],
+    ["not a site", ""],
+  ];
+  for (const [site, host] of cases) {
+    it(`gives ${site} the host ${host}`, () => {
+      assert.equal(hostOf(site), host);
+    });
+  }
+});
+
+describe("matchesDomain", () => {
+  const cases: [string, string, boolean][] = [
+    ["https://paypal.com", "paypal.com", true],
+    ["https://www.paypal.com", "paypal.com", true],
+    ["http://paypal.com", "paypal.com", true],
+    ["https://paypal.com:8443", "paypal.com", true],
+    ["https://a.b.paypal.com", "paypal.com", true],
+    ["https://pay.google.com", "pay.google.com", true],
+    ["https://x.pay.google.com", "pay.google.com", true],
+    ["https://google.com", "pay.google.com", false],
+    ["https://mail.google.com", "pay.google.com", false],
+    ["https://notpaypal.com", "paypal.com", false],
+    ["https://paypal.com.evil", "paypal.com", false],
+    ["https://paypal.co", "paypal.com", false],
+    ["http://127.0.0.1:4567", "127.0.0.1", true],
+    ["http://[::1]", "127.0.0.1", false],
+  ];
+  for (const [site, pattern, matches] of cases) {
+    it(`${matches ? "matches" : "does not match"} ${site} against ${pattern}`, () => {
+      assert.equal(matchesDomain(hostOf(site), pattern), matches);
+    });
+  }
+
+  it("matches a site Firefox reached through a trailing dot or an IPv4-mapped address", () => {
+    assert.equal(matchesDomain(hostOf(siteOf("http://localhost.:4567/") ?? ""), "localhost"), true);
+    assert.equal(
+      matchesDomain(hostOf(siteOf("http://[::ffff:127.0.0.1]:4567/") ?? ""), "127.0.0.1"),
+      true,
+    );
+  });
+});
+
+const EMPTY = "The line is empty.";
+const NOT_A_DOMAIN = "This is not a domain; write one such as example.com.";
+const SUBDOMAINS =
+  "Write the domain without a wildcard or a leading dot: a domain already covers its subdomains.";
+const SCHEME = "Write the domain without http:// or https://: it is blocked on both.";
+const PATH = "Write the domain without a path, query or #: the whole site is blocked.";
+const PORT = "Write the domain without a port: it is blocked on every port.";
+
+describe("normalizeDomain", () => {
+  const accepted: [string, string][] = [
+    ["paypal.com", "paypal.com"],
+    [" Paypal.COM ", "paypal.com"],
+    ["paypal.com/", "paypal.com"],
+    ["paypal.com.", "paypal.com"],
+    ["PAYPAL.com./", "paypal.com"],
+    ["bank.例え", "bank.xn--r8jz45g"],
+    ["127.0.0.1", "127.0.0.1"],
+    ["127.0.0.1.", "127.0.0.1"],
+    ["127.0.0.1/", "127.0.0.1"],
+    ["localhost", "localhost"],
+    ["deutsche-bank.de", "deutsche-bank.de"],
+    ["1177.se", "1177.se"],
+  ];
+  for (const [line, host] of accepted) {
+    it(`accepts ${JSON.stringify(line)} as ${host}`, () => {
+      assert.deepEqual(normalizeDomain(line), { host });
+    });
+  }
+
+  const refused: [string, string][] = [
+    ["", EMPTY],
+    ["   ", EMPTY],
+    ["*.paypal.com", SUBDOMAINS],
+    [".paypal.com", SUBDOMAINS],
+    ["*paypal.com", SUBDOMAINS],
+    ["paypal.*", SUBDOMAINS],
+    ["https://paypal.com", SCHEME],
+    ["http://paypal.com/", SCHEME],
+    ["paypal.com/x", PATH],
+    ["paypal.com//", PATH],
+    ["paypal.com?x", PATH],
+    ["paypal.com#x", PATH],
+    ["paypal.com\\x", PATH],
+    ["paypal.com:443", PORT],
+    ["paypal.com:80", PORT],
+    ["paypal.com:", PORT],
+    ["user@paypal.com", NOT_A_DOMAIN],
+    [":@paypal.com", NOT_A_DOMAIN],
+    ["pay%2epal.com", NOT_A_DOMAIN],
+    ["paypal.com%2e", NOT_A_DOMAIN],
+    ["[::1]", NOT_A_DOMAIN],
+    ["a b", NOT_A_DOMAIN],
+    ["paypal.com\nevil.com", NOT_A_DOMAIN],
+    ["paypal.com\revil.com", NOT_A_DOMAIN],
+    ["pay\tpal.com", NOT_A_DOMAIN],
+    ["paypal.com,venmo.com", NOT_A_DOMAIN],
+    ["paypal..com", NOT_A_DOMAIN],
+    ["paypal.com..", NOT_A_DOMAIN],
+    ["paypal.com!", NOT_A_DOMAIN],
+    ["paypal.123", NOT_A_DOMAIN],
+    ["192.168", NOT_A_DOMAIN],
+    ["10.1", NOT_A_DOMAIN],
+    ["0x7f.1", NOT_A_DOMAIN],
+    ["127.000.0.1", NOT_A_DOMAIN],
+    ["127.0.0.1..", NOT_A_DOMAIN],
+  ];
+  for (const [line, error] of refused) {
+    it(`refuses ${JSON.stringify(line)}`, () => {
+      assert.deepEqual(normalizeDomain(line), { error });
+    });
+  }
+});
+
+describe("parseBlocklist", () => {
+  it("skips blank lines and numbers the lines that fail, blank ones counted", () => {
+    assert.deepEqual(parseBlocklist("paypal.com\n\n*.x.com\nok.com\nhttps://y.com"), {
+      errors: [
+        { line: 3, text: SUBDOMAINS },
+        { line: 5, text: SCHEME },
+      ],
+    });
+  });
+
+  it("returns the patterns in first order without duplicates", () => {
+    assert.deepEqual(parseBlocklist("paypal.com\r\n  \r\nchase.com\nPAYPAL.com.\n"), {
+      patterns: ["paypal.com", "chase.com"],
+    });
+  });
+
+  it("returns no patterns for empty text", () => {
+    assert.deepEqual(parseBlocklist(""), { patterns: [] });
+    assert.deepEqual(parseBlocklist(" \n\t\n"), { patterns: [] });
+  });
+});
+
+describe("DEFAULT_BLOCKLIST", () => {
+  it("holds only normalized domains", () => {
+    for (const entry of DEFAULT_BLOCKLIST) {
+      assert.deepEqual(normalizeDomain(entry), { host: entry }, entry);
+    }
+  });
+
+  it("has no duplicates", () => {
+    assert.equal(new Set(DEFAULT_BLOCKLIST).size, DEFAULT_BLOCKLIST.length);
+  });
 });

@@ -590,6 +590,161 @@ describe("site access", { timeout: 10000 }, () => {
   });
 });
 
+describe("blocklist", { timeout: 10000 }, () => {
+  const BLOCKED =
+    "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.";
+
+  it("refuses to open a blocked site before it creates a tab", async (t) => {
+    const { fake, call } = setup();
+    const create = t.mock.method(fake.browser.tabs, "create");
+    const update = t.mock.method(fake.browser.tabs, "update");
+    await assert.rejects(call("s1", "tab_open", { url: "https://www.paypal.com/signin" }), {
+      code: "site_blocked",
+      message: BLOCKED,
+    });
+    assert.equal(create.mock.callCount(), 0);
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(fake.tabs.size, 0);
+    assert.equal(fake.groups.size, 0);
+  });
+
+  it("refuses to open a blocked site the user approved, in a session with a group", async (t) => {
+    const { fake, call, open, grant, sessions } = setup();
+    await grant("https://www.paypal.com");
+    sessions.set("s1", { allowed: new Set(["https://www.paypal.com"]) });
+    await open("s1");
+    const create = t.mock.method(fake.browser.tabs, "create");
+    const update = t.mock.method(fake.browser.tabs, "update");
+    await assert.rejects(call("s1", "tab_open", { url: "https://www.paypal.com/" }), {
+      code: "site_blocked",
+      message: BLOCKED,
+    });
+    assert.equal(create.mock.callCount(), 0);
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(fake.tabs.size, 1);
+  });
+
+  it("refuses to navigate a tab to a blocked site", async (t) => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://www.paypal.com");
+    const tab = await open("s1", "https://a.example/");
+    const update = t.mock.method(fake.browser.tabs, "update");
+    await assert.rejects(
+      call("s1", "navigate", { tabId: tab.id, url: "https://www.paypal.com/" }),
+      {
+        code: "site_blocked",
+        message: BLOCKED,
+      },
+    );
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/");
+  });
+
+  it("refuses to reload a tab whose site became blocked", async (t) => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await fake.browser.storage.local.set({ blocklist: ["a.example"] });
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    await assert.rejects(call("s1", "navigate", { tabId: tab.id, action: "reload" }), {
+      code: "site_blocked",
+      message:
+        "Foxhand does not act on https://a.example: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+    });
+    assert.equal(reload.mock.callCount(), 0);
+  });
+
+  it("reloads about:blank with no check, reading the settings only for the result", async (t) => {
+    const { fake, navigate, open } = setup();
+    const tab = await open("s1");
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    const get = t.mock.method(fake.browser.storage.local, "get");
+    assert.equal((await navigate("s1", { tabId: tab.id, action: "reload" })).url, "about:blank");
+    assert.equal(reload.mock.callCount(), 1);
+    assert.equal(get.mock.callCount(), 1);
+  });
+
+  it("refuses to reload a tab that shows a page that is not a website, naming only the tab", async (t) => {
+    const { fake, call, open } = setup();
+    const tab = await open("s1");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    const message = `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`;
+    for (const url of ["file:///home/u/secret.txt", "about:newtab", "about:blank#x"]) {
+      fakeTab.url = url;
+      const error = await call("s1", "navigate", { tabId: tab.id, action: "reload" }).then(
+        () => assert.fail(`reloaded ${url}`),
+        (caught: unknown) => caught,
+      );
+      assert.ok(error instanceof ToolError, url);
+      assert.deepEqual(
+        { code: error.code, message: error.message },
+        { code: "page_not_web", message },
+      );
+      assert.equal(/secret|file/.test(error.message), false);
+    }
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = async (tabId) => {
+      const { url: _url, ...rest } = await get(tabId);
+      return rest;
+    };
+    await assert.rejects(call("s1", "navigate", { tabId: tab.id, action: "reload" }), {
+      code: "page_not_web",
+      message,
+    });
+    assert.equal(reload.mock.callCount(), 0);
+  });
+
+  it("refuses a web URL that has no site before it opens anything", async () => {
+    const { fake, call, open } = setup();
+    await assert.rejects(call("s1", "tab_open", { url: "http://./" }), {
+      code: "invalid_url",
+      message: "Foxhand opens only http and https URLs, or about:blank.",
+    });
+    assert.equal(fake.tabs.size, 0);
+    const tab = await open("s1");
+    await assert.rejects(call("s1", "navigate", { tabId: tab.id, url: "http://./" }), {
+      code: "invalid_url",
+      message: "Foxhand navigates only to http and https URLs.",
+    });
+    assert.equal(fake.tabs.get(tab.id)?.url, "about:blank");
+  });
+
+  it("shows a tab moved in from a blocked, approved site only as its site", async () => {
+    const { fake, list, open, grant } = setup();
+    await grant("https://www.paypal.com");
+    const tab = await open("s1");
+    const moved = fake.openTab({ url: "https://www.paypal.com/activity" });
+    moved.groupId = groupIdOf(fake, tab.id);
+    assert.deepEqual((await list("s1"))[1], {
+      id: moved.id,
+      url: "https://www.paypal.com",
+      title: "",
+      active: false,
+    });
+  });
+
+  it("goes back and forward onto a blocked site, showing only its site", async () => {
+    const { fake, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/x");
+    await navigate("s1", { tabId: tab.id, url: "https://b.example/y" });
+    await fake.browser.storage.local.set({ blocklist: ["a.example", "b.example"] });
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, action: "back" }), {
+      ...tab,
+      url: "https://a.example",
+      title: "",
+    });
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, action: "forward" }), {
+      ...tab,
+      url: "https://b.example",
+      title: "",
+    });
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();

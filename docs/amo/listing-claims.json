@@ -29,7 +29,11 @@
     { "listing": "The approval can only come from your click", "evidence": [] },
     {
       "listing": "A built-in list of common financial and health sites is blocked by default",
-      "evidence": []
+      "evidence": [
+        { "file": "apps/extension/src/default-blocklist.ts", "contains": "DEFAULT_BLOCKLIST" },
+        { "file": "apps/extension/src/site-access.ts", "contains": "site_blocked" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "access.check(" }
+      ]
     },
     { "listing": "File uploads only read from allowed folders", "evidence": [] },
     {

@@ -16,7 +16,11 @@ const COUNTER_PREFIX = "Counter ";
 export interface FixtureServer {
   /** The server's site, `http://127.0.0.1:<port>`, as the extension names it. */
   site: string;
+  /** The server's port. */
+  port: number;
   url(path: string): string;
+  /** How many requests reached this path, 404s included. */
+  hits(path: string): number;
   close(): Promise<void>;
 }
 
@@ -24,9 +28,11 @@ export interface FixtureServer {
 export async function startFixtureServer(): Promise<FixtureServer> {
   const timers = new Set<NodeJS.Timeout>();
   let counter = 0;
+  const hits = new Map<string, number>();
 
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
+    hits.set(path, (hits.get(path) ?? 0) + 1);
     if (path === "/a") {
       sendPage(response, TITLES.a);
     } else if (path === "/b") {
@@ -59,7 +65,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
 
   return {
     site: origin,
+    port: address.port,
     url: (path) => `${origin}${path}`,
+    hits: (path) => hits.get(path) ?? 0,
     close: async () => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();

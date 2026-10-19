@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
+import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
 import { createFakeBrowser } from "./fake-browser.ts";
 import {
+  effectiveBlocklist,
   grantSite,
   onSettingsChanged,
   readSettings,
@@ -22,6 +24,7 @@ describe("readSettings", () => {
     const get = t.mock.method(fake.browser.storage.local, "get");
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["http://127.0.0.1:4567", "https://a.example", "https://b.example"],
+      blocklist: undefined,
     });
     assert.deepEqual(
       get.mock.calls.map((call) => call.arguments),
@@ -32,7 +35,7 @@ describe("readSettings", () => {
 
   it("returns no sites from empty storage", async (t) => {
     const { fake } = setup(t);
-    assert.deepEqual(await readSettings(fake.browser), { sites: [] });
+    assert.deepEqual(await readSettings(fake.browser), { sites: [], blocklist: undefined });
   });
 
   it("ignores each malformed key with one warning naming it", async (t) => {
@@ -54,10 +57,13 @@ describe("readSettings", () => {
       "site:https://array.example": ["2026-01-02T03:04:05.000Z"],
       "site:https://empty.example": {},
       "site:https://number.example": { grantedAt: 1 },
-      blocklist: [],
+      Blocklist: [],
     };
     await fake.browser.storage.local.set({ ...malformed, "site:https://kept.example": GRANT });
-    assert.deepEqual(await readSettings(fake.browser), { sites: ["https://kept.example"] });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://kept.example"],
+      blocklist: undefined,
+    });
     assert.deepEqual(
       warnings(),
       Object.keys(malformed).map((key) => ({ event: "ignored_setting", key })),
@@ -69,7 +75,10 @@ describe("readSettings", () => {
     await fake.browser.storage.local.set(
       JSON.parse('{"__proto__": {"grantedAt": "x"}, "site:https://__proto__": {"grantedAt": "x"}}'),
     );
-    assert.deepEqual(await readSettings(fake.browser), { sites: ["https://__proto__"] });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://__proto__"],
+      blocklist: undefined,
+    });
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "__proto__" }]);
   });
 
@@ -84,7 +93,7 @@ describe("readSettings", () => {
     const settings = await readSettings(fake.browser).finally(() => {
       delete prototype.grantedAt;
     });
-    assert.deepEqual(settings, { sites: [] });
+    assert.deepEqual(settings, { sites: [], blocklist: undefined });
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "site:https://a.example" }]);
   });
 
@@ -94,6 +103,111 @@ describe("readSettings", () => {
       throw new Error("storage is unavailable");
     };
     await assert.rejects(readSettings(fake.browser), /storage is unavailable/);
+  });
+});
+
+describe("the stored blocklist", () => {
+  it("is undefined when none is stored, and the built-in list applies", async (t) => {
+    const { fake, warnings } = setup(t);
+    const settings = await readSettings(fake.browser);
+    assert.equal(settings.blocklist, undefined);
+    assert.equal(effectiveBlocklist(settings), DEFAULT_BLOCKLIST);
+    assert.deepEqual(warnings(), []);
+  });
+
+  it("is read beside the site grants and replaces the built-in list", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      blocklist: ["paypal.com"],
+      "site:https://a.example": GRANT,
+    });
+    const settings = await readSettings(fake.browser);
+    assert.deepEqual(settings, { sites: ["https://a.example"], blocklist: ["paypal.com"] });
+    assert.deepEqual(effectiveBlocklist(settings), ["paypal.com"]);
+    assert.deepEqual(warnings(), []);
+  });
+
+  it("is normalized, with duplicates dropped in first order", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      blocklist: [" PAYPAL.com. ", "paypal.com", "chase.com"],
+    });
+    assert.deepEqual((await readSettings(fake.browser)).blocklist, ["paypal.com", "chase.com"]);
+    assert.deepEqual(warnings(), []);
+  });
+
+  it("blocks nothing when it is stored empty", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({ blocklist: [] });
+    const settings = await readSettings(fake.browser);
+    assert.deepEqual(settings.blocklist, []);
+    assert.deepEqual(effectiveBlocklist(settings), []);
+    assert.deepEqual(warnings(), []);
+  });
+
+  for (const value of ["paypal.com", null, {}, [1], ["paypal.com", 2]]) {
+    it(`is ignored with one warning when it is ${JSON.stringify(value)}`, async (t) => {
+      const { fake, warnings } = setup(t);
+      await fake.browser.storage.local.set({ blocklist: value });
+      const settings = await readSettings(fake.browser);
+      assert.equal(settings.blocklist, undefined);
+      assert.equal(effectiveBlocklist(settings), DEFAULT_BLOCKLIST);
+      assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "blocklist" }]);
+    });
+  }
+
+  it("drops each entry that is not a domain with a warning and keeps the rest", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      blocklist: ["paypal.com", "*.chase.com", "paypal.com\nevil.com", "venmo.com"],
+    });
+    const { blocklist } = await readSettings(fake.browser);
+    assert.deepEqual(blocklist, ["paypal.com", "venmo.com"]);
+    assert.deepEqual(warnings(), [
+      {
+        event: "ignored_blocklist_entry",
+        index: 1,
+        reason:
+          "Write the domain without a wildcard or a leading dot: a domain already covers its subdomains.",
+      },
+      {
+        event: "ignored_blocklist_entry",
+        index: 2,
+        reason: "This is not a domain; write one such as example.com.",
+      },
+    ]);
+  });
+
+  it("falls back to the built-in list when no entry is a domain", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({ blocklist: ["*.paypal.com", "https://chase.com"] });
+    const settings = await readSettings(fake.browser);
+    assert.equal(settings.blocklist, undefined);
+    assert.equal(effectiveBlocklist(settings), DEFAULT_BLOCKLIST);
+    assert.deepEqual(warnings(), [
+      {
+        event: "ignored_blocklist_entry",
+        index: 0,
+        reason:
+          "Write the domain without a wildcard or a leading dot: a domain already covers its subdomains.",
+      },
+      {
+        event: "ignored_blocklist_entry",
+        index: 1,
+        reason: "Write the domain without http:// or https://: it is blocked on both.",
+      },
+      { event: "ignored_setting", key: "blocklist" },
+    ]);
+  });
+
+  it("is ignored with one warning when the array has holes", async (t) => {
+    const { fake, warnings } = setup(t);
+    const sparse: unknown[] = new Array(2);
+    sparse[1] = "paypal.com";
+    await fake.browser.storage.local.set({ blocklist: sparse });
+    const settings = await readSettings(fake.browser);
+    assert.equal(settings.blocklist, undefined);
+    assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "blocklist" }]);
   });
 });
 
@@ -121,7 +235,10 @@ describe("grantSite and revokeSite", () => {
       remove.mock.calls.map((call) => call.arguments),
       [["site:https://a.example"]],
     );
-    assert.deepEqual(await readSettings(fake.browser), { sites: ["https://b.example"] });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://b.example"],
+      blocklist: undefined,
+    });
   });
 
   it("use the key prefix site:", () => {

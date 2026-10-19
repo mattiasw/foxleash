@@ -84,6 +84,8 @@ describe("createMcpServer", () => {
       "Synthetic drags do not drive native drag and drop",
       "tab group named Foxhand",
       "Relay that sentence to the user and stop.",
+      "are refused before anything is loaded",
+      "Tell the user instead of trying to reach them another way.",
     ]) {
       assert.ok(INSTRUCTIONS.includes(phrase), phrase);
     }

@@ -25,3 +25,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page's path, query or title, and tabs showing a local file only that they are local files.
 - The extension's settings page lists the sites you allowed always and lets you revoke each
   one.
+- Financial and health sites on a built-in blocklist are refused before Foxhand opens or
+  reloads them, even if you approved the site, and a tab showing one shows your agent only
+  the site's address.

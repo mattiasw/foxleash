@@ -1,6 +1,7 @@
 import type { MethodName, NavigateAction, RequestMessage, Result } from "@foxhand/protocol";
 import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
 import type { SessionGroups } from "./session-groups.ts";
+import { siteOf } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 import { waitForLoad } from "./wait-for-load.ts";
 
@@ -58,6 +59,7 @@ export function createHandlers<Handle>({
 
   async function tabOpen(session: string, params: Params): Promise<Result<"tab_open">> {
     const url = tabOpenUrl(params);
+    if (url !== undefined) await access.check(session, url);
     const group = await groups.groupOf(session);
     // Opened blank and grouped first, so the page never loads outside the session's group.
     const tab = await browser.tabs.create(
@@ -95,9 +97,27 @@ export function createHandlers<Handle>({
         `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
       );
     }
+    await gate(session, tab, target);
     const loaded = await waitForLoad(browser, timers, tabId, () => startNavigation(tabId, target));
     const view = await access.view(session);
     return { tab: view.tabInfo(loaded) };
+  }
+
+  /** Refuses a load of a blocked site before it starts. Going back and forward is not gated. */
+  async function gate(session: string, tab: Tab, target: NavigationTarget): Promise<void> {
+    if (target.kind === "url") {
+      await access.check(session, target.url);
+      return;
+    }
+    if (target.action !== "reload" || tab.url === "about:blank") return;
+    const url = tab.url ?? "";
+    if (siteOf(url) === undefined) {
+      throw new ToolError(
+        "page_not_web",
+        `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
+      );
+    }
+    await access.check(session, url);
   }
 
   async function existingTab(tabId: number): Promise<Tab> {
@@ -159,6 +179,7 @@ function webUrl(url: string, refusal: string): string {
   if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     throw new ToolError("invalid_url", refusal);
   }
+  if (siteOf(parsed.href) === undefined) throw new ToolError("invalid_url", refusal);
   return parsed.href;
 }
 
