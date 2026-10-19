@@ -7,11 +7,17 @@
 #      at test, describe, it, suite, context, specify or concurrent, and a bare .skip() on any
 #      receiver. node:test runs a todo's body but never fails on it, so a bare .todo() on any
 #      receiver is refused, as is a .todo on a test-root chain unless it is called with one
-#      quoted name that holds no backslash and closes on the line. node:test's option-object
-#      spelling is refused too: an unconditional `skip:`, `only:` or `todo:` option on a test.
-#      A member access may have whitespace before its dot or be optional (?.), a marker's call
-#      may be optional too (?.()), and a call split over lines before a dot or a parenthesis is
-#      joined first, across blank lines and comments closed on their line.
+#      quoted name that holds no backslash and closes on the line. node:test's expected
+#      failure exits 0 too, so .expectFailure( on any receiver and a bare expectFailure( are
+#      refused. node:test's option-object spelling is refused too: an unconditional `skip:`,
+#      `only:`, `todo:` or `expectFailure:` option on a test, a function or an array or object
+#      literal as its value, and a method-shorthand key (`{ todo() {} }`). A member access may
+#      have whitespace before its dot or be optional (?.), a marker's call may be optional too
+#      (?.()) and carry TypeScript type arguments (`test.only<T>(`), and a call split over
+#      lines before a dot or a parenthesis is joined first, across blank lines and comments
+#      closed on their line. Each line is also read as the engine reads its names: through a
+#      computed literal key (`test["only"](`), an escaped name (`test.\u006fnly(`) and a block
+#      comment inside the line (`test./* x */only(`).
 #      Allowed: the conditional `{ skip: !process.env.X }` and `{ todo: !process.env.X }`
 #      options, t.skip("reason") and t.todo("reason") in a test body, a bodiless
 #      test.todo("name"), and an empty env-gated placeholder test on one line (a skip option
@@ -200,40 +206,117 @@ JOIN='
   { flush(); ctx = "" }
   END { flush() }
 '
+# Prints each joined line as written, then twice more as jsnorm() reads it, with its block
+# comments removed and kept. Every later stage judges all three, so a reading only adds
+# refusals; the dedupe below drops a reading equal to its line.
+READINGS='
+  # A line as the engine reads its names, in three steps: (1) when strip is set, every block
+  # comment that closes inside the line is removed with the whitespace on both sides of it
+  # (`test./* x */ only(` reads `test.only(`), leaving one space where two identifier bytes
+  # would meet; step 1 does not know strings, so a `/*` in one string and a `*/` in a later one
+  # would remove the code between them, which is why the line is also read with strip unset;
+  # (2) an escape of an ASCII identifier byte is decoded: `\uXXXX`, `\u{...}` (leading zeros
+  # allowed), `\xHH`, and an identity escape (a backslash before a letter, `_` or `$` that
+  # starts no escape sequence, so `\b`, `\f`, `\n`, `\r`, `\t`, `\v`, `\u` and `\x` stay); any
+  # other escape stays as written, so no escape can make a quote, bracket or paren; (3) a
+  # computed member access with a literal key, `X["name"]` or
+  # `X?.["name"]`, reads `X.name` / `X?.name` when the byte right before it is an identifier
+  # byte, `)` or `]`, with no space: `return ["skip"].map(f)` is an array literal. Each loop
+  # ends: a comment removal and a key rewrite shorten the string, and the escape loop moves
+  # past every escape it matched.
+  function jsnorm(s, strip,   out, h, k, pre, gap, c) {
+    # A string, not a /.../ literal: busybox awk ends a literal at a `/` inside brackets.
+    while (strip && match(s, "[[:space:]]*/[*]([^*]|[*]+[^*/])*[*]+/[[:space:]]*")) {
+      gap = (substr(s, 1, RSTART - 1) ~ /[A-Za-z0-9_$]$/ &&
+        substr(s, RSTART + RLENGTH) ~ /^[A-Za-z0-9_$]/) ? " " : ""
+      s = substr(s, 1, RSTART - 1) gap substr(s, RSTART + RLENGTH)
+    }
+    out = ""
+    while (match(s, /\\(u([0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]|[{][0-9A-Fa-f]+[}])|x[0-9A-Fa-f][0-9A-Fa-f]|[ac-eg-mo-qswyzA-Z_$])/)) {
+      if (RLENGTH == 2) c = substr(s, RSTART + 1, 1)
+      else {
+        h = substr(s, RSTART + 2, RLENGTH - 2)
+        gsub(/[{}]/, "", h)
+        h = tolower(h)
+        sub(/^0+/, "", h)
+        c = (h in uesc) ? uesc[h] : substr(s, RSTART, RLENGTH)
+      }
+      out = out substr(s, 1, RSTART - 1) c
+      s = substr(s, RSTART + RLENGTH)
+    }
+    s = out s
+    while (match(s, /[]A-Za-z0-9_$)]([?][.])?[[][[:space:]]*["\047`][A-Za-z_$][A-Za-z0-9_$]*["\047`][[:space:]]*[]]/)) {
+      k = substr(s, RSTART + 1, RLENGTH - 1)
+      pre = (substr(k, 1, 2) == "?.") ? "?." : "."
+      sub(/^([?][.])?[[][[:space:]]*["\047`]/, "", k)
+      sub(/["\047`][[:space:]]*[]]$/, "", k)
+      s = substr(s, 1, RSTART) pre k substr(s, RSTART + RLENGTH)
+    }
+    return s
+  }
+  BEGIN {
+    # The escape table: lowercase hex without leading zeros to an ASCII identifier byte.
+    for (c = 36; c < 123; c++) {
+      ch = sprintf("%c", c)
+      if (ch ~ /^[A-Za-z0-9_$]$/) uesc[sprintf("%x", c)] = ch
+    }
+  }
+  { print; print jsnorm($0, 1); print jsnorm($0, 0) }
+'
 JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=1 "$JOIN" &&
   printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=0 "$JOIN") &&
+  JOINED=$(printf '%s\n' "$JOINED" | LC_ALL=C awk "$READINGS") &&
   JOINED=$(printf '%s\n' "$JOINED" | LC_ALL=C awk '!seen[$0]++') || {
   echo "check-test-integrity: the added-line scanner (awk) failed; gate 2 cannot see the diff." >&2
   exit 1
 }
 
-# .only and .fixme are refused on any receiver; .skip only on a chain rooted at a test root, so
-# a test body's t.skip("reason") passes. Whitespace may come before a dot, never after it, so
-# prose such as "i.e. only (a, b)" is not a member access.
+# .only, .fixme and the MARKERS names (among them node:test's expectFailure) are refused on any
+# receiver; .skip only on a chain rooted at a test root, so a test body's t.skip("reason")
+# passes. Whitespace may come before a dot, never after it, so prose such as "i.e. only (a, b)"
+# is not a member access. A call may be optional (?.) and carry TypeScript type arguments, one
+# nesting level (`test.skip<Array<string>>(`); TYPE_ARGS needs a byte right after `<` that is
+# neither a space, which formatters always write around a comparison, nor =, so a comparison
+# (`filters.only < 1`, `fit <= max`) is not read as type arguments.
 DOT='[[:space:]]*[?]?[.]'
-CALL='[[:space:]]*([?][.][[:space:]]*)?[(]'
+TYPE_ARGS='<[^[:space:]<>()=]([^<>()]|<[^<>()]*>)*>'
+CALL="[[:space:]]*([?][.][[:space:]]*)?(${TYPE_ARGS}[[:space:]]*)?[(]"
 IDENT='[A-Za-z_$][A-Za-z0-9_$]*'
 ROOTS='test|describe|it|suite|context|specify|concurrent'
 LINK="${DOT}${IDENT}"
-MARKERS='fit|xit|xtest|xcontext|xspecify|fdescribe|xdescribe'
+MARKERS='fit|xit|xtest|xcontext|xspecify|fdescribe|xdescribe|expectFailure'
 RECEIVER_SKIP="(${ROOTS})(${LINK})*${DOT}skip"
 RECEIVER_TODO="(${ROOTS})(${LINK})*${DOT}todo"
 # The backtick must stay inside single quotes, or sh runs it as a command.
 SKIP_PATTERN='(\b('"$MARKERS|$RECEIVER_SKIP"')|'"$DOT"'(only|fixme))('"$CALL"'|('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`))'
 
-# The option-object patterns. A key may be quoted or have whitespace before its colon, but it
-# must start the line or follow {, , or a block comment's */, so prose such as "desktop only: 2
-# per row" is not a key. VALUE is true, null, NaN or a string: node:test skips on any value but
-# undefined and false. CALL_VALUE, a number (which may start with a sign or .), Infinity, or a
-# literal after a run of signs, ~, ! and ( (-1, .5, -true, ~0, !void 0, (true)), is refused only
-# in an options object that is the first or second argument of a test call on the same line,
-# because skip is also a pagination key. ONLY_OPTION and TODO_OPTION go to the marker grep, so no
-# placeholder exempts a focus or a todo. todo is no pagination key, so TODO_OPTION refuses a
-# CALL_VALUE after any key; the price is that a todo: key holding a literal in plain test data,
-# at the start of a line or after {, , or */, is refused too. That is what catches a todo option
-# in an options object over several lines. PLACEHOLDER matches a skipped EMPTY test, registered
-# inside an if (!process.env.X) branch: the options object holds no nested object, ends at the
-# first } outside a quoted value and is followed directly by an empty () => {}) or
+# The option-object patterns. A key (option_key) may be plain, quoted or computed (`["skip"]`,
+# spaces allowed inside the brackets) and have whitespace before its colon, but it must start
+# the line or follow {, , or a block comment's */, so prose such as "desktop only: 2 per row" is
+# not a key. VALUE is true, null, NaN or a string: node:test skips on any value but undefined and
+# false. CALL_VALUE, a number (which may start with a sign or .), Infinity, a literal after a run
+# of signs, ~, ! and ( (-1, .5, -true, ~0, !void 0, (true)), a function (`() => x`,
+# `function () {}`, the function keyword only: `function$enabled` is a name) or an array or
+# object literal followed by , or } (`[]`, `{}`, `!![]`; `["darwin"].includes(p)` starts an
+# expression and passes), bare or after such a run, is refused only in an options object that
+# is the first or second argument of a test call on the same line, because skip is also a
+# pagination key. A method-shorthand key on the test call's line is a function too
+# (`{ todo() {} }`, `{ get skip() { return true; } }`, `{ *skip() {} }`): METHOD_OPTION.
+# ONLY_OPTION, TODO_OPTION, EXPECT_OPEN and METHOD_OPTION go to the marker grep, so no
+# placeholder exempts them. todo and expectFailure are no pagination keys, so TODO_OPTION
+# refuses a CALL_VALUE after either on any line; the price is that such a key holding a literal,
+# a function or an array or object literal in plain test data (`{ todo: [], done: [] }`), at the
+# start of a line or after {, , or */, is refused too. That is what catches a todo or
+# expectFailure option in an options object over several lines.
+# expectFailure also takes a validator, as assert.throws does. On any line EXPECT_OPEN refuses
+# a value that starts with an object, since an object Biome wraps closes lines later, and a
+# regex literal or an error class (a capitalised name ending in Error or Exception:
+# `TypeError`, `assert.AssertionError`, `DOMException`) followed by , or } or the end of the
+# line, so `/^win/.test(p)` passes. An array validator is matched index by index against the
+# thrown value, which a plain Error does not match, so the test fails; EXPECT_OPEN leaves arrays
+# alone and `["win32"].includes(p)` passes. PLACEHOLDER matches a skipped EMPTY test,
+# registered inside an if (!process.env.X) branch: the options object holds no nested object,
+# ends at the first } outside a quoted value and is followed directly by an empty () => {}) or
 # async () => {}) body that closes the call. Each placeholder is replaced with } before the
 # skip-option grep, so it exempts only itself, not another skip option on its joined line, and
 # no key match runs across it. PLACEHOLDER must hold no #, the sed delimiter.
@@ -256,14 +339,23 @@ VOID_KEYWORD='void[^A-Za-z0-9_$]'
 # A value that is never a condition: a keyword literal, the void keyword, a number (which may
 # start with .) or a string.
 LITERAL='((true|false|null|undefined|NaN|Infinity)\b|'"$VOID_KEYWORD"'|[.]?[0-9]|'"$Q"')'
+ARROW_HEAD="(async[[:space:]]+)?([(][^)]*[)]|${IDENT})[[:space:]]*=>"
+FUNCTION_START="(${ARROW_HEAD}|(async[[:space:]]+)?function[^A-Za-z0-9_\$])"
+# An array or object literal holding no ] or }: always truthy. A nested one is not matched.
+COMPOSITE='([[][^]]*[]]|[{][^}]*[}])'
+option_key() {
+  printf '%s' "(${Q}?($1)${Q}?|[[][[:space:]]*${Q}($1)${Q}[[:space:]]*[]])"
+}
 BARE_SKIP="${DOT}skip${CALL}[[:space:]]*[)]"
-KEY="(^|[{,]|[*]/)[[:space:]]*${Q}?"
-VALUE="${Q}?[[:space:]]*:[[:space:]]*((true|null|NaN)\b|${Q})"
-CALL_KEY="\b(test|it|describe|suite|context|specify)${CALL}((${ARG}|${ESC_QS})*,)?[[:space:]]*[{]([^}]*,)?[[:space:]]*${Q}?"
-CALL_VALUE="${Q}?[[:space:]]*:[[:space:]]*([.]?[0-9]|Infinity\b|[-+~!(][-+~[:space:]!(]*${LITERAL})"
-SKIP_OPTION="${KEY}skip${VALUE}|${CALL_KEY}skip${CALL_VALUE}"
-ONLY_OPTION="${KEY}only${VALUE}|${CALL_KEY}only${CALL_VALUE}"
-TODO_OPTION="${KEY}todo(${VALUE}|${CALL_VALUE})"
+KEY="(^|[{,]|[*]/)[[:space:]]*"
+VALUE="[[:space:]]*:[[:space:]]*((true|null|NaN)\b|${Q})"
+CALL_KEY="\b(test|it|describe|suite|context|specify)${CALL}((${ARG}|${ESC_QS})*,)?[[:space:]]*[{]([^}]*,)?[[:space:]]*"
+CALL_VALUE="[[:space:]]*:[[:space:]]*([.]?[0-9]|Infinity\b|[-+~!(][-+~[:space:]!(]*${LITERAL}|([-+~!(][-+~[:space:]!(]*)?${FUNCTION_START}|([-+~!(][-+~[:space:]!(]*)?${COMPOSITE}[[:space:])]*[,}])"
+SKIP_OPTION="${KEY}$(option_key skip)${VALUE}|${CALL_KEY}$(option_key skip)${CALL_VALUE}"
+ONLY_OPTION="${KEY}$(option_key only)${VALUE}|${CALL_KEY}$(option_key only)${CALL_VALUE}"
+TODO_OPTION="${KEY}$(option_key 'todo|expectFailure')(${VALUE}|${CALL_VALUE})"
+EXPECT_OPEN="${KEY}$(option_key expectFailure)[[:space:]]*:[[:space:]]*([-+~!(][-+~[:space:]!(]*)?([{]|(/([^/*\\]|\\\\.)([^/\\]|\\\\.)*/[A-Za-z]*|(${IDENT}[.])*([A-Z][A-Za-z0-9_\$]*)?(Error|Exception))[[:space:])]*([,}]|\$))"
+METHOD_OPTION="${CALL_KEY}((get|async)[[:space:]]+)?([*][[:space:]]*)?$(option_key 'skip|only|todo|expectFailure')[[:space:]]*[(]"
 BARE_TODO="${DOT}todo${CALL}[[:space:]]*[)]"
 # A todo may hold only one quoted name, closed on its line. ERE has no lookahead, so the refused
 # shapes are spelled out: arguments that do not close on the line, a first argument that is not
@@ -276,13 +368,13 @@ NOT_NAME=$(printf '[^\047\042\140[:space:])]')
 OPEN_NAME=$(printf '((\042[^\042]*|\047[^\047]*|\140[^\140]*)(\\\\|$)|\140[^\140]*[$][{][A-Za-z0-9_$.[:space:]]*[^A-Za-z0-9_$.[:space:]}])')
 TODO_CALL="\b${RECEIVER_TODO}${CALL}([[:space:]]*\$|[[:space:]]*${NOT_NAME}|[[:space:]]*${OPEN_NAME}|[[:space:]]*${QS}[[:space:]]*(\$|[^[:space:])]))"
 TODO_CHAIN='\b'"$RECEIVER_TODO"'('"$DOT"'[A-Za-z_]+)+('"$CALL"'|[[:space:]]*`)'
-PLACEHOLDER="${KEY}skip${Q}?[[:space:]]*:(${NBQ}|${ESC_QS}|${COMMENT})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
+PLACEHOLDER="${KEY}$(option_key skip)[[:space:]]*:(${NBQ}|${ESC_QS}|${COMMENT})*[}][[:space:]]*,[[:space:]]*(async[[:space:]]+)?[(][[:space:]]*[)][[:space:]]*=>[[:space:]]*[{][[:space:]]*[}][[:space:]]*[)]"
 
 # -a stops grep treating a line with a byte that is not valid UTF-8 as binary; LC_ALL=C lets
 # that byte match a bracket expression, which a UTF-8 locale never does. [[:space:]] is then
 # ASCII only, so the join pass has turned the other JavaScript whitespace into spaces.
 MARKER_STATUS=0
-BAD=$(printf '%s\n' "$JOINED" | LC_ALL=C grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION|$TODO_CALL|$TODO_CHAIN|$BARE_TODO|$TODO_OPTION") || MARKER_STATUS=$?
+BAD=$(printf '%s\n' "$JOINED" | LC_ALL=C grep -aE "$SKIP_PATTERN|$BARE_SKIP|$ONLY_OPTION|$TODO_CALL|$TODO_CHAIN|$BARE_TODO|$TODO_OPTION|$EXPECT_OPEN|$METHOD_OPTION") || MARKER_STATUS=$?
 if [ "$MARKER_STATUS" -gt 1 ]; then
   echo "check-test-integrity: the marker grep failed (exit $MARKER_STATUS); gate 2 cannot judge." >&2
   exit 1
@@ -307,6 +399,7 @@ if [ -n "$BAD" ] || [ -n "$BAD_OPTION" ]; then
   [ -z "$BAD" ] || printf '%s\n' "$BAD" >&2
   [ -z "$BAD_OPTION" ] || printf '%s\n' "$BAD_OPTION" >&2
   echo "check-test-integrity: allowed: { skip: !process.env.X }, t.skip(\"reason\"), test.todo(\"name\") on one line with no body, an empty env-gated placeholder test on one line." >&2
+  echo "check-test-integrity: a line can be listed as the gate reads it (escaped and computed names spelled out, with and without its block comments), in place of or beside the line as written." >&2
   exit 1
 fi
 

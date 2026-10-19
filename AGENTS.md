@@ -73,7 +73,8 @@ scripts, and calling `node --test` directly runs the suite with them switched of
   calling the real tools against local fixture pages.
 - Coverage floors are a ratchet: raise them when coverage rises, never lower them.
 - Never delete a test file, and never commit `.only`, an unconditional `.skip`, an
-  unconditional todo on a test that has a body, or `x`/`f`-prefixed tests; a bodiless
+  unconditional todo on a test that has a body, an expected failure (`test.expectFailure`,
+  or an unconditional `expectFailure` option), or `x`/`f`-prefixed tests; a bodiless
   `test.todo("name")` that records a planned test is fine. `bin/check-test-integrity.sh`
   enforces both in CI. Fix the code, not the test.
 - A new regression test is verified by breaking the behaviour it guards and watching it

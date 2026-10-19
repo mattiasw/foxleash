@@ -545,6 +545,275 @@ describe("check-test-integrity.sh", () => {
       "a focus option after a template-literal name holding an escaped backtick",
       `test(\`a \\\` b\`, { ${m("only", ": -1")} }, () => {\n  run();\n});\n`,
     ],
+    // Type arguments before a marker's call.
+    ["a skip with type arguments", `${m("test.", "skip<object>(")}"t", () => {\n  run();\n});\n`],
+    [
+      "an optional-call skip with type arguments",
+      `${m("test.", "skip?.<object>(")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip with type arguments and a space before the call",
+      `${m("test.", "skip<object> (")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip with nested type arguments",
+      `${m("test.", "skip<Array<string>>(")}"t", () => {\n  run();\n});\n`,
+    ],
+    ["a focus with type arguments", `${m("test.", "only<T>(")}"t", () => {\n  run();\n});\n`],
+    ["a todo with type arguments and a body", `${m("test.", "todo<object>(")}"t", fn);\n`],
+    // A function is always truthy, and a negated one is never a condition.
+    [
+      "an option-object skip that is an arrow",
+      `test("t", { ${m("skip", ": () => !process.env.DB")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object skip that is an async arrow",
+      `test("t", { ${m("skip", ": async () => x")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object skip that is a function expression",
+      `test("t", { ${m("skip", ": function () { return 1; }")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object focus that is an arrow",
+      `test("t", { ${m("only", ": () => x")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object skip that is a negated arrow (never a condition)",
+      `test("t", { ${m("skip", ": !(() => x)")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object skip that is a parenthesised arrow",
+      `test("t", { ${m("skip", ": (() => x)")} }, () => { run(); });\n`,
+    ],
+    [
+      "an option-object skip that is a bitwise-negated arrow",
+      `test("t", { ${m("skip", ": ~(() => x)")} }, () => { run(); });\n`,
+    ],
+    [
+      "a wrapped todo option holding an arrow",
+      `test("t", {\n  ${m("to", "do: () => x")},\n}, () => {\n  work();\n});\n`,
+    ],
+    // Read as the engine reads names: a computed literal key, an escaped name and a block
+    // comment inside the line are spelled out before the patterns run.
+    [
+      "a computed member access with a double-quoted key",
+      `${m("test", '["only"]')}("t", () => {\n  work();\n});\n`,
+    ],
+    [
+      "a computed member access with a single-quoted key",
+      `${m("describe", "['skip']")}("s", () => {});\n`,
+    ],
+    ["a computed member access with a backtick key", `${m("test", "[`only`]")}("t", fn);\n`],
+    ["an optional computed member access", `${m("test?.", '["skip"]')}("t", fn);\n`],
+    [
+      "a computed key with spaces inside the brackets",
+      `${m("test[ ", '"only"', " ]")}("t", fn);\n`,
+    ],
+    ["a chain of two computed keys", `${m("test", '["describe"]', '["only"]')}("s", fn);\n`],
+    ["a computed key after an index", `${m("suites[0]", '["only"]')}("t", fn);\n`],
+    ["a unicode escape in the name", `${m("test.", "\\u006f", "nly(")}"t", fn);\n`],
+    ["an uppercase unicode escape in the name", `${m("test.", "\\u006F", "nly(")}"t", fn);\n`],
+    ["a braced unicode escape in the name", `${m("describe.", "\\u{73}", "kip(")}"s", fn);\n`],
+    [
+      "a braced unicode escape with leading zeros in the name",
+      `${m("describe.", "\\u{0073}", "kip(")}"s", fn);\n`,
+    ],
+    ["a hex escape in a computed key", `${m("test", '["\\x6f', 'nly"]')}("t", fn);\n`],
+    ["an identity escape in a computed key", `${m("test", '["\\o', 'nly"]')}("t", fn);\n`],
+    [
+      "an identity escape in a quoted option key",
+      `test("t", { ${m('"\\s', 'kip": true')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a unicode escape in an option key",
+      `test("t", { ${m("sk", "\\u0069", "p: true")} }, () => {\n  work();\n});\n`,
+    ],
+    ["a block comment after the dot", `${m("test./", "* x */only(")}"t", fn);\n`],
+    [
+      "a block comment after the dot, as Biome spaces it",
+      `${m("test./", "* x */ only(")}"t", fn);\n`,
+    ],
+    [
+      "a block comment after the dot with a space before it",
+      `${m("test. /", "* x */only(")}"t", fn);\n`,
+    ],
+    ["a block comment before the dot of a skip", `${m("test/", "* x */.skip(")}"t", fn);\n`],
+    ["a block comment before the call's paren", `${m("test.only/", "**/(")}"t", fn);\n`],
+    [
+      "a block comment inside an option object",
+      `test("t", { ${m("skip/", "**/: true")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a block comment between two words, then one after the dot",
+      `${m("void /", "* c */ test./", "* d */skip(")}"t", fn);\n`,
+    ],
+    [
+      "a computed key between two strings holding a comment's ends",
+      `const a = "/*"; ${m("test", '["only"]')}("t", fn); const b = "*/";\n`,
+    ],
+    // Option keys and values: any key spelling, a composite and a method shorthand.
+    [
+      "a computed option key with a double-quoted name",
+      `test("t", { ${m('["sk', 'ip"]: true')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a computed option key with a single-quoted name",
+      `test("t", { ${m("['on", "ly']: true")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a computed option key with a backtick name and spaces",
+      `test("t", { ${m("[ `sk", "ip` ]: true")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a computed option key with a number on the test call's line",
+      `test("t", { ${m('["sk', 'ip"]: 1')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a wrapped computed option key",
+      `test("t", {\n  ${m('["sk', 'ip"]: true')},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a wrapped computed todo key",
+      `test("t", {\n  ${m('["to', 'do"]: true')},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a wrapped todo option",
+      `test("t", {\n  ${m("to", "do: true")},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a wrapped todo option with a string reason",
+      `test("t", {\n  ${m("to", 'do: "a long reason"')},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a wrapped todo option with a number",
+      `test("t", {\n  ${m("to", "do: 1")},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an empty array as an option skip",
+      `test("t", { ${m("skip", ": []")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an empty object as an option skip",
+      `test("t", { ${m("skip", ": {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a doubly negated array as an option skip",
+      `test("t", { ${m("skip", ": !![]")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a bitwise-negated array as an option skip",
+      `test("t", { ${m("skip", ": ~[]")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a todo method on the test call's line",
+      `test("t", { ${m("to", "do() {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an async todo method on the test call's line",
+      `test("t", { ${m("async to", "do() {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a skip getter on the test call's line",
+      `test("t", { ${m("get sk", "ip() { return true; }")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a generator skip method on the test call's line",
+      `test("t", { ${m("*sk", "ip() {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an async generator todo method on the test call's line",
+      `test("t", { ${m("async *to", "do() {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a todo option beside an object holding a function (no placeholder)",
+      `test("real", { ${m("to", "do: true")}, x: f({}, () => {}) }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a skip method on an empty test (no placeholder)",
+      `test("p", { ${m("sk", "ip() { return true; }")} }, () => {});\n`,
+    ],
+    // node:test's expected failure exits 0 when its body throws.
+    [
+      "an expected failure on test",
+      `${m("test.expect", "Failure(")}"t", () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected failure on describe",
+      `${m("describe.expect", "Failure(")}"d", () => {\n  work();\n});\n`,
+    ],
+    [
+      "a bare expected-failure call imported from node:test",
+      `${m("expect", "Failure(")}"t", () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure each chain",
+      `${m("it.expect", "Failure.each(")}[[1]])("n", () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option set to true on the test call's line",
+      `test("t", { ${m("expect", "Failure: true")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option set to true on its own line of a multi-line options object",
+      `test("t", {\n  ${m("expect", "Failure: true")},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option with a string reason on the test call's line",
+      `test("t", { ${m("expect", 'Failure: "known bug"')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option with a string reason on its own line",
+      `test("t", {\n  ${m("expect", 'Failure: "a long reason"')},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option that is an arrow on the test call's line",
+      `test("t", { ${m("expect", "Failure: () => true")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure method on the test call's line",
+      `test("t", { ${m("expect", "Failure() {}")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option on an empty test (no placeholder)",
+      `test("p", { ${m("expect", "Failure: true")} }, () => {});\n`,
+    ],
+    [
+      "an expected-failure option holding a regex on the test call's line",
+      `test("t", { ${m("expect", "Failure: /boom/")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding a regex on its own line",
+      `test("t", {\n  ${m("expect", "Failure: /boom/")},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding a regex with an escaped slash and a flag",
+      `test("t", { ${m("expect", "Failure: /a\\/b/i")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding a regex that ends its line",
+      `test("t", {\n  ${m("expect", "Failure: /boom/")}\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding an error class on the test call's line",
+      `test("t", { ${m("expect", "Failure: TypeError")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding the Error class",
+      `test("t", { ${m("expect", "Failure: Error")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding DOMException",
+      `test("t", { ${m("expect", "Failure: DOMException")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option holding a namespaced error class on its own line",
+      `test("t", {\n  ${m("expect", "Failure: assert.AssertionError")},\n}, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option opening a validator object over several lines",
+      `test("t", {\n  ${m("expect", "Failure: {")}\n    message: "boom",\n  },\n}, () => {\n  work();\n});\n`,
+    ],
   ];
 
   for (const [label, body] of caught) {
@@ -569,6 +838,13 @@ describe("check-test-integrity.sh", () => {
     const { status, out } = runGuard(dir);
     assert.equal(status, 1, out);
     assert.equal(out.split(m("test.", 'only("t"')).length, 2, out);
+  });
+
+  test("lists a refused computed-key line as the gate reads it", () => {
+    commitTestFile(dir, "bad.test.ts", `${m("test", '["only"]')}("t", fn);\n`);
+    const { status, out } = runGuard(dir);
+    assert.equal(status, 1, out);
+    assert.match(out, new RegExp(`^${m("test\\.", "only\\(")}"t", fn\\);$`, "m"));
   });
 
   test("catches a focus when git is configured to always colour its output", () => {
@@ -875,6 +1151,15 @@ describe("check-test-integrity.sh", () => {
     });
   }
 
+  // Two edits seven unchanged lines apart, so git prints two hunks at the gate's 3 lines of
+  // context (it merges changes at most twice the context apart): hunk 1 ends with
+  // `const sizes = fit`, hunk 2 starts with `  .locator("a")`, and `await page` is in neither.
+  const HUNK_BOUNDARY_BEFORE =
+    'x();\ny();\nz();\nconst sizes = fit\nawait page\n  .locator("a")\n  .first()\n  .nth(0)\n  .click();\n';
+  const HUNK_BOUNDARY_AFTER = HUNK_BOUNDARY_BEFORE.replace("x();", "x2();").replace(
+    "  .click();",
+    "  .dblclick();",
+  );
   const allowedEdits: Array<[string, string, string, boolean]> = [
     [
       "a locator edited under an unchanged split chain",
@@ -890,8 +1175,8 @@ describe("check-test-integrity.sh", () => {
     ],
     [
       "an edit below a hunk boundary, which does not join the hunk above",
-      'x();\ny();\nz();\nconst sizes = fit\nawait page\n  .locator("a")\n  .first()\n  .nth(0)\n  .click();\n',
-      'x2();\ny();\nz();\nconst sizes = fit\nawait page\n  .locator("a")\n  .first()\n  .nth(0)\n  .dblclick();\n',
+      HUNK_BOUNDARY_BEFORE,
+      HUNK_BOUNDARY_AFTER,
       false,
     ],
     [
@@ -941,6 +1226,16 @@ describe("check-test-integrity.sh", () => {
       assert.match(out, PASSED);
     });
   }
+
+  // The hunk-boundary row tests the reset at a hunk header only while its edits diff as two
+  // hunks, which depends on the gate's diff context.
+  test("the hunk-boundary case diffs as two hunks at the gate's context", () => {
+    const context = /--unified=(\d+)/.exec(readFileSync(SCRIPT, "utf8"));
+    assert.ok(context, "the script names its diff context");
+    commitChange(dir, "bad.test.ts", HUNK_BOUNDARY_BEFORE, HUNK_BOUNDARY_AFTER);
+    const diff = git(dir, "diff", `--unified=${context[1]}`, "base...HEAD");
+    assert.equal(diff.match(/^@@ /gm)?.length, 2, diff);
+  });
 
   const allowed: Array<[string, string]> = [
     [
@@ -1082,6 +1377,113 @@ describe("check-test-integrity.sh", () => {
       "pagination holding a negative number outside a test call",
       "const rows = await db.user.findMany({ skip: -1, take: 5 });\n",
     ],
+    [
+      "a comparison that reads like type arguments after only",
+      `test("t", () => {\n  if (filters.${m("only", " < 1")} && total > (offset + 1)) {\n    run();\n  }\n});\n`,
+    ],
+    [
+      "a less-or-equal comparison that reads like type arguments after only",
+      `test("t", () => {\n  if (filters.${m("only", " <= 1")} && total > (offset ?? 0)) {\n    run();\n  }\n});\n`,
+    ],
+    [
+      "a less-or-equal comparison on a name spelled like a focus marker",
+      `test("t", () => {\n  if (${m("fit", " <= max")} && size > (min ?? 0)) {\n    run();\n  }\n});\n`,
+    ],
+    [
+      "a database cursor skip on AVA's t.context",
+      `test("t", async (t) => {\n  const rows = await t.context.db.find({})${m(".", "skip(")}10).toArray();\n  assert.ok(rows);\n});\n`,
+    ],
+    [
+      "a database cursor skip on a context object",
+      `test("t", async () => {\n  const rows = await context.db.collection("u").find({})${m(".", "skip(")}10);\n  assert.ok(rows);\n});\n`,
+    ],
+    [
+      "an option-object skip on a name starting with function and a dollar sign",
+      `test("t", { ${m("skip", ": function$enabled")} }, () => {\n  run();\n});\n`,
+    ],
+    [
+      "an option-object skip on a name starting with function",
+      `test("t", { ${m("skip", ": functionality")} }, () => { run(); });\n`,
+    ],
+    [
+      "a locator chain with a quoted trailing comment",
+      `test("t", async ({ page }) => {\n  await page // the user's page\n    .locator("a")\n    .click();\n});\n`,
+    ],
+    ["a todo with one quoted name", `${m("test.", "todo(")}"title");\n`],
+    ["a todo whose name holds a comma", `${m("test.", "todo(")}"a, b");\n`],
+    ["a todo whose template name holds a member path", m("test.", "todo(", "`a $", "{b.c}`);\n")],
+    [
+      "node:test's in-body todo with a reason",
+      `test("t", (t) => {\n  ${m("t.", "todo(")}"later");\n});\n`,
+    ],
+    [
+      "an option skip whose value starts with an array",
+      `test("t", { ${m("skip", ': ["darwin"].includes(process.platform)')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an option skip whose value starts with a negated array",
+      `test("t", { ${m("skip", ': !["linux"].includes(p)')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "the empty placeholder with a computed skip key",
+      `test("store (set DATABASE_URL to run)", { ${m('["sk', 'ip"]: true')} }, () => {});\n`,
+    ],
+    [
+      "a todo option set to false",
+      `test("t", { ${m("to", "do: false")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a computed pagination key",
+      `test("t", () => {\n  db.findMany({ ${m('["sk', 'ip"]: 10')}, take: 5 });\n});\n`,
+    ],
+    [
+      "an array literal after return",
+      `const f = () => {\n  return ${m('["only"]', ".map(g)")};\n};\n`,
+    ],
+    ["an array literal after an equals sign", `const b = ${m('["only"]', ".forEach(f)")};\n`],
+    ["an array literal as an argument", `fn(${m('["only"]', ".concat(x))")};\n`],
+    ["a computed call on another name", 'S["init"]({});\nwindow["DOCS_modelChunkLoadData"](x);\n'],
+    [
+      "escapes that decode to no identifier character",
+      'const s = "a\\u0000b \\u00b7 \\u{1F600} \\x00";\n',
+    ],
+    [
+      "escape sequences between the letters of markers, which stand for no letter",
+      'const s = "a.o\\nly(1) b.\\fixme(2) c.fi\\xme(3) \\tes\\t.skip(4) descri\\be.skip(5) desc\\ribe.skip(6) test.r\\unIf(false)(7)";\n',
+    ],
+    [
+      "an escape of a non-ASCII letter in a name",
+      `const v = ${m("test.", "\\u00e9", "only(")}"t");\n`,
+    ],
+    [
+      "escaped identifiers in a comment",
+      '// see \\u0068eaders() and "next/hea\\u0064ers"\ntest("t", () => {});\n',
+    ],
+    ["a glob holding /**/", 'const files = glob("src/**/*.ts");\ntest("t", () => {});\n'],
+    [
+      "an expected-failure option set to false",
+      `test("t", { ${m("expect", "Failure: false")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a conditional expected-failure option",
+      `test("t", { ${m("expect", "Failure: !process.env.X")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "an expected-failure option on a name after a block comment",
+      `test("t", { ${m("expect", "Failure: /* why */ isWindows")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a conditional expected-failure option that starts with an array",
+      `test("t", { ${m("expect", 'Failure: ["win32"].includes(process.platform)')} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a conditional expected-failure option that starts with a regex",
+      `test("t", { ${m("expect", "Failure: /^win/.test(process.platform)")} }, () => {\n  work();\n});\n`,
+    ],
+    [
+      "a conditional expected-failure option on a flag named like an error",
+      `test("t", { ${m("expect", "Failure: hasError")} }, () => {\n  work();\n});\n`,
+    ],
   ];
 
   for (const [label, body] of allowed) {
@@ -1126,6 +1528,13 @@ describe("check-test-integrity.sh", () => {
       /scanner \(awk\) failed/,
     ],
     [
+      "the readings pass",
+      "awk",
+      'for a in "$@"; do case "$a" in *jsnorm*) exit 2 ;; esac; done',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
       "the marker grep",
       "grep",
       `for a in "$@"; do case "$a" in ${m("*fdes", "cribe*")}) exit 2 ;; esac; done`,
@@ -1135,7 +1544,7 @@ describe("check-test-integrity.sh", () => {
     [
       "the option-object grep",
       "grep",
-      'for a in "$@"; do case "$a" in *"]?skip"*) exit 2 ;; esac; done',
+      'for a in "$@"; do case "$a" in *"]?(skip)"*) exit 2 ;; esac; done',
       OPTIONED,
       /option-object grep failed \(exit 2\)/,
     ],
@@ -1219,6 +1628,7 @@ describe("check-test-integrity.sh", () => {
     git(dir, "update-index", "--add", "--cacheinfo", `160000,${head},base.test.ts`);
     // Not commitAll: add -A would drop the gitlink, which has no directory in the work tree.
     git(dir, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "submodule base");
+    assert.match(git(dir, "ls-tree", "HEAD", "base.test.ts"), /^160000 /);
     const { status, out } = runGuard(dir);
     assert.equal(status, 1, out);
     assert.match(out, /test files dropped from 1/);
