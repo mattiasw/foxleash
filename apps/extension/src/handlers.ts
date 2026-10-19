@@ -1,8 +1,22 @@
-import type { MethodName, NavigateAction, RequestMessage, Result } from "@foxhand/protocol";
+import type {
+  MethodName,
+  NavigateAction,
+  RequestMessage,
+  Result,
+  TabInfo,
+} from "@foxhand/protocol";
 import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { siteOf } from "./site.ts";
-import type { SiteAccess } from "./site-access.ts";
+import {
+  type Approval,
+  approvalPending,
+  type Decision,
+  type OpenPrompt,
+  PROMPT_PAGE,
+  type SiteAccess,
+  siteBlocked,
+} from "./site-access.ts";
 import { waitForLoad } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
@@ -59,7 +73,11 @@ export function createHandlers<Handle>({
 
   async function tabOpen(session: string, params: Params): Promise<Result<"tab_open">> {
     const url = tabOpenUrl(params);
-    if (url !== undefined) await access.check(session, url);
+    const decision = url === undefined ? undefined : await access.check(session, url);
+    if (url !== undefined && decision?.decision === "join") {
+      // Waits on the session's open prompt for this site, in its tab, instead of a new tab.
+      return { tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }) };
+    }
     const group = await groups.groupOf(session);
     // Opened blank and grouped first, so the page never loads outside the session's group.
     const tab = await browser.tabs.create(
@@ -72,6 +90,18 @@ export function createHandlers<Handle>({
       const current = await browser.tabs.get(tab.id);
       const view = await access.view(session);
       return { tab: view.tabInfo(current) };
+    }
+    if (decision?.decision === "ask") {
+      let approval: Approval;
+      try {
+        approval = await access.ask(session, url, tab.id);
+      } catch (error) {
+        // Nothing was shown in the tab, so it would only be left blank.
+        await browser.tabs.remove([tab.id]).catch(() => {});
+        throw error;
+      }
+      await approval.answer;
+      return { tab: await loadAfterAnswer(session, tab.id, url, { kind: "url", url }) };
     }
     const loaded = await waitForLoad(browser, timers, tab.id, () =>
       browser.tabs.update(tab.id, { url }),
@@ -91,25 +121,41 @@ export function createHandlers<Handle>({
     const target = navigationTarget(params);
     const tab = await existingTab(tabId);
     const group = await groups.groupOf(session);
-    if (group === undefined || tab.groupId !== group.id) {
-      throw new ToolError(
-        "tab_not_in_group",
-        `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
-      );
+    if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    // A request on the prompt's own tab goes through the prompt, so Foxhand never leaves it.
+    const prompt = access.openPrompt(session);
+    if (prompt?.tabId === tabId) {
+      const url = retryUrl(prompt, target);
+      return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
     }
-    await gate(session, tab, target);
+    // A reload of a prompt the user has answered loads the page it asked about.
+    const asked = isReload(target) ? access.askedUrl(session, tab) : undefined;
+    if (asked !== undefined) {
+      return { tab: await approveAndLoad(session, tabId, asked, { kind: "url", url: asked }) };
+    }
+    const gated = await gate(session, tab, target);
+    if (gated !== undefined && gated.decision.decision !== "allowed") {
+      return { tab: await approveAndLoad(session, tabId, gated.url, target) };
+    }
+    keepPrompt(session, tabId);
     const loaded = await waitForLoad(browser, timers, tabId, () => startNavigation(tabId, target));
     const view = await access.view(session);
     return { tab: view.tabInfo(loaded) };
   }
 
-  /** Refuses a load of a blocked site before it starts. Going back and forward is not gated. */
-  async function gate(session: string, tab: Tab, target: NavigationTarget): Promise<void> {
+  /**
+   * The gate's decision for the URL a load would open, or undefined for a load that is not
+   * gated: going back and forward, and reloading about:blank.
+   */
+  async function gate(
+    session: string,
+    tab: Tab,
+    target: NavigationTarget,
+  ): Promise<{ decision: Decision; url: string } | undefined> {
     if (target.kind === "url") {
-      await access.check(session, target.url);
-      return;
+      return { decision: await access.check(session, target.url), url: target.url };
     }
-    if (target.action !== "reload" || tab.url === "about:blank") return;
+    if (target.action !== "reload" || tab.url === "about:blank") return undefined;
     const url = tab.url ?? "";
     if (siteOf(url) === undefined) {
       throw new ToolError(
@@ -117,7 +163,51 @@ export function createHandlers<Handle>({
         `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
       );
     }
-    await access.check(session, url);
+    return { decision: await access.check(session, url), url };
+  }
+
+  async function approveAndLoad(
+    session: string,
+    tabId: number,
+    url: string,
+    target: NavigationTarget,
+  ): Promise<TabInfo> {
+    const { answer } = await access.ask(session, url, tabId);
+    await answer;
+    return loadAfterAnswer(session, tabId, url, target);
+  }
+
+  /** Loads the approved URL; on the prompt page it replaces the prompt in the tab's history. */
+  async function loadAfterAnswer(
+    session: string,
+    tabId: number,
+    url: string,
+    target: NavigationTarget,
+  ): Promise<TabInfo> {
+    const group = await groups.groupOf(session);
+    const tab = await existingTab(tabId);
+    if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    const view = await access.view(session);
+    const site = siteOf(url);
+    if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
+    const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
+    keepPrompt(session, tabId);
+    const loaded = await waitForLoad(browser, timers, tabId, () =>
+      target.kind === "action" && !onPrompt && tab.url === url
+        ? browser.tabs.reload(tabId)
+        : browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
+    );
+    const after = await access.view(session);
+    return after.tabInfo(loaded);
+  }
+
+  /**
+   * Refuses a load over the session's open prompt, which a parallel request may have shown in
+   * the tab meanwhile. Called right before the load starts, with no await in between.
+   */
+  function keepPrompt(session: string, tabId: number): void {
+    const shown = access.openPrompt(session);
+    if (shown?.tabId === tabId) throw approvalPending(shown.tabId, shown.site);
   }
 
   async function existingTab(tabId: number): Promise<Tab> {
@@ -189,4 +279,27 @@ function isNavigateAction(value: unknown): value is NavigateAction {
 
 function own(params: Params, key: string): unknown {
   return Object.hasOwn(params, key) ? params[key] : undefined;
+}
+
+function notInGroup(tabId: number): ToolError {
+  return new ToolError(
+    "tab_not_in_group",
+    `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
+  );
+}
+
+/**
+ * The URL a request on the prompt's tab waits for: a URL on the prompt's site, or the prompt's
+ * own URL for a reload. Anything else, or anything while a request already waits, is refused.
+ */
+function retryUrl(prompt: OpenPrompt, target: NavigationTarget): string {
+  if (!prompt.waiting) {
+    if (target.kind === "url" && siteOf(target.url) === prompt.site) return target.url;
+    if (isReload(target)) return prompt.url;
+  }
+  throw approvalPending(prompt.tabId, prompt.site);
+}
+
+function isReload(target: NavigationTarget): boolean {
+  return target.kind === "action" && target.action === "reload";
 }

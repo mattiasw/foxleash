@@ -2,15 +2,29 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { MethodName, TabInfo } from "@foxhand/protocol";
 import type { Tab } from "./browser-api.ts";
-import { createFakeBrowser, createFakeTimers, flush } from "./fake-browser.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  FAKE_EXTENSION_ID,
+  type FakePort,
+  flush,
+} from "./fake-browser.ts";
 import { createHandlers, ToolError } from "./handlers.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite } from "./settings.ts";
-import { createSiteAccess, type SessionMemory } from "./site-access.ts";
+import {
+  APPROVAL_WAIT_MS,
+  createSiteAccess,
+  type OpenPrompt,
+  type SessionMemory,
+  type SessionState,
+} from "./site-access.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
   it("returns only the tabs in the session's group", async () => {
-    const { fake, list, open } = setup();
+    const { fake, list, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://other.example");
     fake.openTab({ url: "https://user.example/" });
     const first = await open("s1", "https://a.example/");
     const second = await open("s1");
@@ -71,7 +85,8 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("returns only the tab's id, url, title and active state", async () => {
-    const { open } = setup();
+    const { open, grant } = setup();
+    await grant("https://example.com");
     const tab = await open("s1", "https://example.com/");
     assert.deepEqual(Object.keys(tab).sort(), ["active", "id", "title", "url"]);
   });
@@ -105,7 +120,8 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("reuses the session's group and opens in its window", async () => {
-    const { fake, open } = setup();
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
     const first = await open("s1");
     fake.currentWindowId = 2;
     const second = await open("s1", "https://example.com/");
@@ -123,7 +139,9 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("makes one group for two concurrent calls of one session", async () => {
-    const { fake, open } = setup();
+    const { fake, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
     const [first, second] = await Promise.all([
       open("s1", "https://a.example/"),
       open("s1", "https://b.example/"),
@@ -144,7 +162,8 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("creates a new group when the user closes the group while the tab joins it", async () => {
-    const { fake, open } = setup();
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
     const first = await open("s1");
     const closed = groupIdOf(fake, first.id);
     const group = fake.browser.tabs.group;
@@ -236,6 +255,7 @@ describe("tab_open", { timeout: 10000 }, () => {
 describe("navigate", { timeout: 10000 }, () => {
   it("loads a url in a tab of the session's group", async () => {
     const { navigate, open, grant } = setup();
+    await grant("https://a.example");
     await grant("https://b.example");
     const tab = await open("s1", "https://a.example/");
     assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/" }), {
@@ -306,7 +326,8 @@ describe("navigate", { timeout: 10000 }, () => {
   });
 
   it("refuses a tab in another session's group", async () => {
-    const { fake, call, open } = setup();
+    const { fake, call, open, grant } = setup();
+    await grant("https://other.example");
     await open("s1");
     const other = await open("s2", "https://other.example/");
     await rejectsWith(
@@ -415,7 +436,9 @@ describe("navigate", { timeout: 10000 }, () => {
 
 describe("sessions", { timeout: 10000 }, () => {
   it("treats __proto__ and constructor as ordinary session ids", async () => {
-    const { fake, list, open } = setup();
+    const { fake, list, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
     const first = await open("__proto__", "https://a.example/");
     const second = await open("constructor", "https://b.example/");
     assert.equal(fake.groups.size, 2);
@@ -534,29 +557,34 @@ describe("site access", { timeout: 10000 }, () => {
     });
   });
 
-  it("opens an unapproved site and returns only its site, with the same keys", async () => {
-    const { fake, open } = setup();
-    const tab = await open("s1", "https://example.com/path?q=1");
-    assert.deepEqual(tab, { id: tab.id, url: "https://example.com", title: "", active: true });
+  it("returns only the site of a page that redirected to an unapproved site", async () => {
+    const { fake, open, grant } = setup();
+    await grant("https://a.example");
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = (tabId, properties) =>
+      update(tabId, { ...properties, url: "https://b.example/landing?id=7" });
+    const tab = await open("s1", "https://a.example/path?q=1");
+    assert.deepEqual(tab, { id: tab.id, url: "https://b.example", title: "", active: true });
     assert.deepEqual(Object.keys(tab).sort(), ["active", "id", "title", "url"]);
-    assert.equal(fake.tabs.get(tab.id)?.url, "https://example.com/path?q=1");
   });
 
-  it("navigates to an unapproved site and returns only its site", async () => {
-    const { navigate, open, grant } = setup();
-    await grant("https://a.example");
-    const tab = await open("s1", "https://a.example/");
-    assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/secret" }), {
+  it("goes back onto a site the session may no longer see and returns only its site", async () => {
+    const { navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example", "https://b.example"]));
+    const tab = await open("s1", "https://a.example/secret");
+    await navigate("s1", { tabId: tab.id, url: "https://b.example/" });
+    sessions.get("s1")?.allowed.delete("https://a.example");
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, action: "back" }), {
       id: tab.id,
-      url: "https://b.example",
+      url: "https://a.example",
       title: "",
       active: true,
     });
   });
 
   it("shows a site granted for a session in full to that session only", async () => {
-    const { list, open, sessions } = setup();
-    sessions.set("s1", { allowed: new Set(["https://a.example"]) });
+    const { fake, list, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
     const first = await open("s1", "https://a.example/page");
     assert.deepEqual(first, {
       id: first.id,
@@ -564,11 +592,13 @@ describe("site access", { timeout: 10000 }, () => {
       title: "Title of https://a.example/page",
       active: true,
     });
-    const second = await open("s2", "https://a.example/page");
-    assert.deepEqual(second, { id: second.id, url: "https://a.example", title: "", active: true });
+    const blank = await open("s2");
+    const moved = fake.tabs.get(first.id);
+    assert.ok(moved);
+    moved.groupId = groupIdOf(fake, blank.id);
     assert.deepEqual(
       (await list("s2")).map(({ url }) => url),
-      ["https://a.example"],
+      ["https://a.example", "about:blank"],
     );
   });
 
@@ -581,7 +611,8 @@ describe("site access", { timeout: 10000 }, () => {
   });
 
   it("fails the call instead of showing tabs when the settings cannot be read", async () => {
-    const { fake, call, open } = setup();
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
     await open("s1", "https://a.example/");
     fake.browser.storage.local.get = async () => {
       throw new Error("storage is unavailable");
@@ -611,7 +642,7 @@ describe("blocklist", { timeout: 10000 }, () => {
   it("refuses to open a blocked site the user approved, in a session with a group", async (t) => {
     const { fake, call, open, grant, sessions } = setup();
     await grant("https://www.paypal.com");
-    sessions.set("s1", { allowed: new Set(["https://www.paypal.com"]) });
+    sessions.set("s1", state(["https://www.paypal.com"]));
     await open("s1");
     const create = t.mock.method(fake.browser.tabs, "create");
     const update = t.mock.method(fake.browser.tabs, "update");
@@ -627,6 +658,7 @@ describe("blocklist", { timeout: 10000 }, () => {
   it("refuses to navigate a tab to a blocked site", async (t) => {
     const { fake, call, open, grant } = setup();
     await grant("https://www.paypal.com");
+    await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
     const update = t.mock.method(fake.browser.tabs, "update");
     await assert.rejects(
@@ -745,12 +777,388 @@ describe("blocklist", { timeout: 10000 }, () => {
   });
 });
 
+describe("approval", { timeout: 10000 }, () => {
+  it("loads nothing before the answer, then replaces the prompt with the page", async () => {
+    const { fake, call, page } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const shown = await page("s1");
+    await flush();
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    const [tab] = fake.tabs.values();
+    assert.ok(tab);
+    assert.match(tab.url, /^moz-extension:\/\/.*\/approve\.html\?id=/);
+    assert.equal(tab.active, true);
+    assert.notEqual(tab.groupId, -1);
+    shown.deliver({ type: "answer", answer: "once" });
+    assert.deepEqual(await opened, {
+      tab: {
+        id: tab.id,
+        url: "https://a.example/x",
+        title: "Title of https://a.example/x",
+        active: true,
+      },
+    });
+    assert.deepEqual(fake.tabUpdates.at(-1), {
+      tabId: tab.id,
+      url: "https://a.example/x",
+      loadReplace: true,
+    });
+    assert.deepEqual(tab.history, ["about:blank", "https://a.example/x"]);
+  });
+
+  it("asks before navigating a tab to an unapproved site", async () => {
+    const { fake, call, open, page, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://b.example/y" });
+    const shown = await page("s1");
+    await flush();
+    assert.equal(loadsOf(fake, "https://b.example/y"), 0);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await navigated;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://b.example/y");
+    assert.deepEqual(fake.tabs.get(tab.id)?.history, [
+      "about:blank",
+      "https://a.example/",
+      "https://b.example/y",
+    ]);
+  });
+
+  it("keeps a tab refused by Don't allow on the prompt page", async () => {
+    const { fake, call, page } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    (await page("s1")).deliver({ type: "answer", answer: "no" });
+    await assert.rejects(opened, { code: "site_refused" });
+    const [tab] = fake.tabs.values();
+    assert.match(tab?.url ?? "", /^moz-extension:/);
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    await assert.rejects(call("s1", "tab_open", { url: "https://a.example/" }), {
+      code: "site_refused",
+    });
+    assert.equal(fake.tabs.size, 1);
+  });
+
+  it("opens one prompt and removes the other tab of two parallel tab_open calls", async () => {
+    const { fake, call, page } = setup();
+    const [first, second] = [
+      call("s1", "tab_open", { url: "https://a.example/" }),
+      call("s1", "tab_open", { url: "https://b.example/" }),
+    ];
+    await assert.rejects(second, { code: "approval_pending" });
+    const shown = await page("s1");
+    assert.equal(fake.tabs.size, 1);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await first;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/");
+  });
+
+  it("joins the open prompt with tab_open for its site, creating no tab", async () => {
+    const { fake, call, timeOut, promptOf } = setup();
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    const { tabId } = await promptOf("s1");
+    const retry = call("s1", "tab_open", { url: "https://a.example/y" });
+    await flush();
+    assert.equal(fake.tabs.size, 1);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await retry;
+    assert.ok("tab" in result);
+    assert.deepEqual(result.tab, {
+      id: tabId,
+      url: "https://a.example/y",
+      title: "Title of https://a.example/y",
+      active: true,
+    });
+    assert.equal(fake.tabs.size, 1);
+  });
+
+  it("joins on the prompt's tab with a url on its site or a reload, and loads in place", async () => {
+    for (const [params, loaded] of [
+      [{ url: "https://a.example/y" }, "https://a.example/y"],
+      [{ action: "reload" }, "https://a.example/x"],
+    ] as const) {
+      const { fake, call, timeOut, promptOf } = setup();
+      const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+        code: "approval_timeout",
+      });
+      const shown = await timeOut("s1");
+      await first;
+      const { tabId } = await promptOf("s1");
+      const retry = call("s1", "navigate", { tabId, ...params });
+      await flush();
+      assert.equal(loadsOf(fake, loaded), 0, loaded);
+      shown.deliver({ type: "answer", answer: "always" });
+      const result = await retry;
+      assert.ok("tab" in result);
+      assert.equal(result.tab.url, loaded);
+      assert.deepEqual(fake.tabUpdates.at(-1), { tabId, url: loaded, loadReplace: true });
+    }
+  });
+
+  it("reloads a prompt answered after its call timed out by loading what it asked about", async () => {
+    const { fake, call, timeOut, promptOf } = setup();
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    const { tabId } = await promptOf("s1");
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await call("s1", "navigate", { tabId, action: "reload" });
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.deepEqual(fake.tabUpdates.at(-1), {
+      tabId,
+      url: "https://a.example/x",
+      loadReplace: true,
+    });
+    assert.deepEqual(fake.tabs.get(tabId)?.history, ["about:blank", "https://a.example/x"]);
+  });
+
+  it("refuses a reload of a prompt answered with Don't allow, staying on it", async () => {
+    const { fake, call, page, promptOf } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const { tabId } = await promptOf("s1");
+    (await page("s1")).deliver({ type: "answer", answer: "no" });
+    await assert.rejects(opened, { code: "site_refused" });
+    await assert.rejects(call("s1", "navigate", { tabId, action: "reload" }), {
+      code: "site_refused",
+    });
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    assert.match(fake.tabs.get(tabId)?.url ?? "", /^moz-extension:/);
+  });
+
+  it("keeps a prompt that a parallel request showed in the tab while a navigate was checked", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const get = fake.browser.storage.local.get;
+    const held = Promise.withResolvers<void>();
+    let reads = 0;
+    fake.browser.storage.local.get = async (keys) => {
+      reads += 1;
+      if (reads === 1) await held.promise;
+      return get(keys);
+    };
+    const approved = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/b" });
+    await flush();
+    assert.equal(reads, 1);
+    const asking = call("s1", "navigate", { tabId: tab.id, url: "https://b.example/" });
+    const prompt = await promptOf("s1");
+    held.resolve();
+    await assert.rejects(approved, {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+    });
+    assert.equal(prompt.tabId, tab.id);
+    assert.equal(loadsOf(fake, "https://a.example/b"), 0);
+    assert.match(fake.tabs.get(tab.id)?.url ?? "", /^moz-extension:/);
+    void asking.catch(() => {});
+  });
+
+  it("keeps a prompt that a parallel request showed in the tab while an answered load waited", async () => {
+    const { fake, call, open, page, promptOf, sessions } = setup();
+    const tab = await open("s1");
+    const answered = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/x" });
+    const first = await page("s1");
+    const get = fake.browser.storage.local.get;
+    const held = Promise.withResolvers<void>();
+    let holding = true;
+    fake.browser.storage.local.get = async (keys) => {
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return get(keys);
+    };
+    first.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(holding, false);
+    const asking = call("s1", "navigate", { tabId: tab.id, url: "https://b.example/" });
+    const second = await promptOf("s1");
+    await page("s1");
+    held.resolve();
+    await assert.rejects(answered, {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+    });
+    assert.equal(second.site, "https://b.example");
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    assert.equal(sessions.get("s1")?.closed, 0);
+    assert.deepEqual(sessions.get("s1")?.allowed, new Set(["https://a.example"]));
+    assert.equal(fake.tabs.get(tab.id)?.url.startsWith("moz-extension:"), true);
+    void asking.catch(() => {});
+  });
+
+  it("refuses every other request on the prompt's tab while it asks", async () => {
+    const { fake, call, page, timeOut, promptOf, grant } = setup();
+    await grant("https://b.example");
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    await page("s1");
+    const { tabId } = await promptOf("s1");
+    const message = `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`;
+    const refusals: Record<string, unknown>[] = [
+      { url: "https://a.example/y" },
+      { action: "reload" },
+      { action: "back" },
+      { action: "forward" },
+      { url: "https://b.example/" },
+    ];
+    for (const params of refusals) {
+      await assert.rejects(call("s1", "navigate", { tabId, ...params }), {
+        code: "approval_pending",
+        message,
+      });
+    }
+    await timeOut("s1");
+    await first;
+    for (const params of refusals.slice(2)) {
+      await assert.rejects(call("s1", "navigate", { tabId, ...params }), {
+        code: "approval_pending",
+      });
+    }
+    assert.match(fake.tabs.get(tabId)?.url ?? "", /^moz-extension:/);
+  });
+
+  it("loads a navigate joined from another tab there, without replacing its history", async () => {
+    const { fake, call, open, timeOut, promptOf } = setup();
+    const blank = await open("s1");
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    const prompt = await promptOf("s1");
+    const joined = call("s1", "navigate", { tabId: blank.id, url: "https://a.example/y" });
+    await flush();
+    assert.equal(loadsOf(fake, "https://a.example/y"), 0);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await joined;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.id, blank.id);
+    assert.deepEqual(fake.tabUpdates.at(-1), {
+      tabId: blank.id,
+      url: "https://a.example/y",
+      loadReplace: false,
+    });
+    assert.match(fake.tabs.get(prompt.tabId)?.url ?? "", /^moz-extension:/);
+  });
+
+  it("reloads after a prompt by loading the same URL in place of the prompt", async () => {
+    const { fake, call, open, sessions, page } = setup();
+    sessions.set("s1", state(["https://b.example"]));
+    const tab = await open("s1", "https://b.example/page");
+    sessions.set("s1", state([]));
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    const result = await reloaded;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://b.example/page");
+    assert.deepEqual(fake.tabUpdates.at(-1), {
+      tabId: tab.id,
+      url: "https://b.example/page",
+      loadReplace: true,
+    });
+  });
+
+  it("reloads a tab joined to a prompt elsewhere only while it still shows the gated URL", async (t) => {
+    for (const moved of [false, true]) {
+      const { fake, call, open, timeOut } = setup();
+      const other = await open("s1");
+      const otherTab = fake.tabs.get(other.id);
+      assert.ok(otherTab);
+      otherTab.url = "https://a.example/page";
+      const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+        code: "approval_timeout",
+      });
+      const shown = await timeOut("s1");
+      await first;
+      const reload = t.mock.method(fake.browser.tabs, "reload");
+      const reloaded = call("s1", "navigate", { tabId: other.id, action: "reload" });
+      await flush();
+      if (moved) otherTab.url = "https://c.example/";
+      shown.deliver({ type: "answer", answer: "once" });
+      const result = await reloaded;
+      assert.ok("tab" in result);
+      assert.equal(result.tab.url, "https://a.example/page");
+      assert.equal(reload.mock.callCount(), moved ? 0 : 1);
+      assert.equal(loadsOf(fake, "https://a.example/page"), moved ? 1 : 0);
+      reload.mock.restore();
+    }
+  });
+
+  it("refuses to load after the answer when the tab left the session's group, keeping the answer", async () => {
+    const { fake, call, sessions, page, promptOf } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const shown = await page("s1");
+    const { tabId } = await promptOf("s1");
+    fake.ungroup(tabId);
+    shown.deliver({ type: "answer", answer: "once" });
+    await assert.rejects(opened, {
+      code: "tab_not_in_group",
+      message: `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
+    });
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    assert.deepEqual(sessions.get("s1")?.allowed, new Set(["https://a.example"]));
+  });
+
+  it("refuses to load after the answer a site blocked while the prompt was open", async () => {
+    const { fake, call, page } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const shown = await page("s1");
+    await fake.browser.storage.local.set({ blocklist: ["a.example"] });
+    shown.deliver({ type: "answer", answer: "once" });
+    await assert.rejects(opened, {
+      code: "site_blocked",
+      message:
+        "Foxhand does not act on https://a.example: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+    });
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+  });
+
+  it("removes the new tab when the prompt cannot be shown in it", async () => {
+    const { fake, call } = setup();
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      await flush();
+      return remove(tabIds);
+    };
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.active === true) throw new Error("Invalid tab ID");
+      return update(tabId, properties);
+    };
+    await assert.rejects(call("s1", "tab_open", { url: "https://a.example/" }), /Invalid tab ID/);
+    assert.equal(fake.tabs.size, 0);
+  });
+
+  it("still fails with the refusal when the new tab cannot be removed", async () => {
+    const { fake, call } = setup();
+    fake.browser.tabs.remove = async () => {
+      throw new Error("Invalid tab ID");
+    };
+    const first = call("s1", "tab_open", { url: "https://a.example/" });
+    await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
+      code: "approval_pending",
+    });
+    assert.equal(fake.tabs.size, 2);
+    void first.catch(() => {});
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
-  const access = createSiteAccess({ browser: fake.browser, sessions });
+  const access = createSiteAccess({ browser: fake.browser, sessions, timers });
   const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -778,7 +1186,39 @@ function setup() {
     return grantSite(fake.browser, site);
   }
 
-  return { fake, timers, sessions, call, open, list, navigate, grant };
+  /** The session's open prompt, once its page has been loaded. */
+  async function promptOf(session: string): Promise<OpenPrompt> {
+    for (let turn = 0; turn < 50; turn += 1) {
+      const prompt = access.openPrompt(session);
+      if (prompt !== undefined) return prompt;
+      await flush();
+    }
+    assert.fail(`session ${session} has no prompt`);
+  }
+
+  /** The prompt page of the session's open prompt connecting. */
+  async function page(session: string): Promise<FakePort> {
+    const { tabId } = await promptOf(session);
+    return fake.connectPage("approve", {
+      id: FAKE_EXTENSION_ID,
+      url: fake.tabs.get(tabId)?.url ?? "",
+      tab: { id: tabId },
+    });
+  }
+
+  /** Lets the request on the session's prompt time out, leaving the prompt open. */
+  async function timeOut(session: string): Promise<FakePort> {
+    const shown = await page(session);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    return shown;
+  }
+
+  return { fake, timers, sessions, call, open, list, navigate, grant, promptOf, page, timeOut };
+}
+
+function loadsOf(fake: { tabUpdates: { url?: string }[] }, url: string): number {
+  return fake.tabUpdates.filter((update) => update.url === url).length;
 }
 
 function groupIdOf(fake: { tabs: Map<number, Tab> }, tabId: number): number {
@@ -793,4 +1233,8 @@ async function rejectsWith(promise: Promise<unknown>, code: string, label?: stri
     (error: unknown) => error instanceof ToolError && error.code === code,
     label,
   );
+}
+
+function state(allowed: string[]): SessionState {
+  return { allowed: new Set(allowed), refused: new Set(), closed: 0 };
 }

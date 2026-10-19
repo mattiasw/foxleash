@@ -140,8 +140,9 @@ Foxhand acts in the user's logged-in browser, so a web page that injects instruc
 the model is the main threat. The safeguards live in Foxhand, not in the MCP client, whose
 permission prompts can be switched off:
 
-- A session acts on a site only after the user approved that site in the browser. Only a
-  user click grants approval; nothing arriving over native messaging can.
+- A session acts on a site only after the user approved that site in the browser, before the
+  page is opened. Only a user click grants approval; nothing arriving over native messaging
+  can.
 - A site is the URL's origin (scheme, host and port). Tabs on sites the session is not
   approved for reach the agent redacted to their site, with no title (ADR 0007).
 - Financial and health sites are blocked by default.

@@ -1,4 +1,5 @@
 import type { BrowserApi, Tab, TabGroup } from "./browser-api.ts";
+import { PROMPT_PAGE } from "./site-access.ts";
 
 export interface SessionGroups {
   /** The session's tab group, or undefined when it has none or the user closed it. */
@@ -111,7 +112,8 @@ export function createSessionGroups(
       forget(session, group.id);
       return;
     }
-    if (!tabs.every(isBlank)) return;
+    const promptPage = browser.runtime.getURL(PROMPT_PAGE);
+    if (!tabs.every((tab) => isBlank(tab, promptPage))) return;
     // Removing a window's last tabs closes the window, and closing the last window quits Firefox.
     if (windowTabs.length === tabs.length) return;
     await browser.tabs.remove(tabs.map((tab) => tab.id));
@@ -129,7 +131,13 @@ const BLANK_URLS: ReadonlySet<string | undefined> = new Set([
   "about:home",
 ]);
 
-/** A tab still loading may be leaving a new-tab page for an address the user typed. */
-function isBlank(tab: Tab): boolean {
-  return tab.status === "complete" && BLANK_URLS.has(tab.url);
+/**
+ * A tab still loading may be leaving a new-tab page for an address the user typed. A prompt page
+ * counts as blank: after the session it can only say that its request has ended.
+ */
+function isBlank(tab: Tab, promptPage: string): boolean {
+  return (
+    tab.status === "complete" &&
+    (BLANK_URLS.has(tab.url) || tab.url?.startsWith(promptPage) === true)
+  );
 }

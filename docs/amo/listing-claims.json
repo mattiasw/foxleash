@@ -26,7 +26,14 @@
     { "listing": "upload files from allowed folders", "tools": ["upload_file"] }
   ],
   "safeguards": [
-    { "listing": "The approval can only come from your click", "evidence": [] },
+    {
+      "listing": "The approval can only come from your click",
+      "evidence": [
+        { "file": "apps/extension/src/approve.ts", "contains": "isTrusted" },
+        { "file": "apps/extension/src/site-access.ts", "contains": "sender.url" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "access.ask(" }
+      ]
+    },
     {
       "listing": "A built-in list of common financial and health sites is blocked by default",
       "evidence": [

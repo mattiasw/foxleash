@@ -24,6 +24,8 @@ const UNTRUSTED =
 const BOTH_OR_NEITHER = "Give either url or action, not both and not neither.";
 const MAX_RESULT_BYTES = 8 * 1024 * 1024;
 const REDACTED_TABS = "A tab on a site the user has not approved shows only that site";
+const ASKS_FIRST =
+  "On a site the user has not approved, Foxhand first asks the user in the tab and waits for the answer.";
 const EM_DASH = String.fromCodePoint(0x2014);
 const LIMIT = { timeout: 10_000 };
 const clients: Client[] = [];
@@ -47,6 +49,11 @@ describe("tools", () => {
     assert.deepEqual(navigate?.inputSchema.required, ["tabId"]);
     const tabOpen = tools.find((tool) => tool.name === "tab_open");
     assert.equal(tabOpen?.inputSchema.required, undefined);
+    for (const tool of [tabOpen, navigate]) {
+      assert.equal(tool?.description?.includes(ASKS_FIRST), true, tool?.name ?? "missing");
+    }
+    const tabsList = tools.find((tool) => tool.name === "tabs_list");
+    assert.equal(tabsList?.description?.includes(ASKS_FIRST), false);
   });
 
   it("returns tabs_list's result as untrusted text", LIMIT, async () => {

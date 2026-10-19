@@ -33,6 +33,31 @@ describe("endSession", { timeout: 10000 }, () => {
     assert.deepEqual(await groups.groupOf("s1"), group);
   });
 
+  it("closes a group of blank tabs and this extension's prompt pages", async () => {
+    const { fake, groups, open } = setup();
+    const prompt = fake.browser.runtime.getURL("approve.html?id=1");
+    const tabs = [await open("s1", { url: "about:blank" }), await open("s1", { url: prompt })];
+    await groups.endSession("s1");
+    for (const tab of tabs) assert.equal(fake.tabs.has(tab.id), false, tab.url);
+  });
+
+  it("keeps a group with a prompt page that is still loading, or another extension page", async () => {
+    const cases: [string, string][] = [
+      ["approve.html?id=1", "loading"],
+      ["options.html", "complete"],
+    ];
+    for (const [path, status] of cases) {
+      const { fake, groups, open } = setup();
+      const tab = await open("s1", { url: fake.browser.runtime.getURL(path), status });
+      await groups.endSession("s1");
+      assert.equal(fake.tabs.has(tab.id), true, path);
+    }
+    const { fake, groups, open } = setup();
+    const other = await open("s1", { url: "moz-extension://other/approve.html?id=1" });
+    await groups.endSession("s1");
+    assert.equal(fake.tabs.has(other.id), true);
+  });
+
   it("keeps a blank tab that is still loading", async () => {
     const { fake, groups, open } = setup();
     const tab = await open("s1", { url: "about:newtab", status: "loading" });

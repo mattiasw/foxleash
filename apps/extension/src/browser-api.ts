@@ -6,6 +6,11 @@ export interface BrowserApi {
     onInstalled: BrowserEvent<() => void>;
     getManifest(): { version: string };
     openOptionsPage(): Promise<void>;
+    /** This extension's id. */
+    id: string;
+    /** The full `moz-extension:` URL of a file in the extension. */
+    getURL(path: string): string;
+    onConnect: BrowserEvent<(port: RuntimePort) => void>;
   };
   action: {
     setBadgeText(details: { tabId: number; text: string }): Promise<void>;
@@ -21,7 +26,10 @@ export interface BrowserApi {
     query(queryInfo: { groupId?: number; windowId?: number }): Promise<Tab[]>;
     get(tabId: number): Promise<Tab>;
     create(createProperties: { url: string; active: boolean; windowId?: number }): Promise<Tab>;
-    update(tabId: number, updateProperties: { url: string }): Promise<Tab>;
+    update(
+      tabId: number,
+      updateProperties: { url?: string; active?: boolean; loadReplace?: boolean },
+    ): Promise<Tab>;
     goBack(tabId: number): Promise<void>;
     goForward(tabId: number): Promise<void>;
     reload(tabId: number): Promise<void>;
@@ -36,6 +44,10 @@ export interface BrowserApi {
       removeListener(listener: TabUpdatedListener): void;
     };
     onCreated: BrowserEvent<(tab: Tab) => void>;
+    onRemoved: BrowserEvent<(tabId: number) => void>;
+  };
+  windows: {
+    update(windowId: number, updateInfo: { drawAttention?: boolean }): Promise<unknown>;
   };
   tabGroups: {
     get(groupId: number): Promise<TabGroup>;
@@ -76,6 +88,19 @@ export interface Port {
   error: { message: string } | null | undefined;
 }
 
+/** A port an extension page opened with `runtime.connect`. */
+export interface RuntimePort extends Port {
+  name: string;
+  sender?: MessageSender;
+}
+
+/** Firefox's `runtime.MessageSender`, as far as the extension reads it. */
+export interface MessageSender {
+  id?: string;
+  url?: string;
+  tab?: { id: number };
+}
+
 export interface Tab {
   id: number;
   windowId: number;
@@ -96,6 +121,7 @@ export interface TabGroup {
 
 export interface TabChangeInfo {
   status?: string;
+  url?: string;
   groupId?: number;
 }
 

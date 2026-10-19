@@ -6,7 +6,11 @@ const root = import.meta.dirname;
 export const dist = join(root, "dist");
 
 export const esbuildOptions: BuildOptions = {
-  entryPoints: [join(root, "src", "background.ts"), join(root, "src", "options.ts")],
+  entryPoints: [
+    join(root, "src", "background.ts"),
+    join(root, "src", "options.ts"),
+    join(root, "src", "approve.ts"),
+  ],
   outdir: dist,
   entryNames: "[name]",
   bundle: true,

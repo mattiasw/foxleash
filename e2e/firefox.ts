@@ -7,9 +7,10 @@ import { EXTENSION_ID } from "@foxhand/protocol";
 
 /**
  * Firefox's own lifetime, enforced by a watchdog inside its process group (LIFETIME_WRAPPER).
- * Above the sum of a test file's deadlines (setup hook 120 s, six tests at 60 s, teardown hook
- * 60 s = 540 s), so it never cuts a slow run short. It fires only when the harness could not
- * clean up, for example when node was killed with SIGKILL and none of its handlers ran.
+ * Above the sum of a test file's deadlines (the longest: setup hook 120 s, eight tests at 60 s
+ * and one at 90 s, teardown hook 60 s = 750 s), so it never cuts a slow run short. It fires
+ * only when the harness could not clean up, for example when node was killed with SIGKILL and
+ * none of its handlers ran.
  */
 export const FIREFOX_LIFETIME_SECONDS = 900;
 
@@ -69,6 +70,11 @@ export interface Firefox {
   evaluate(context: string, expression: string): Promise<unknown>;
   /** Clicks the first element matching `cssSelector` with real (trusted) input. */
   click(context: string, cssSelector: string): Promise<void>;
+  /**
+   * Shows and focuses the tab with the Marionette switch that `click` sends before it clicks.
+   * BiDi's `browsingContext.activate` refuses extension pages.
+   */
+  activate(context: string): Promise<void>;
   closeContext(context: string): Promise<void>;
   /** Resolves with the first tab that matches, polling until `timeoutMs`. */
   waitForContext(
@@ -90,8 +96,8 @@ export interface LaunchOptions {
  * Starts Firefox headless in its own process group under a hard lifetime, opens the WebDriver
  * session over Marionette as soon as it listens, so this run holds Firefox's single session from
  * the start, and connects BiDi to that session. BiDi does everything it can; Marionette only
- * clicks, because BiDi has no input in extension pages (ADR 0008). Any failure kills the group
- * before it rejects.
+ * clicks and brings a tab to the front, because BiDi has no input in extension pages and does
+ * not activate them (ADR 0008). Any failure kills the group before it rejects.
  */
 export async function launchFirefox({
   binary,
@@ -206,6 +212,10 @@ export async function launchFirefox({
     });
   }
 
+  async function switchTo(context: string): Promise<void> {
+    await input.send("WebDriver:SwitchToWindow", { handle: context });
+  }
+
   let closing: Promise<void> | undefined;
   return {
     async installExtension(path) {
@@ -247,7 +257,7 @@ export async function launchFirefox({
     click(context, cssSelector) {
       return withDeadline(
         (async () => {
-          await input.send("WebDriver:SwitchToWindow", { handle: context });
+          await switchTo(context);
           let found: unknown;
           try {
             found = await input.send("WebDriver:FindElement", {
@@ -266,6 +276,11 @@ export async function launchFirefox({
         HELPER_TIMEOUT_MS,
         `click ${context} ${cssSelector}`,
       );
+    },
+    activate(context) {
+      // The same switch as click's, so a click right after this changes neither focus nor
+      // visibility.
+      return withDeadline(switchTo(context), HELPER_TIMEOUT_MS, `activate ${context}`);
     },
     async closeContext(context) {
       await session.send("browsingContext.close", { context });

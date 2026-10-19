@@ -46,3 +46,18 @@ button {
   outline: 2px solid;
   outline-offset: 2px;
 }
+
+.answers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+#target {
+  overflow-wrap: anywhere;
+}

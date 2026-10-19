@@ -86,6 +86,9 @@ describe("createMcpServer", () => {
       "Relay that sentence to the user and stop.",
       "are refused before anything is loaded",
       "Tell the user instead of trying to reach them another way.",
+      "Foxhand asks the user in that tab, and the call waits for the answer for up to 30 seconds.",
+      "tell the user to answer in that tab, then call navigate with that tab and action reload.",
+      "If the user did not allow the site, do not try it again unless the user asks.",
     ]) {
       assert.ok(INSTRUCTIONS.includes(phrase), phrase);
     }

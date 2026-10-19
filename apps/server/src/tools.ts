@@ -13,6 +13,8 @@ export const UNTRUSTED_LINE =
 
 const REDACTED_TABS =
   "A tab on a site the user has not approved shows only that site (scheme, host and port) as its URL, or only the scheme for a page that is not a website, with an empty title.";
+const ASKS_FIRST =
+  "On a site the user has not approved, Foxhand first asks the user in the tab and waits for the answer.";
 const BOTH_OR_NEITHER = "Give either url or action, not both and not neither.";
 const NESTED = "The result from Firefox is nested too deeply to return.";
 const TOO_LARGE = "The result from Firefox is too large to return.";
@@ -31,7 +33,7 @@ export function registerTools(server: McpServer, bridge: ToolBridge): void {
   server.registerTool(
     "tab_open",
     {
-      description: `Open a new tab in this session's Foxhand tab group, optionally at a URL, and return it. ${REDACTED_TABS}`,
+      description: `Open a new tab in this session's Foxhand tab group, optionally at a URL, and return it. ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
         url: z.string().optional().describe("http or https URL; omit for a blank tab"),
       },
@@ -41,7 +43,7 @@ export function registerTools(server: McpServer, bridge: ToolBridge): void {
   server.registerTool(
     "navigate",
     {
-      description: `Load a URL in a tab of this session's Foxhand tab group, or go back, forward or reload it, and return the tab. Give either url or action. ${REDACTED_TABS}`,
+      description: `Load a URL in a tab of this session's Foxhand tab group, or go back, forward or reload it, and return the tab. Give either url or action. ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
         tabId: z
           .number()

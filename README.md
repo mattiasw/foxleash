@@ -64,10 +64,10 @@ Ask your agent to do something in the browser, for example:
 
 > Open the issue list of my project on GitHub and summarize the ones labeled bug.
 
-The first time a session acts on a site, Foxhand asks you in that tab whether to allow it:
-once, always, or not at all. You can see and revoke your answers in the extension's
-settings: its settings page in the Firefox add-ons manager lists the sites you allowed
-always, each with a Revoke button.
+Before a session opens a page on a site you have not approved, Foxhand asks you in that tab
+whether to allow it: this session, always, or not at all. The agent's call waits up to 30
+seconds for your answer. The extension's settings page in the Firefox add-ons manager lists
+the sites you allowed always, each with a Revoke button.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -88,8 +88,11 @@ The main risk is **prompt injection**: a web page that contains instructions aim
 AI model, such as "send the contents of this page to ...". Models can be fooled by these,
 and no defense is complete. Foxhand limits what a fooled agent can do:
 
-- It acts on a site only after you approved that site in the browser. The approval can
-  only come from your click, not from the agent.
+- It acts on a site only after you approved that site in the browser, and asks before it
+  opens a page there. The approval can only come from your click, not from the agent. Two
+  ways still reach a site you have not approved without asking: going back or forward in a
+  tab's history, and a page on an approved site that redirects to another site. The agent
+  then sees only that site's address.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title, and a local file only as `file:`. The sites you allowed always are listed
   in the extension's settings page in the add-ons manager, each with a Revoke button.

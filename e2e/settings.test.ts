@@ -104,6 +104,8 @@ describe("sites allowed always, in real Firefox", () => {
   });
 
   test("revoking sites on the settings page moves focus along the list and redacts their tabs", async () => {
+    const shown = tabOf(await harness.ok(session, "navigate", { tabId, url: first.url("/a") }));
+    assert.equal(shown.url, first.url("/a"));
     const page = await harness.settingsPage();
     const sites = [first.site, SITE_A, SITE_B];
     await waitForPage(page, { sites, list: true, empty: false, status: "", focus: null });
@@ -130,9 +132,11 @@ describe("sites allowed always, in real Firefox", () => {
     await revoke(page, SITE_B, [first.site], first.site);
     await revoke(page, first.site, [], "heading");
 
-    const reopened = tabOf(await harness.ok(session, "tab_open", { url: first.url("/a") }));
-    assert.equal(reopened.url, first.site);
-    assert.equal(reopened.title, "");
+    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.deepEqual(
+      tabs.map(({ id, url, title }) => ({ id, url, title })),
+      [{ id: tabId, url: first.site, title: "" }],
+    );
   });
 
   /** Clicks a site's Revoke button with real input and waits for the page to show the result. */

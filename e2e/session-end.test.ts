@@ -20,6 +20,9 @@ describe("session end in real Firefox", () => {
       harness.install();
       fixtures = await startFixtureServer();
       await harness.startFirefox(EXTENSION_DIST);
+      await harness.seedSettings({
+        [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
+      });
       live = await harness.connect();
       await harness.waitUntilReady(live);
     },

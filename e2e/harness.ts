@@ -32,6 +32,16 @@ export const EXTENSION_DIST = join(CHECKOUT, "apps", "extension", "dist");
 const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
 const SETTINGS_PAGE = "options.html";
 const SETTINGS_TITLE = "Foxhand settings";
+const PROMPT_PAGE = "approve.html";
+// With the focus and visibility the arming reads, so a prompt that never arms says which one
+// is missing.
+const ARMED_STATE = `(() => {
+  const buttons = document.querySelectorAll("button[data-answer]");
+  const unarmed = document.querySelectorAll('button[data-answer][aria-disabled="true"]');
+  return buttons.length + " buttons, " + unarmed.length + " unarmed; document.hasFocus() " +
+    document.hasFocus() + ", document.visibilityState " + document.visibilityState;
+})()`;
+const ARMED = "3 buttons, 0 unarmed;";
 
 // The longest socket path the host can make must fit in sun_path (108 bytes with its NUL).
 const MAX_SOCKET_PATH_BYTES = 107;
@@ -73,6 +83,10 @@ export interface Harness {
   /** Opens the settings page in a new tab, waits for its first render, and returns the tab. */
   settingsPage(): Promise<string>;
   connect(overrides?: Record<string, string>): Promise<Session>;
+  /** Waits for a tab showing the approval prompt, other than the tabs in `except`. */
+  promptContext(except?: readonly string[]): Promise<string>;
+  /** Shows and focuses the prompt's tab, then waits until its three answer buttons are armed. */
+  waitForArmed(context: string): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
   /** Calls a tool that must succeed and returns its parsed JSON. */
@@ -281,6 +295,31 @@ export function createHarness(): Harness {
       return session;
     },
 
+    promptContext(except = []) {
+      assertOpen();
+      const firefox = currentFirefox();
+      const prefix = firefox.extensionUrl(PROMPT_PAGE);
+      return firefox.waitForContext(
+        (tab) => tab.url.startsWith(prefix) && !except.includes(tab.context),
+        PAGE_TIMEOUT_MS,
+      );
+    },
+
+    async waitForArmed(context) {
+      assertOpen();
+      const firefox = currentFirefox();
+      await firefox.activate(context);
+      await pollUntil(
+        async () => {
+          const state = await firefox.evaluate(context, ARMED_STATE);
+          if (typeof state === "string" && state.startsWith(ARMED)) return true;
+          throw new Error(`the prompt has ${String(state)}`);
+        },
+        PAGE_TIMEOUT_MS,
+        "the prompt's buttons to arm",
+      );
+    },
+
     waitForHost,
 
     async waitUntilReady(session, accept = (result) => !result.isError) {
@@ -336,6 +375,20 @@ export function createHarness(): Harness {
       if (errors.length > 0) throw errors[0];
     },
   };
+}
+
+/**
+ * Asserts that a tool call has not settled after `ms`. Its handlers are attached here, so a later
+ * `await` of the same promise still sees the outcome and nothing goes unhandled meanwhile.
+ */
+export async function stillPending(promise: Promise<unknown>, ms: number): Promise<void> {
+  let settled = false;
+  const mark = () => {
+    settled = true;
+  };
+  promise.then(mark, mark);
+  await sleep(ms);
+  assert.equal(settled, false, `the call settled within ${ms} ms`);
 }
 
 /** `os.tmpdir()`, or literal /tmp when the host's longest socket path would not fit under it. */
