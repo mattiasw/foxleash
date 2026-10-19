@@ -23,11 +23,21 @@ export interface FakeBrowser {
   /** What `permissions.contains({ origins: ["<all_urls>"] })` answers. */
   allUrls: boolean;
   version: string;
+  /** How many times `runtime.openOptionsPage` ran. */
+  optionsPageOpened: number;
+  /** The per-tab badge text `action.setBadgeText` set; a load clears the tab's entry. */
+  badgeText: Map<number, string>;
+  /** The per-tab title `action.setTitle` set; a load clears the tab's entry. */
+  badgeTitle: Map<number, string>;
   /** The user granting or revoking access to all websites in about:addons. */
   setAllUrls(granted: boolean): void;
   openTab(properties?: Partial<Omit<FakeTab, "id" | "history" | "index">>): FakeTab;
   /** The user closing a group: the group and its tabs go away. */
   closeGroup(groupId: number): void;
+  /** The user dragging a tab out of its group; an emptied group goes away. */
+  ungroup(tabId: number): void;
+  /** The user clicking the toolbar button while the tab is shown. */
+  clickAction(tabId: number): void;
   emitStatus(tabId: number, status: string): void;
   /** Fires `storage.onChanged` with no changes, as for a storage area the fake does not keep. */
   emitStorageChanged(areaName: string): void;
@@ -65,6 +75,8 @@ export function createFakeBrowser(): FakeBrowser {
   const stored = new Map<string, unknown>();
   const onStorageChanged =
     createEvent<(changes: Record<string, StorageChange>, areaName: string) => void>();
+  const onCreated = createEvent<(tab: Tab) => void>();
+  const onClicked = createEvent<(tab: Tab) => void>();
 
   const browser: BrowserApi = {
     runtime: {
@@ -72,6 +84,18 @@ export function createFakeBrowser(): FakeBrowser {
       onStartup: createEvent(),
       onInstalled: createEvent(),
       getManifest: () => ({ version: fake.version }),
+      openOptionsPage: async () => {
+        fake.optionsPageOpened += 1;
+      },
+    },
+    action: {
+      setBadgeText: async ({ tabId, text }) => {
+        fake.badgeText.set(tabOf(tabId).id, text);
+      },
+      setTitle: async ({ tabId, title }) => {
+        fake.badgeTitle.set(tabOf(tabId).id, title);
+      },
+      onClicked,
     },
     permissions: {
       contains: async () => fake.allUrls,
@@ -114,6 +138,7 @@ export function createFakeBrowser(): FakeBrowser {
         for (const tab of tabIds.map(tabOf)) {
           tab.groupId = group.id;
           tab.windowId = group.windowId;
+          emit(tab, { groupId: group.id });
         }
         return group.id;
       },
@@ -124,6 +149,7 @@ export function createFakeBrowser(): FakeBrowser {
           if (index >= 0) updatedListeners.splice(index, 1);
         },
       },
+      onCreated,
     },
     tabGroups: {
       get: async (groupId) => ({ ...groupOf(groupId) }),
@@ -162,6 +188,9 @@ export function createFakeBrowser(): FakeBrowser {
     currentWindowId: 1,
     allUrls: true,
     version: "0.1.0",
+    optionsPageOpened: 0,
+    badgeText: new Map(),
+    badgeTitle: new Map(),
     setAllUrls: (granted) => {
       fake.allUrls = granted;
       const changed = granted ? onAdded : onRemoved;
@@ -189,6 +218,7 @@ export function createFakeBrowser(): FakeBrowser {
         }
       }
       fake.tabs.set(tab.id, tab);
+      for (const listener of [...onCreated.listeners]) listener(snapshot(tab));
       return tab;
     },
     closeGroup: (groupId) => {
@@ -196,6 +226,18 @@ export function createFakeBrowser(): FakeBrowser {
       for (const tab of fake.tabs.values()) {
         if (tab.groupId === groupId) fake.tabs.delete(tab.id);
       }
+    },
+    ungroup: (tabId) => {
+      const tab = tabOf(tabId);
+      const { groupId } = tab;
+      tab.groupId = -1;
+      const empty = ![...fake.tabs.values()].some((other) => other.groupId === groupId);
+      if (empty) fake.groups.delete(groupId);
+      emit(tab, { groupId: -1 });
+    },
+    clickAction: (tabId) => {
+      const tab = snapshot(tabOf(tabId));
+      for (const listener of [...onClicked.listeners]) listener(tab);
     },
     emitStatus: (tabId, status) => {
       const tab = tabOf(tabId);
@@ -253,6 +295,9 @@ export function createFakeBrowser(): FakeBrowser {
   function load(tab: FakeTab, url: string): void {
     tab.url = url;
     tab.status = "loading";
+    // Firefox resets a tab's per-tab action values when it navigates.
+    fake.badgeText.delete(tab.id);
+    fake.badgeTitle.delete(tab.id);
     emit(tab, { status: "loading" });
     queueMicrotask(() => {
       if (!fake.tabs.has(tab.id)) return;

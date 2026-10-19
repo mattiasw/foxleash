@@ -63,6 +63,13 @@
       "evidence": [
         { "file": "apps/extension/src/site-access.ts", "contains": "redactedUrl(tab.url)" }
       ]
+    },
+    {
+      "listing": "shows ON on the tabs an agent session can use",
+      "evidence": [
+        { "file": "apps/extension/src/indicator.ts", "contains": "setBadgeText" },
+        { "file": "apps/extension/manifest.json", "contains": "default_area" }
+      ]
     }
   ]
 }

@@ -7,9 +7,21 @@ export interface SessionGroups {
   ensureGroup(session: string, tab: { id: number; windowId: number }): Promise<number>;
   /** Closes the session's group when it holds only blank tabs; otherwise leaves it. */
   endSession(session: string): Promise<void>;
+  /**
+   * True when the group is one this created for a session and has not forgotten; false for
+   * undefined and -1.
+   */
+  isSessionGroup(groupId: number | undefined): boolean;
 }
 
-export function createSessionGroups(browser: BrowserApi): SessionGroups {
+/**
+ * `onGrouped` runs after a tab joins a session's group, once the group is known to
+ * `isSessionGroup`. It must not reject: a rejection would skip the title of a new group.
+ */
+export function createSessionGroups(
+  browser: BrowserApi,
+  onGrouped: (tabId: number) => Promise<void> = async () => {},
+): SessionGroups {
   // Maps, not objects: "__proto__" and "constructor" are valid session ids.
   const groups = new Map<string, number>();
   const pending = new Map<string, Promise<unknown>>();
@@ -17,7 +29,7 @@ export function createSessionGroups(browser: BrowserApi): SessionGroups {
   // keeping their window open, and close it between them.
   let closing: Promise<unknown> = Promise.resolve();
 
-  return { groupOf, ensureGroup, endSession };
+  return { groupOf, ensureGroup, endSession, isSessionGroup };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
     const id = groups.get(session);
@@ -42,6 +54,10 @@ export function createSessionGroups(browser: BrowserApi): SessionGroups {
     });
   }
 
+  function isSessionGroup(groupId: number | undefined): boolean {
+    return [...groups.values()].some((id) => id === groupId);
+  }
+
   /** Runs the task after every task already queued for the session has settled. */
   function serialize<T>(session: string, task: () => Promise<T>): Promise<T> {
     const previous = pending.get(session) ?? Promise.resolve();
@@ -60,13 +76,9 @@ export function createSessionGroups(browser: BrowserApi): SessionGroups {
     tab: { id: number; windowId: number },
   ): Promise<number> {
     const group = await groupOf(session);
-    if (group !== undefined) {
-      try {
-        await browser.tabs.group({ groupId: group.id, tabIds: [tab.id] });
-        return group.id;
-      } catch {
-        // The user closed the group after groupOf found it: make a new one.
-      }
+    if (group !== undefined && (await joinGroup(group.id, tab.id))) {
+      await onGrouped(tab.id);
+      return group.id;
     }
     // Without a window, Firefox creates the group in the focused window and moves the tab there.
     const id = await browser.tabs.group({
@@ -74,8 +86,19 @@ export function createSessionGroups(browser: BrowserApi): SessionGroups {
       createProperties: { windowId: tab.windowId },
     });
     groups.set(session, id);
+    await onGrouped(tab.id);
     await browser.tabGroups.update(id, { title: "Foxhand", color: "orange" });
     return id;
+  }
+
+  async function joinGroup(groupId: number, tabId: number): Promise<boolean> {
+    try {
+      await browser.tabs.group({ groupId, tabIds: [tabId] });
+      return true;
+    } catch {
+      // The user closed the group after groupOf found it: make a new one.
+      return false;
+    }
   }
 
   async function closeIfBlank(session: string): Promise<void> {

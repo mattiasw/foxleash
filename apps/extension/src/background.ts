@@ -1,6 +1,7 @@
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createHandlers } from "./handlers.ts";
+import { createIndicator } from "./indicator.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { createSiteAccess } from "./site-access.ts";
 
@@ -12,7 +13,8 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
-const groups = createSessionGroups(browser);
+const groups = createSessionGroups(browser, (tabId) => indicator.refresh(tabId));
+const indicator = createIndicator({ browser, groups });
 const access = createSiteAccess({ browser, sessions: new Map() });
 const handleRequest = createHandlers({ browser, groups, timers, access });
 const connection = createConnection({

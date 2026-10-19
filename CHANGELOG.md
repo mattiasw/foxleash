@@ -28,3 +28,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Financial and health sites on a built-in blocklist are refused before Foxhand opens or
   reloads them, even if you approved the site, and a tab showing one shows your agent only
   the site's address.
+- The Foxhand toolbar button shows ON on the tabs your agent session can use; clicking it
+  opens the settings.

@@ -17,6 +17,14 @@
   "options_ui": {
     "page": "options.html"
   },
+  "action": {
+    "default_title": "Foxhand",
+    "default_icon": {
+      "48": "icons/foxhand.svg",
+      "96": "icons/foxhand.svg"
+    },
+    "default_area": "navbar"
+  },
   "permissions": [
     "nativeMessaging",
     "tabs",

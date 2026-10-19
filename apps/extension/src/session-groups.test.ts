@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createFakeBrowser, type FakeTab } from "./fake-browser.ts";
+import { createFakeBrowser, type FakeTab, flush } from "./fake-browser.ts";
 import { createSessionGroups } from "./session-groups.ts";
 
 const BLANK = ["about:blank", "about:newtab", "about:home"];
@@ -215,9 +215,92 @@ describe("endSession", { timeout: 10000 }, () => {
   });
 });
 
-function setup() {
+describe("isSessionGroup", { timeout: 10000 }, () => {
+  it("is true for a group ensureGroup made", async () => {
+    const { groups, open } = setup();
+    const tab = await open("s1", { url: "https://example.com/" });
+    assert.equal(groups.isSessionGroup(tab.groupId), true);
+  });
+
+  it("is false for no group and for a group the user made", async () => {
+    const { fake, groups, outside, open } = setup();
+    await open("s1", { url: "https://example.com/" });
+    const userGroup = await fake.browser.tabs.group({ tabIds: [outside.id] });
+    assert.equal(groups.isSessionGroup(-1), false);
+    assert.equal(groups.isSessionGroup(undefined), false);
+    assert.equal(groups.isSessionGroup(userGroup), false);
+  });
+
+  it("is false after endSession closed a blank group", async () => {
+    const { groups, open } = setup();
+    const tab = await open("s1", { url: "about:blank" });
+    await groups.endSession("s1");
+    assert.equal(groups.isSessionGroup(tab.groupId), false);
+  });
+
+  it("is false once groupOf found that the user closed the group", async () => {
+    const { fake, groups, open } = setup();
+    const tab = await open("s1", { url: "https://example.com/" });
+    fake.closeGroup(tab.groupId);
+    assert.equal(await groups.groupOf("s1"), undefined);
+    assert.equal(groups.isSessionGroup(tab.groupId), false);
+  });
+});
+
+describe("onGrouped", { timeout: 10000 }, () => {
+  it("runs for a tab joining a new and an existing group, with the group known", async () => {
+    const calls: { tabId: number; known: boolean }[] = [];
+    const { fake, groups, open } = setup(async (tabId) => {
+      calls.push({ tabId, known: groups.isSessionGroup(fake.tabs.get(tabId)?.groupId) });
+    });
+    const first = await open("s1", { url: "https://example.com/" });
+    const second = await open("s1", { url: "https://example.com/next" });
+    assert.equal(second.groupId, first.groupId);
+    assert.deepEqual(calls, [
+      { tabId: first.id, known: true },
+      { tabId: second.id, known: true },
+    ]);
+  });
+
+  it("runs before the new group's title is set", async () => {
+    const called: number[] = [];
+    const { fake, groups } = setup(async (tabId) => {
+      called.push(tabId);
+    });
+    fake.browser.tabGroups.update = async () => {
+      throw new Error("update failed");
+    };
+    const tab = fake.openTab({ url: "https://example.com/" });
+    await assert.rejects(groups.ensureGroup("s1", tab), /update failed/);
+    assert.deepEqual(called, [tab.id]);
+    assert.equal(groups.isSessionGroup(fake.tabs.get(tab.id)?.groupId), true);
+  });
+
+  it("is waited for on the new-group and the existing-group path", async () => {
+    let release = () => {};
+    const { fake, groups } = setup(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    for (const url of ["https://example.com/", "https://example.com/next"]) {
+      let settled = false;
+      const adding = groups.ensureGroup("s1", fake.openTab({ url }));
+      adding.then(() => {
+        settled = true;
+      });
+      await flush();
+      assert.equal(settled, false, url);
+      release();
+      await adding;
+    }
+  });
+});
+
+function setup(onGrouped?: (tabId: number) => Promise<void>) {
   const fake = createFakeBrowser();
-  const groups = createSessionGroups(fake.browser);
+  const groups = createSessionGroups(fake.browser, onGrouped);
   const outside = fake.openTab({ url: "https://user.example/" });
 
   async function open(

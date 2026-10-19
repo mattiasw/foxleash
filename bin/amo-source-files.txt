@@ -10,6 +10,7 @@ apps/extension/src/browser-api.ts
 apps/extension/src/connection.ts
 apps/extension/src/default-blocklist.ts
 apps/extension/src/handlers.ts
+apps/extension/src/indicator.ts
 apps/extension/src/log.ts
 apps/extension/src/options.html
 apps/extension/src/options.ts

@@ -5,6 +5,12 @@ export interface BrowserApi {
     onStartup: BrowserEvent<() => void>;
     onInstalled: BrowserEvent<() => void>;
     getManifest(): { version: string };
+    openOptionsPage(): Promise<void>;
+  };
+  action: {
+    setBadgeText(details: { tabId: number; text: string }): Promise<void>;
+    setTitle(details: { tabId: number; title: string }): Promise<void>;
+    onClicked: BrowserEvent<(tab: Tab) => void>;
   };
   permissions: {
     contains(permissions: { origins: string[] }): Promise<boolean>;
@@ -29,6 +35,7 @@ export interface BrowserApi {
       addListener(listener: TabUpdatedListener, filter?: TabUpdatedFilter): void;
       removeListener(listener: TabUpdatedListener): void;
     };
+    onCreated: BrowserEvent<(tab: Tab) => void>;
   };
   tabGroups: {
     get(groupId: number): Promise<TabGroup>;
@@ -89,6 +96,7 @@ export interface TabGroup {
 
 export interface TabChangeInfo {
   status?: string;
+  groupId?: number;
 }
 
 export type TabUpdatedListener = (tabId: number, changeInfo: TabChangeInfo, tab: Tab) => void;

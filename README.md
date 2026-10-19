@@ -77,6 +77,9 @@ on tabs in that group, including tabs you move into it. When the agent session e
 closes its group if the group holds only blank tabs, so pages you may still be reading stay
 open.
 
+The Foxhand button in the toolbar shows ON on the tabs an agent session can use; clicking it
+opens Foxhand's settings.
+
 ## Security
 
 Foxhand acts in your logged-in browser, so read this before you use it.
