@@ -17,8 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   extension.
 - An MCP server gives your agent the `tabs_list`, `tab_open` and `navigate` tools, so it can
   list, open and navigate the tabs in its Foxhand tab group in your Firefox.
-- `npm run setup` connects Firefox to Foxhand and registers Foxhand with Claude Code;
-  `npm run teardown` removes both.
+- `npm run setup` installs the signed Foxhand extension in Firefox (you confirm once),
+  connects Firefox to Foxhand and registers Foxhand with Claude Code; `npm run teardown`
+  removes the native host and the registration.
 - `npm run doctor` checks your setup, the Foxhand host of every running Firefox and the
   extension, and says what to do about each problem it finds.
 - Tabs on sites you have not approved show your agent only the site's address, not the

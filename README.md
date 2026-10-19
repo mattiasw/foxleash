@@ -28,6 +28,8 @@ local MCP server, and from there to the agent.
   builds are untested)
 - Node.js 24 or later
 - An MCP client. The setup command registers Foxhand with Claude Code if it is installed.
+- The GitHub CLI (`gh`), logged in (`gh auth login`) with an account that can read this
+  repository's releases, unless you install from a signed `.xpi` with `--xpi`.
 
 ## Install
 
@@ -45,6 +47,12 @@ npm run setup
 2. registers the MCP server with Claude Code (`claude mcp add -s user foxhand`). To skip
    this, run `npm run setup -- --no-claude`. When `claude` is not on your PATH, setup
    prints the command to run yourself.
+3. downloads the signed extension for this checkout's version from the repository's GitHub
+   releases into `~/.cache/foxhand/` and opens it in Firefox, where you confirm the
+   installation. To install from a signed `.xpi` you already have, run
+   `npm run setup -- --xpi <path>`; to skip this step, run
+   `npm run setup -- --no-extension`. When `firefox` is not on your PATH, setup prints the
+   file to open in Firefox yourself.
 
 Then check that every part is connected:
 
@@ -55,8 +63,8 @@ npm run doctor
 It lists the Foxhand host of every running Firefox and whether the extension has access to
 all websites.
 
-To update: `git pull && npm ci && npm run setup`, and confirm in Firefox if the extension
-changed. To remove: `npm run teardown`, then remove the extension in Firefox.
+To update: `git pull && npm ci && npm run setup`, then confirm the installation in
+Firefox. To remove: `npm run teardown`, then remove the extension in Firefox.
 
 ## Use
 

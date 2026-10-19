@@ -72,7 +72,7 @@ export interface Harness {
   root: string;
   run: string;
   env: Record<string, string>;
-  /** Installs the native host into the temp home only (`install --no-claude`). */
+  /** Installs the native host into the temp home only (`install --no-claude --no-extension`). */
   install(): void;
   startFirefox(extensionDir: string): Promise<Firefox>;
   /**
@@ -191,15 +191,19 @@ export function createHarness(): Harness {
 
     install() {
       assertOpen();
-      const result = spawnSync(process.execPath, [MAIN, "install", "--no-claude"], {
-        env,
-        encoding: "utf8",
-        timeout: INSTALL_TIMEOUT_MS,
-      });
+      const result = spawnSync(
+        process.execPath,
+        [MAIN, "install", "--no-claude", "--no-extension"],
+        {
+          env,
+          encoding: "utf8",
+          timeout: INSTALL_TIMEOUT_MS,
+        },
+      );
       assert.equal(
         result.status,
         0,
-        `foxhand install --no-claude failed (${result.error?.message ?? `status ${result.status}`}):\n${result.stdout}${result.stderr}`,
+        `foxhand install --no-claude --no-extension failed (${result.error?.message ?? `status ${result.status}`}):\n${result.stdout}${result.stderr}`,
       );
     },
 

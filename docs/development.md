@@ -238,6 +238,18 @@ so rerun setup after moving or switching checkouts or Node versions.
 `npm run setup -- --no-claude` and `npm run teardown -- --no-claude` leave Claude Code's
 user configuration unchanged, for a checkout that should not touch it.
 
+Setup's last step installs the extension. It runs
+`gh release download v<version> --repo github.com/mattiasw/foxhand --pattern foxhand-<version>.xpi`
+into `~/.cache/foxhand/foxhand-<version>.xpi` (from `$HOME` only, like the other paths) and
+opens that file in Firefox, which asks you to confirm the installation. The repository names
+its host, so `GH_HOST` or a gh login to another host cannot change where the file comes from.
+`<version>` is this checkout's version, not GitHub's latest release, so the extension matches
+the checkout's server and host, and a release that does not exist yet fails instead of
+installing an older extension. The file is kept, because Firefox reads it again when you
+confirm. `npm run setup -- --xpi <path>` opens a local file instead; a relative path resolves
+against the directory `npm run` was started from. `npm run setup -- --no-extension` skips the
+step. Firefox is started detached, so setup neither waits for it nor stops it.
+
 The host listens on `<socket directory>/<pid>.sock`. The socket directory is the first of
 `$XDG_RUNTIME_DIR/foxhand` and `/run/user/<uid>/foxhand` whose base directory (that is,
 `$XDG_RUNTIME_DIR` or `/run/user/<uid>`) is a real directory owned by you with no group or
@@ -310,7 +322,7 @@ What the probe does in a page:
 
 To run it in your everyday Firefox profile, for example against your own logged-in sites:
 
-1. `npm run build`, then `npm run setup` to install the native host.
+1. `npm run build`, then `npm run setup -- --no-extension` to install the native host.
 2. In Firefox, open `about:debugging`, choose This Firefox, then Load Temporary Add-on, and
    pick `apps/extension/dist/manifest.json`. Firefox removes the add-on again when it
    restarts.

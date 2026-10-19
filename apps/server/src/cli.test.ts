@@ -48,13 +48,16 @@ describe("runCli usage", () => {
         "Commands:",
         "  mcp                      Run the MCP server (your MCP client starts it)",
         "  host                     Run the native messaging host (Firefox starts it)",
-        "  install [--no-claude]    Set up the native host and add Foxhand to Claude Code",
+        "  install [--no-claude] [--no-extension | --xpi <path>]",
+        "                           Set up the native host, Claude Code and the extension",
         "  uninstall [--no-claude]  Remove the native host and Foxhand from Claude Code",
         "  doctor                   Check the installation and the connection to Firefox",
         "  probe [--out <path>] <url>...",
         "                           Measure which synthetic input works on each page",
         "",
         "--no-claude leaves your Claude Code configuration unchanged.",
+        "install downloads this version's signed extension with gh and opens it in",
+        "Firefox; --xpi uses a local .xpi file instead, and --no-extension skips it.",
         "probe writes <path>.json and .md, by default ./foxhand-probe-<date>-<time>.",
         "",
       ].join("\n"),
@@ -90,6 +93,54 @@ describe("runCli subcommands", () => {
         assert.deepEqual(calls, []);
       });
     }
+  }
+
+  const installCases: [string[], CommandOptions][] = [
+    [["--no-extension"], { noClaude: false, noExtension: true }],
+    [["--xpi", "a.xpi"], { noClaude: false, xpi: "a.xpi" }],
+    [["--no-claude", "--xpi", "a.xpi"], { noClaude: true, xpi: "a.xpi" }],
+    [["--xpi", "a.xpi", "--no-claude"], { noClaude: true, xpi: "a.xpi" }],
+    [["--no-claude", "--no-extension"], { noClaude: true, noExtension: true }],
+    [["--xpi", "./-P.xpi"], { noClaude: false, xpi: "./-P.xpi" }],
+  ];
+  for (const [rest, options] of installCases) {
+    it(`passes install ${rest.join(" ")} as ${JSON.stringify(options)}`, async () => {
+      const { deps, stdout, stderr, calls } = setup();
+      assert.equal(await runCli(["install", ...rest], deps), 7);
+      assert.deepEqual(calls, [{ name: "install", options, deps }]);
+      assert.equal(stdout(), "");
+      assert.equal(stderr(), "");
+    });
+  }
+
+  for (const rest of [
+    ["--xpi"],
+    ["--xpi", ""],
+    ["--xpi", "a", "--xpi", "b"],
+    ["--xpi", "a", "--no-extension"],
+    ["--no-extension", "--xpi", "a"],
+    ["--no-extension", "--no-extension"],
+    ["--xpi", "--no-claude"],
+    ["--xpi", "--no-extension"],
+    ["--xpi", "-P"],
+  ]) {
+    it(`refuses install ${JSON.stringify(rest)} with usage and 2`, async () => {
+      const { deps, stdout, stderr, calls } = setup();
+      assert.equal(await runCli(["install", ...rest], deps), 2);
+      assert.equal(stderr(), USAGE);
+      assert.equal(stdout(), "");
+      assert.deepEqual(calls, []);
+    });
+  }
+
+  for (const rest of [["--xpi", "a"], ["--no-extension"]]) {
+    it(`refuses uninstall ${rest.join(" ")} with usage and 2`, async () => {
+      const { deps, stdout, stderr, calls } = setup();
+      assert.equal(await runCli(["uninstall", ...rest], deps), 2);
+      assert.equal(stderr(), USAGE);
+      assert.equal(stdout(), "");
+      assert.deepEqual(calls, []);
+    });
   }
 
   it("runs host and ignores the arguments Firefox appends", async () => {

@@ -16,10 +16,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, it } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { type CliDeps, COMMANDS } from "./cli.ts";
+import { type CliDeps, COMMANDS, type CommandOptions } from "./cli.ts";
 import {
   claudeAddArgs,
+  type ExtensionSource,
+  extensionPath,
   install,
   installPaths,
   launcherScript,
@@ -27,7 +30,8 @@ import {
   shellQuote,
   uninstall,
 } from "./install.ts";
-import { type RunResult, runCommand } from "./run-command.ts";
+import { type LaunchResult, type RunResult, runCommand } from "./run-command.ts";
+import { SERVER_VERSION } from "./version.ts";
 
 type Call = [string, string[], { timeoutMs: number }];
 
@@ -42,6 +46,11 @@ const ADD: Call = [
   { timeoutMs: 30000 },
 ];
 const OK: RunResult = { status: "ok", code: 0, stdout: "", stderr: "" };
+const RELEASE: ExtensionSource = { kind: "release", version: "1.2.3" };
+const GH_MISSING_HINT =
+  "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxhand .xpi";
+const GH_AUTH_HINT =
+  "run gh auth login with an account that can read github.com/mattiasw/foxhand, pass --xpi <path> with a signed Foxhand .xpi, or skip the extension with --no-extension";
 const temps: string[] = [];
 
 afterEach(() => {
@@ -215,6 +224,174 @@ describe("install", () => {
   });
 });
 
+describe("the extension step", () => {
+  it("downloads this version's release and opens it in Firefox", async () => {
+    const home = tempDir();
+    const t = setup(home, [OK, OK, writingGh(OK)]);
+    const xpi = extensionPath(home, "1.2.3");
+    assert.equal(await install({ ...t.options, extension: RELEASE }), 0);
+    assert.deepEqual(t.calls, [REMOVE, ADD, gh(home)]);
+    assert.deepEqual(t.launches, [["firefox", [xpi]]]);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        "registered Foxhand with Claude Code",
+        `downloaded ${xpi}`,
+        `opened ${xpi} in Firefox; confirm the installation there`,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
+    );
+    assert.equal(readFileSync(xpi, "utf8"), "signed");
+    assert.equal(mode(join(home, ".cache")), 0o700);
+    assert.equal(mode(join(home, ".cache", "foxhand")), 0o700);
+  });
+
+  it("leaves the mode of an existing cache directory alone", async () => {
+    const home = tempDir();
+    const dir = join(home, ".cache", "foxhand");
+    mkdirSync(dir, { recursive: true });
+    chmodSync(dir, 0o755);
+    const t = setup(home, [writingGh(OK)]);
+    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 0);
+    assert.equal(mode(dir), 0o755);
+  });
+
+  const failures: [string, RunResult, string[]][] = [
+    ["missing", { status: "missing" }, [GH_MISSING_HINT]],
+    [
+      "failed",
+      { status: "failed", code: 1, stdout: "", stderr: "  release not found\n" },
+      ["gh release download: release not found", GH_AUTH_HINT],
+    ],
+    ["timeout", { status: "timeout" }, ["gh release download did not finish in 120 s"]],
+  ];
+  for (const [name, result, lines] of failures) {
+    it(`returns 1 without opening anything when gh is ${name}`, async () => {
+      const home = tempDir();
+      const t = setup(home, [result]);
+      assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
+      assert.deepEqual(t.calls, [gh(home)]);
+      assert.deepEqual(t.launches, []);
+      assert.equal(
+        t.output(),
+        [`wrote ${t.launcher}`, `wrote ${t.manifest}`, ...lines, ""].join("\n"),
+      );
+    });
+  }
+
+  it("returns 1 without opening anything when gh wrote no file", async () => {
+    const home = tempDir();
+    const t = setup(home, [OK]);
+    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
+    assert.deepEqual(t.launches, []);
+    assert.equal(
+      t.output(),
+      `wrote ${t.launcher}\nwrote ${t.manifest}\ngh release download did not write ${extensionPath(home, "1.2.3")}\n`,
+    );
+  });
+
+  it("opens a local file as given, without gh", async () => {
+    const xpi = join(tempDir(), "my foxhand.xpi");
+    writeFileSync(xpi, "signed");
+    const t = setup(tempDir(), []);
+    const extension: ExtensionSource = { kind: "file", path: xpi };
+    assert.equal(await install({ ...t.options, claude: false, extension }), 0);
+    assert.deepEqual(t.calls, []);
+    assert.deepEqual(t.launches, [["firefox", [xpi]]]);
+    assert.equal(
+      t.output(),
+      `wrote ${t.launcher}\nwrote ${t.manifest}\nopened ${xpi} in Firefox; confirm the installation there\nNext: npm run doctor\n`,
+    );
+  });
+
+  for (const [name, path] of [
+    ["a missing file", (dir: string) => join(dir, "missing.xpi")],
+    ["a directory", (dir: string) => dir],
+    ["a path through a file", (dir: string) => join(dir, "file.xpi", "x")],
+  ] as const) {
+    it(`returns 1 for ${name} given as the local file`, async () => {
+      const dir = tempDir();
+      writeFileSync(join(dir, "file.xpi"), "signed");
+      const xpi = path(dir);
+      const t = setup(tempDir(), []);
+      const extension: ExtensionSource = { kind: "file", path: xpi };
+      assert.equal(await install({ ...t.options, claude: false, extension }), 1);
+      assert.deepEqual(t.calls, []);
+      assert.deepEqual(t.launches, []);
+      assert.equal(t.output(), `wrote ${t.launcher}\nwrote ${t.manifest}\nno file at ${xpi}\n`);
+      assert.ok(existsSync(t.launcher));
+      assert.ok(existsSync(t.manifest));
+    });
+  }
+
+  it("does nothing for the extension without a source", async () => {
+    const home = tempDir();
+    const t = setup(home, []);
+    assert.equal(await install({ ...t.options, claude: false }), 0);
+    assert.deepEqual(t.calls, []);
+    assert.deepEqual(t.launches, []);
+    assert.equal(t.output(), `wrote ${t.launcher}\nwrote ${t.manifest}\nNext: npm run doctor\n`);
+    assert.equal(existsSync(join(home, ".cache")), false);
+  });
+
+  it("prints the file to open and returns 0 when firefox is not on PATH", async () => {
+    const home = tempDir();
+    const t = setup(home, [writingGh(OK)], { status: "missing" });
+    const xpi = extensionPath(home, "1.2.3");
+    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 0);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        `downloaded ${xpi}`,
+        `Firefox (firefox) was not found on PATH; open ${xpi} in Firefox to install the extension`,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("returns 1 when firefox could not be started", async () => {
+    const home = tempDir();
+    const t = setup(home, [writingGh(OK)], { status: "failed", error: "EACCES" });
+    const xpi = extensionPath(home, "1.2.3");
+    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        `downloaded ${xpi}`,
+        `could not start firefox: EACCES; open ${xpi} in Firefox to install the extension`,
+        "",
+      ].join("\n"),
+    );
+  });
+
+  const claudeFailures: [string, RunResult[], Call[]][] = [
+    ["the remove times out", [{ status: "timeout" }], [REMOVE]],
+    ["the add fails", [OK, { status: "failed", code: 1, stdout: "", stderr: "x" }], [REMOVE, ADD]],
+  ];
+  for (const [name, results, calls] of claudeFailures) {
+    it(`skips the extension when ${name}`, async () => {
+      const t = setup(tempDir(), results);
+      assert.equal(await install({ ...t.options, extension: RELEASE }), 1);
+      assert.deepEqual(t.calls, calls);
+      assert.deepEqual(t.launches, []);
+    });
+  }
+});
+
+describe("extensionPath", () => {
+  it("puts the version's file in the Foxhand cache directory under HOME", () => {
+    assert.equal(extensionPath("/home/u", "4.5.6"), "/home/u/.cache/foxhand/foxhand-4.5.6.xpi");
+  });
+});
+
 describe("a HOME that is not absolute", () => {
   for (const home of ["", "relative/home"]) {
     for (const name of ["install", "uninstall"]) {
@@ -358,8 +535,9 @@ describe("claudeAddArgs", () => {
 describe("the install and uninstall commands", () => {
   it("install and uninstall under $HOME", async () => {
     const home = tempDir();
-    const previous = process.env.HOME;
+    const previous = saveEnv();
     process.env.HOME = home;
+    process.env.PATH = tempDir();
     try {
       const installCommand = COMMANDS.get("install");
       const uninstallCommand = COMMANDS.get("uninstall");
@@ -368,7 +546,7 @@ describe("the install and uninstall commands", () => {
       const deps: CliDeps = { stdout: collector(out), stderr: collector(out), commands: COMMANDS };
       const launcher = join(home, ".local", "share", "foxhand", "foxhand-host");
       const manifest = join(home, ".mozilla", "native-messaging-hosts", "foxhand.json");
-      assert.equal(await installCommand({ noClaude: true }, deps), 0);
+      assert.equal(await installCommand({ noClaude: true, noExtension: true }, deps), 0);
       assert.equal(
         readFileSync(launcher, "utf8"),
         launcherScript(process.execPath, fileURLToPath(new URL("./main.ts", import.meta.url))),
@@ -381,14 +559,153 @@ describe("the install and uninstall commands", () => {
         `wrote ${launcher}\nwrote ${manifest}\nNext: npm run doctor\nremoved ${manifest}\nremoved ${launcher}\n`,
       );
     } finally {
-      if (previous === undefined) {
-        delete process.env.HOME;
-      } else {
-        process.env.HOME = previous;
+      restoreEnv(previous);
+    }
+  });
+
+  it("resolves a relative --xpi against INIT_CWD under npm run setup", async () => {
+    const previous = saveEnv();
+    const initCwd = tempDir();
+    process.env.HOME = tempDir();
+    process.env.PATH = tempDir();
+    process.env.INIT_CWD = initCwd;
+    process.env.npm_lifecycle_event = "setup";
+    try {
+      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "missing.xpi" });
+      assert.equal(code, 1);
+      assert.ok(output.endsWith(`no file at ${join(initCwd, "missing.xpi")}\n`), output);
+    } finally {
+      restoreEnv(previous);
+    }
+  });
+
+  it("resolves a relative --xpi against the working directory outside npm run setup", async () => {
+    const previous = saveEnv();
+    const cwd = tempDir();
+    process.env.HOME = tempDir();
+    process.env.PATH = tempDir();
+    process.env.INIT_CWD = tempDir();
+    delete process.env.npm_lifecycle_event;
+    process.chdir(cwd);
+    try {
+      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "missing.xpi" });
+      assert.equal(code, 1);
+      assert.ok(output.endsWith(`no file at ${join(cwd, "missing.xpi")}\n`), output);
+    } finally {
+      restoreEnv(previous);
+    }
+  });
+
+  it("resolves a relative --xpi against the working directory without INIT_CWD", async () => {
+    const previous = saveEnv();
+    const cwd = tempDir();
+    process.env.HOME = tempDir();
+    process.env.PATH = tempDir();
+    delete process.env.INIT_CWD;
+    process.env.npm_lifecycle_event = "setup";
+    process.chdir(cwd);
+    try {
+      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "missing.xpi" });
+      assert.equal(code, 1);
+      assert.ok(output.endsWith(`no file at ${join(cwd, "missing.xpi")}\n`), output);
+    } finally {
+      restoreEnv(previous);
+    }
+  });
+
+  it("downloads the release of this checkout's version by default", async () => {
+    const previous = saveEnv();
+    const home = tempDir();
+    const bin = tempDir();
+    writeFileSync(
+      join(bin, "gh"),
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/gh-args"\necho "not logged in" >&2\nexit 1\n',
+      { mode: 0o755 },
+    );
+    process.env.HOME = home;
+    process.env.PATH = bin;
+    try {
+      const { code, output } = await runInstallCommand({ noClaude: true });
+      assert.equal(code, 1);
+      assert.ok(output.endsWith(`gh release download: not logged in\n${GH_AUTH_HINT}\n`), output);
+      assert.equal(
+        readFileSync(join(home, "gh-args"), "utf8"),
+        `${gh(home, SERVER_VERSION)[1].join("\n")}\n`,
+      );
+    } finally {
+      restoreEnv(previous);
+    }
+  });
+
+  it("starts firefox with the absolute path of an existing --xpi", {
+    timeout: 10_000,
+  }, async () => {
+    const previous = saveEnv();
+    const home = tempDir();
+    const initCwd = tempDir();
+    const bin = tempDir();
+    const xpi = join(initCwd, "foxhand.xpi");
+    writeFileSync(xpi, "signed");
+    writeFileSync(
+      join(bin, "firefox"),
+      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/firefox-args.tmp"\n/bin/mv "$HOME/firefox-args.tmp" "$HOME/firefox-args"\n',
+      { mode: 0o755 },
+    );
+    process.env.HOME = home;
+    process.env.PATH = bin;
+    process.env.INIT_CWD = initCwd;
+    process.env.npm_lifecycle_event = "setup";
+    try {
+      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "foxhand.xpi" });
+      assert.equal(code, 0);
+      assert.ok(
+        output.endsWith(
+          `opened ${xpi} in Firefox; confirm the installation there\nNext: npm run doctor\n`,
+        ),
+        output,
+      );
+      const args = join(home, "firefox-args");
+      for (let i = 0; i < 250 && !existsSync(args); i += 1) {
+        await sleep(20);
       }
+      assert.equal(readFileSync(args, "utf8"), `${xpi}\n`);
+    } finally {
+      restoreEnv(previous);
     }
   });
 });
+
+async function runInstallCommand(
+  options: CommandOptions,
+): Promise<{ code: number; output: string }> {
+  const installCommand = COMMANDS.get("install");
+  assert.ok(installCommand !== undefined);
+  const out: string[] = [];
+  const deps: CliDeps = { stdout: collector(out), stderr: collector(out), commands: COMMANDS };
+  const code = await installCommand(options, deps);
+  return { code, output: out.join("") };
+}
+
+interface SavedEnv {
+  cwd: string;
+  values: Record<"HOME" | "PATH" | "INIT_CWD" | "npm_lifecycle_event", string | undefined>;
+}
+
+function saveEnv(): SavedEnv {
+  const { HOME, PATH, INIT_CWD, npm_lifecycle_event } = process.env;
+  return { cwd: process.cwd(), values: { HOME, PATH, INIT_CWD, npm_lifecycle_event } };
+}
+
+function restoreEnv(saved: SavedEnv): void {
+  process.chdir(saved.cwd);
+  for (const [name, value] of Object.entries(saved.values)) {
+    if (value === undefined) {
+      delete process.env[name];
+    } else {
+      process.env[name] = value;
+    }
+  }
+}
 
 function tempDir(): string {
   const dir = mkdtempSync(join(tmpdir(), "foxhand-install-"));
@@ -396,8 +713,11 @@ function tempDir(): string {
   return dir;
 }
 
-function setup(home: string, results: RunResult[]) {
+type Scripted = RunResult | ((args: readonly string[]) => RunResult);
+
+function setup(home: string, results: Scripted[], launchResult: LaunchResult = { status: "ok" }) {
   const calls: Call[] = [];
+  const launches: [string, string[]][] = [];
   const chunks: string[] = [];
   const queue = [...results];
   let running = false;
@@ -410,22 +730,67 @@ function setup(home: string, results: RunResult[]) {
     if (running) {
       throw new Error(`call before the previous one finished: ${command} ${args.join(" ")}`);
     }
-    const result = queue.shift();
-    if (result === undefined) {
+    const scripted = queue.shift();
+    if (scripted === undefined) {
       throw new Error(`unscripted call: ${command} ${args.join(" ")}`);
     }
     running = true;
     await new Promise((resolve) => setImmediate(resolve));
     running = false;
-    return result;
+    return typeof scripted === "function" ? scripted(args) : scripted;
   }
+  async function launch(command: string, args: readonly string[]): Promise<LaunchResult> {
+    launches.push([command, [...args]]);
+    return launchResult;
+  }
+  const extension: ExtensionSource = { kind: "none" };
   return {
     calls,
+    launches,
     launcher: join(home, ".local", "share", "foxhand", "foxhand-host"),
     manifest: join(home, ".mozilla", "native-messaging-hosts", "foxhand.json"),
     output: () => chunks.join(""),
-    options: { home, node: NODE, main: MAIN, claude: true, run, out: collector(chunks) },
+    options: {
+      home,
+      node: NODE,
+      main: MAIN,
+      claude: true,
+      extension,
+      run,
+      launch,
+      out: collector(chunks),
+    },
   };
+}
+
+/** A gh that writes the asset into the --dir it was given, then returns `result`. */
+function writingGh(result: RunResult): (args: readonly string[]) => RunResult {
+  return (args) => {
+    const dir = args[args.indexOf("--dir") + 1];
+    const pattern = args[args.indexOf("--pattern") + 1];
+    assert.ok(dir !== undefined && pattern !== undefined);
+    writeFileSync(join(dir, pattern), "signed");
+    return result;
+  };
+}
+
+function gh(home: string, version = "1.2.3"): Call {
+  return [
+    "gh",
+    [
+      "release",
+      "download",
+      `v${version}`,
+      "--repo",
+      "github.com/mattiasw/foxhand",
+      "--pattern",
+      `foxhand-${version}.xpi`,
+      "--dir",
+      join(home, ".cache", "foxhand"),
+      "--clobber",
+    ],
+    { timeoutMs: 120000 },
+  ];
 }
 
 function mode(path: string): number {

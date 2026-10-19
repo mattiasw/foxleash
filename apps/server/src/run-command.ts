@@ -1,4 +1,4 @@
-import { type ExecFileException, execFile } from "node:child_process";
+import { type ChildProcess, type ExecFileException, execFile, spawn } from "node:child_process";
 
 export type RunResult =
   | { status: "ok" | "failed"; code: number; stdout: string; stderr: string }
@@ -6,6 +6,13 @@ export type RunResult =
   | { status: "timeout" };
 
 export type Run = typeof runCommand;
+
+export type LaunchResult =
+  | { status: "ok" }
+  | { status: "missing" }
+  | { status: "failed"; error: string };
+
+export type Launch = typeof launchDetached;
 
 export function runCommand(
   command: string,
@@ -46,4 +53,36 @@ function toResult(error: ExecFileException | null, stdout: string, stderr: strin
     return { status: "failed", code: error.code, stdout, stderr };
   }
   return { status: "failed", code: -1, stdout, stderr: stderr === "" ? error.message : stderr };
+}
+
+export function launchDetached(command: string, args: readonly string[]): Promise<LaunchResult> {
+  return new Promise((resolve) => {
+    let child: ChildProcess;
+    try {
+      // Not waited for: the program may be the user's Firefox, which keeps running. Its own
+      // session keeps a Ctrl-C in our terminal away from it.
+      child = spawn(command, [...args], { detached: true, stdio: "ignore", shell: false });
+    } catch (error: unknown) {
+      // spawn throws for some execve errors and for invalid arguments; the rest arrive as an error event.
+      resolve({ status: "failed", error: launchError(error) });
+      return;
+    }
+    child.once("spawn", () => resolve({ status: "ok" }));
+    // on, not once: a second error event without a listener would crash the process.
+    child.on("error", (error: NodeJS.ErrnoException) => {
+      resolve(
+        error.code === "ENOENT"
+          ? { status: "missing" }
+          : { status: "failed", error: launchError(error) },
+      );
+    });
+    child.unref();
+  });
+}
+
+function launchError(error: unknown): string {
+  if (error instanceof Error) {
+    return "code" in error && typeof error.code === "string" ? error.code : error.message;
+  }
+  return String(error);
 }

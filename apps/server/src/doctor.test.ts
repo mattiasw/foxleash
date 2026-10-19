@@ -21,8 +21,8 @@ import { fileURLToPath } from "node:url";
 import { EXTENSION_ID, PROTOCOL_VERSION, protocolMismatch } from "@foxhand/protocol";
 import { type DoctorOptions, doctor, type Spawn } from "./doctor.ts";
 import { createFrameReader, encodeFrame, FRAME_LIMIT } from "./framing.ts";
-import { install, installPaths } from "./install.ts";
-import type { Run, RunResult } from "./run-command.ts";
+import { type ExtensionSource, install, installPaths } from "./install.ts";
+import type { Launch, Run, RunResult } from "./run-command.ts";
 import { type FakeHost, startFakeHost } from "./testing/fake-host.ts";
 import { SERVER_VERSION } from "./version.ts";
 
@@ -1001,10 +1001,19 @@ async function fixture(script = answering(launcherWelcome())): Promise<Fixture> 
   return { home, main, manifest, launcher, socketDir: privateDir() };
 }
 
-function quiet(): { claude: false; run: Run; out: Writable; uid: number } {
+function quiet(): {
+  claude: false;
+  extension: ExtensionSource;
+  run: Run;
+  launch: Launch;
+  out: Writable;
+  uid: number;
+} {
   return {
     claude: false,
+    extension: { kind: "none" },
     run: fakeRun({ status: "missing" }).run,
+    launch: async () => assert.fail("launch called"),
     out: new Writable({ write: (_chunk, _encoding, callback) => callback() }),
     uid,
   };

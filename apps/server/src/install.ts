@@ -1,18 +1,27 @@
 import { chmodSync, mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
 import { EXTENSION_ID, NATIVE_HOST_NAME } from "@foxhand/protocol";
-import type { Run, RunResult } from "./run-command.ts";
+import type { Launch, Run, RunResult } from "./run-command.ts";
 
 const CLAUDE_SERVER_NAME = "foxhand";
 const CLAUDE_TIMEOUT_MS = 30_000;
 const REMOVE_ARGS = ["mcp", "remove", "-s", "user", CLAUDE_SERVER_NAME];
+const RELEASE_REPO = "github.com/mattiasw/foxhand";
+const GH_TIMEOUT_MS = 120_000;
+
+export type ExtensionSource =
+  | { kind: "release"; version: string }
+  | { kind: "file"; path: string }
+  | { kind: "none" };
 
 export interface InstallOptions {
   home: string;
   node: string;
   main: string;
   claude: boolean;
+  extension: ExtensionSource;
   run: Run;
+  launch: Launch;
   out: NodeJS.WritableStream;
   uid?: number;
 }
@@ -66,8 +75,100 @@ export async function install(options: InstallOptions): Promise<number> {
       return 1;
     }
   }
+  if (!(await installExtension(options))) {
+    return 1;
+  }
   out.write("Next: npm run doctor\n");
   return 0;
+}
+
+/** False after it printed why the extension step failed. */
+async function installExtension(options: InstallOptions): Promise<boolean> {
+  const { home, extension, run, launch, out } = options;
+  if (extension.kind === "none") {
+    return true;
+  }
+  const path =
+    extension.kind === "release"
+      ? await downloadExtension(extension.version, home, run, out)
+      : localExtension(extension.path, out);
+  if (path === undefined) {
+    return false;
+  }
+  // The file stays: Firefox reads it again when the user confirms the installation.
+  const launched = await launch("firefox", [path]);
+  if (launched.status === "ok") {
+    out.write(`opened ${path} in Firefox; confirm the installation there\n`);
+    return true;
+  }
+  if (launched.status === "missing") {
+    out.write(
+      `Firefox (firefox) was not found on PATH; open ${path} in Firefox to install the extension\n`,
+    );
+    return true;
+  }
+  out.write(
+    `could not start firefox: ${launched.error}; open ${path} in Firefox to install the extension\n`,
+  );
+  return false;
+}
+
+async function downloadExtension(
+  version: string,
+  home: string,
+  run: Run,
+  out: NodeJS.WritableStream,
+): Promise<string | undefined> {
+  const path = extensionPath(home, version);
+  const dir = dirname(path);
+  // No chmod: an existing ~/.cache/foxhand may hold the development profile, and keeps its mode.
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const args = [
+    "release",
+    "download",
+    `v${version}`,
+    "--repo",
+    RELEASE_REPO,
+    "--pattern",
+    `foxhand-${version}.xpi`,
+    "--dir",
+    dir,
+    "--clobber",
+  ];
+  const result = await run("gh", args, { timeoutMs: GH_TIMEOUT_MS });
+  if (result.status === "ok") {
+    if (!isFile(path)) {
+      out.write(`gh release download did not write ${path}\n`);
+      return undefined;
+    }
+    out.write(`downloaded ${path}\n`);
+    return path;
+  }
+  if (result.status === "missing") {
+    out.write(
+      "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxhand .xpi\n",
+    );
+  } else if (result.status === "failed") {
+    out.write(`gh release download: ${detail(result)}\n`);
+    out.write(
+      `run gh auth login with an account that can read ${RELEASE_REPO}, pass --xpi <path> with a signed Foxhand .xpi, or skip the extension with --no-extension\n`,
+    );
+  } else {
+    out.write("gh release download did not finish in 120 s\n");
+  }
+  return undefined;
+}
+
+function localExtension(path: string, out: NodeJS.WritableStream): string | undefined {
+  if (!isFile(path)) {
+    out.write(`no file at ${path}\n`);
+    return undefined;
+  }
+  return path;
+}
+
+function isFile(path: string): boolean {
+  return statSync(path, { throwIfNoEntry: false })?.isFile() === true;
 }
 
 export async function uninstall(options: UninstallOptions): Promise<number> {
@@ -108,6 +209,10 @@ export function installPaths(home: string): { launcher: string; manifest: string
     launcher: join(home, ".local", "share", "foxhand", "foxhand-host"),
     manifest: join(home, ".mozilla", "native-messaging-hosts", `${NATIVE_HOST_NAME}.json`),
   };
+}
+
+export function extensionPath(home: string, version: string): string {
+  return join(home, ".cache", "foxhand", `foxhand-${version}.xpi`);
 }
 
 export function launcherScript(node: string, main: string): string {
