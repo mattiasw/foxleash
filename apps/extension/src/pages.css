@@ -42,6 +42,32 @@ button {
   font: inherit;
 }
 
+label {
+  display: block;
+}
+
+textarea {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  margin-block: 0.25rem;
+  font-family: ui-monospace, monospace;
+  font-size: 1em;
+  resize: vertical;
+}
+
+.errors li {
+  display: block;
+  padding-block: 0.25rem;
+  border-bottom: none;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
 :focus-visible {
   outline: 2px solid;
   outline-offset: 2px;

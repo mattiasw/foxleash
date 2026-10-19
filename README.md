@@ -66,8 +66,13 @@ Ask your agent to do something in the browser, for example:
 
 Before a session opens a page on a site you have not approved, Foxhand asks you in that tab
 whether to allow it: this session, always, or not at all. The agent's call waits up to 30
-seconds for your answer. The extension's settings page in the Firefox add-ons manager lists
-the sites you allowed always, each with a Revoke button.
+seconds for your answer. After three refused or closed prompts, a session stops asking.
+
+The extension's settings page in the Firefox add-ons manager lists the sites you allowed
+always, each with a Revoke button. It also lists the sites you allowed or refused for each
+running agent session, and the prompts you closed without an answer, each with a Forget
+button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
+in memory until the session ends. The settings page is also where you edit the blocklist.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -96,9 +101,10 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title, and a local file only as `file:`. The sites you allowed always are listed
   in the extension's settings page in the add-ons manager, each with a Revoke button.
-- Financial and health sites are blocked by default. You can edit the list. Foxhand checks
-  the blocklist before it opens or reloads a page, and shows the agent a tab on a blocked
-  site only as the site's address.
+- Financial and health sites are blocked by default. You can edit the list in the
+  extension's settings page, one domain per line. Foxhand checks the blocklist before it
+  opens or reloads a page, and shows the agent a tab on a blocked site only as the site's
+  address.
 - File uploads only read from allowed folders (the agent's working folder and
   `~/Downloads` by default) and never dotfiles or key files.
 - Tool results mark page content as untrusted, and the agent is told not to follow

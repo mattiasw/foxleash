@@ -52,6 +52,22 @@ export function revokeSite(browser: SettingsBrowser, site: string): Promise<void
   return browser.storage.local.remove(SITE_KEY_PREFIX + site);
 }
 
+/**
+ * Stores the blocklist, `patterns` as `parseBlocklist` returns them. The built-in set is stored
+ * as no key, so later built-in additions apply.
+ */
+export function saveBlocklist(
+  browser: SettingsBrowser,
+  patterns: readonly string[],
+): Promise<void> {
+  const saved = new Set(patterns);
+  const builtIn = new Set(DEFAULT_BLOCKLIST);
+  if (saved.size === builtIn.size && [...saved].every((pattern) => builtIn.has(pattern))) {
+    return browser.storage.local.remove(BLOCKLIST_KEY);
+  }
+  return browser.storage.local.set({ [BLOCKLIST_KEY]: [...patterns] });
+}
+
 /** Calls `listener` whenever the stored settings change. */
 export function onSettingsChanged(browser: SettingsBrowser, listener: () => void): void {
   browser.storage.onChanged.addListener((_changes, areaName) => {
@@ -91,6 +107,6 @@ function grantedSite(key: string, value: unknown): string | undefined {
   return typeof value.grantedAt === "string" ? site : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }

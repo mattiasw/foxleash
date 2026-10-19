@@ -32,3 +32,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tab: for this session, always, or not at all. Only your click can allow it.
 - The Foxhand toolbar button shows ON on the tabs your agent session can use; clicking it
   opens the settings.
+- The settings page lets you edit the blocklist, and see and forget what you allowed or
+  refused for each running agent session, and the prompts you closed without an answer.

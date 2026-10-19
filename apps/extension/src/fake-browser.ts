@@ -52,6 +52,11 @@ export interface FakeBrowser {
    * closes the page, and `disconnected` is set when the background disconnects.
    */
   connectPage(name: string, sender: MessageSender): FakePort;
+  /**
+   * A `runtime.sendMessage` from an extension page or content script with that sender. Returns
+   * the first listener's reply, or undefined when no listener replied.
+   */
+  sendMessage(message: unknown, sender: MessageSender): Promise<unknown> | undefined;
   /** The user dragging a tab out of its group; an emptied group goes away. */
   ungroup(tabId: number): void;
   /** The user clicking the toolbar button while the tab is shown. */
@@ -107,6 +112,8 @@ export function createFakeBrowser(): FakeBrowser {
   const onCreated = createEvent<(tab: Tab) => void>();
   const onClicked = createEvent<(tab: Tab) => void>();
   const onConnect = createEvent<(port: RuntimePort) => void>();
+  const onMessage =
+    createEvent<(message: unknown, sender: MessageSender) => Promise<unknown> | undefined>();
   const onTabRemoved = createEvent<(tabId: number) => void>();
   let failSet = false;
 
@@ -122,6 +129,13 @@ export function createFakeBrowser(): FakeBrowser {
       id: FAKE_EXTENSION_ID,
       getURL: (path) => `${FAKE_EXTENSION_ORIGIN}/${path}`,
       onConnect,
+      onMessage,
+      // As the settings page. Firefox resolves with undefined when no listener replies.
+      sendMessage: (message) =>
+        fake.sendMessage(message, {
+          id: FAKE_EXTENSION_ID,
+          url: browser.runtime.getURL("options.html"),
+        }) ?? Promise.resolve(undefined),
     },
     action: {
       setBadgeText: async ({ tabId, text }) => {
@@ -288,6 +302,13 @@ export function createFakeBrowser(): FakeBrowser {
       const runtimePort: RuntimePort = Object.assign(port, { name, sender });
       for (const listener of [...onConnect.listeners]) listener(runtimePort);
       return port;
+    },
+    sendMessage: (message, sender) => {
+      for (const listener of [...onMessage.listeners]) {
+        const reply = listener(message, sender);
+        if (reply !== undefined) return reply;
+      }
+      return undefined;
     },
     ungroup: (tabId) => {
       const tab = tabOf(tabId);

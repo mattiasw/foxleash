@@ -9,6 +9,7 @@ import {
   readSettings,
   revokeSite,
   SITE_KEY_PREFIX,
+  saveBlocklist,
 } from "./settings.ts";
 
 const GRANT = { grantedAt: "2026-01-02T03:04:05.000Z" };
@@ -243,6 +244,60 @@ describe("grantSite and revokeSite", () => {
 
   it("use the key prefix site:", () => {
     assert.equal(SITE_KEY_PREFIX, "site:");
+  });
+});
+
+describe("saveBlocklist", () => {
+  it("stores the patterns, which readSettings then returns", async (t) => {
+    const { fake } = setup(t);
+    await saveBlocklist(fake.browser, ["127.0.0.1", "paypal.com"]);
+    assert.deepEqual(await fake.browser.storage.local.get(null), {
+      blocklist: ["127.0.0.1", "paypal.com"],
+    });
+    const settings = await readSettings(fake.browser);
+    assert.deepEqual(settings.blocklist, ["127.0.0.1", "paypal.com"]);
+    assert.deepEqual(effectiveBlocklist(settings), ["127.0.0.1", "paypal.com"]);
+  });
+
+  it("removes the key for the built-in set, in any order and with duplicates", async (t) => {
+    const { fake } = setup(t);
+    const remove = t.mock.method(fake.browser.storage.local, "remove");
+    const set = t.mock.method(fake.browser.storage.local, "set");
+    const builtIn = [...DEFAULT_BLOCKLIST].reverse();
+    builtIn.push(DEFAULT_BLOCKLIST[0] ?? "");
+    await saveBlocklist(fake.browser, builtIn);
+    assert.deepEqual(await fake.browser.storage.local.get(null), {});
+    assert.equal(set.mock.callCount(), 0);
+
+    await fake.browser.storage.local.set({ blocklist: ["127.0.0.1"] });
+    await saveBlocklist(fake.browser, builtIn);
+    assert.deepEqual(await fake.browser.storage.local.get(null), {});
+    assert.deepEqual(
+      remove.mock.calls.map((call) => call.arguments),
+      [["blocklist"], ["blocklist"]],
+    );
+    const settings = await readSettings(fake.browser);
+    assert.equal(settings.blocklist, undefined);
+    assert.deepEqual(effectiveBlocklist(settings), DEFAULT_BLOCKLIST);
+  });
+
+  it("stores an empty list, which blocks nothing", async (t) => {
+    const { fake } = setup(t);
+    await saveBlocklist(fake.browser, []);
+    assert.deepEqual(await fake.browser.storage.local.get(null), { blocklist: [] });
+    const settings = await readSettings(fake.browser);
+    assert.deepEqual(settings.blocklist, []);
+    assert.deepEqual(effectiveBlocklist(settings), []);
+  });
+
+  it("stores a subset or a superset of the built-in list", async (t) => {
+    const { fake } = setup(t);
+    const subset = DEFAULT_BLOCKLIST.slice(1);
+    await saveBlocklist(fake.browser, subset);
+    assert.deepEqual(await fake.browser.storage.local.get(null), { blocklist: subset });
+    const superset = [...DEFAULT_BLOCKLIST, "127.0.0.1"];
+    await saveBlocklist(fake.browser, superset);
+    assert.deepEqual(await fake.browser.storage.local.get(null), { blocklist: superset });
   });
 });
 

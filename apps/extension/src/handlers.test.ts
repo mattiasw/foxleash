@@ -1158,7 +1158,7 @@ function setup() {
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
-  const access = createSiteAccess({ browser: fake.browser, sessions, timers });
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const handleRequest = createHandlers({ browser: fake.browser, groups, timers, access });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

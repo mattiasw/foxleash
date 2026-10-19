@@ -11,6 +11,11 @@ export interface BrowserApi {
     /** The full `moz-extension:` URL of a file in the extension. */
     getURL(path: string): string;
     onConnect: BrowserEvent<(port: RuntimePort) => void>;
+    /** A listener replies by returning a promise, and returns undefined to not reply. */
+    onMessage: BrowserEvent<
+      (message: unknown, sender: MessageSender) => Promise<unknown> | undefined
+    >;
+    sendMessage(message: unknown): Promise<unknown>;
   };
   action: {
     setBadgeText(details: { tabId: number; text: string }): Promise<void>;

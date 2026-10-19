@@ -15,7 +15,7 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
 
 const groups = createSessionGroups(browser, (tabId) => indicator.refresh(tabId));
 const indicator = createIndicator({ browser, groups });
-const access = createSiteAccess({ browser, sessions: new Map(), timers });
+const access = createSiteAccess({ browser, groups, sessions: new Map(), timers });
 const handleRequest = createHandlers({ browser, groups, timers, access });
 const connection = createConnection({
   browser,

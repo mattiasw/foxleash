@@ -1,6 +1,7 @@
 import type { TabInfo } from "@foxhand/protocol";
-import type { BrowserApi, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
+import type { BrowserApi, MessageSender, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
+import type { SessionGroups } from "./session-groups.ts";
 import { effectiveBlocklist, grantSite, readSettings } from "./settings.ts";
 import { hostOf, matchesDomain, redactedUrl, siteOf } from "./site.ts";
 
@@ -20,6 +21,8 @@ export interface SessionState {
 export const APPROVAL_WAIT_MS = 30_000;
 /** The extension page that asks the user. */
 export const PROMPT_PAGE = "approve.html";
+/** The settings page, the only page that may read or forget session answers. */
+export const OPTIONS_PAGE = "options.html";
 
 const PORT_NAME = "approve";
 // Refused and closed prompts a session may have before Foxhand stops asking.
@@ -47,6 +50,7 @@ export interface OpenPrompt {
 
 export interface SiteAccessDeps<Handle> {
   browser: Pick<BrowserApi, "storage" | "runtime" | "tabs" | "windows">;
+  groups: Pick<SessionGroups, "groupOf">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
 }
@@ -70,6 +74,23 @@ export interface SiteAccess {
   askedUrl(session: string, tab: Tab): string | undefined;
   /** Forgets the session's answers and closes its open prompt. */
   endSession(session: string): void;
+  /** The answers each session holds, sites sorted. */
+  sessionAnswers(): Promise<SessionAnswers[]>;
+  /**
+   * Forgets one answer of the session: a site it allowed or refused, or with `"closed"` its
+   * closed prompts. Only removes; never allows anything.
+   */
+  forget(session: string, site: string): void;
+}
+
+/** What the settings page lists for one session. */
+export interface SessionAnswers {
+  session: string;
+  /** The session as the user can recognize it: by the tabs in its group. */
+  label: string;
+  allowed: string[];
+  refused: string[];
+  closed: number;
 }
 
 export interface SiteView {
@@ -115,6 +136,7 @@ interface Waiter<Handle> {
 
 export function createSiteAccess<Handle>({
   browser,
+  groups,
   sessions,
   timers,
 }: SiteAccessDeps<Handle>): SiteAccess {
@@ -124,6 +146,7 @@ export function createSiteAccess<Handle>({
   const answered = new Map<number, Answered>();
 
   browser.runtime.onConnect.addListener(connect);
+  browser.runtime.onMessage.addListener(receiveFromSettings);
   browser.tabs.onRemoved.addListener((tabId) => {
     answered.delete(tabId);
     for (const prompt of promptsIn(tabId)) drop(prompt, true);
@@ -145,7 +168,7 @@ export function createSiteAccess<Handle>({
     }
   });
 
-  return { view, check, ask, openPrompt, askedUrl, endSession };
+  return { view, check, ask, openPrompt, askedUrl, endSession, sessionAnswers, forget };
 
   async function view(session: string): Promise<SiteView> {
     const settings = await readSettings(browser);
@@ -222,6 +245,44 @@ export function createSiteAccess<Handle>({
     if (prompt !== undefined) drop(prompt, false);
   }
 
+  async function sessionAnswers(): Promise<SessionAnswers[]> {
+    // Copied before any await, so the reply shows one moment.
+    const held = [...sessions]
+      .map(([session, state]) => ({
+        session,
+        allowed: [...state.allowed].sort(),
+        refused: [...state.refused].sort(),
+        closed: state.closed,
+      }))
+      .filter((entry) => entry.allowed.length > 0 || entry.refused.length > 0 || entry.closed > 0);
+    return Promise.all(
+      held.map(async (entry) => ({ ...entry, label: await labelOf(entry.session) })),
+    );
+  }
+
+  function forget(session: string, site: string): void {
+    const state = sessions.get(session);
+    if (state === undefined) return;
+    if (site === "closed") state.closed = 0;
+    else {
+      state.allowed.delete(site);
+      state.refused.delete(site);
+    }
+    if (state.allowed.size === 0 && state.refused.size === 0 && state.closed === 0) {
+      sessions.delete(session);
+    }
+  }
+
+  async function labelOf(session: string): Promise<string> {
+    const group = await groups.groupOf(session);
+    const tabs =
+      group === undefined
+        ? 0
+        : (await browser.tabs.query({ groupId: group.id }).catch(() => [])).length;
+    if (tabs === 0) return "session with no tabs";
+    return tabs === 1 ? "session with 1 tab" : `session with ${tabs} tabs`;
+  }
+
   function webSite(url: string): string {
     const site = siteOf(url);
     if (site === undefined) {
@@ -242,7 +303,7 @@ export function createSiteAccess<Handle>({
     if (state.refused.size + state.closed >= PROMPT_BUDGET) {
       throw new ToolError(
         "site_refused",
-        "Foxhand asks no more in this session after three refused or closed prompts. Start a new session to be asked again.",
+        "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.",
       );
     }
   }
@@ -363,6 +424,27 @@ export function createSiteAccess<Handle>({
     return [...prompts.values()].find(
       (prompt) => prompt.promptUrl === sender.url && sender.tab?.id === prompt.tabId,
     );
+  }
+
+  /** Not async: a listener that returns a promise replies, and only the settings page gets one. */
+  function receiveFromSettings(
+    message: unknown,
+    sender: MessageSender,
+  ): Promise<unknown> | undefined {
+    if (sender.id !== browser.runtime.id || sender.url !== browser.runtime.getURL(OPTIONS_PAGE)) {
+      return undefined;
+    }
+    const fields = fieldsOf(message);
+    if (fields?.type === "session_answers") return sessionAnswers();
+    if (
+      fields?.type === "forget" &&
+      typeof fields.session === "string" &&
+      typeof fields.site === "string"
+    ) {
+      forget(fields.session, fields.site);
+      return Promise.resolve(true);
+    }
+    return undefined;
   }
 
   function receive(prompt: Prompt<Handle>, port: Port, message: unknown): void {

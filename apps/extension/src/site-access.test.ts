@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { RuntimePort, Tab } from "./browser-api.ts";
+import type { MessageSender, RuntimePort, Tab } from "./browser-api.ts";
 import {
   createFakeBrowser,
   createFakeTimers,
@@ -10,6 +10,7 @@ import {
   flush,
 } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
+import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, readSettings } from "./settings.ts";
 import {
   APPROVAL_WAIT_MS,
@@ -268,7 +269,7 @@ const PROMPT_URL =
   /^moz-extension:\/\/[0-9a-f-]+\/approve\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const REFUSED = "The user did not allow Foxhand on https://a.example in this session.";
 const BUDGET =
-  "Foxhand asks no more in this session after three refused or closed prompts. Start a new session to be asked again.";
+  "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.";
 const PENDING =
   "Foxhand is waiting for the user to answer in tab 1 whether to allow https://a.example. Try again after the user has answered.";
 
@@ -510,7 +511,12 @@ describe("prompt page", () => {
       addListener: (listener) => listeners.push(listener),
       removeListener: () => {},
     };
-    createSiteAccess({ browser: fake.browser, sessions: new Map(), timers: createFakeTimers() });
+    createSiteAccess({
+      browser: fake.browser,
+      groups: createSessionGroups(fake.browser),
+      sessions: new Map(),
+      timers: createFakeTimers(),
+    });
     const gone = () => {
       throw new Error("Attempt to postMessage on disconnected port");
     };
@@ -1114,6 +1120,271 @@ describe("endSession", () => {
   });
 });
 
+describe("sessionAnswers", () => {
+  it("lists each session's answers with its tab count, in the order the sessions answered", async () => {
+    const { fake, access, sessions, groups, tab } = setup();
+    sessions.set("s2", {
+      allowed: new Set(["https://c.example", "https://a.example"]),
+      refused: new Set(["https://d.example", "https://b.example"]),
+      closed: 2,
+    });
+    sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 1 });
+    sessions.set("s3", { allowed: new Set(), refused: new Set(["https://e.example"]), closed: 0 });
+    await groups.ensureGroup("s2", tab);
+    await groups.ensureGroup("s2", fake.openTab());
+    await groups.ensureGroup("s1", fake.openTab());
+    assert.deepEqual(await access.sessionAnswers(), [
+      {
+        session: "s2",
+        label: "session with 2 tabs",
+        allowed: ["https://a.example", "https://c.example"],
+        refused: ["https://b.example", "https://d.example"],
+        closed: 2,
+      },
+      { session: "s1", label: "session with 1 tab", allowed: [], refused: [], closed: 1 },
+      {
+        session: "s3",
+        label: "session with no tabs",
+        allowed: [],
+        refused: ["https://e.example"],
+        closed: 0,
+      },
+    ]);
+  });
+
+  it("leaves out sessions that hold no answer", async () => {
+    const { access, sessions } = setup();
+    sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 0 });
+    sessions.set("s2", state(["https://a.example"]));
+    assert.deepEqual(
+      (await access.sessionAnswers()).map((entry) => entry.session),
+      ["s2"],
+    );
+  });
+
+  it("labels a session whose group was closed, or whose tabs cannot be read, as having no tabs", async () => {
+    const { fake, access, sessions, groups, tab } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const groupId = await groups.ensureGroup("s1", tab);
+    const query = fake.browser.tabs.query;
+    fake.browser.tabs.query = async () => {
+      throw new Error("tabs are unavailable");
+    };
+    assert.equal((await access.sessionAnswers())[0]?.label, "session with no tabs");
+    fake.browser.tabs.query = query;
+    assert.equal((await access.sessionAnswers())[0]?.label, "session with 1 tab");
+    fake.closeGroup(groupId);
+    assert.equal((await access.sessionAnswers())[0]?.label, "session with no tabs");
+  });
+
+  it("shows the answers as they were when it was called", async () => {
+    const { access, sessions } = setup();
+    const held: SessionState = { allowed: new Set(), refused: new Set(), closed: 1 };
+    sessions.set("s1", held);
+    const listed = access.sessionAnswers();
+    held.closed = 3;
+    held.allowed.add("https://a.example");
+    assert.deepEqual(await listed, [
+      { session: "s1", label: "session with no tabs", allowed: [], refused: [], closed: 1 },
+    ]);
+  });
+});
+
+describe("forget", () => {
+  it("forgets an allowed site, so the session is asked again and its tabs are redacted", async () => {
+    const { access, sessions } = setup();
+    sessions.set("s1", state(["https://a.example", "https://b.example"]));
+    access.forget("s1", "https://a.example");
+    assert.deepEqual(sessions.get("s1"), state(["https://b.example"]));
+    const current = await access.view("s1");
+    assert.equal(current.allowed("https://a.example/"), false);
+    assert.equal(current.tabInfo(tab({ url: "https://a.example/x" })).title, "");
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "ask" });
+    assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "allowed" });
+  });
+
+  it("forgets a refused site, so the session is asked for it again", async () => {
+    const { access, sessions } = setup();
+    sessions.set("s1", {
+      allowed: new Set(),
+      refused: new Set(["https://a.example", "https://b.example"]),
+      closed: 0,
+    });
+    access.forget("s1", "https://a.example");
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "ask" });
+    await assert.rejects(access.check("s1", "https://b.example/"), { code: "site_refused" });
+  });
+
+  it("restores a spent budget by forgetting one refusal or the closed prompts", async () => {
+    const { access, sessions } = setup();
+    sessions.set("s1", {
+      allowed: new Set(),
+      refused: new Set(["https://a.example", "https://b.example"]),
+      closed: 1,
+    });
+    await assert.rejects(access.check("s1", "https://c.example/"), { message: BUDGET });
+    access.forget("s1", "https://a.example");
+    assert.deepEqual(await access.check("s1", "https://c.example/"), { decision: "ask" });
+
+    sessions.set("s2", { allowed: new Set(), refused: new Set(), closed: 3 });
+    await assert.rejects(access.check("s2", "https://c.example/"), { message: BUDGET });
+    access.forget("s2", "closed");
+    assert.deepEqual(sessions.get("s2"), undefined);
+    assert.deepEqual(await access.check("s2", "https://c.example/"), { decision: "ask" });
+  });
+
+  it("asks a session again whose prompts were answered and closed", async () => {
+    const { fake, access, tab, ask } = setup();
+    await ask("s1", "https://a.example/");
+    connect(fake, tab.id).deliver({ type: "answer", answer: "no" });
+    for (const site of ["https://b.example/", "https://c.example/"]) {
+      const next = fake.openTab();
+      await ask("s1", site, next.id);
+      connect(fake, next.id);
+      fake.removeTab(next.id);
+    }
+    await assert.rejects(access.check("s1", "https://d.example/"), { message: BUDGET });
+    access.forget("s1", "closed");
+    assert.deepEqual(await access.check("s1", "https://d.example/"), { decision: "ask" });
+    await rejectsWith(access.check("s1", "https://a.example/"), "site_refused");
+    access.forget("s1", "https://a.example");
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "ask" });
+  });
+
+  it("keeps the session's other answers and drops its entry once it holds none", () => {
+    const { access, sessions } = setup();
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example"]),
+      refused: new Set(["https://b.example"]),
+      closed: 2,
+    });
+    access.forget("s1", "closed");
+    assert.deepEqual(sessions.get("s1"), {
+      allowed: new Set(["https://a.example"]),
+      refused: new Set(["https://b.example"]),
+      closed: 0,
+    });
+    access.forget("s1", "https://b.example");
+    assert.deepEqual(sessions.get("s1"), state(["https://a.example"]));
+    access.forget("s1", "https://c.example");
+    assert.deepEqual(sessions.get("s1"), state(["https://a.example"]));
+    access.forget("s1", "https://a.example");
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("does nothing for an unknown session and never allows a site", async () => {
+    const { access, sessions } = setup();
+    access.forget("s1", "https://a.example");
+    access.forget("s1", "closed");
+    assert.equal(sessions.size, 0);
+    sessions.set("s2", { allowed: new Set(), refused: new Set(), closed: 1 });
+    access.forget("s2", "https://a.example");
+    assert.deepEqual(sessions.get("s2"), {
+      allowed: new Set(),
+      refused: new Set(),
+      closed: 1,
+    });
+    assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+  });
+});
+
+describe("messages from the settings page", () => {
+  it("answers the settings page with the session answers and forgets on request", async () => {
+    const { fake, sessions } = setup();
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example"]),
+      refused: new Set(["https://b.example"]),
+      closed: 0,
+    });
+    assert.deepEqual(await fake.sendMessage({ type: "session_answers" }, settingsPage(fake)), [
+      {
+        session: "s1",
+        label: "session with no tabs",
+        allowed: ["https://a.example"],
+        refused: ["https://b.example"],
+        closed: 0,
+      },
+    ]);
+    const forgot = fake.sendMessage(
+      { type: "forget", session: "s1", site: "https://b.example" },
+      settingsPage(fake),
+    );
+    assert.equal(await forgot, true);
+    assert.deepEqual(sessions.get("s1"), state(["https://a.example"]));
+  });
+
+  it("answers through runtime.sendMessage, which sends as the settings page", async () => {
+    const { fake, sessions } = setup();
+    sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 2 });
+    assert.equal(
+      await fake.browser.runtime.sendMessage({ type: "forget", session: "s1", site: "closed" }),
+      true,
+    );
+    assert.equal(sessions.has("s1"), false);
+    assert.equal(await fake.browser.runtime.sendMessage({ type: "unknown" }), undefined);
+  });
+
+  it("listens from the moment it is created", () => {
+    const fake = createFakeBrowser();
+    createSiteAccess({
+      browser: fake.browser,
+      groups: createSessionGroups(fake.browser),
+      sessions: new Map(),
+      timers: createFakeTimers(),
+    });
+    assert.notEqual(fake.sendMessage({ type: "session_answers" }, settingsPage(fake)), undefined);
+  });
+
+  it("does not answer any other sender", async () => {
+    const { fake, sessions } = setup();
+    const options = fake.browser.runtime.getURL("options.html");
+    const senders: MessageSender[] = [
+      { id: "other@example.org", url: options },
+      { url: options },
+      { id: FAKE_EXTENSION_ID },
+      { id: FAKE_EXTENSION_ID, url: `${fake.browser.runtime.getURL("approve.html")}?id=x` },
+      { id: FAKE_EXTENSION_ID, url: "https://a.example/options.html" },
+      { id: FAKE_EXTENSION_ID, url: `${options}?x` },
+      { id: FAKE_EXTENSION_ID, url: `${options}#x` },
+      { id: FAKE_EXTENSION_ID, url: options, tab: { id: 1 } },
+    ];
+    for (const sender of senders.slice(0, -1)) {
+      sessions.set("s1", state(["https://a.example"]));
+      assert.equal(fake.sendMessage({ type: "session_answers" }, sender), undefined);
+      const forget = { type: "forget", session: "s1", site: "https://a.example" };
+      assert.equal(fake.sendMessage(forget, sender), undefined);
+      assert.deepEqual(sessions.get("s1"), state(["https://a.example"]), JSON.stringify(sender));
+    }
+    // The settings page in a tab is still the settings page.
+    assert.notEqual(fake.sendMessage({ type: "session_answers" }, senders.at(-1) ?? {}), undefined);
+  });
+
+  it("does not answer messages it does not know", async () => {
+    const { fake, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const messages: unknown[] = [
+      { type: "answers" },
+      { type: "Session_answers" },
+      "session_answers",
+      null,
+      42,
+      ["session_answers"],
+      { type: "forget", session: 1, site: "https://a.example" },
+      { type: "forget", session: "s1", site: ["https://a.example"] },
+      { type: "forget", session: "s1" },
+      { type: "forget", site: "https://a.example" },
+    ];
+    for (const message of messages) {
+      assert.equal(
+        fake.sendMessage(message, settingsPage(fake)),
+        undefined,
+        JSON.stringify(message),
+      );
+    }
+    assert.deepEqual(sessions.get("s1"), state(["https://a.example"]));
+  });
+});
+
 function siteOfUrl(url: string): string {
   return new URL(url).origin;
 }
@@ -1129,7 +1400,8 @@ function setup() {
   const fake = createFakeBrowser();
   const sessions: SessionMemory = new Map();
   const timers = createFakeTimers();
-  const access = createSiteAccess({ browser: fake.browser, sessions, timers });
+  const groups = createSessionGroups(fake.browser);
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const tab = fake.openTab({ active: true });
 
   /** Asks in `tabId` and returns the approval with the prompt page's URL. */
@@ -1142,7 +1414,11 @@ function setup() {
     return { approval, answer: track(approval.answer), promptUrl: fake.tabs.get(tabId)?.url ?? "" };
   }
 
-  return { fake, sessions, access, timers, tab, ask };
+  return { fake, sessions, access, timers, groups, tab, ask };
+}
+
+function settingsPage(fake: FakeBrowser): MessageSender {
+  return { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL("options.html") };
 }
 
 function tab(fields: Partial<Tab>): Tab {
