@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { Firefox } from "./firefox.ts";
+import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
   READ_HIDDEN,
@@ -16,6 +16,7 @@ import {
   type Harness,
   type Session,
   tabOf,
+  tabsOf,
   untrustedContent,
 } from "./harness.ts";
 
@@ -339,6 +340,18 @@ describe("read_page in real Firefox", () => {
       await harness.ok(session, "tab_open", { url: fixtures.url("/read-redirect") }),
     );
     const other = `http://localhost:${fixtures.port}`;
+    // tab_open can return before the tab shows the redirect target.
+    await pollUntil(
+      async () => {
+        const listed = tabsOf(await harness.ok(session, "tabs_list")).find(
+          ({ id }) => id === tab.id,
+        );
+        if (listed !== undefined && URL.parse(listed.url)?.origin === other) return listed;
+        throw new Error(`tab ${tab.id} is listed as ${JSON.stringify(listed?.url)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${tab.id} to show ${other}`,
+    );
     const text = await refused(tab.id);
     assert.ok(text.includes(`Foxhand is not allowed on ${other} in this session`), text);
   });
