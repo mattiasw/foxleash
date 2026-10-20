@@ -336,9 +336,14 @@ function errorResult(text: string): CallToolResult {
 function textResult(result: unknown): CallToolResult {
   let json: string;
   try {
+    // undefined for a result of undefined, whatever the lib's return type says
+    const compact: string | undefined = JSON.stringify(result);
+    if (compact !== undefined && prettyJsonLength(compact, MAX_RESULT_BYTES) > MAX_RESULT_BYTES) {
+      return errorResult(TOO_LARGE);
+    }
     json = JSON.stringify(result, null, 2);
   } catch (error: unknown) {
-    // Deep nesting overflows the stack, or its indentation outgrows V8's string length limit.
+    // Deep nesting overflows the stack; indentation past the cap is refused before it is built.
     if (error instanceof RangeError) {
       return errorResult(NESTED);
     }
@@ -349,6 +354,46 @@ function textResult(result: unknown): CallToolResult {
     return errorResult(TOO_LARGE);
   }
   return { content: [{ type: "text", text }] };
+}
+
+/**
+ * The length of `JSON.stringify(value, null, 2)` given `compact = JSON.stringify(value)`, or
+ * some count over `limit` once the count passes it. Exact because compact JSON has no
+ * whitespace outside strings: every added newline, indent and space comes from a bracket, comma
+ * or colon.
+ */
+export function prettyJsonLength(compact: string, limit: number): number {
+  let count = compact.length;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let i = 0; i < compact.length; i += 1) {
+    if (count > limit) return count;
+    const char = compact[i];
+    if (inString) {
+      if (escaped) escaped = false;
+      else if (char === "\\") escaped = true;
+      else if (char === '"') inString = false;
+    } else if (char === '"') {
+      inString = true;
+    } else if (char === "{" || char === "[") {
+      const next = compact[i + 1];
+      if (next === "}" || next === "]") {
+        i += 1;
+      } else {
+        depth += 1;
+        count += 1 + 2 * depth;
+      }
+    } else if (char === "}" || char === "]") {
+      depth -= 1;
+      count += 1 + 2 * depth;
+    } else if (char === ",") {
+      count += 1 + 2 * depth;
+    } else if (char === ":") {
+      count += 1;
+    }
+  }
+  return count;
 }
 
 /** read_page's tree as page text in its frame, and Foxhand's own note when it was cut. */

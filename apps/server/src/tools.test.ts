@@ -11,6 +11,7 @@ import { BridgeError, HostError } from "./bridge.ts";
 import { NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { createMcpServer } from "./mcp.ts";
 import {
+  prettyJsonLength,
   SCREENSHOT_NOTE,
   type ToolBridge,
   UNTRUSTED_FRAME,
@@ -528,6 +529,70 @@ describe("tools", () => {
       content: [{ type: "text", text: "The result from Firefox is nested too deeply to return." }],
       isError: true,
     });
+  });
+
+  it(
+    "refuses a result whose indentation would pass the cap without building it",
+    LIMIT,
+    async () => {
+      let deep: unknown = new Array(150_000).fill(0);
+      for (let level = 0; level < 2_000; level += 1) {
+        deep = [deep];
+      }
+      const { client } = await start(() => deep);
+      const output = await client.callTool({ name: "tabs_list", arguments: {} });
+      assert.deepEqual(output, {
+        content: [{ type: "text", text: "The result from Firefox is too large to return." }],
+        isError: true,
+      });
+    },
+  );
+
+  it("counts the exact length of a value's pretty-printed JSON", LIMIT, () => {
+    const values: unknown[] = [
+      1,
+      -1.5e-7,
+      true,
+      null,
+      "a",
+      [],
+      {},
+      [[]],
+      { a: {} },
+      [{}, []],
+      [[[[1, 2], [3]]]],
+      { a: [{ b: { c: [1, {}] } }], d: 2 },
+      [1, [2, { b: 'x",{[:' }], {}],
+      { s: "]}" },
+      ["{", "}", "[", "]", ",", ":"],
+      ['"', [1, 2]],
+      { 'k\\"': [null, true, { c: [] }] },
+      "a\\",
+      ["a\\", "b"],
+      { "a\\": "b\\" },
+      { '\n"': "\u0001" },
+      { e: "\u2028", s: "é😀" },
+      { a: undefined, b: 1 },
+      [undefined, () => 1],
+    ];
+    for (const value of values) {
+      const compact = JSON.stringify(value);
+      assert.equal(
+        prettyJsonLength(compact, Number.POSITIVE_INFINITY),
+        JSON.stringify(value, null, 2).length,
+        compact,
+      );
+    }
+  });
+
+  it("stops counting once the pretty-printed length passes the limit", LIMIT, () => {
+    assert.equal(prettyJsonLength("[1,2]", 12), 12);
+    const atLimit = prettyJsonLength("[1,2]", 11);
+    assert.ok(atLimit > 11, String(atLimit));
+    const early = prettyJsonLength("[1,2]", 7);
+    assert.ok(early > 7 && early < 12, String(early));
+    const long = prettyJsonLength(JSON.stringify("a".repeat(100)), 10);
+    assert.ok(long > 10, String(long));
   });
 
   it("returns an own __proto__ key as text", LIMIT, async () => {
