@@ -73,6 +73,29 @@ export interface PageText {
   totalChars: number;
 }
 
+export const CONSOLE_LEVELS = ["debug", "log", "info", "warn", "error"] as const;
+export type ConsoleLevel = (typeof CONSOLE_LEVELS)[number];
+
+export const CONSOLE_KINDS = ["console", "uncaught_error", "unhandled_rejection"] as const;
+export type ConsoleKind = (typeof CONSOLE_KINDS)[number];
+
+/** One message a page wrote; `time` is ms since the epoch, when Foxhand's recorder saw it. */
+export interface ConsoleMessage {
+  level: ConsoleLevel;
+  kind: ConsoleKind;
+  text: string;
+  time: number;
+}
+
+/** The most messages a page keeps; older ones are dropped and counted. */
+export const MAX_CONSOLE_MESSAGES = 300;
+/**
+ * A message's text is cut to this many UTF-16 units. With MAX_CONSOLE_MESSAGES, the reply stays
+ * under the background's cap of 2,000,000 characters as JSON even when every character escapes
+ * to six.
+ */
+export const MAX_CONSOLE_TEXT = 1000;
+
 /** The most bytes upload_file takes in one call, across all its files. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
@@ -130,6 +153,11 @@ export interface Methods {
     params: { tabId: number } & Target & DragEnd;
     result: { ref: string; targetRef: string; mode: DragMode; dropped: boolean };
   };
+  /** `recording` is false when Foxhand has not recorded the page since it loaded. */
+  read_console: {
+    params: { tabId: number };
+    result: { recording: boolean; messages: ConsoleMessage[]; dropped: number };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -156,6 +184,7 @@ export const METHOD_NAMES = [
   "hover",
   "scroll",
   "drag",
+  "read_console",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

@@ -48,7 +48,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the eleven tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the twelve tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -57,6 +57,7 @@ describe("tools", () => {
       "get_page_text",
       "hover",
       "navigate",
+      "read_console",
       "read_page",
       "screenshot",
       "scroll",
@@ -78,6 +79,7 @@ describe("tools", () => {
           "hover",
           "scroll",
           "drag",
+          "read_console",
         ].includes(tool.name),
         tool.name,
       );
@@ -831,6 +833,289 @@ describe("tools", () => {
     const { client } = await start(() => result);
     const output = await client.callTool({ name: "tabs_list", arguments: {} });
     assert.equal(unframed(output), '{\n  "__proto__": {\n    "x": 1\n  },\n  "tab": 1\n}');
+  });
+});
+
+describe("read_console", () => {
+  const LEVELS = ["debug", "log", "info", "warn", "error"] as const;
+  const UNREADABLE = "Firefox returned console messages Foxhand cannot read.";
+
+  /** One message at each level, then an uncaught error and a rejection, oldest first. */
+  function messages() {
+    return [
+      ...LEVELS.map((level, index) => ({
+        level,
+        kind: "console",
+        text: `${level} message`,
+        time: 1000 + index,
+      })),
+      { level: "error", kind: "uncaught_error", text: "Error: boom (a.js:1:2)", time: 1005 },
+      { level: "error", kind: "unhandled_rejection", text: "Error: Nope", time: 1006 },
+    ];
+  }
+
+  function result(list: unknown[] = messages(), dropped = 0) {
+    return { recording: true, messages: list, dropped };
+  }
+
+  async function read(args: Record<string, unknown>, answer: unknown = result()) {
+    const { client, calls } = await start(() => answer);
+    const output = await client.callTool({ name: "read_console", arguments: args });
+    return { output, calls };
+  }
+
+  it("is described with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "read_console");
+    assert.deepEqual(tool?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), [
+      "tabId",
+      "level",
+      "pattern",
+      "limit",
+    ]);
+    assert.equal(tool?.description?.includes(ASKS_FIRST), false);
+    for (const words of [
+      "uncaught errors and unhandled promise rejections, oldest first",
+      "Only the tab's top page is recorded, not its frames.",
+      "recording false means Foxhand has not recorded the page since it loaded",
+      "Foxhand keeps the newest 300 messages of a page, each cut to 1,000 characters",
+      "the newest limit (100 unless given, at most 300) are returned",
+      "read_console never asks",
+    ]) {
+      assert.ok(tool?.description?.includes(words), words);
+    }
+  });
+
+  it("refuses arguments outside the schema without asking Firefox", LIMIT, async () => {
+    const { client, calls } = await start(() => result());
+    const prefix =
+      "MCP error -32602: Input validation error: Invalid arguments for tool read_console: ";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: -1 }, "Too small: expected number to be >=0 at tabId"],
+      [{ tabId: 1, limit: 0 }, "Too small: expected number to be >=1 at limit"],
+      [{ tabId: 1, limit: 301 }, "Too big: expected number to be <=300 at limit"],
+      [{ tabId: 1, limit: 1.5 }, "Invalid input: expected int, received number at limit"],
+      [
+        { tabId: 1, level: "fatal" },
+        'Invalid option: expected one of "debug"|"log"|"info"|"warn"|"error" at level',
+      ],
+      [{ tabId: 1, pattern: 1 }, "Invalid input: expected string, received number at pattern"],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "read_console", arguments: args });
+      assert.deepEqual(output, {
+        content: [{ type: "text", text: prefix + reason }],
+        isError: true,
+      });
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("asks Firefox with the tab id only", LIMIT, async () => {
+    const { calls } = await read({ tabId: 2, level: "warn", pattern: "x", limit: 3 });
+    assert.deepEqual(calls, [{ method: "read_console", params: { tabId: 2 } }]);
+    assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
+  });
+
+  it("returns every message, framed as untrusted, with nothing omitted", LIMIT, async () => {
+    const { output } = await read({ tabId: 1 }, result(messages(), 4));
+    assert.equal(output.isError, undefined);
+    assert.equal(
+      unframed(output),
+      pretty({ recording: true, messages: messages(), dropped: 4, omitted: 0 }),
+    );
+  });
+
+  it("returns recording false as Firefox gives it", LIMIT, async () => {
+    const { output } = await read({ tabId: 1 }, { recording: false, messages: [], dropped: 0 });
+    assert.equal(
+      unframed(output),
+      pretty({ recording: false, messages: [], dropped: 0, omitted: 0 }),
+    );
+  });
+
+  it("keeps messages of the level given or above", LIMIT, async () => {
+    const expected: Record<string, string[]> = {
+      debug: ["debug", "log", "info", "warn", "error", "error", "error"],
+      log: ["log", "info", "warn", "error", "error", "error"],
+      info: ["log", "info", "warn", "error", "error", "error"],
+      warn: ["warn", "error", "error", "error"],
+      error: ["error", "error", "error"],
+    };
+    for (const [level, levels] of Object.entries(expected)) {
+      const { output } = await read({ tabId: 1, level });
+      const shown = JSON.parse(unframed(output));
+      assert.deepEqual(
+        shown.messages.map((message: { level: string }) => message.level),
+        levels,
+        level,
+      );
+      assert.equal(shown.omitted, 0, level);
+    }
+  });
+
+  it("keeps messages whose text matches the pattern, case-sensitively", LIMIT, async () => {
+    const cases: [string, string[]][] = [
+      ["^Error: ", ["Error: boom (a.js:1:2)", "Error: Nope"]],
+      ["error", ["error message"]],
+      ["o{2}m", ["Error: boom (a.js:1:2)"]],
+      ["nothing like it", []],
+    ];
+    for (const [pattern, texts] of cases) {
+      const { output } = await read({ tabId: 1, pattern });
+      const shown = JSON.parse(unframed(output));
+      assert.deepEqual(
+        shown.messages.map((message: { text: string }) => message.text),
+        texts,
+        pattern,
+      );
+    }
+  });
+
+  it("applies level and pattern together", LIMIT, async () => {
+    const { output } = await read({ tabId: 1, level: "warn", pattern: "message" });
+    const shown = JSON.parse(unframed(output));
+    assert.deepEqual(
+      shown.messages.map((message: { text: string }) => message.text),
+      ["warn message", "error message"],
+    );
+  });
+
+  it("keeps the newest limit matches in order and counts the rest as omitted", LIMIT, async () => {
+    const { output } = await read({ tabId: 1, limit: 2 });
+    assert.equal(
+      unframed(output),
+      pretty({ recording: true, messages: messages().slice(-2), dropped: 0, omitted: 5 }),
+    );
+    const matched = await read({ tabId: 1, pattern: "message", limit: 4 });
+    assert.equal(
+      unframed(matched.output),
+      pretty({ recording: true, messages: messages().slice(1, 5), dropped: 0, omitted: 1 }),
+    );
+    const fewer = await read({ tabId: 1, level: "error", limit: 4 });
+    assert.equal(
+      unframed(fewer.output),
+      pretty({ recording: true, messages: messages().slice(-3), dropped: 0, omitted: 0 }),
+    );
+  });
+
+  it("returns the newest 100 matches unless given a limit", LIMIT, async () => {
+    const many = Array.from({ length: 150 }, (_, index) => ({
+      level: "log",
+      kind: "console",
+      text: `line ${index}`,
+      time: index,
+    }));
+    const { output } = await read({ tabId: 1 }, result(many));
+    assert.equal(
+      unframed(output),
+      pretty({ recording: true, messages: many.slice(50), dropped: 0, omitted: 50 }),
+    );
+  });
+
+  it("refuses a pattern that takes more than a second on the page's text", LIMIT, async () => {
+    const slow = { level: "log", kind: "console", text: `${"a".repeat(40)}!`, time: 1 };
+    const started = Date.now();
+    const { output } = await read({ tabId: 1, pattern: "^(\\w+\\s?)+$" }, result([slow]));
+    assert.deepEqual(output, {
+      content: [
+        {
+          type: "text",
+          text: "pattern took more than 1 second to match the messages; try a simpler pattern.",
+        },
+      ],
+      isError: true,
+    });
+    assert.ok(Date.now() - started < 5000);
+    const quick = await read({ tabId: 1, pattern: "^(\\w+\\s?)+$", level: "warn" }, result([slow]));
+    assert.equal(JSON.parse(unframed(quick.output)).messages.length, 0);
+  });
+
+  it(
+    "refuses a pattern that is not a regular expression without asking Firefox",
+    LIMIT,
+    async () => {
+      const { output, calls } = await read({ tabId: 1, pattern: "(" });
+      assert.deepEqual(output, {
+        content: [
+          {
+            type: "text",
+            text: "pattern is not a valid JavaScript regular expression: Invalid regular expression: /(/: Unterminated group",
+          },
+        ],
+        isError: true,
+      });
+      assert.deepEqual(calls, []);
+    },
+  );
+
+  it("refuses a result it cannot read", LIMIT, async () => {
+    const message = messages()[0];
+    const answers: unknown[] = [
+      null,
+      "text",
+      { messages: [], dropped: 0 },
+      { recording: "yes", messages: [], dropped: 0 },
+      { recording: true, messages: {}, dropped: 0 },
+      { recording: true, messages: [], dropped: -1 },
+      { recording: true, messages: [], dropped: 1.5 },
+      { recording: true, messages: [], dropped: "0" },
+      result([{ ...message, level: "fatal" }]),
+      result([{ ...message, kind: "warning" }]),
+      result([{ ...message, text: 1 }]),
+      result([{ ...message, text: "x".repeat(1001) }]),
+      result([{ ...message, time: "1000" }]),
+      result([{ level: "log", kind: "console", text: "x" }]),
+      result(Array.from({ length: 301 }, () => message)),
+    ];
+    const nothing = await start(() => undefined);
+    assert.deepEqual(
+      await nothing.client.callTool({ name: "read_console", arguments: { tabId: 1 } }),
+      { content: [{ type: "text", text: UNREADABLE }], isError: true },
+    );
+    for (const answer of answers) {
+      const { output } = await read({ tabId: 1 }, answer);
+      assert.deepEqual(
+        output,
+        { content: [{ type: "text", text: UNREADABLE }], isError: true },
+        JSON.stringify(answer)?.slice(0, 200),
+      );
+    }
+    const longest = { ...message, text: "x".repeat(1000) };
+    const most = await read(
+      { tabId: 1, limit: 300 },
+      result(Array.from({ length: 300 }, () => longest)),
+    );
+    assert.equal(JSON.parse(unframed(most.output)).messages.length, 300);
+  });
+
+  it("returns only the fields of the result it knows", LIMIT, async () => {
+    const message = { ...messages()[0], extra: "page text" };
+    const { output } = await read({ tabId: 1 }, { ...result([message]), extra: true });
+    const { extra: _extra, ...known } = message;
+    assert.equal(
+      unframed(output),
+      pretty({ recording: true, messages: [known], dropped: 0, omitted: 0 }),
+    );
+  });
+
+  it("returns read_console's bridge and host errors as for the other tools", LIMIT, async () => {
+    const sentence = "The Foxhand native host did not answer in time.";
+    const bridged = await start(() => {
+      throw new BridgeError(sentence);
+    });
+    assert.deepEqual(
+      await bridged.client.callTool({ name: "read_console", arguments: { tabId: 1 } }),
+      { content: [{ type: "text", text: sentence }], isError: true },
+    );
+    const hosted = await start(() => {
+      throw new HostError("site_not_approved", "Foxhand is not allowed on https://a.example.");
+    });
+    const output = await hosted.client.callTool({ name: "read_console", arguments: { tabId: 1 } });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), "Foxhand is not allowed on https://a.example.");
   });
 });
 

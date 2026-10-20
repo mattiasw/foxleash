@@ -24,6 +24,9 @@ export type {
 export { parseMessage } from "./messages.ts";
 export type {
   ClickButton,
+  ConsoleKind,
+  ConsoleLevel,
+  ConsoleMessage,
   DragMode,
   MethodName,
   Methods,
@@ -41,7 +44,11 @@ export type {
   TabInfo,
 } from "./methods.ts";
 export {
+  CONSOLE_KINDS,
+  CONSOLE_LEVELS,
   DEFAULT_PAGE_TEXT_CHARS,
+  MAX_CONSOLE_MESSAGES,
+  MAX_CONSOLE_TEXT,
   MAX_PAGE_TEXT_CHARS,
   METHOD_NAMES,
   UPLOAD_CHUNK_BYTES,

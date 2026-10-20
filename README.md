@@ -111,6 +111,19 @@ of form fields are left out, and frames are not read. The text is cut at 50,000 
 unless the agent asks for more (at most 200,000), and the agent is told when it was.
 `get_page_text` works only on a tab showing a site you approved, and never asks.
 
+The agent reads what a page wrote to its console with `read_console`: its `console.log`,
+`info`, `warn`, `error` and `debug` calls, uncaught errors and unhandled promise rejections,
+oldest first, each with its level, kind, text and time. Foxhand starts recording a page early
+in its load, in a tab of the agent's group on a site you approved, so anything the page logs
+before then is missed; frames are not recorded. Loading a new page in the tab starts with no
+messages. Foxhand keeps the newest 300 messages of a page, each cut to 1,000 characters, and
+counts the older ones it let go. The agent can ask for messages of a minimum level, those whose
+text matches a regular expression, and at most a number of the newest ones (100 unless it asks
+for up to 300). When the page loaded before you approved the site, or since it loaded you
+withdrew the approval or the tab left the agent's group, the result says it is not recording,
+with no messages, until the page is loaded again. `read_console` works only on a tab showing a
+site you approved, and never asks.
+
 The agent acts in a page with `click`, `hover`, `scroll` and `drag`, on an element from
 `read_page` (scrolled into view first) or at a point in the tab's viewport, as in a
 screenshot. They send the pointer and mouse events a real mouse sends, in order: a click is

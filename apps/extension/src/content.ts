@@ -1,4 +1,5 @@
 import type { BrowserApi } from "./browser-api.ts";
+import { readConsoleRecords } from "./console-messages.ts";
 import { elementRect } from "./element-rect.ts";
 import { createElementRefs } from "./element-refs.ts";
 import { clickOptions, dragOptions, hoverOptions, scrollOptions } from "./page-actions.ts";
@@ -41,6 +42,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     hover: (params) => actions.hover(parsed(hoverOptions(params)), { refs, pointer }),
     scroll: (params) => actions.scroll(parsed(scrollOptions(params)), { refs, pointer }),
     drag: (params) => actions.drag(parsed(dragOptions(params)), { refs, pointer }),
+    read_console: () => readConsoleRecords(window),
   };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),

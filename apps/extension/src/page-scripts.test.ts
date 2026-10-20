@@ -731,6 +731,7 @@ function setup() {
     probe: async () => null,
     pages,
     uploads: createUploads(timers),
+    recordings: { liveRecording: () => undefined },
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

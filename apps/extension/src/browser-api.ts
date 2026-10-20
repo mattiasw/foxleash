@@ -54,6 +54,8 @@ export interface BrowserApi {
     };
     onCreated: BrowserEvent<(tab: Tab) => void>;
     onRemoved: BrowserEvent<(tabId: number) => void>;
+    /** The tab left its window, as when the user drags it to another one. */
+    onDetached: BrowserEvent<(tabId: number) => void>;
   };
   windows: {
     update(windowId: number, updateInfo: { drawAttention?: boolean }): Promise<unknown>;
@@ -72,10 +74,11 @@ export interface BrowserApi {
   };
   scripting: {
     executeScript<Args extends unknown[], Result>(injection: {
-      target: { tabId: number };
+      target: { tabId: number; frameIds?: number[] };
       func: (...args: Args) => Result;
       args: Args;
-      world: "ISOLATED";
+      world: "ISOLATED" | "MAIN";
+      injectImmediately?: boolean;
     }): Promise<InjectionResult<Awaited<Result>>[]>;
     executeScript(injection: {
       target: { tabId: number; frameIds?: number[] };

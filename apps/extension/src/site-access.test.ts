@@ -1100,6 +1100,23 @@ describe("endSession", () => {
     assert.equal(sessions.has("s1"), false);
   });
 
+  it("tells onWithdraw of each site the session allowed", () => {
+    const withdrawn: [string, string][] = [];
+    const { access, sessions } = setup((session, site) => withdrawn.push([session, site]));
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example", "https://b.example"]),
+      refused: new Set(["https://c.example"]),
+      closed: 1,
+    });
+    sessions.set("s2", state(["https://d.example"]));
+    access.endSession("s1");
+    access.endSession("s3");
+    assert.deepEqual(withdrawn, [
+      ["s1", "https://a.example"],
+      ["s1", "https://b.example"],
+    ]);
+  });
+
   it("ends a session without a prompt", () => {
     const { access, sessions } = setup();
     sessions.set("s1", state([]));
@@ -1191,6 +1208,24 @@ describe("sessionAnswers", () => {
 });
 
 describe("forget", () => {
+  it("tells onWithdraw once when it forgets an allowed site, and only then", () => {
+    const withdrawn: [string, string][] = [];
+    const { access, sessions } = setup((session, site) => withdrawn.push([session, site]));
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example"]),
+      refused: new Set(["https://b.example"]),
+      closed: 1,
+    });
+    access.forget("s1", "https://b.example");
+    access.forget("s1", "closed");
+    access.forget("s1", "https://c.example");
+    access.forget("s2", "https://a.example");
+    assert.deepEqual(withdrawn, []);
+    access.forget("s1", "https://a.example");
+    access.forget("s1", "https://a.example");
+    assert.deepEqual(withdrawn, [["s1", "https://a.example"]]);
+  });
+
   it("forgets an allowed site, so the session is asked again and its tabs are redacted", async () => {
     const { access, sessions } = setup();
     sessions.set("s1", state(["https://a.example", "https://b.example"]));
@@ -1396,12 +1431,16 @@ async function rejectsWith(promise: Promise<unknown>, code: string): Promise<voi
   );
 }
 
-function setup() {
+function setup(onWithdraw?: (session: string, site: string) => void) {
   const fake = createFakeBrowser();
   const sessions: SessionMemory = new Map();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
-  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+  const access = createSiteAccess(
+    onWithdraw === undefined
+      ? { browser: fake.browser, groups, sessions, timers }
+      : { browser: fake.browser, groups, sessions, timers, onWithdraw },
+  );
   const tab = fake.openTab({ active: true });
 
   /** Asks in `tabId` and returns the approval with the prompt page's URL. */

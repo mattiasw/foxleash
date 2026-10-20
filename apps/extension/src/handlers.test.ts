@@ -1608,6 +1608,112 @@ describe("get_page_text", { timeout: 10000 }, () => {
   });
 });
 
+describe("read_console", { timeout: 10000 }, () => {
+  const message = { level: "warn", kind: "console", text: "careful", time: 1000 };
+  const recorded = { recording: true, messages: [message], dropped: 2 };
+
+  it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+      await assert.rejects(call("s1", "read_console", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "read_console needs a tab id that is a whole number of 0 or more.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page with no parameters and returns its records while recording is live", async () => {
+    const { call, pageCalls, replyWith, liveWith } = setup();
+    const live = {};
+    const asked: [string, number][] = [];
+    liveWith((session, tabId) => {
+      asked.push([session, tabId]);
+      return live;
+    });
+    replyWith(async () => recorded);
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3, extra: true }), recorded);
+    assert.deepEqual(await call("s2", "read_console", { tabId: 0 }), recorded);
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: 3, type: "read_console", params: {} },
+      { session: "s2", tabId: 0, type: "read_console", params: {} },
+    ]);
+    assert.deepEqual(asked, [
+      ["s1", 3],
+      ["s1", 3],
+      ["s2", 0],
+      ["s2", 0],
+    ]);
+  });
+
+  it("returns the page's result rebuilt, with its texts cut again", async () => {
+    const { call, replyWith, liveWith } = setup();
+    const long = { ...message, text: "a".repeat(1001), extra: "page text" };
+    replyWith(async () => ({ ...recorded, messages: [long], extra: true }));
+    const live = {};
+    liveWith(() => live);
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), {
+      ...recorded,
+      messages: [{ ...message, text: "a".repeat(1000) }],
+    });
+  });
+
+  it("returns no records without a live recording, or when it changed during the read", async () => {
+    const { call, replyWith, liveWith, pageCalls } = setup();
+    replyWith(async () => recorded);
+    const none = { recording: false, messages: [], dropped: 0 };
+    liveWith(() => undefined);
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
+    const answers = [{}, {}];
+    liveWith(() => answers.shift());
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
+    const before = {};
+    const later = [before, undefined];
+    liveWith(() => later.shift());
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
+    const after = [undefined, {}];
+    liveWith(() => after.shift());
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
+    liveWith((session) => (session === "s2" ? before : undefined));
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
+    assert.deepEqual(await call("s2", "read_console", { tabId: 3 }), recorded);
+    assert.equal(pageCalls.length, 6);
+  });
+
+  it("refuses a reply it cannot read as page_error, recording or not", async () => {
+    const { call, replyWith, liveWith } = setup();
+    const replies: unknown[] = [
+      undefined,
+      null,
+      [],
+      { ...recorded, recording: "yes" },
+      { ...recorded, messages: [{ ...message, level: "fatal" }] },
+      { ...recorded, dropped: -1 },
+      Object.create(recorded),
+    ];
+    for (const answer of [() => ({}), () => undefined]) {
+      liveWith(answer);
+      for (const reply of replies) {
+        replyWith(async () => reply);
+        await assert.rejects(call("s1", "read_console", { tabId: 3 }), {
+          code: "page_error",
+          message: "Foxhand could not complete the request in the page in tab 3.",
+        });
+      }
+    }
+  });
+
+  it("passes the page's refusal through unchanged", async () => {
+    const { call, replyWith } = setup();
+    const refusal = new ToolError("site_not_approved", "Foxhand is not allowed on that site.");
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(
+      call("s1", "read_console", { tabId: 3 }),
+      (error: unknown) => error === refusal,
+    );
+  });
+});
+
 describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
   const REF = "0a1b2c3d-4";
   const TARGET_REF = "0a1b2c3d-9";
@@ -2791,6 +2897,8 @@ interface PageCall {
 
 type PageReply = (type: string) => Promise<unknown>;
 
+type Live = (session: string, tabId: number) => object | undefined;
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -2809,6 +2917,10 @@ function setup() {
       return pageReply(type);
     },
   };
+  let live: Live = () => undefined;
+  const recordings = {
+    liveRecording: (session: string, tabId: number) => live(session, tabId),
+  };
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -2817,6 +2929,7 @@ function setup() {
     probe,
     pages,
     uploads,
+    recordings,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -2877,6 +2990,11 @@ function setup() {
     pageReply = reply;
   }
 
+  /** What the console recordings answer from now on. */
+  function liveWith(answer: Live): void {
+    live = answer;
+  }
+
   return {
     fake,
     timers,
@@ -2886,6 +3004,7 @@ function setup() {
     uploads,
     pageCalls,
     replyWith,
+    liveWith,
     call,
     open,
     list,

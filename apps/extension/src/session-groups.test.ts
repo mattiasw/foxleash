@@ -272,6 +272,33 @@ describe("isSessionGroup", { timeout: 10000 }, () => {
   });
 });
 
+describe("sessionOf", { timeout: 10000 }, () => {
+  it("names the session whose group it is", async () => {
+    const { groups, open } = setup();
+    const first = await open("s1", { url: "https://example.com/" });
+    const second = await open("s2", { url: "https://example.com/" });
+    assert.equal(groups.sessionOf(first.groupId), "s1");
+    assert.equal(groups.sessionOf(second.groupId), "s2");
+  });
+
+  it("is undefined for no group and for a group the user made", async () => {
+    const { fake, groups, outside, open } = setup();
+    await open("s1", { url: "https://example.com/" });
+    const userGroup = await fake.browser.tabs.group({ tabIds: [outside.id] });
+    assert.equal(groups.sessionOf(-1), undefined);
+    assert.equal(groups.sessionOf(undefined), undefined);
+    assert.equal(groups.sessionOf(userGroup), undefined);
+  });
+
+  it("is undefined after endSession closed a blank group", async () => {
+    const { groups, open } = setup();
+    const tab = await open("s1", { url: "about:blank" });
+    assert.equal(groups.sessionOf(tab.groupId), "s1");
+    await groups.endSession("s1");
+    assert.equal(groups.sessionOf(tab.groupId), undefined);
+  });
+});
+
 describe("onGrouped", { timeout: 10000 }, () => {
   it("runs for a tab joining a new and an existing group, with the group known", async () => {
     const calls: { tabId: number; known: boolean }[] = [];

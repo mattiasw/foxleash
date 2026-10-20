@@ -33,7 +33,27 @@ export const TITLES = {
   actDrag: "Fixture act drag",
   actBase: "Fixture act base",
   actEmbed: "Fixture act embed",
+  console: "Fixture console",
+  consoleCsp: "Fixture console CSP",
 } as const;
+
+/** What the console pages log, each in one message. */
+export const CONSOLE_TOKENS = {
+  debug: "console-debug-Wq4",
+  log: "console-log-Er5",
+  info: "console-info-Ty6",
+  warn: "console-warn-Ui7",
+  error: "console-error-Op8",
+  uncaught: "console-uncaught-As9",
+  rejection: "console-rejection-Df1",
+  csp: "console-csp-Gh2",
+} as const;
+
+/** The only nonce the console CSP page's policy lets scripts run with. */
+export const CONSOLE_CSP_NONCE = "fixtureNonce7Jk";
+
+/** The middle of the Log button on both console pages, in CSS pixels. */
+export const CONSOLE_LOG_POINT = { x: 70, y: 30 } as const;
 
 /** The data the act-drag page's draggable source puts in its dataTransfer. */
 export const ACT_DRAG_DATA = "drag-payload-Kx7";
@@ -273,6 +293,12 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       // To the same server under another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
       response.end();
+    } else if (path === "/console") {
+      sendHtml(response, CONSOLE_PAGE);
+    } else if (path === "/console-csp") {
+      sendHtml(response, CONSOLE_CSP_PAGE, {
+        "Content-Security-Policy": `script-src 'nonce-${CONSOLE_CSP_NONCE}'`,
+      });
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
@@ -317,14 +343,57 @@ function sendPage(response: ServerResponse, title: string): void {
   );
 }
 
-function sendHtml(response: ServerResponse, html: string): void {
+function sendHtml(
+  response: ServerResponse,
+  html: string,
+  headers: Record<string, string> = {},
+): void {
   response.writeHead(200, {
     "Content-Type": "text/html; charset=utf-8",
     // So reload and back fetch the page again.
     "Cache-Control": "no-store",
+    ...headers,
   });
   response.end(html);
 }
+
+// Both console pages log only when their Log button is clicked, so a test can wait until Foxhand
+// records the page first.
+const CONSOLE_LOG_BUTTON = `<button id="log" style="position: fixed; left: 10px; top: 10px; width: 120px; height: 40px; margin: 0">Log</button>`;
+
+// The timers keep the uncaught error and the rejection after the console calls, in that order.
+const CONSOLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.console}</title></head>
+<body><h1>${TITLES.console}</h1>
+${CONSOLE_LOG_BUTTON}
+<script>
+document.getElementById("log").addEventListener("click", () => {
+  console.debug("${CONSOLE_TOKENS.debug}");
+  console.log("${CONSOLE_TOKENS.log}", { n: 1 });
+  console.info("${CONSOLE_TOKENS.info}");
+  console.warn("${CONSOLE_TOKENS.warn}");
+  console.error("${CONSOLE_TOKENS.error}");
+  setTimeout(() => {
+    throw new Error("${CONSOLE_TOKENS.uncaught}");
+  }, 50);
+  setTimeout(() => {
+    Promise.reject(new Error("${CONSOLE_TOKENS.rejection}"));
+  }, 100);
+});
+</script>
+</body></html>
+`;
+
+// Its policy forbids inline script without the nonce, and eval.
+const CONSOLE_CSP_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.consoleCsp}</title></head>
+<body><h1>${TITLES.consoleCsp}</h1>
+${CONSOLE_LOG_BUTTON}
+<script nonce="${CONSOLE_CSP_NONCE}">
+document.getElementById("log").addEventListener("click", () => console.log("${CONSOLE_TOKENS.csp}"));
+</script>
+</body></html>
+`;
 
 // A skip link, a form whose action the server counts and whose input submits it on every input
 // event, an editable area and a disclosure toggle whose page-world listener flips aria-expanded

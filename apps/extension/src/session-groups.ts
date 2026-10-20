@@ -13,6 +13,8 @@ export interface SessionGroups {
    * undefined and -1.
    */
   isSessionGroup(groupId: number | undefined): boolean;
+  /** The session whose group this is; undefined for undefined, -1 and any other group. */
+  sessionOf(groupId: number | undefined): string | undefined;
 }
 
 /**
@@ -30,7 +32,7 @@ export function createSessionGroups(
   // keeping their window open, and close it between them.
   let closing: Promise<unknown> = Promise.resolve();
 
-  return { groupOf, ensureGroup, endSession, isSessionGroup };
+  return { groupOf, ensureGroup, endSession, isSessionGroup, sessionOf };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
     const id = groups.get(session);
@@ -57,6 +59,10 @@ export function createSessionGroups(
 
   function isSessionGroup(groupId: number | undefined): boolean {
     return [...groups.values()].some((id) => id === groupId);
+  }
+
+  function sessionOf(groupId: number | undefined): string | undefined {
+    return [...groups].find(([, id]) => id === groupId)?.[0];
   }
 
   /** Runs the task after every task already queued for the session has settled. */

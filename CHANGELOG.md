@@ -60,3 +60,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `drag` tools, on an element from `read_page` or at a point, on sites you approved.
   Clicks on links and form buttons that lead to another site are refused; your agent opens
   such a page with `navigate`, which asks you first.
+- Your agent can read a page's console messages, uncaught errors and unhandled promise
+  rejections with the `read_console` tool, filtered by level and pattern, only from pages
+  that loaded on sites you approved.

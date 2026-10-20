@@ -17,6 +17,8 @@ import type {
   TabUpdatedListener,
   Timers,
 } from "./browser-api.ts";
+import { parseConsoleResult } from "./console-messages.ts";
+import type { ConsoleRecording } from "./console-recording.ts";
 import {
   clickOptions,
   dragOptions,
@@ -77,6 +79,8 @@ export interface HandlerDeps<Handle> {
   pages: Pick<PageScripts, "request">;
   /** The bytes upload_chunk stages; `import type`, since uploads.ts imports this file. */
   uploads: Pick<Uploads, "add" | "take">;
+  /** Which tabs' console records may be read; `import type`, since it imports this file. */
+  recordings: Pick<ConsoleRecording, "liveRecording">;
 }
 
 type Params = Record<string, unknown>;
@@ -116,6 +120,7 @@ export function createHandlers<Handle>({
   probe,
   pages,
   uploads,
+  recordings,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = {
     tabs_list: tabsList,
@@ -131,6 +136,7 @@ export function createHandlers<Handle>({
     scroll: (session, params) =>
       pageAction(session, params, "scroll", scrollOptions, scrollResultOf),
     drag: (session, params) => pageAction(session, params, "drag", dragOptions, dragResultOf),
+    read_console: readConsole,
     probe_input: probeInput,
   };
 
@@ -518,6 +524,32 @@ export function createHandlers<Handle>({
     return result;
   }
 
+  /** Reads what the page in a tab wrote to its console, through the content script. */
+  async function readConsole(session: string, params: Params): Promise<Result<"read_console">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "read_console needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const live = recordings.liveRecording(session, tabId);
+    const reply = await pages.request(session, tabId, "read_console", {});
+    // The reply comes from the page's content process: own fields only, and the caps again.
+    const result = parseConsoleResult(reply);
+    if (result === undefined) {
+      throw new ToolError(
+        "page_error",
+        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+      );
+    }
+    // Records from a document whose access was interrupted since it loaded are never returned.
+    if (live === undefined || recordings.liveRecording(session, tabId) !== live) {
+      return { recording: false, messages: [], dropped: 0 };
+    }
+    return result;
+  }
+
   /** Records the site of every URL the tab moves to until `stop`. */
   function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
     const sites = new Set<string | undefined>();
@@ -681,9 +713,21 @@ export async function allowedPageSite(
   }
   const group = await groups.groupOf(session);
   if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+  return allowedSiteFor(access, session, tabId, tab.url ?? "");
+}
+
+/**
+ * The site of `url` in a tab of the session's group, when the session may read and act there:
+ * not the session's open prompt, a web page, not blocked, approved. Never asks.
+ */
+export async function allowedSiteFor(
+  access: Pick<SiteAccess, "view" | "openPrompt">,
+  session: string,
+  tabId: number,
+  url: string,
+): Promise<string> {
   const prompt = access.openPrompt(session);
   if (prompt?.tabId === tabId) throw approvalPending(prompt.tabId, prompt.site);
-  const url = tab.url ?? "";
   const site = siteOf(url);
   if (site === undefined) throw pageNotWeb(tabId);
   const view = await access.view(session);

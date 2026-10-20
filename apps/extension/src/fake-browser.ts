@@ -106,6 +106,8 @@ export interface FakeBrowser {
   /** The user clicking the toolbar button while the tab is shown. */
   clickAction(tabId: number): void;
   emitStatus(tabId: number, status: string): void;
+  /** Fires `tabs.onDetached` alone, as when the user starts dragging the tab to another window. */
+  emitDetached(tabId: number): void;
   /** Fires `storage.onChanged` with no changes, as for a storage area the fake does not keep. */
   emitStorageChanged(areaName: string): void;
   listenerCount(): number;
@@ -194,6 +196,7 @@ export function createFakeBrowser(): FakeBrowser {
   const onMessage =
     createEvent<(message: unknown, sender: MessageSender) => Promise<unknown> | undefined>();
   const onTabRemoved = createEvent<(tabId: number) => void>();
+  const onTabDetached = createEvent<(tabId: number) => void>();
   let failSet = false;
   let injectionFailure: { error: unknown } | undefined;
   let captureFailure: { error: unknown } | undefined;
@@ -312,6 +315,7 @@ export function createFakeBrowser(): FakeBrowser {
       },
       onCreated,
       onRemoved: onTabRemoved,
+      onDetached: onTabDetached,
     },
     windows: {
       update: async (windowId, updateInfo) => {
@@ -505,15 +509,19 @@ export function createFakeBrowser(): FakeBrowser {
       emit(tab, { status });
     },
     emitStorageChanged: (areaName) => emitStorage({}, areaName),
+    emitDetached: (tabId) => {
+      for (const listener of [...onTabDetached.listeners]) listener(tabId);
+    },
     listenerCount: () => updatedListeners.length,
   };
   return fake;
 
   function executeScript<Args extends unknown[], Result>(injection: {
-    target: { tabId: number };
+    target: { tabId: number; frameIds?: number[] };
     func: (...args: Args) => Result;
     args: Args;
-    world: "ISOLATED";
+    world: "ISOLATED" | "MAIN";
+    injectImmediately?: boolean;
   }): Promise<InjectionResult<Awaited<Result>>[]>;
   function executeScript(injection: {
     target: { tabId: number; frameIds?: number[] };

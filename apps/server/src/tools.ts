@@ -1,6 +1,12 @@
 import { randomBytes } from "node:crypto";
+import { runInNewContext } from "node:vm";
 import {
+  CONSOLE_KINDS,
+  CONSOLE_LEVELS,
+  type ConsoleLevel,
   DEFAULT_PAGE_TEXT_CHARS,
+  MAX_CONSOLE_MESSAGES,
+  MAX_CONSOLE_TEXT,
   MAX_PAGE_TEXT_CHARS,
   type MethodName,
   type Params,
@@ -82,6 +88,28 @@ const DRAG_START = "drag needs either ref or both x and y for the start, not bot
 const DRAG_END =
   "drag needs either targetRef or both targetX and targetY for the end, not both and not neither.";
 const UNREADABLE_UPLOAD = "Firefox returned an upload result Foxhand cannot read.";
+const DEFAULT_CONSOLE_LIMIT = 100;
+const MAX_MESSAGES = MAX_CONSOLE_MESSAGES.toLocaleString("en-US");
+const MAX_MESSAGE_TEXT = MAX_CONSOLE_TEXT.toLocaleString("en-US");
+const READ_CONSOLE = `Read what the page in a tab of this session's Foxhand tab group wrote to its console: console.log, info, warn, error and debug calls, uncaught errors and unhandled promise rejections, oldest first, each with its level, kind (console, uncaught_error or unhandled_rejection), text and time (ms since the epoch). Only the tab's top page is recorded, not its frames. Foxhand records a page from early in its load on a site the user approved, so messages logged before it starts are missed. Loading a new page in the tab starts with no messages; a change of the address within the page (a fragment, history.pushState) does not. recording false means Foxhand has not recorded the page since it loaded: it loaded before the user approved the site, or since then the user withdrew the approval or the tab left the tab group; reload it with navigate to start recording. Foxhand keeps the newest ${MAX_MESSAGES} messages of a page, each cut to ${MAX_MESSAGE_TEXT} characters; dropped counts the older ones it let go. Arguments are shown as text: objects as JSON, errors as their name and message. level returns only messages of that severity or above (debug, then log and info, then warn, then error). pattern is a JavaScript regular expression, case-sensitive, that a message's text must match; one that takes more than a second to match is refused. Of the matching messages the newest limit (${DEFAULT_CONSOLE_LIMIT} unless given, at most ${MAX_MESSAGES}) are returned, and omitted counts the matches left out. The tab must show a site the user approved; read_console never asks.`;
+const UNREADABLE_CONSOLE = "Firefox returned console messages Foxhand cannot read.";
+const PATTERN_MS = 1000;
+const SLOW_PATTERN = `pattern took more than ${PATTERN_MS / 1000} second to match the messages; try a simpler pattern.`;
+const LEVEL_RANK: Record<ConsoleLevel, number> = { debug: 0, log: 1, info: 1, warn: 2, error: 3 };
+const CONSOLE_RESULT = z.object({
+  recording: z.boolean(),
+  messages: z
+    .array(
+      z.object({
+        level: z.enum(CONSOLE_LEVELS),
+        kind: z.enum(CONSOLE_KINDS),
+        text: z.string().max(MAX_CONSOLE_TEXT),
+        time: z.number(),
+      }),
+    )
+    .max(MAX_CONSOLE_MESSAGES),
+  dropped: z.number().int().min(0),
+});
 const DROP_NOTE =
   "The page decides what to do with dropped files; read the page to check that it took them.";
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
@@ -407,6 +435,83 @@ export function registerTools(
       return run(bridge, "drag", params);
     },
   );
+  server.registerTool(
+    "read_console",
+    {
+      description: READ_CONSOLE,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        level: z
+          .enum(CONSOLE_LEVELS)
+          .optional()
+          .describe("Return only messages of this severity or above"),
+        pattern: z
+          .string()
+          .optional()
+          .describe("A JavaScript regular expression, case-sensitive, that the text must match"),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(MAX_CONSOLE_MESSAGES)
+          .optional()
+          .describe(
+            `Return at most this many of the newest matching messages: ${DEFAULT_CONSOLE_LIMIT} unless given, at most ${MAX_MESSAGES}`,
+          ),
+      },
+    },
+    async ({ tabId, level, pattern, limit }) => {
+      // Run here, not in the page or the extension, and under a time limit.
+      let regex: RegExp | undefined;
+      try {
+        regex = pattern === undefined ? undefined : new RegExp(pattern);
+      } catch (error: unknown) {
+        const reason = error instanceof Error ? error.message : String(error);
+        return errorResult(`pattern is not a valid JavaScript regular expression: ${reason}`);
+      }
+      const called = await callBridge(bridge, "read_console", { tabId });
+      if (!called.ok) return called.error;
+      const parsed = CONSOLE_RESULT.safeParse(called.result);
+      if (!parsed.success) return errorResult(UNREADABLE_CONSOLE);
+      const { recording, messages, dropped } = parsed.data;
+      const rank = level === undefined ? 0 : LEVEL_RANK[level];
+      const ranked = messages.filter((message) => LEVEL_RANK[message.level] >= rank);
+      const matched =
+        regex === undefined
+          ? ranked.map(() => true)
+          : patternMatches(
+              regex,
+              ranked.map((message) => message.text),
+            );
+      if (matched === undefined) return errorResult(SLOW_PATTERN);
+      const matches = ranked.filter((_message, index) => matched[index]);
+      const kept = matches.slice(Math.max(0, matches.length - (limit ?? DEFAULT_CONSOLE_LIMIT)));
+      return textResult({
+        recording,
+        messages: kept,
+        dropped,
+        omitted: matches.length - kept.length,
+      });
+    },
+  );
+}
+
+/**
+ * Whether the pattern matches each text; undefined when that takes longer than PATTERN_MS. The
+ * texts come from the page, which can make a backtracking pattern run for hours.
+ */
+function patternMatches(regex: RegExp, texts: string[]): boolean[] | undefined {
+  const matched: boolean[] = [];
+  try {
+    runInNewContext(
+      "for (const text of texts) matched.push(regex.test(text));",
+      { regex, texts, matched },
+      { timeout: PATTERN_MS },
+    );
+  } catch {
+    return undefined;
+  }
+  return matched;
 }
 
 function tabIdSchema() {

@@ -10,6 +10,9 @@ apps/extension/src/approve.ts
 apps/extension/src/background.ts
 apps/extension/src/browser-api.ts
 apps/extension/src/connection.ts
+apps/extension/src/console-messages.ts
+apps/extension/src/console-recorder.ts
+apps/extension/src/console-recording.ts
 apps/extension/src/content.ts
 apps/extension/src/default-blocklist.ts
 apps/extension/src/element-rect.ts

@@ -53,6 +53,8 @@ export interface SiteAccessDeps<Handle> {
   groups: Pick<SessionGroups, "groupOf">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
+  /** The session's approval of the site ended: the user withdrew it, or the session ended. */
+  onWithdraw?: (session: string, site: string) => void;
 }
 
 export interface SiteAccess {
@@ -139,6 +141,7 @@ export function createSiteAccess<Handle>({
   groups,
   sessions,
   timers,
+  onWithdraw,
 }: SiteAccessDeps<Handle>): SiteAccess {
   // The open prompt of each session; at most one.
   const prompts = new Map<string, Prompt<Handle>>();
@@ -240,7 +243,10 @@ export function createSiteAccess<Handle>({
   }
 
   function endSession(session: string): void {
+    const state = sessions.get(session);
     sessions.delete(session);
+    // A session that reconnects with the same id asks again, so nothing from the gap is read.
+    for (const site of state?.allowed ?? []) onWithdraw?.(session, site);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false);
   }
@@ -265,7 +271,7 @@ export function createSiteAccess<Handle>({
     if (state === undefined) return;
     if (site === "closed") state.closed = 0;
     else {
-      state.allowed.delete(site);
+      if (state.allowed.delete(site)) onWithdraw?.(session, site);
       state.refused.delete(site);
     }
     if (state.allowed.size === 0 && state.refused.size === 0 && state.closed === 0) {

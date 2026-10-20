@@ -1,5 +1,6 @@
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
+import { createConsoleRecording } from "./console-recording.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
 import { createPageScripts } from "./page-scripts.ts";
@@ -18,7 +19,14 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
 
 const groups = createSessionGroups(browser, (tabId) => indicator.refresh(tabId));
 const indicator = createIndicator({ browser, groups });
-const access = createSiteAccess({ browser, groups, sessions: new Map(), timers });
+const access = createSiteAccess({
+  browser,
+  groups,
+  sessions: new Map(),
+  timers,
+  onWithdraw: (session, site) => recordings.withdraw(session, site),
+});
+const recordings = createConsoleRecording({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });
 const uploads = createUploads(timers);
 const handleRequest = createHandlers({
@@ -29,6 +37,7 @@ const handleRequest = createHandlers({
   probe: probePage,
   pages,
   uploads,
+  recordings,
 });
 const connection = createConnection({
   browser,
