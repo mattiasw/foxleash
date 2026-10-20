@@ -453,6 +453,13 @@ describe("runHost, socket side", () => {
     const forwarded = await h.out.next();
     assert.equal(forwarded.id, "h1");
     assert.equal(Buffer.byteLength(JSON.stringify(forwarded)), NATIVE_MESSAGE_LIMIT);
+    writeFrame(h.stdin, { type: "response", id: forwarded.id, ok: true, result: 1 });
+    assert.deepEqual(await client.frames.next(), {
+      type: "response",
+      id: "r1",
+      ok: true,
+      result: 1,
+    });
     client.send(request("r2", { params: { pad: `${pad}x` } }));
     assert.deepEqual(
       await client.frames.next(),
