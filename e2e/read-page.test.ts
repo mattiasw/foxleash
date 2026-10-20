@@ -403,7 +403,7 @@ describe("read_page in real Firefox", () => {
 
   async function open(path: string, title: string): Promise<number> {
     const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url(path) }));
-    assert.equal(tab.title, title);
+    assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
     return tab.id;
   }
 

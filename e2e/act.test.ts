@@ -506,7 +506,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     opened += 1;
     const url = fixtures.url(`${path}?tab=${opened}`);
     const tab = tabOf(await harness.ok(session, "tab_open", { url }));
-    assert.equal(tab.title, title);
+    assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
     const found = (await firefox.contexts()).find((context) => context.url === url);
     assert.ok(found !== undefined, `no tab shows ${url}`);
     const read = await harness.call(session, "read_page", { tabId: tab.id });

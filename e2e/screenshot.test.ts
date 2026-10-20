@@ -325,7 +325,7 @@ describe("screenshot in real Firefox", () => {
 
   async function open(on: Session, path: string, title: string): Promise<number> {
     const tab = tabOf(await harness.ok(on, "tab_open", { url: fixtures.url(path) }));
-    assert.equal(tab.title, title);
+    assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
     return tab.id;
   }
 
