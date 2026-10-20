@@ -20,6 +20,15 @@ export const TITLES = {
   textHiddenBody: "Fixture text hidden body",
   textSlotted: "Fixture text slotted",
   textDetails: "Fixture text details",
+  shot: "Fixture shot",
+} as const;
+
+/** The CSS size of the shot page's box, which a screenshot by its ref must have. */
+export const SHOT_BOX = { width: 120, height: 80 } as const;
+/** The shot page's background and its box's colour, as RGB. */
+export const SHOT_COLOURS = {
+  page: [255, 228, 181],
+  box: [30, 144, 255],
 } as const;
 
 /** Field values the read form holds that read_page must never return. */
@@ -174,6 +183,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, TEXT_SLOTTED_PAGE);
     } else if (path === "/text-details") {
       sendHtml(response, TEXT_DETAILS_PAGE);
+    } else if (path === "/shot") {
+      sendHtml(response, SHOT_PAGE);
     } else if (path === "/read-redirect") {
       // To the same server under another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
@@ -565,6 +576,23 @@ ${items.join("\n")}
 </ul></body></html>
 `;
 }
+
+// A page taller than the window with one solid box below the first screenful: same-coloured
+// text, so read_page names it and nothing is drawn on it, and no border, shadow or outline.
+const SHOT_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shot}</title>
+<style>
+html, body { margin: 0; padding: 0; }
+body { background: rgb(${SHOT_COLOURS.page.join(", ")}); min-height: 3000px; }
+#shot-box {
+  appearance: none; display: block; box-sizing: border-box;
+  width: ${SHOT_BOX.width}px; height: ${SHOT_BOX.height}px;
+  margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none;
+  background: rgb(${SHOT_COLOURS.box.join(", ")}); color: rgb(${SHOT_COLOURS.box.join(", ")});
+}
+</style></head>
+<body><div style="padding: 1500px 0 0 40px"><button id="shot-box" type="button">Shot box</button></div></body></html>
+`;
 
 export function counterTitle(count: number): string {
   return `${COUNTER_PREFIX}${count}`;

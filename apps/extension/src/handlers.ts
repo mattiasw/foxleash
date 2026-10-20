@@ -6,11 +6,19 @@ import type {
   Result,
   TabInfo,
 } from "@foxhand/protocol";
-import type { BrowserApi, InjectionResult, Tab, Timers } from "./browser-api.ts";
+import type {
+  BrowserApi,
+  CaptureArea,
+  InjectionResult,
+  Tab,
+  TabUpdatedListener,
+  Timers,
+} from "./browser-api.ts";
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
+import { captureRect, pngData, screenshotFailed } from "./screenshot.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
 import { siteOf } from "./site.ts";
@@ -70,6 +78,8 @@ export const PROBE_TIMEOUT_MS = 30_000;
  * its longest check, since Firefox may start it late, once the page is idle.
  */
 export const PROBE_CUTOFF_MS = 25_000;
+/** With page-scripts' 20 s injection and 10 s reply, below the host's 60 s request timeout. */
+export const CAPTURE_TIMEOUT_MS = 20_000;
 
 export function createHandlers<Handle>({
   browser,
@@ -85,6 +95,7 @@ export function createHandlers<Handle>({
     navigate,
     read_page: readPage,
     get_page_text: getPageText,
+    screenshot,
     probe_input: probeInput,
   };
 
@@ -239,6 +250,84 @@ export function createHandlers<Handle>({
       );
     }
     return text;
+  }
+
+  /**
+   * Captures the tab's viewport, or with ref one element's box in it, in a tab on a site the
+   * session may act on. Never asks, and never captures whichever tab happens to be active.
+   */
+  async function screenshot(session: string, params: Params): Promise<Result<"screenshot">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "screenshot needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const ref = screenshotRef(params);
+    // From before the first gate, so a tab that shows another site and comes back between the
+    // two gates, which see only their own moments, is caught too.
+    const visits = watchSites(tabId);
+    try {
+      const gateDeps = { browser, groups, access };
+      const site = await allowedPageSite(gateDeps, session, tabId);
+      const rect = ref === undefined ? undefined : await elementArea(session, tabId, ref);
+      const dataUrl = await capture(tabId, rect);
+      // Nothing from the page reaches the agent once the user has withdrawn access.
+      if ((await allowedPageSite(gateDeps, session, tabId)) !== site || visits.left(site)) {
+        throw pageChanged(tabId);
+      }
+      const png = pngData(dataUrl, tabId);
+      if ("code" in png) throw new ToolError(png.code, png.message);
+      return png;
+    } finally {
+      visits.stop();
+    }
+  }
+
+  /** The element's box in the page, scrolled into view and cut to the viewport. */
+  async function elementArea(session: string, tabId: number, ref: string): Promise<CaptureArea> {
+    const area = captureRect(await pages.request(session, tabId, "element_rect", { ref }), tabId);
+    if ("code" in area) throw new ToolError(area.code, area.message);
+    return area.rect;
+  }
+
+  async function capture(tabId: number, rect: CaptureArea | undefined): Promise<string> {
+    const timeout = new ToolError(
+      "page_timeout",
+      `Firefox did not take the screenshot of tab ${tabId} in time; try again.`,
+    );
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(() => reject(timeout), CAPTURE_TIMEOUT_MS);
+    try {
+      return await Promise.race([
+        browser.tabs.captureTab(
+          tabId,
+          rect === undefined ? { format: "png", scale: 1 } : { format: "png", scale: 1, rect },
+        ),
+        timedOut,
+      ]);
+    } catch (error: unknown) {
+      if (error === timeout) throw timeout;
+      // Firefox's own error text can repeat the page's URL.
+      const failed = screenshotFailed(tabId);
+      throw new ToolError(failed.code, failed.message);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+
+  /** Records the site of every URL the tab moves to until `stop`. */
+  function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
+    const sites = new Set<string | undefined>();
+    const listener: TabUpdatedListener = (updatedTabId, changeInfo) => {
+      if (updatedTabId === tabId && changeInfo.url !== undefined) sites.add(siteOf(changeInfo.url));
+    };
+    browser.tabs.onUpdated.addListener(listener);
+    return {
+      left: (site) => [...sites].some((shown) => shown !== site),
+      stop: () => browser.tabs.onUpdated.removeListener(listener),
+    };
   }
 
   /**
@@ -400,6 +489,15 @@ function tabOpenUrl(params: Params): string | undefined {
   return webUrl(url, "Foxhand opens only http and https URLs, or about:blank.");
 }
 
+function screenshotRef(params: Params): string | undefined {
+  if (!Object.hasOwn(params, "ref")) return undefined;
+  const ref = params.ref;
+  if (typeof ref !== "string") {
+    throw new ToolError("invalid_params", "screenshot needs ref to be a string.");
+  }
+  return ref;
+}
+
 function navigationTarget(params: Params): NavigationTarget {
   const hasUrl = Object.hasOwn(params, "url");
   const hasAction = Object.hasOwn(params, "action");
@@ -454,6 +552,13 @@ function pageNotWeb(tabId: number): ToolError {
   return new ToolError(
     "page_not_web",
     `Foxhand acts only on http and https pages, and tab ${tabId} shows another kind of page.`,
+  );
+}
+
+function pageChanged(tabId: number): ToolError {
+  return new ToolError(
+    "page_changed",
+    `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
   );
 }
 

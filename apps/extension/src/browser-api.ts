@@ -41,6 +41,8 @@ export interface BrowserApi {
     remove(tabIds: number[]): Promise<void>;
     /** Rejects when no content script listens in the frame, or its page unloads before replying. */
     sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;
+    /** Resolves to a data URL; `rect` is in CSS pixels, relative to the page. */
+    captureTab(tabId: number, options: CaptureOptions): Promise<string>;
     group(options: {
       tabIds: number[];
       groupId?: number;
@@ -81,6 +83,20 @@ export interface BrowserApi {
       injectImmediately?: boolean;
     }): Promise<InjectionResult<unknown>[]>;
   };
+}
+
+/** The options of `tabs.captureTab` that the extension uses. */
+export interface CaptureOptions {
+  format: "png";
+  scale?: number;
+  rect?: CaptureArea;
+}
+
+export interface CaptureArea {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 /** One frame's outcome of `scripting.executeScript`. */

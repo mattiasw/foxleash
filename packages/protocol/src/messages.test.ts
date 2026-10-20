@@ -70,7 +70,15 @@ describe("parseMessage accepts", () => {
       },
     },
     ...(
-      ["tabs_list", "tab_open", "navigate", "read_page", "get_page_text", "probe_input"] as const
+      [
+        "tabs_list",
+        "tab_open",
+        "navigate",
+        "read_page",
+        "get_page_text",
+        "screenshot",
+        "probe_input",
+      ] as const
     ).map((method) => ({
       name: `a ${method} request`,
       input: { ...request, method, params: { tabId: 2 } },

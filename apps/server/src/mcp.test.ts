@@ -259,6 +259,7 @@ describe("foxhand mcp", () => {
         "get_page_text",
         "navigate",
         "read_page",
+        "screenshot",
         "tab_open",
         "tabs_list",
       ]);

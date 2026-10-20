@@ -54,6 +54,14 @@
       ]
     },
     {
+      "listing": "never outside that folder and never over an existing file",
+      "evidence": [
+        { "file": "apps/server/src/save-file.ts", "contains": "\"wx\"" },
+        { "file": "apps/server/src/save-file.ts", "contains": "realpath" },
+        { "file": "apps/server/src/tools.ts", "contains": "savePng(" }
+      ]
+    },
+    {
       "listing": "Foxhand acts only on tabs in that group",
       "evidence": [{ "file": "apps/extension/src/handlers.ts", "contains": "tab_not_in_group" }]
     },

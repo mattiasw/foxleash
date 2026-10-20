@@ -72,6 +72,8 @@ export interface Methods {
     result: { tree: string; truncated: boolean };
   };
   get_page_text: { params: { tabId: number; maxChars?: number }; result: PageText };
+  /** `data` is the base64 PNG, without a `data:` prefix. */
+  screenshot: { params: { tabId: number; ref?: string }; result: { data: string } };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -91,6 +93,7 @@ export const METHOD_NAMES = [
   "navigate",
   "read_page",
   "get_page_text",
+  "screenshot",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

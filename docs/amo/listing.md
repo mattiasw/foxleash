@@ -112,6 +112,8 @@ The extension declares these kinds of data to Firefox:
 
 When the agent uploads a file, the Foxhand program reads it only from folders you allowed and refuses dotfiles and files named like keys. The extension hands it to the page's file field. The page then sends it to that site as a manual upload would.
 
+When the agent asks to save a screenshot, the Foxhand program on your computer writes it as a PNG file in the folder the agent works in, never outside that folder and never over an existing file. The file holds what the page showed.
+
 The extension keeps your settings, such as the sites you approved and the blocklist, in its local storage in your Firefox profile, which Firefox does not sync. The extension's settings page, in the Firefox add-ons manager, lists the sites you allowed always and lets you revoke each one, and lets you edit the blocklist. It also lists the sites you allowed or refused for each running agent session, and the prompts you closed without an answer, and lets you forget each of those answers. Foxhand keeps these session answers only in memory, never in storage, until the session ends.
 
 ## Compatibility

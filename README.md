@@ -109,6 +109,17 @@ of form fields are left out, and frames are not read. The text is cut at 50,000 
 unless the agent asks for more (at most 200,000), and the agent is told when it was.
 `get_page_text` works only on a tab showing a site you approved, and never asks.
 
+The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
+when the tab is in the background, or with `ref` of one element from `read_page`. For an
+element screenshot Foxhand scrolls the page to bring the element into view, then captures its
+box, cut to the part inside the window. With `saveTo`, Foxhand also saves the PNG as a new file
+in the folder `foxhand mcp` was started in, normally the agent's working folder: the path must
+be inside that folder, end in `.png` and be in a folder that exists, with no folder or file
+name starting with a dot, and an existing file is never replaced. Saved files are readable
+only by you (mode 0600). A screenshot larger than about 6 MB is too large to return; the agent
+can then take one of a single element or save it. `screenshot` works only on a tab showing a
+site you approved, and never asks.
+
 ## Security
 
 Foxhand acts in your logged-in browser, so read this before you use it.
@@ -133,9 +144,13 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   `~/Downloads` by default) and never dotfiles or key files.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
-- The values of password, one-time code and card number fields are never returned to the
-  agent, only whether they are filled: Firefox fills saved passwords into login pages when
-  they load, and a page you approved could otherwise hand yours to the agent.
+- Text results never return the values of password, one-time code and card number fields,
+  only whether they are filled: Firefox fills saved passwords into login pages when they
+  load, and a page you approved could otherwise hand yours to the agent. A screenshot shows
+  such fields as the page draws them: Firefox masks password fields, but a card number or
+  one-time code field, or a password field the page shows as text, shows its value.
+- Saved screenshots go only into the agent's working folder, as new files, and never over
+  an existing file.
 
 Your agent's own permission settings still apply on top of this, but do not rely on them
 alone: many people run agents with prompts turned off.

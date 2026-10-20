@@ -63,6 +63,8 @@ export interface ToolResult {
   text: string;
   /** Every text item, in order. */
   texts: string[];
+  /** Every image item, in order. */
+  images: { data: string; mimeType: string }[];
 }
 
 export interface Session {
@@ -85,7 +87,8 @@ export interface Harness {
   seedSettings(entries: Record<string, unknown>): Promise<void>;
   /** Opens the settings page in a new tab, waits for its first render, and returns the tab. */
   settingsPage(): Promise<string>;
-  connect(overrides?: Record<string, string>): Promise<Session>;
+  /** Starts `foxhand mcp`, in `options.cwd` when given. */
+  connect(overrides?: Record<string, string>, options?: { cwd?: string }): Promise<Session>;
   /** Waits for a tab showing the approval prompt, other than the tabs in `except`. */
   promptContext(except?: readonly string[]): Promise<string>;
   /** Shows and focuses the prompt's tab, then waits until its three answer buttons are armed. */
@@ -275,13 +278,14 @@ export function createHarness(): Harness {
       return context;
     },
 
-    async connect(overrides = {}) {
+    async connect(overrides = {}, options = {}) {
       assertOpen();
       const transport = new StdioClientTransport({
         command: process.execPath,
         args: [MAIN, "mcp"],
         env: { ...env, ...overrides },
         stderr: "pipe",
+        ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
       });
       let stderr = "";
       transport.stderr?.on("data", (chunk: Buffer | string) => {
@@ -519,9 +523,17 @@ async function callTool(
   const texts = content.flatMap((item: unknown) =>
     isRecord(item) && item.type === "text" && typeof item.text === "string" ? [item.text] : [],
   );
+  const images = content.flatMap((item: unknown) =>
+    isRecord(item) &&
+    item.type === "image" &&
+    typeof item.data === "string" &&
+    typeof item.mimeType === "string"
+      ? [{ data: item.data, mimeType: item.mimeType }]
+      : [],
+  );
   const first = texts[0];
   assert.ok(first !== undefined, `${name} returned no text: ${JSON.stringify(result)}`);
-  return { isError: result.isError === true, text: first, texts };
+  return { isError: result.isError === true, text: first, texts, images };
 }
 
 /** A success result's JSON, from inside its untrusted frame. */

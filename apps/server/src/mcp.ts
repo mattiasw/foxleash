@@ -99,11 +99,15 @@ export async function runMcp(options: McpOptions): Promise<number> {
   }
 }
 
-export function createMcpServer(options: { bridge: ToolBridge; version: string }): McpServer {
+export function createMcpServer(options: {
+  bridge: ToolBridge;
+  version: string;
+  saveFolder?: string;
+}): McpServer {
   const server = new McpServer(
     { name: "foxhand", version: options.version },
     { instructions: INSTRUCTIONS },
   );
-  registerTools(server, options.bridge);
+  registerTools(server, options.bridge, options.saveFolder);
   return server;
 }

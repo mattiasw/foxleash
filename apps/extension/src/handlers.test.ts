@@ -8,11 +8,19 @@ import {
   FAKE_EXTENSION_ID,
   type FakePort,
   flush,
+  ONE_PIXEL_PNG,
 } from "./fake-browser.ts";
-import { createHandlers, PROBE_CUTOFF_MS, PROBE_TIMEOUT_MS, ToolError } from "./handlers.ts";
+import {
+  CAPTURE_TIMEOUT_MS,
+  createHandlers,
+  PROBE_CUTOFF_MS,
+  PROBE_TIMEOUT_MS,
+  ToolError,
+} from "./handlers.ts";
+import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite } from "./settings.ts";
+import { grantSite, revokeSite } from "./settings.ts";
 import {
   APPROVAL_WAIT_MS,
   createSiteAccess,
@@ -1567,6 +1575,346 @@ describe("get_page_text", { timeout: 10000 }, () => {
       (error: unknown) => error === refusal,
     );
   });
+});
+
+describe("screenshot", { timeout: 10000 }, () => {
+  const PNG = ONE_PIXEL_PNG.slice("data:image/png;base64,".length);
+  const BOX = {
+    rect: { left: 10, top: 20, width: 120, height: 80 },
+    viewport: { width: 1280, height: 720 },
+    scroll: { x: 0, y: 1500 },
+  };
+
+  it("refuses a tab id that is not a whole number of 0 or more before anything else", async (t) => {
+    const { fake, call, pageCalls } = setup();
+    const get = t.mock.method(fake.browser.tabs, "get");
+    for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+      await assert.rejects(call("s1", "screenshot", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "screenshot needs a tab id that is a whole number of 0 or more.",
+      });
+    }
+    assert.equal(get.mock.callCount(), 0);
+    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("takes 0 as a tab id", async () => {
+    const { call, open } = setup();
+    await open("s1");
+    await assert.rejects(call("s1", "screenshot", { tabId: 0 }), { code: "tab_not_found" });
+  });
+
+  it("refuses a ref that is not a string before anything else", async (t) => {
+    const { fake, call, open, grant, pageCalls } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const get = t.mock.method(fake.browser.tabs, "get");
+    for (const ref of [7, null, undefined, {}, ["0a1b2c3d-1"]]) {
+      await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref }), {
+        code: "invalid_params",
+        message: "screenshot needs ref to be a string.",
+      });
+    }
+    assert.equal(get.mock.callCount(), 0);
+    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("captures the tab's viewport as a PNG at scale 1 and returns its base64", async () => {
+    const { fake, call, open, grant, pageCalls, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    assert.deepEqual(fake.captures, [{ tabId: tab.id, format: "png", scale: 1 }]);
+    assert.deepEqual(pageCalls, []);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
+  it("captures the tab it names, also when another tab is active", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const first = await open("s1", "https://a.example/one");
+    const second = await open("s1", "https://a.example/two");
+    assert.equal(fake.tabs.get(first.id)?.active, false);
+    assert.equal(fake.tabs.get(second.id)?.active, true);
+    await call("s1", "screenshot", { tabId: first.id });
+    assert.deepEqual(
+      fake.captures.map((capture) => capture.tabId),
+      [first.id],
+    );
+  });
+
+  it("refuses a tab that does not exist or is outside the session's group", async () => {
+    const { fake, call, open, grant, pageCalls } = setup();
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const outside = fake.openTab({ url: "https://a.example/" });
+    await assert.rejects(call("s1", "screenshot", { tabId: 99 }), {
+      code: "tab_not_found",
+      message: "Tab 99 does not exist.",
+    });
+    await rejectsWith(call("s1", "screenshot", { tabId: outside.id }), "tab_not_in_group");
+    await rejectsWith(
+      call("s1", "screenshot", { tabId: outside.id, ref: "0a1b2c3d-1" }),
+      "tab_not_in_group",
+    );
+    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("refuses the tab that shows the session's open prompt", async () => {
+    const { fake, call, promptOf } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/" });
+    const prompt = await promptOf("s1");
+    await rejectsWith(call("s1", "screenshot", { tabId: prompt.tabId }), "approval_pending");
+    assert.deepEqual(fake.captures, []);
+    void opened.catch(() => {});
+  });
+
+  it("refuses a page that is not on the web, an unapproved site and a blocked one", async () => {
+    const { fake, call, open, grant, access } = setup();
+    const tab = await open("s1");
+    const cases: [string, string][] = [
+      ["about:blank", "page_not_web"],
+      ["moz-extension://abc/options.html", "page_not_web"],
+      ["https://a.example/x", "site_not_approved"],
+      ["https://www.paypal.com/", "site_blocked"],
+    ];
+    await grant("https://www.paypal.com");
+    for (const [url, code] of cases) {
+      fake.navigateByUser(tab.id, url);
+      await flush();
+      await rejectsWith(call("s1", "screenshot", { tabId: tab.id }), code, url);
+    }
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("asks the page for the element's box, then captures it in page coordinates", async () => {
+    const { fake, call, open, grant, pageCalls, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    let capturesAtRequest = -1;
+    replyWith(async () => {
+      capturesAtRequest = fake.captures.length;
+      return BOX;
+    });
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
+      data: PNG,
+    });
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: tab.id, type: "element_rect", params: { ref: "0a1b2c3d-4" } },
+    ]);
+    assert.equal(capturesAtRequest, 0);
+    assert.deepEqual(fake.captures, [
+      {
+        tabId: tab.id,
+        format: "png",
+        scale: 1,
+        rect: { x: 10, y: 1520, width: 120, height: 80 },
+      },
+    ]);
+  });
+
+  it("refuses an element with no visible area, or a box it cannot read, without capturing", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    replyWith(async () => ({ ...BOX, rect: { left: 0, top: 0, width: 0, height: 0 } }));
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
+      code: "element_not_visible",
+      message: `The element has no visible area in tab ${tab.id}.`,
+    });
+    replyWith(async () => ({ ...BOX, scroll: undefined }));
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
+      code: "page_error",
+      message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
+    });
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("passes the page's refusal of the ref through unchanged", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const refusal = new ToolError(
+      "stale_ref",
+      "Element 0a1b2c3d-4 is from a page the tab no longer shows.",
+    );
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(
+      call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }),
+      (error: unknown) => error === refusal,
+    );
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("fails without Firefox's error text when the capture is refused", async () => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/secret-path");
+    const timersBefore = timers.pending();
+    fake.failNextCapture(new Error("Cannot capture https://a.example/secret-path"));
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+    assert.equal(timers.pending(), timersBefore);
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+  });
+
+  it("refuses a capture that is not a PNG data URL", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.captureResult = "data:image/jpeg;base64,/9j/4AAQ";
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+  });
+
+  it("fails a capture that never settles once CAPTURE_TIMEOUT_MS passes", async () => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    fake.holdNextCapture();
+    let settled = false;
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    shot.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flush();
+    assert.equal(fake.captures.length, 1);
+    timers.advance(CAPTURE_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(settled, false);
+    timers.advance(1);
+    await assert.rejects(shot, {
+      code: "page_timeout",
+      message: `Firefox did not take the screenshot of tab ${tab.id} in time; try again.`,
+    });
+    assert.equal(timers.pending(), timersBefore);
+    // Only that capture was held.
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+  });
+
+  it("has a fake captureTab that rejects a tab Firefox does not know", async () => {
+    const { fake } = setup();
+    await assert.rejects(fake.browser.tabs.captureTab(99, { format: "png" }), {
+      message: "Invalid tab ID: 99",
+    });
+  });
+
+  it("bounds the capture so a whole request stays below the host's 60 s timeout", () => {
+    assert.equal(CAPTURE_TIMEOUT_MS, 20_000);
+    assert.ok(PAGE_INJECTION_MS + PAGE_REPLY_MS + CAPTURE_TIMEOUT_MS < 60_000);
+  });
+
+  it("returns no data when the tab shows another site and comes back during the capture", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const listeners = fake.listenerCount();
+    for (const away of ["https://c.example/", "about:blank"]) {
+      const release = fake.holdNextCapture();
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      fake.navigateByUser(tab.id, away);
+      await flush();
+      fake.navigateByUser(tab.id, "https://a.example/");
+      await flush();
+      release();
+      await assert.rejects(shot, {
+        code: "page_changed",
+        message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      });
+      assert.equal(fake.listenerCount(), listeners, away);
+    }
+  });
+
+  it("returns the data when the page moves within its site during the capture", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const other = fake.openTab({ url: "https://a.example/" });
+    const listeners = fake.listenerCount();
+    const release = fake.holdNextCapture();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    // Another tab moving to another site changes nothing for this one.
+    fake.navigateByUser(other.id, "https://c.example/");
+    await flush();
+    release();
+    assert.deepEqual(await shot, { data: PNG });
+    assert.equal(fake.listenerCount(), listeners);
+    await rejectsWith(call("s1", "screenshot", { tabId: 99 }), "tab_not_found");
+    assert.equal(fake.listenerCount(), listeners);
+  });
+
+  const changes: {
+    name: string;
+    change: (ctx: ReturnType<typeof setup>, tabId: number) => Promise<void> | void;
+    code: string;
+    message?: (tabId: number) => string;
+  }[] = [
+    {
+      name: "the tab moving to another approved site",
+      change: ({ fake }, tabId) => fake.navigateByUser(tabId, "https://b.example/"),
+      code: "page_changed",
+      message: (tabId) =>
+        `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+    },
+    {
+      name: "the tab moving to an unapproved site",
+      change: ({ fake }, tabId) => fake.navigateByUser(tabId, "https://c.example/"),
+      code: "site_not_approved",
+    },
+    {
+      name: "the user revoking the site",
+      change: ({ fake }) => revokeSite(fake.browser, "https://a.example"),
+      code: "site_not_approved",
+    },
+    {
+      name: "the tab leaving the session's group",
+      change: ({ fake }, tabId) => fake.ungroup(tabId),
+      code: "tab_not_in_group",
+    },
+    {
+      name: "the tab closing",
+      change: ({ fake }, tabId) => fake.removeTab(tabId),
+      code: "tab_not_found",
+    },
+  ];
+  for (const { name, change, code, message } of changes) {
+    it(`returns no data after ${name} during the capture`, async () => {
+      const ctx = setup();
+      const { fake, call, open, grant } = ctx;
+      await grant("https://a.example");
+      await grant("https://b.example");
+      const tab = await open("s1", "https://a.example/");
+      const release = fake.holdNextCapture();
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      assert.equal(fake.captures.length, 1);
+      await change(ctx, tab.id);
+      await flush();
+      release();
+      await assert.rejects(
+        shot,
+        message === undefined ? { code } : { code, message: message(tab.id) },
+      );
+    });
+  }
 });
 
 interface PageCall {

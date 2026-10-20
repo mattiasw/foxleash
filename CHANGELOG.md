@@ -46,3 +46,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   filled.
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
+- Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also
+  in the background, or of one element, on sites you approved. With `saveTo` it also saves
+  the screenshot as a new file in its working folder, never over an existing file.

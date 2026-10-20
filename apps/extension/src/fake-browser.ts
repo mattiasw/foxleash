@@ -1,6 +1,7 @@
 import type {
   BrowserApi,
   BrowserEvent,
+  CaptureOptions,
   InjectionResult,
   MessageSender,
   Permissions,
@@ -44,6 +45,14 @@ export interface FakeBrowser {
   injectionResults: InjectionResult<unknown>[];
   /** Makes the next `scripting.executeScript` reject with `error`, once. */
   failNextInjection(error: unknown): void;
+  /** Every `tabs.captureTab` call, in order, with only the option keys it was given. */
+  captures: Capture[];
+  /** What each `tabs.captureTab` call resolves to; a one-pixel PNG data URL by default. */
+  captureResult: string;
+  /** Makes the next `tabs.captureTab` reject with `error`, once. */
+  failNextCapture(error: unknown): void;
+  /** Leaves the next `tabs.captureTab` pending until `release` runs; it then resolves with `captureResult`. */
+  holdNextCapture(): () => void;
   /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
   tabMessages: TabMessage[];
   /**
@@ -104,6 +113,10 @@ export interface Injection {
   injectImmediately?: boolean;
 }
 
+export interface Capture extends CaptureOptions {
+  tabId: number;
+}
+
 export interface TabMessage {
   tabId: number;
   message: unknown;
@@ -119,6 +132,10 @@ export interface TabUpdate {
   active?: boolean;
   loadReplace?: boolean;
 }
+
+/** A real 1x1 PNG, as `tabs.captureTab` returns it. */
+export const ONE_PIXEL_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 /** The extension's id in the fake, and the host of its `getURL` URLs. */
 export const FAKE_EXTENSION_ID = "foxhand@example.org";
@@ -151,6 +168,8 @@ export function createFakeBrowser(): FakeBrowser {
   const onTabRemoved = createEvent<(tabId: number) => void>();
   let failSet = false;
   let injectionFailure: { error: unknown } | undefined;
+  let captureFailure: { error: unknown } | undefined;
+  let captureHold: Promise<void> | undefined;
   const contentScripts = new Map<
     number,
     { handler: ContentScript; pending: Set<(error: Error) => void> }
@@ -239,6 +258,7 @@ export function createFakeBrowser(): FakeBrowser {
         reply.then(resolve, reject).finally(() => script.pending.delete(reject));
         return promise;
       },
+      captureTab,
       group: async ({ tabIds, groupId, createProperties }) => {
         const group =
           groupId === undefined ? createGroup(createProperties?.windowId) : groupOf(groupId);
@@ -320,6 +340,16 @@ export function createFakeBrowser(): FakeBrowser {
     injectionResults: [{ frameId: 0, result: null }],
     failNextInjection: (error) => {
       injectionFailure = { error };
+    },
+    captures: [],
+    captureResult: ONE_PIXEL_PNG,
+    failNextCapture: (error) => {
+      captureFailure = { error };
+    },
+    holdNextCapture: () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      captureHold = promise;
+      return () => resolve();
     },
     tabMessages: [],
     setContentScript: (tabId, handler) => {
@@ -431,6 +461,18 @@ export function createFakeBrowser(): FakeBrowser {
     if (failure !== undefined) throw failure.error;
     // The fake runs no page, so what each frame returned is the test's to say.
     return structuredClone(fake.injectionResults);
+  }
+
+  async function captureTab(tabId: number, options: CaptureOptions): Promise<string> {
+    fake.captures.push({ tabId, ...structuredClone(options) });
+    const failure = captureFailure;
+    captureFailure = undefined;
+    const hold = captureHold;
+    captureHold = undefined;
+    if (failure !== undefined) throw failure.error;
+    tabOf(tabId);
+    await hold;
+    return fake.captureResult;
   }
 
   /** The document went away: its content script with it, and the replies it still owed. */

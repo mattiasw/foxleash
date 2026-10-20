@@ -12,6 +12,7 @@ apps/extension/src/browser-api.ts
 apps/extension/src/connection.ts
 apps/extension/src/content.ts
 apps/extension/src/default-blocklist.ts
+apps/extension/src/element-rect.ts
 apps/extension/src/element-refs.ts
 apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
@@ -27,6 +28,7 @@ apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts
 apps/extension/src/read-page.ts
+apps/extension/src/screenshot.ts
 apps/extension/src/session-groups.ts
 apps/extension/src/settings.ts
 apps/extension/src/site-access.ts

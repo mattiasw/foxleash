@@ -1,4 +1,5 @@
 import type { BrowserApi } from "./browser-api.ts";
+import { elementRect } from "./element-rect.ts";
 import { createElementRefs } from "./element-refs.ts";
 import { handlePageMessage, PageError, type PageHandlers } from "./page-messages.ts";
 import { pageTextOptions } from "./page-text.ts";
@@ -29,6 +30,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
       if (typeof options === "string") throw new PageError("invalid_params", options);
       return readPageText(document, options.maxChars);
     },
+    element_rect: (params) => elementRect(params, { refs }),
   };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),
