@@ -1,5 +1,11 @@
 import { type ElementRefs, refError } from "./element-refs.ts";
-import { detailsSummaryOf, inDetailsContent, isClosedDetails, shadowRootOf } from "./flat-tree.ts";
+import {
+  detailsSummaryOf,
+  flatParentOf,
+  inDetailsContent,
+  isClosedDetails,
+  shadowRootOf,
+} from "./flat-tree.ts";
 import { PageError } from "./page-messages.ts";
 import {
   createTextBuffer,
@@ -129,7 +135,7 @@ export function readPage(
     return tree.result();
   }
   const role = roleOf(element, page) ?? "generic";
-  const { name } = nameOf(element, role, page);
+  const { name } = nameOf(element, role, page, rootTextState(element, getComputedStyle(element)));
   const focused = focusedElement();
   tree.add(
     formatLine({
@@ -177,23 +183,19 @@ interface TreeContext {
 function walkTree(root: Element, rootRole: string | undefined, context: TreeContext): void {
   const { options, page, tree, focused } = context;
   const all = options.filter === "all";
-  const rootStyle = getComputedStyle(root);
-  // A root given by ref may itself be hidden, and then so is its text.
-  const rootBoxed =
-    rootStyle.contentVisibility !== "hidden" &&
-    (root.checkVisibility() || rootStyle.display === "contents");
-  const rootTextVisible = rootStyle.visibility === "visible" && rootBoxed;
+  // A root given by ref may be hidden by its own style or its flat-tree ancestors.
+  const rootState = rootTextState(root, getComputedStyle(root));
   const rootScope: Scope = {
     element: root,
     lineLevel: rootRole === undefined ? undefined : 0,
     childLevel: rootRole === undefined ? 0 : 1,
     owner: undefined,
     pending: undefined,
-    quiet: rootRole !== undefined && nameOf(root, rootRole, page).fromContent,
-    boxed: rootBoxed,
-    textVisible: rootTextVisible,
+    quiet: rootRole !== undefined && nameOf(root, rootRole, page, rootState).fromContent,
+    boxed: rootState.boxed,
+    textVisible: rootState.visible,
     block: true,
-    content: detailsContent(root, { boxed: rootBoxed, visible: rootTextVisible }),
+    content: detailsContent(root, rootState),
   };
   if (rootRole !== undefined) rootScope.owner = rootScope;
   const scopes: Scope[] = [rootScope];
@@ -486,6 +488,53 @@ function presenceOf(element: Element, style: CSSStyleDeclaration): Presence {
   return style.visibility === "visible" ? "shown" : "noLine";
 }
 
+/** The state of the text directly inside `root`, judged by its flat-tree ancestors too. */
+function rootTextState(root: Element, style: CSSStyleDeclaration): TextState {
+  const boxed = style.contentVisibility !== "hidden" && laidOut(root, style);
+  // visibility is inherited through the flat tree, the details content box included.
+  return { boxed, visible: boxed && style.visibility === "visible" };
+}
+
+/** Whether the element's content is laid out in a box the user can see. */
+function laidOut(start: Element, startStyle: CSSStyleDeclaration): boolean {
+  let element = start;
+  let style = startStyle;
+  const select = isOptionInSelect(element) ? element.closest("select") : null;
+  if (select !== null) {
+    // Firefox gives the options of a closed drop-down no box: judge them as presenceOf does.
+    for (
+      let current: Element | null = element;
+      current !== null && current !== select;
+      current = current.parentElement
+    ) {
+      if (current.hasAttribute("hidden") || getComputedStyle(current).display === "none") {
+        return false;
+      }
+    }
+    element = select;
+    style = getComputedStyle(select);
+  }
+  if (style.display !== "contents") return element.checkVisibility();
+  // An element outside the flat tree (unslotted, or an unshown slot fallback) has no resolved
+  // style, so it never gets here as display contents: no step needs to look for one.
+  let child = element;
+  for (let holder = flatParentOf(child); holder !== null; holder = flatParentOf(child)) {
+    if (holder.localName === "br" || CHILDLESS.has(holder.localName)) return false;
+    if (
+      inDetailsContent(holder, child) &&
+      (isClosedDetails(holder) ||
+        detailsContent(holder, { boxed: true, visible: true })?.boxed === false)
+    ) {
+      return false;
+    }
+    const holderStyle = getComputedStyle(holder);
+    if (holderStyle.contentVisibility === "hidden") return false;
+    if (holderStyle.display !== "contents") return holder.checkVisibility();
+    child = holder;
+  }
+  return false;
+}
+
 /**
  * The state of what a details' content box holds, from the details' own state: Firefox lays out
  * every child but the shown summary in its ::details-content box, styled from that box, which a
@@ -683,12 +732,13 @@ export function isEditingHost(element: Element): boolean {
 
 /**
  * The element's accessible name, a subset of accname, and whether it came from the element's
- * own text. Never a form control's value.
+ * own text, read in `startState` when given. Never a form control's value.
  */
 function nameOf(
   element: Element,
   role: string,
   page: PageMemory,
+  startState?: TextState,
 ): { name: string; fromContent: boolean } {
   const labelledBy = labelledByText(element);
   if (labelledBy !== "") return { name: labelledBy, fromContent: false };
@@ -697,7 +747,7 @@ function nameOf(
   const own = ownName(element, page);
   if (own !== undefined) return { name: own, fromContent: false };
   if (NAME_FROM_CONTENT_ROLES.has(role)) {
-    const content = collectText(element, false);
+    const content = collectText(element, false, startState);
     if (content !== "") return { name: content, fromContent: true };
   }
   return { name: element.getAttribute("title") ?? "", fromContent: false };
@@ -779,20 +829,24 @@ function nonEmpty(text: string): string | undefined {
 
 /**
  * The text inside `start`, as the user sees it unless `withHidden`, cut a little past the
- * longest name. It never reads into a form control.
+ * longest name. It never reads into a form control. `startState`, when given, is the state of
+ * the text directly inside `start`, else it comes from `start`'s own style.
  */
-function collectText(start: Element, withHidden: boolean): string {
+function collectText(start: Element, withHidden: boolean, startState?: TextState): string {
   if (start.localName === "select" || CHILDLESS.has(start.localName)) return "";
   const buffer = createTextBuffer();
-  const startStyle = getComputedStyle(start);
-  const startBoxed = startStyle.contentVisibility !== "hidden";
-  const startShown = startStyle.visibility === "visible" && startBoxed;
+  let state = startState;
+  if (state === undefined) {
+    const startStyle = getComputedStyle(start);
+    const boxed = startStyle.contentVisibility !== "hidden";
+    state = { boxed, visible: startStyle.visibility === "visible" && boxed };
+  }
   const outer: TextScope = {
     element: start,
     block: false,
-    boxed: startBoxed,
-    shown: withHidden || startShown,
-    content: detailsContent(start, { boxed: startBoxed, visible: startShown }),
+    boxed: state.boxed,
+    shown: withHidden || state.visible,
+    content: detailsContent(start, state),
   };
   const scopes: TextScope[] = [];
   walkChildren(start, {

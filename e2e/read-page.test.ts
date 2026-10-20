@@ -393,6 +393,126 @@ describe("read_page in real Firefox", () => {
     assert.ok(text.includes("is not in this session's tab group"), text);
   });
 
+  test("a ref read leaves out what the page hid after the read", async () => {
+    const tabId = await open("/read-ref-hidden", TITLES.readRefHidden);
+    const { tree } = await read(tabId);
+    // Each root is set to display: contents, given an own and a display: contents child's text,
+    // and moved into its holder; the slotted root stays where it is.
+    const roots = [
+      { id: "display", label: "Display root", shown: false },
+      { id: "cv", label: "Content visibility root", shown: false },
+      { id: "box", label: "Box root", shown: false },
+      { id: "closed", label: "Closed root", shown: false },
+      { id: "nested", label: "Nested root", shown: false },
+      { id: "childless", label: "Childless root", shown: false },
+      { id: "br", label: "Break root", shown: false },
+      { id: "shadow-top", label: "Shadow top root", shown: false },
+      { id: "unslotted", label: "Unslotted root", shown: false },
+      { id: "fallback", label: "Fallback root", shown: false },
+      { id: "visible", label: "Visible root", shown: true },
+      { id: "open-details", label: "Open details root", shown: true },
+      { id: "slotted", label: "Slotted root", shown: true },
+      { id: "shown-fallback", label: "Shown fallback root", shown: true },
+    ].map((root) => ({
+      ...root,
+      ref: refOf(tree, `group "${root.label}"`),
+      own: `ref-hidden-${root.id}-own-Ka7`,
+      child: `ref-hidden-${root.id}-child-Lb8`,
+    }));
+    // Each element named from its content gets new text, then the page hides it or not.
+    const named = [
+      { id: "button-closed", line: '  button "Go closed"', role: "button", shown: false },
+      { id: "button-box", line: '  button "Go box"', role: "button", shown: false },
+      { id: "button-display", line: 'button "Go display"', role: "button", shown: false },
+      { id: "button-contents", line: 'button "Go contents"', role: "button", shown: false },
+      { id: "option-hidden", line: '  option "Two"', role: "option", shown: false },
+      { id: "option-contents", line: '  option "Six"', role: "option", shown: false },
+      { id: "option-own", line: '  option "Eight"', role: "option", shown: false },
+      { id: "option-group", line: '  option "Nine"', role: "option", shown: false },
+      { id: "button-control", line: 'button "Go control"', role: "button", shown: true },
+      { id: "option-control", line: '  option "Four"', role: "option", shown: true },
+    ].map((name) => ({
+      ...name,
+      ref: refOf(tree, name.line),
+      token: `ref-hidden-name-${name.id}-Mc9`,
+    }));
+    const changes = {
+      roots: roots.map(({ id, own, child }) => ({ id, own, child })),
+      named: named.map(({ id, token }) => ({ id, token })),
+    };
+    assert.equal(
+      await firefox.evaluate(
+        await contextOf(fixtures.url("/read-ref-hidden")),
+        `(() => {
+          const changes = ${JSON.stringify(changes)};
+          for (const { id, own, child } of changes.roots) {
+            const root = document.getElementById("root-" + id);
+            root.style.display = "contents";
+            root.textContent = own + " ";
+            const span = document.createElement("span");
+            span.style.display = "contents";
+            span.textContent = child;
+            root.append(span);
+            if (id === "slotted") continue;
+            const holder = document.getElementById("holder-" + id);
+            if (id === "fallback" || id === "shown-fallback") {
+              holder.shadowRoot.querySelector("slot").append(root);
+            } else if (id === "shadow-top") {
+              holder.shadowRoot.append(root);
+            } else {
+              holder.append(root);
+            }
+          }
+          for (const { id, token } of changes.named) {
+            document.getElementById(id).textContent = token;
+          }
+          document.getElementById("name-closed").open = false;
+          document.getElementById("name-box").classList.add("box-hidden");
+          document.getElementById("button-display").style.display = "none";
+          document.getElementById("select-hidden").style.display = "none";
+          document.getElementById("select-contents").style.display = "contents";
+          document.getElementById("option-own").hidden = true;
+          document.getElementById("optgroup-display").style.display = "none";
+          const contents = document.getElementById("button-contents");
+          contents.style.display = "contents";
+          document.getElementById("holder-button-contents").append(contents);
+          return "changed";
+        })()`,
+      ),
+      "changed",
+    );
+
+    for (const { label, shown, ref, own, child } of roots) {
+      const sub = await read(tabId, { ref });
+      assert.equal(lines(sub.tree)[0], `group "${label}" [${ref}]`, sub.tree);
+      if (shown) {
+        for (const token of [own, child]) {
+          assert.ok(
+            lines(sub.tree).some((line) => line.startsWith('  text "') && line.includes(token)),
+            `no text line with ${token} in:\n${sub.tree}`,
+          );
+        }
+      } else {
+        assertNoSecrets(sub.texts, [own, child]);
+      }
+    }
+    for (const { role, shown, ref, token } of named) {
+      const sub = await read(tabId, { ref });
+      const first = lines(sub.tree)[0] ?? "";
+      if (shown) {
+        assert.equal(first, `${role} "${token}" [${ref}]`, sub.tree);
+      } else {
+        assert.ok(first.startsWith(`${role} `) && first.includes(`[${ref}]`), sub.tree);
+        assertNoSecrets(sub.texts, [token]);
+      }
+    }
+    const all = await read(tabId);
+    assertNoSecrets(all.texts, [
+      ...roots.filter(({ shown }) => !shown).flatMap(({ own, child }) => [own, child]),
+      ...named.filter(({ shown }) => !shown).map(({ token }) => token),
+    ]);
+  });
+
   // Last: the blocklist then covers the fixture server for the rest of the file.
   test("a tab on a blocked site is refused", async () => {
     await harness.seedSettings({ blocklist: ["127.0.0.1", "localhost"] });

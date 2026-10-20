@@ -13,6 +13,7 @@ export const TITLES = {
   readFrame: "Fixture read frame",
   readLarge: "Fixture read large",
   readRefs: "Fixture read refs",
+  readRefHidden: "Fixture read ref hidden",
   textMain: "Fixture text main",
   textRoleMain: "Fixture text role main",
   textArticle: "Fixture text article",
@@ -216,6 +217,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, readLargePage());
     } else if (path === "/read-refs") {
       sendHtml(response, READ_REFS_PAGE);
+    } else if (path === "/read-ref-hidden") {
+      sendHtml(response, READ_REF_HIDDEN_PAGE);
     } else if (path === "/text-main") {
       sendHtml(response, TEXT_MAIN_PAGE);
     } else if (path === "/text-role-main") {
@@ -551,6 +554,76 @@ const READ_REFS_PAGE = `<!doctype html>
 <a role="link" tabindex="0">No address</a>
 <button type="button"><img alt="Close"></button>
 <a href="/a"><svg aria-label="Home" width="10" height="10"></svg></a>
+</body></html>
+`;
+
+// Elements a test hides after the first read, to read them by ref: group roots with their own
+// text, each with the holder the test moves it into (hiding ones: display none, content-visibility
+// hidden, a details with a hidden content box, a closed details, display contents under display
+// none, a progress, a br, a hidden host's shadow root, a host with no slot, a slot showing
+// assigned nodes; showing ones: a plain div, an open details, a slot, a slot showing its
+// fallback), buttons and options named from their content, and custom elements with open
+// shadow roots.
+const READ_REF_HIDDEN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.readRefHidden}</title>
+<style>
+.box-hidden::details-content { content-visibility: hidden; }
+</style></head>
+<body>
+<div role="group" aria-label="Display root" id="root-display">Display root text</div>
+<div role="group" aria-label="Content visibility root" id="root-cv">Content visibility root text</div>
+<div role="group" aria-label="Box root" id="root-box">Box root text</div>
+<div role="group" aria-label="Closed root" id="root-closed">Closed root text</div>
+<div role="group" aria-label="Nested root" id="root-nested">Nested root text</div>
+<div role="group" aria-label="Childless root" id="root-childless">Childless root text</div>
+<div role="group" aria-label="Break root" id="root-br">Break root text</div>
+<div role="group" aria-label="Shadow top root" id="root-shadow-top">Shadow top root text</div>
+<div role="group" aria-label="Unslotted root" id="root-unslotted">Unslotted root text</div>
+<div role="group" aria-label="Fallback root" id="root-fallback">Fallback root text</div>
+<div role="group" aria-label="Visible root" id="root-visible">Visible root text</div>
+<div role="group" aria-label="Open details root" id="root-open-details">Open details root text</div>
+<div role="group" aria-label="Shown fallback root" id="root-shown-fallback">Shown fallback root text</div>
+<slot-host><div role="group" aria-label="Slotted root" id="root-slotted">Slotted root text</div></slot-host>
+<div id="holder-display" style="display: none"></div>
+<div id="holder-cv" style="content-visibility: hidden"></div>
+<details id="holder-box" class="box-hidden" open><summary>Box holder</summary></details>
+<details id="holder-closed"><summary>Closed holder</summary></details>
+<div style="display: none"><div id="holder-nested" style="display: contents"></div></div>
+<progress id="holder-childless"></progress>
+<br id="holder-br">
+<top-host id="holder-shadow-top" style="display: none"></top-host>
+<bare-host id="holder-unslotted"></bare-host>
+<fallback-host id="holder-fallback"><span>Assigned</span></fallback-host>
+<div id="holder-visible"></div>
+<details id="holder-open-details" open><summary>Open holder</summary></details>
+<empty-host id="holder-shown-fallback"></empty-host>
+<details id="name-closed" open><summary>Closed name</summary><button id="button-closed">Go closed</button></details>
+<details id="name-box" open><summary>Box name</summary><button id="button-box">Go box</button></details>
+<button id="button-display">Go display</button>
+<button id="button-contents">Go contents</button>
+<div id="holder-button-contents" style="display: none"></div>
+<button id="button-control">Go control</button>
+<select id="select-hidden" aria-label="Hidden pick"><option>One</option><option id="option-hidden">Two</option></select>
+<select id="select-contents" aria-label="Contents pick"><option>Five</option><option id="option-contents">Six</option></select>
+<select id="select-own" aria-label="Own pick"><option>Seven</option><option id="option-own">Eight</option></select>
+<select id="select-group" aria-label="Group pick"><option>Ten</option><optgroup id="optgroup-display" label="Group"><option id="option-group">Nine</option></optgroup></select>
+<select id="select-control" aria-label="Control pick"><option>Three</option><option id="option-control">Four</option></select>
+<script>
+for (const [name, html] of [
+  ["slot-host", "<div><slot></slot></div>"],
+  ["top-host", ""],
+  ["bare-host", "<div>Bare host</div>"],
+  ["fallback-host", "<slot></slot>"],
+  ["empty-host", "<slot></slot>"],
+]) {
+  customElements.define(name, class extends HTMLElement {
+    constructor() {
+      super();
+      this.attachShadow({ mode: "open" }).innerHTML = html;
+    }
+  });
+}
+</script>
 </body></html>
 `;
 
