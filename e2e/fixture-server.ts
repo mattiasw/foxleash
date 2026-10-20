@@ -804,22 +804,24 @@ function minimalPdf(): string {
   return pdf;
 }
 
-// Two file fields, one taking several files, a drop zone that cancels dragover and drop, and a
-// button that takes no drops. The page keeps the files each target got in window.received and
-// the events it saw in window.events, with the drops that reached the document.
+// Three file fields, one taking several files and one with no label, a drop zone that cancels
+// dragover and drop, and a button that takes no drops. The page keeps the files each target got
+// in window.received and the events it saw in window.events, with the drops that reached the
+// document.
 const UPLOAD_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.upload}</title></head>
 <body>
 <main>
 <input id="single" type="file" aria-label="Single file">
 <input id="many" type="file" multiple aria-label="Many files">
+<input id="unnamed" type="file">
 <section id="zone" aria-label="Drop zone"><p>Drop files here</p></section>
 <button id="plain" type="button">No drops</button>
 </main>
 <script>
-window.received = { single: [], many: [], zone: [] };
-window.events = { single: [], many: [], zone: [], documentDrops: 0 };
-for (const id of ["single", "many"]) {
+window.received = { single: [], many: [], unnamed: [], zone: [] };
+window.events = { single: [], many: [], unnamed: [], zone: [], documentDrops: 0 };
+for (const id of ["single", "many", "unnamed"]) {
   const input = document.getElementById(id);
   input.addEventListener("input", () => window.events[id].push("input"));
   input.addEventListener("change", () => {

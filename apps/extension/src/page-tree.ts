@@ -9,6 +9,8 @@ export type ReadPageOptions = { filter: "all" | "interactive"; depth?: number; r
 
 /** The states a line can carry; only `value` and `href` hold page text. */
 export interface LineStates {
+  /** An <input type="file">: upload_file sets its files. */
+  file?: true;
   checked?: "checked" | "mixed";
   selected?: boolean;
   expanded?: boolean;
@@ -232,6 +234,7 @@ export function formatLine({ level, role, name, ref, states = {} }: Line): strin
   const parts = [`${"  ".repeat(level)}${role}`];
   if (name !== undefined && clean(name) !== "") parts.push(quote(name));
   if (ref !== undefined) parts.push(`[${ref}]`);
+  if (states.file === true) parts.push("file field");
   if (states.checked !== undefined) parts.push(states.checked);
   if (states.selected === true) parts.push("selected");
   if (states.expanded !== undefined) parts.push(`expanded=${states.expanded}`);

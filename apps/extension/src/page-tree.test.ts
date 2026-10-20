@@ -94,6 +94,48 @@ describe("formatLine", () => {
     );
   });
 
+  it("marks a file field straight after its reference", () => {
+    assert.equal(
+      formatLine({ level: 0, role: "button", ref: "0a1b2c3d-4", states: { file: true } }),
+      "button [0a1b2c3d-4] file field",
+    );
+    assert.equal(
+      formatLine({
+        level: 0,
+        role: "button",
+        name: "Resume",
+        ref: "0a1b2c3d-5",
+        states: { required: true, disabled: true, file: true },
+      }),
+      'button "Resume" [0a1b2c3d-5] file field disabled required',
+    );
+    assert.equal(
+      formatLine({
+        level: 2,
+        role: "textbox",
+        name: "Email",
+        ref: "0a1b2c3d-8",
+        states: {
+          frame: true,
+          href: "https://example.com/",
+          field: { value: "me@example.com" },
+          level: 3,
+          focused: true,
+          invalid: true,
+          required: true,
+          readonly: true,
+          disabled: true,
+          pressed: true,
+          expanded: false,
+          selected: true,
+          checked: "mixed",
+          file: true,
+        },
+      }),
+      '    textbox "Email" [0a1b2c3d-8] file field mixed selected expanded=false pressed disabled readonly required invalid focused level=3 value="me@example.com" href="https://example.com/" frame content not read',
+    );
+  });
+
   it("writes only the role when nothing else is given", () => {
     assert.equal(formatLine({ level: 0, role: "main" }), "main");
     assert.equal(formatLine({ level: 1, role: "main", states: {} }), "  main");

@@ -864,6 +864,7 @@ function statesOf(
   page: PageMemory,
 ): LineStates {
   const states: LineStates = {};
+  if (element instanceof HTMLInputElement && element.type === "file") states.file = true;
   const checked = checkedOf(element);
   if (checked !== undefined) states.checked = checked;
   if ((element instanceof HTMLOptionElement && element.selected) || ariaTrue(element, "selected")) {

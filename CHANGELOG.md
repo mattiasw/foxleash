@@ -41,9 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tool results put page content between a start line and an end line that carry the same
   random id, so text in a page cannot pass for the end of it.
 - Your agent can read a page's structure with the `read_page` tool: its elements with their
-  roles, names and states, its visible text, and a reference to each element. The values of
-  password fields, and of one-time code and card number fields that the page marks as such
-  for autofill, are never read out, only whether they are filled.
+  roles, names and states, its visible text, and a reference to each element, with file
+  fields marked so your agent can find them for `upload_file` even without a label. The
+  values of password fields, and of one-time code and card number fields that the page marks
+  as such for autofill, are never read out, only whether they are filled.
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also

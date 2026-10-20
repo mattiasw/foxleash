@@ -97,10 +97,12 @@ The agent reads a page with `read_page`, which returns the page as an accessibil
 line per element with its role, name and state (such as checked, disabled, a field's value or
 a link's address), and the page's visible text. Each element line carries an element
 reference that later tools use to act on that element; references are valid only for the page
-they came from. Hidden elements are left out, and frames are noted but not read. The agent
-can read only the interactive elements (`filter: "interactive"`), fewer levels (`depth`) or one
-element and what it contains (`ref`). The tree is cut at 50,000 characters, and the agent is
-told when it was. `read_page` works only on a tab showing a site you approved, and never asks.
+they came from. A file field's line is marked `file field`, so the agent can find it for
+`upload_file` even when the page gives it no label. Hidden elements are left out, and frames
+are noted but not read. The agent can read only the interactive elements
+(`filter: "interactive"`), fewer levels (`depth`) or one element and what it contains (`ref`).
+The tree is cut at 50,000 characters, and the agent is told when it was. `read_page` works
+only on a tab showing a site you approved, and never asks.
 
 The agent reads a page's text with `get_page_text`: the text as the page shows it, the main
 content first (the page's main element or article, else its largest block of text), then the

@@ -98,6 +98,7 @@ describe("tools", () => {
       "protected, never their value",
       "marks as such for autofill",
       "stays protected only if read_page read it while it was a password field",
+      "marked file field",
       "50,000 characters",
       "read_page never asks",
     ]) {
