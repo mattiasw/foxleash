@@ -20,6 +20,8 @@ apps/extension/src/options.html
 apps/extension/src/options.ts
 apps/extension/src/page-messages.ts
 apps/extension/src/page-scripts.ts
+apps/extension/src/page-text-dom.ts
+apps/extension/src/page-text.ts
 apps/extension/src/page-tree.ts
 apps/extension/src/pages.css
 apps/extension/src/probe-page.ts

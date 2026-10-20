@@ -37,6 +37,27 @@ export interface ProbeResult {
   checks: ProbeCheck[];
 }
 
+/** get_page_text's cut when the request gives none. */
+export const DEFAULT_PAGE_TEXT_CHARS = 50_000;
+/**
+ * The largest cut get_page_text accepts: the reply stays under the background's cap of 2,000,000
+ * characters as JSON even when every character escapes to six.
+ */
+export const MAX_PAGE_TEXT_CHARS = 200_000;
+
+/** Where get_page_text found the main content; `body` when the whole page is the main content. */
+export type PageTextSource = "main" | "role_main" | "article" | "largest_block" | "body";
+
+export interface PageText {
+  source: PageTextSource;
+  main: string;
+  rest: string;
+  /** True when main or rest was cut. */
+  truncated: boolean;
+  /** The length, in UTF-16 units, of main plus rest after tidying and before the cut. */
+  totalChars: number;
+}
+
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
   tab_open: { params: { url?: string }; result: { tab: TabInfo } };
@@ -50,6 +71,7 @@ export interface Methods {
     params: { tabId: number; filter?: "all" | "interactive"; depth?: number; ref?: string };
     result: { tree: string; truncated: boolean };
   };
+  get_page_text: { params: { tabId: number; maxChars?: number }; result: PageText };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -68,6 +90,7 @@ export const METHOD_NAMES = [
   "tab_open",
   "navigate",
   "read_page",
+  "get_page_text",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

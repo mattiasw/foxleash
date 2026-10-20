@@ -1,6 +1,8 @@
 import type { BrowserApi } from "./browser-api.ts";
 import { createElementRefs } from "./element-refs.ts";
-import { handlePageMessage, type PageHandlers } from "./page-messages.ts";
+import { handlePageMessage, PageError, type PageHandlers } from "./page-messages.ts";
+import { pageTextOptions } from "./page-text.ts";
+import { readPageText } from "./page-text-dom.ts";
 import { readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
 
@@ -22,6 +24,11 @@ if (!Object.hasOwn(globalThis, STARTED)) {
   const passwordFields = new WeakSet<Element>();
   const handlers: PageHandlers = {
     read_page: (params) => readPage(params, { refs, passwordFields }),
+    get_page_text: (params) => {
+      const options = pageTextOptions(params);
+      if (typeof options === "string") throw new PageError("invalid_params", options);
+      return readPageText(document, options.maxChars);
+    },
   };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),

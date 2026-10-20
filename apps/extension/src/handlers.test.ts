@@ -1483,6 +1483,92 @@ describe("read_page", { timeout: 10000 }, () => {
   });
 });
 
+describe("get_page_text", { timeout: 10000 }, () => {
+  const text = { source: "main", main: "Story", rest: "Menu", truncated: false, totalChars: 9 };
+
+  it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+      await assert.rejects(call("s1", "get_page_text", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "get_page_text needs a tab id that is a whole number of 0 or more.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("refuses a bad maxChars with its sentence before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const maxChars of [0, 200_001, 1.5, "100", null]) {
+      await assert.rejects(call("s1", "get_page_text", { tabId: 3, maxChars }), {
+        code: "invalid_params",
+        message: "get_page_text needs maxChars to be a whole number from 1 to 200000.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page with maxChars only, the default when none is given", async () => {
+    const { call, pageCalls, replyWith } = setup();
+    replyWith(async () => text);
+    await call("s1", "get_page_text", { tabId: 3 });
+    await call("s2", "get_page_text", { tabId: 0, maxChars: 40, extra: true });
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: 3, type: "get_page_text", params: { maxChars: 50_000 } },
+      { session: "s2", tabId: 0, type: "get_page_text", params: { maxChars: 40 } },
+    ]);
+  });
+
+  it("returns only the five fields of the page's text", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ ...text, extra: "page text" }));
+    assert.deepEqual(await call("s1", "get_page_text", { tabId: 3 }), text);
+  });
+
+  it("cuts a reply over maxChars again and marks it cut", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ ...text, main: "a".repeat(8), rest: "b".repeat(8) }));
+    assert.deepEqual(await call("s1", "get_page_text", { tabId: 3, maxChars: 10 }), {
+      ...text,
+      main: "a".repeat(8),
+      rest: "bb",
+      truncated: true,
+    });
+  });
+
+  it("refuses a reply it cannot read as page_error", async () => {
+    const { call, replyWith } = setup();
+    const replies: unknown[] = [
+      undefined,
+      null,
+      "text",
+      [],
+      { ...text, source: "header" },
+      { ...text, main: 1 },
+      { ...text, truncated: "no" },
+      { ...text, totalChars: -1 },
+      Object.create(text),
+    ];
+    for (const reply of replies) {
+      replyWith(async () => reply);
+      await assert.rejects(call("s1", "get_page_text", { tabId: 3 }), {
+        code: "page_error",
+        message: "Foxhand could not complete the request in the page in tab 3.",
+      });
+    }
+  });
+
+  it("passes the page's refusal through unchanged", async () => {
+    const { call, replyWith } = setup();
+    const refusal = new ToolError("site_not_approved", "Foxhand is not allowed on that site.");
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(
+      call("s1", "get_page_text", { tabId: 3 }),
+      (error: unknown) => error === refusal,
+    );
+  });
+});
+
 interface PageCall {
   session: string;
   tabId: number;

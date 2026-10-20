@@ -80,7 +80,7 @@ const CHILDLESS: ReadonlySet<string> = new Set([
   "template",
   "noscript",
 ]);
-const UNREAD: ReadonlySet<string> = new Set(["script", "style", "template", "noscript"]);
+export const UNREAD: ReadonlySet<string> = new Set(["script", "style", "template", "noscript"]);
 // Firefox also exposes its own widget roots (video controls, date inputs) as shadow roots.
 const SHADOW_HOSTS: ReadonlySet<string> = new Set([
   "article",
@@ -396,7 +396,7 @@ function childrenOf(element: Element): ArrayLike<Node> {
 }
 
 /** The author shadow root of an element that may carry one, open or closed. */
-function shadowRootOf(element: Element): ShadowRoot | null {
+export function shadowRootOf(element: Element): ShadowRoot | null {
   if (!element.localName.includes("-") && !SHADOW_HOSTS.has(element.localName)) return null;
   const access: ShadowAccess = element;
   const root = access.openOrClosedShadowRoot;

@@ -9,6 +9,7 @@ import type {
 import type { BrowserApi, InjectionResult, Tab, Timers } from "./browser-api.ts";
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
+import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
@@ -83,6 +84,7 @@ export function createHandlers<Handle>({
     tab_open: tabOpen,
     navigate,
     read_page: readPage,
+    get_page_text: getPageText,
     probe_input: probeInput,
   };
 
@@ -215,6 +217,28 @@ export function createHandlers<Handle>({
       );
     }
     return { tree, truncated };
+  }
+
+  /** Reads a page's text through the content script, which runs only after the site gate. */
+  async function getPageText(session: string, params: Params): Promise<Result<"get_page_text">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "get_page_text needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const options = pageTextOptions(params);
+    if (typeof options === "string") throw new ToolError("invalid_params", options);
+    const reply = await pages.request(session, tabId, "get_page_text", options);
+    const text = pageTextOf(reply, options.maxChars);
+    if (text === undefined) {
+      throw new ToolError(
+        "page_error",
+        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+      );
+    }
+    return text;
   }
 
   /**

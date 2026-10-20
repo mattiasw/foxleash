@@ -44,3 +44,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   roles, names and states, its visible text, and a reference to each element. The values of
   password, one-time code and card number fields are never read out, only whether they are
   filled.
+- Your agent can read a page's text with the `get_page_text` tool: the main content first,
+  then the rest of the page, on sites you approved.

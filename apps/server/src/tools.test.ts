@@ -36,10 +36,11 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the four tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the five tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "get_page_text",
       "navigate",
       "read_page",
       "tab_open",
@@ -48,7 +49,11 @@ describe("tools", () => {
     for (const tool of tools) {
       assert.ok(tool.description !== undefined && tool.description.length > 0, tool.name);
       assert.equal(tool.description.includes(EM_DASH), false, tool.name);
-      assert.equal(tool.description.includes(REDACTED_TABS), tool.name !== "read_page", tool.name);
+      assert.equal(
+        tool.description.includes(REDACTED_TABS),
+        tool.name !== "read_page" && tool.name !== "get_page_text",
+        tool.name,
+      );
     }
     const navigate = tools.find((tool) => tool.name === "navigate");
     assert.deepEqual(navigate?.inputSchema.required, ["tabId"]);
@@ -69,6 +74,62 @@ describe("tools", () => {
     ]) {
       assert.ok(readPage?.description?.includes(words), words);
     }
+    const getPageText = tools.find((tool) => tool.name === "get_page_text");
+    assert.equal(getPageText?.description?.includes(ASKS_FIRST), false);
+    assert.deepEqual(getPageText?.inputSchema.required, ["tabId"]);
+    for (const words of [
+      "get_page_text never asks",
+      "50,000 unless given and at most 200,000",
+      "when truncated is true and maxChars was below 200,000, a larger maxChars returns more",
+    ]) {
+      assert.ok(getPageText?.description?.includes(words), words);
+    }
+  });
+
+  it("passes get_page_text only the arguments given", LIMIT, async () => {
+    const page = { source: "main", main: "", rest: "", truncated: false, totalChars: 0 };
+    const { client, calls } = await start(() => page);
+    await client.callTool({ name: "get_page_text", arguments: { tabId: 2 } });
+    await client.callTool({ name: "get_page_text", arguments: { tabId: 0, maxChars: 200_000 } });
+    assert.deepEqual(calls, [
+      { method: "get_page_text", params: { tabId: 2 } },
+      { method: "get_page_text", params: { tabId: 0, maxChars: 200_000 } },
+    ]);
+    assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
+  });
+
+  it("refuses get_page_text arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const prefix =
+      "MCP error -32602: Input validation error: Invalid arguments for tool get_page_text: ";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: -1 }, "Too small: expected number to be >=0 at tabId"],
+      [{ tabId: 1, maxChars: 0 }, "Too small: expected number to be >=1 at maxChars"],
+      [{ tabId: 1, maxChars: 200_001 }, "Too big: expected number to be <=200000 at maxChars"],
+      [{ tabId: 1, maxChars: 1.5 }, "Invalid input: expected int, received number at maxChars"],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "get_page_text", arguments: args });
+      assert.deepEqual(output, {
+        content: [{ type: "text", text: prefix + reason }],
+        isError: true,
+      });
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("returns get_page_text's result as JSON in one untrusted frame", LIMIT, async () => {
+    const page = {
+      source: "article",
+      main: "Story\n\nText",
+      rest: "Menu",
+      truncated: true,
+      totalChars: 90,
+    };
+    const { client } = await start(() => page);
+    const output = await client.callTool({ name: "get_page_text", arguments: { tabId: 1 } });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(page));
   });
 
   it("passes read_page only the arguments given", LIMIT, async () => {

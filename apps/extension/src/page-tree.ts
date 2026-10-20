@@ -268,7 +268,7 @@ export function quote(text: string): string {
   return JSON.stringify(cut.truncated ? `${cut.text}…` : cut.text);
 }
 
-function clean(text: string): string {
+export function clean(text: string): string {
   return text.replace(WHITESPACE, " ").trim();
 }
 

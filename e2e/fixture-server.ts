@@ -13,6 +13,13 @@ export const TITLES = {
   readFrame: "Fixture read frame",
   readLarge: "Fixture read large",
   readRefs: "Fixture read refs",
+  textMain: "Fixture text main",
+  textRoleMain: "Fixture text role main",
+  textArticle: "Fixture text article",
+  textBlock: "Fixture text block",
+  textHiddenBody: "Fixture text hidden body",
+  textSlotted: "Fixture text slotted",
+  textDetails: "Fixture text details",
 } as const;
 
 /** Field values the read form holds that read_page must never return. */
@@ -39,6 +46,57 @@ export const READ_HIDDEN = {
   contentVisibility: "hidden-content-visibility-Vj0",
   fallback: "hidden-fallback-Xg7",
   frame: "frame-inner-text-Yh8",
+} as const;
+
+/** Text the get_page_text pages hold in each region, to find where each region went. */
+export const TEXT_TOKENS = {
+  nav: "text-nav-Ka1",
+  mainHeading: "text-main-heading-Lb2",
+  mainFirst: "text-main-first-Mc3",
+  mainSecond: "text-main-second-Nd4",
+  mainHidden: "text-main-hidden-Oe5",
+  mainValue: "text-main-value-Pf6",
+  aside: "text-aside-Qg7",
+  asideValue: "text-aside-value-Rh8",
+  password: "text-password-Si9",
+  asideArea: "text-aside-area-Tj0",
+  footer: "text-footer-Uk1",
+  bodyText: "text-body-text-Vl2",
+  contents: "text-contents-Wm3",
+  bodyHidden: "text-body-hidden-Xn4",
+  bodyInvisible: "text-body-invisible-Yo5",
+  bodyArea: "text-body-area-Zp6",
+  contentsArea: "text-contents-area-Aq7",
+  contentsAnswer: "text-contents-answer-Br8",
+  contentsParagraph: "text-contents-paragraph-Ci9",
+  contentsNested: "text-contents-nested-Dj0",
+  unslotted: "text-unslotted-Cs9",
+  script: "text-script-Dt0",
+  style: "text-style-Eu1",
+  noscript: "text-noscript-Fv2",
+  hiddenMain: "text-hidden-main-Gw3",
+  roleMain: "text-role-main-Hx4",
+  roleHeader: "text-role-header-Iy5",
+  shortArticle: "text-short-article-Jz6",
+  longArticle: "text-long-article-Ka7",
+  sidebar: "text-sidebar-Lb8",
+  block: "text-block-Mc9",
+  blockArea: "text-block-area-Nd0",
+  hiddenBody: "text-hidden-body-Oe1",
+  hiddenContents: "text-hidden-contents-Pf2",
+  slottedMain: "text-slotted-main-Qg3",
+  slottedHidden: "text-slotted-hidden-Rh4",
+  slottedSkipped: "text-slotted-skipped-Si5",
+  canvas: "text-canvas-Tj6",
+  detailsSummary: "text-details-summary-Ua1",
+  detailsMain: "text-details-main-Vb2",
+  summaryMain: "text-summary-main-Wc3",
+  summaryAnswer: "text-summary-answer-Xd4",
+  summaryParagraph: "text-summary-paragraph-Ye5",
+  namespacedAnswer: "text-namespaced-answer-Zf6",
+  foreignSummary: "text-foreign-summary-Ag7",
+  styledAnswer: "text-styled-answer-Bh8",
+  openParagraph: "text-open-paragraph-Ek2",
 } as const;
 
 export const READ_VISIBLE_MARKER = "visible-marker-Zi9";
@@ -102,6 +160,20 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, readLargePage());
     } else if (path === "/read-refs") {
       sendHtml(response, READ_REFS_PAGE);
+    } else if (path === "/text-main") {
+      sendHtml(response, TEXT_MAIN_PAGE);
+    } else if (path === "/text-role-main") {
+      sendHtml(response, TEXT_ROLE_MAIN_PAGE);
+    } else if (path === "/text-article") {
+      sendHtml(response, TEXT_ARTICLE_PAGE);
+    } else if (path === "/text-block") {
+      sendHtml(response, TEXT_BLOCK_PAGE);
+    } else if (path === "/text-hidden-body") {
+      sendHtml(response, TEXT_HIDDEN_BODY_PAGE);
+    } else if (path === "/text-slotted") {
+      sendHtml(response, TEXT_SLOTTED_PAGE);
+    } else if (path === "/text-details") {
+      sendHtml(response, TEXT_DETAILS_PAGE);
     } else if (path === "/read-redirect") {
       // To the same server under another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
@@ -345,6 +417,133 @@ const READ_REFS_PAGE = `<!doctype html>
 <a role="link" tabindex="0">No address</a>
 <button type="button"><img alt="Close"></button>
 <a href="/a"><svg aria-label="Home" width="10" height="10"></svg></a>
+</body></html>
+`;
+
+const LOREM =
+  "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
+
+// A main element among a header, an aside with a filled form and a footer, then, directly in the
+// body, text that is shown (a text node, a display: contents wrapper) and text that is not:
+// hidden, the text of form fields, a closed disclosure's content and a shadow host's unslotted
+// text under display: contents, script, style and noscript source, and a frame.
+const TEXT_MAIN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textMain}</title></head>
+<body>
+<header><nav><a href="/a">${TEXT_TOKENS.nav}</a></nav></header>
+<main>
+<h1>${TEXT_TOKENS.mainHeading}</h1>
+<p>${TEXT_TOKENS.mainFirst} ${LOREM}</p>
+<p>${TEXT_TOKENS.mainSecond} ${LOREM}</p>
+<span style="display: none">${TEXT_TOKENS.mainHidden}</span>
+<input type="text" aria-label="Main field" value="${TEXT_TOKENS.mainValue}">
+</main>
+<aside><p>${TEXT_TOKENS.aside}</p>
+<form><input type="text" aria-label="Name" value="${TEXT_TOKENS.asideValue}">
+<input type="password" aria-label="Password" autocomplete="current-password" value="${TEXT_TOKENS.password}">
+<textarea aria-label="Message">${TEXT_TOKENS.asideArea}</textarea></form></aside>
+<footer><p>${TEXT_TOKENS.footer}</p></footer>
+${TEXT_TOKENS.bodyText}
+<div style="display: contents"><p>${TEXT_TOKENS.contents}</p></div>
+<div style="display: none">${TEXT_TOKENS.bodyHidden}</div>
+<div style="visibility: hidden">${TEXT_TOKENS.bodyInvisible}</div>
+<textarea aria-label="Body area">${TEXT_TOKENS.bodyArea}</textarea>
+<textarea aria-label="Contents area" style="display: contents">${TEXT_TOKENS.contentsArea}</textarea>
+<details style="display: contents"><summary>Question</summary>${TEXT_TOKENS.contentsAnswer}<p>${TEXT_TOKENS.contentsParagraph}</p><span style="display: contents">${TEXT_TOKENS.contentsNested}</span></details>
+<div id="host" style="display: contents">${TEXT_TOKENS.unslotted}</div>
+<script>
+const unread = "${TEXT_TOKENS.script}";
+const shadow = document.getElementById("host").attachShadow({ mode: "open" });
+const paragraph = document.createElement("p");
+paragraph.textContent = "Shadow paragraph";
+shadow.append(paragraph);
+</script>
+<style>/* ${TEXT_TOKENS.style} */</style>
+<noscript>${TEXT_TOKENS.noscript}</noscript>
+<iframe title="Frame" src="/read-frame-inner"></iframe>
+</body></html>
+`;
+
+// A hidden main element before an element with the main role.
+const TEXT_ROLE_MAIN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textRoleMain}</title></head>
+<body>
+<header><p>${TEXT_TOKENS.roleHeader}</p></header>
+<main hidden><p>${TEXT_TOKENS.hiddenMain}</p></main>
+<div role="main"><h1>Role main</h1><p>${TEXT_TOKENS.roleMain}</p></div>
+</body></html>
+`;
+
+// No main element; a short article before a long one.
+const TEXT_ARTICLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textArticle}</title></head>
+<body>
+<article><p>${TEXT_TOKENS.shortArticle}</p></article>
+<article><h2>Long article</h2><p>${TEXT_TOKENS.longArticle} ${LOREM}</p><p>${LOREM}</p></article>
+</body></html>
+`;
+
+// No landmarks: a sidebar of short links, a block of long paragraphs, and a text area and a
+// canvas whose text, which the page does not show as text, is longer than the block.
+const TEXT_BLOCK_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textBlock}</title></head>
+<body>
+<div><a href="/a">${TEXT_TOKENS.sidebar}</a> <a href="/b">Docs</a></div>
+<div><p>${TEXT_TOKENS.block} ${LOREM}</p><p>${LOREM}</p><p>${LOREM}</p></div>
+<textarea aria-label="Notes">${TEXT_TOKENS.blockArea} ${LOREM} ${LOREM} ${LOREM} ${LOREM}</textarea>
+<canvas width="10" height="10">${TEXT_TOKENS.canvas} ${LOREM} ${LOREM} ${LOREM} ${LOREM}</canvas>
+</body></html>
+`;
+
+// A body whose content is hidden with content-visibility, with text directly in it and in a
+// display: contents wrapper.
+const TEXT_HIDDEN_BODY_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textHiddenBody}</title></head>
+<body style="content-visibility: hidden">${TEXT_TOKENS.hiddenBody}
+<div style="display: contents">${TEXT_TOKENS.hiddenContents}</div>
+</body></html>
+`;
+
+// A main element, a text node and a display: contents wrapper in a shadow host, the text
+// assigned to a slot inside a visibility: hidden element of the closed shadow root and the
+// wrapper to a slot inside a content-visibility: hidden one.
+const TEXT_SLOTTED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textSlotted}</title></head>
+<body>
+<div id="host"><main slot="main"><p>${TEXT_TOKENS.slottedMain}</p></main>${TEXT_TOKENS.slottedHidden}<span slot="skipped" style="display: contents">${TEXT_TOKENS.slottedSkipped}</span></div>
+<script>
+document.getElementById("host").attachShadow({ mode: "closed" }).innerHTML =
+  '<slot name="main"></slot><span style="visibility: hidden"><slot></slot></span>' +
+  '<div style="content-visibility: hidden"><slot name="skipped"></slot></div>';
+</script>
+</body></html>
+`;
+
+// Closed disclosures whose content Firefox lays out though it is hidden: one under display:
+// contents holding a main element, one whose summary holds the main element, one opened only by
+// an open attribute in a namespace, one whose first summary is not an HTML element, an open one
+// under display: contents whose content box the page hides, and an open one under display:
+// contents whose paragraph is shown.
+const TEXT_DETAILS_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textDetails}</title>
+<style>
+@namespace fixture url(urn:fixture);
+fixture|summary { display: contents; }
+#styled::details-content { visibility: hidden; }
+</style></head>
+<body>
+<details style="display: contents"><summary>${TEXT_TOKENS.detailsSummary}</summary><main><p>${TEXT_TOKENS.detailsMain}</p></main></details>
+<details><summary><main><h1>Summary main</h1><p>${TEXT_TOKENS.summaryMain}</p></main></summary>${TEXT_TOKENS.summaryAnswer}<p>${TEXT_TOKENS.summaryParagraph}</p></details>
+<details id="namespaced" style="display: contents"><summary>Namespaced</summary>${TEXT_TOKENS.namespacedAnswer}</details>
+<details id="foreign" style="display: contents"><summary>Foreign</summary></details>
+<details id="styled" open style="display: contents"><summary>Styled</summary>${TEXT_TOKENS.styledAnswer}</details>
+<details open style="display: contents"><summary>Open</summary><p>${TEXT_TOKENS.openParagraph}</p></details>
+<script>
+document.getElementById("namespaced").setAttributeNS("urn:fixture", "open", "");
+const foreign = document.createElementNS("urn:fixture", "summary");
+foreign.textContent = "${TEXT_TOKENS.foreignSummary}";
+document.getElementById("foreign").prepend(foreign);
+</script>
 </body></html>
 `;
 

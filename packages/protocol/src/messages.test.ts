@@ -69,19 +69,19 @@ describe("parseMessage accepts", () => {
         extension: { connected: true, protocol: 1, version: "0.2.0" },
       },
     },
-    ...(["tabs_list", "tab_open", "navigate", "read_page", "probe_input"] as const).map(
-      (method) => ({
-        name: `a ${method} request`,
-        input: { ...request, method, params: { tabId: 2 } },
-        expected: {
-          type: "request",
-          id: "r1",
-          session: "s1",
-          method,
-          params: { tabId: 2 },
-        } as const,
-      }),
-    ),
+    ...(
+      ["tabs_list", "tab_open", "navigate", "read_page", "get_page_text", "probe_input"] as const
+    ).map((method) => ({
+      name: `a ${method} request`,
+      input: { ...request, method, params: { tabId: 2 } },
+      expected: {
+        type: "request",
+        id: "r1",
+        session: "s1",
+        method,
+        params: { tabId: 2 },
+      } as const,
+    })),
     ...[0, null, false].map((result) => ({
       name: `a successful response with the result ${String(result)}`,
       input: { ...success, result },

@@ -26,6 +26,8 @@ export type {
   MethodName,
   Methods,
   NavigateAction,
+  PageText,
+  PageTextSource,
   Params,
   ProbeCheck,
   ProbeCheckName,
@@ -35,4 +37,4 @@ export type {
   Result,
   TabInfo,
 } from "./methods.ts";
-export { METHOD_NAMES } from "./methods.ts";
+export { DEFAULT_PAGE_TEXT_CHARS, MAX_PAGE_TEXT_CHARS, METHOD_NAMES } from "./methods.ts";
