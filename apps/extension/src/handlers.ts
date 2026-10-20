@@ -153,7 +153,7 @@ export function createHandlers<Handle>({
       await approval.answer;
       return { tab: await loadAfterAnswer(session, tab.id, url, { kind: "url", url }) };
     }
-    const loaded = await waitForLoad(browser, timers, tab.id, () =>
+    const loaded = await waitForLoad(browser, timers, tab.id, url, () =>
       browser.tabs.update(tab.id, { url }),
     );
     const view = await access.view(session);
@@ -188,7 +188,13 @@ export function createHandlers<Handle>({
       return { tab: await approveAndLoad(session, tabId, gated.url, target) };
     }
     keepPrompt(session, tabId);
-    const loaded = await waitForLoad(browser, timers, tabId, () => startNavigation(tabId, target));
+    const loaded = await waitForLoad(
+      browser,
+      timers,
+      tabId,
+      target.kind === "url" ? target.url : undefined,
+      () => startNavigation(tabId, target),
+    );
     const view = await access.view(session);
     return { tab: view.tabInfo(loaded) };
   }
@@ -473,7 +479,7 @@ export function createHandlers<Handle>({
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
     keepPrompt(session, tabId);
-    const loaded = await waitForLoad(browser, timers, tabId, () =>
+    const loaded = await waitForLoad(browser, timers, tabId, url, () =>
       target.kind === "action" && !onPrompt && tab.url === url
         ? browser.tabs.reload(tabId)
         : browser.tabs.update(tabId, { url, loadReplace: onPrompt }),

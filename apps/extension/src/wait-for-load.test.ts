@@ -12,7 +12,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("resolves with the loaded tab on complete after loading", async () => {
     const { fake, timers, tab } = setup();
-    const loaded = await waitForLoad(fake.browser, timers, tab.id, () =>
+    const loaded = await waitForLoad(fake.browser, timers, tab.id, "https://b.example/", () =>
       fake.browser.tabs.update(tab.id, { url: "https://b.example/" }),
     );
     assert.equal(loaded.id, tab.id);
@@ -25,7 +25,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("registers the listener and the grace timer before the navigation starts", async () => {
     const { fake, timers, tab } = setup();
     const seen: number[] = [];
-    await waitForLoad(fake.browser, timers, tab.id, async () => {
+    await waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
       seen.push(fake.listenerCount(), timers.pending());
       fake.emitStatus(tab.id, "loading");
       fake.emitStatus(tab.id, "complete");
@@ -36,7 +36,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("resolves when the load finishes before the navigation's promise settles", async () => {
     const { fake, timers, tab } = setup();
-    const loaded = await waitForLoad(fake.browser, timers, tab.id, () => {
+    const loaded = await waitForLoad(fake.browser, timers, tab.id, "https://b.example/", () => {
       fake.emitStatus(tab.id, "loading");
       fake.emitStatus(tab.id, "complete");
       return new Promise(() => {});
@@ -47,7 +47,9 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("resolves after the grace when the navigation never settles and nothing loads", async () => {
     const { fake, timers, tab } = setup();
-    const wait = track(waitForLoad(fake.browser, timers, tab.id, () => new Promise(() => {})));
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", () => new Promise(() => {})),
+    );
     timers.advance(1000);
     await flush();
     assert.equal(wait.tab()?.id, tab.id);
@@ -57,7 +59,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("ignores a complete that arrives before any loading", async () => {
     const { fake, timers, tab } = setup();
     const wait = track(
-      waitForLoad(fake.browser, timers, tab.id, async () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
         fake.emitStatus(tab.id, "complete");
       }),
     );
@@ -76,7 +78,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     const { fake, timers, tab } = setup();
     const other = fake.openTab();
     const wait = track(
-      waitForLoad(fake.browser, timers, tab.id, async () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
         fake.emitStatus(tab.id, "loading");
       }),
     );
@@ -92,7 +94,9 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("resolves with the complete tab after the grace when no load starts", async () => {
     const { fake, timers, tab } = setup();
-    const wait = track(waitForLoad(fake.browser, timers, tab.id, async () => {}));
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {}),
+    );
     timers.advance(999);
     await flush();
     assert.equal(wait.done(), false);
@@ -113,7 +117,9 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("keeps waiting when the grace check finds the tab still loading", async () => {
     const { fake, timers, tab } = setup();
     fake.emitStatus(tab.id, "loading");
-    const wait = track(waitForLoad(fake.browser, timers, tab.id, async () => {}));
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {}),
+    );
     timers.advance(1000);
     await flush();
     assert.equal(wait.done(), false);
@@ -127,7 +133,9 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("returns the still-loading tab 30 s after the grace check found it loading", async () => {
     const { fake, timers, tab } = setup();
     fake.emitStatus(tab.id, "loading");
-    const wait = track(waitForLoad(fake.browser, timers, tab.id, async () => {}));
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {}),
+    );
     timers.advance(1000);
     await flush();
     timers.advance(29999);
@@ -142,7 +150,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("returns the tab as it is 30 s after loading started", async () => {
     const { fake, timers, tab } = setup();
     const wait = track(
-      waitForLoad(fake.browser, timers, tab.id, async () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
         fake.emitStatus(tab.id, "loading");
       }),
     );
@@ -158,7 +166,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   it("arms one timeout however often loading is reported", async () => {
     const { fake, timers, tab } = setup();
     const wait = track(
-      waitForLoad(fake.browser, timers, tab.id, async () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
         fake.emitStatus(tab.id, "loading");
         fake.emitStatus(tab.id, "loading");
       }),
@@ -171,11 +179,107 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     assertCleanedUp(fake, timers);
   });
 
+  it("waits past a complete that leaves the tab on about:blank for the page it loads", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const loaded = await waitForLoad(
+      fake.browser,
+      timers,
+      tab.id,
+      "https://b.example/",
+      async () => {
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+        await fake.browser.tabs.update(tab.id, { url: "https://b.example/" });
+      },
+    );
+    assert.equal(loaded.url, "https://b.example/");
+    assert.equal(loaded.status, "complete");
+    assert.equal(loaded.title, "Title of https://b.example/");
+    assertCleanedUp(fake, timers);
+  });
+
+  it("returns a tab the load leaves on about:blank after the grace", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      }),
+    );
+    await flush();
+    timers.advance(999);
+    await flush();
+    assert.equal(wait.done(), false);
+    timers.advance(1);
+    await flush();
+    assert.equal(wait.tab()?.url, "about:blank");
+    assert.equal(wait.tab()?.status, "complete");
+    assertCleanedUp(fake, timers);
+  });
+
+  it("finishes on a complete on about:blank when the destination is not known", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, undefined, async () => {
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      }),
+    );
+    await flush();
+    assert.equal(wait.tab()?.url, "about:blank");
+    assertCleanedUp(fake, timers);
+  });
+
+  it("returns the loaded page at the grace when its complete came during a restart", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
+        fake.emitStatus(tab.id, "loading");
+      }),
+    );
+    fake.emitStatus(tab.id, "complete");
+    tab.url = "https://b.example/";
+    fake.emitStatus(tab.id, "complete");
+    await flush();
+    assert.equal(wait.done(), false);
+    timers.advance(1000);
+    await flush();
+    assert.equal(wait.tab()?.url, "https://b.example/");
+    assert.equal(wait.tab()?.status, "complete");
+    assertCleanedUp(fake, timers);
+  });
+
+  it("keeps one timeout from the first loading across a restart", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      }),
+    );
+    await flush();
+    timers.advance(500);
+    fake.emitStatus(tab.id, "loading");
+    assert.equal(timers.pending(), 1);
+    timers.advance(29499);
+    await flush();
+    assert.equal(wait.done(), false);
+    timers.advance(1);
+    await flush();
+    assert.equal(wait.tab()?.status, "loading");
+    assertCleanedUp(fake, timers);
+  });
+
   it("rejects with the navigation's error and cleans up", async () => {
     const { fake, timers, tab } = setup();
     const error = new Error("navigation failed");
     await assert.rejects(
-      waitForLoad(fake.browser, timers, tab.id, async () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
         throw error;
       }),
       error,
@@ -187,7 +291,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     const { fake, timers, tab } = setup();
     const error = new Error("invalid argument");
     await assert.rejects(
-      waitForLoad(fake.browser, timers, tab.id, () => {
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", () => {
         throw error;
       }),
       error,
@@ -197,18 +301,24 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("ignores a navigation that rejects after the load finished", async () => {
     const { fake, timers, tab } = setup();
-    const loaded = await waitForLoad(fake.browser, timers, tab.id, async () => {
-      fake.emitStatus(tab.id, "loading");
-      fake.emitStatus(tab.id, "complete");
-      throw new Error("late");
-    });
+    const loaded = await waitForLoad(
+      fake.browser,
+      timers,
+      tab.id,
+      "https://b.example/",
+      async () => {
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+        throw new Error("late");
+      },
+    );
     assert.equal(loaded.status, "complete");
     assertCleanedUp(fake, timers);
   });
 
   it("rejects when the tab is gone at the grace check", async () => {
     const { fake, timers, tab } = setup();
-    const wait = waitForLoad(fake.browser, timers, tab.id, async () => {});
+    const wait = waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {});
     fake.tabs.delete(tab.id);
     timers.advance(1000);
     await assert.rejects(wait, /Invalid tab ID/);
@@ -217,7 +327,7 @@ describe("waitForLoad", { timeout: 10000 }, () => {
 
   it("rejects when the tab is gone at the timeout", async () => {
     const { fake, timers, tab } = setup();
-    const wait = waitForLoad(fake.browser, timers, tab.id, async () => {
+    const wait = waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {
       fake.emitStatus(tab.id, "loading");
     });
     await flush();
@@ -231,7 +341,9 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     const { fake, timers, tab } = setup();
     const lookup = Promise.withResolvers<Tab>();
     fake.browser.tabs.get = () => lookup.promise;
-    const wait = track(waitForLoad(fake.browser, timers, tab.id, async () => {}));
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {}),
+    );
     timers.advance(1000);
     fake.emitStatus(tab.id, "loading");
     lookup.resolve({ ...tab, status: "complete" });
@@ -244,12 +356,42 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     assertCleanedUp(fake, timers);
   });
 
+  it("ignores a grace lookup made stale by a load that a blank complete restarted", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "about:blank" });
+    const lookup = Promise.withResolvers<Tab>();
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = () => lookup.promise;
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/", async () => {}),
+    );
+    timers.advance(1000);
+    fake.emitStatus(tab.id, "loading");
+    fake.emitStatus(tab.id, "complete");
+    lookup.resolve({ ...tab, status: "complete" });
+    await flush();
+    assert.equal(wait.done(), false);
+    fake.browser.tabs.get = get;
+    tab.url = "https://b.example/";
+    fake.emitStatus(tab.id, "loading");
+    fake.emitStatus(tab.id, "complete");
+    await flush();
+    assert.equal(wait.tab()?.url, "https://b.example/");
+    assertCleanedUp(fake, timers);
+  });
+
   it("arms no timer when the wait settled during the grace check", async () => {
     const { fake, timers, tab } = setup();
     const lookup = Promise.withResolvers<Tab>();
     const navigation = Promise.withResolvers<unknown>();
     fake.browser.tabs.get = () => lookup.promise;
-    const wait = waitForLoad(fake.browser, timers, tab.id, () => navigation.promise);
+    const wait = waitForLoad(
+      fake.browser,
+      timers,
+      tab.id,
+      "https://b.example/",
+      () => navigation.promise,
+    );
     timers.advance(1000);
     navigation.reject(new Error("navigation failed"));
     await assert.rejects(wait, /navigation failed/);

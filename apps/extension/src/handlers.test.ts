@@ -6,6 +6,7 @@ import {
   createFakeBrowser,
   createFakeTimers,
   FAKE_EXTENSION_ID,
+  type FakeBrowser,
   type FakePort,
   flush,
   ONE_PIXEL_PNG,
@@ -92,6 +93,19 @@ describe("tab_open", { timeout: 10000 }, () => {
       color: "orange",
     });
     assert.equal(fake.tabs.get(1)?.active, false);
+  });
+
+  it("returns the opened page when the blank tab's own load completes after it", async () => {
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
+    reportBlankLoadBefore(fake, "https://example.com/path");
+    const tab = await open("s1", "https://example.com/path");
+    assert.deepEqual(tab, {
+      id: tab.id,
+      url: "https://example.com/path",
+      title: "Title of https://example.com/path",
+      active: true,
+    });
   });
 
   it("returns only the tab's id, url, title and active state", async () => {
@@ -268,6 +282,19 @@ describe("navigate", { timeout: 10000 }, () => {
     await grant("https://a.example");
     await grant("https://b.example");
     const tab = await open("s1", "https://a.example/");
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/" }), {
+      id: tab.id,
+      url: "https://b.example/",
+      title: "Title of https://b.example/",
+      active: true,
+    });
+  });
+
+  it("returns the loaded page when a blank tab's own load completes after the navigation", async () => {
+    const { fake, navigate, open, grant } = setup();
+    const tab = await open("s1");
+    await grant("https://b.example");
+    reportBlankLoadBefore(fake, "https://b.example/");
     assert.deepEqual(await navigate("s1", { tabId: tab.id, url: "https://b.example/" }), {
       id: tab.id,
       url: "https://b.example/",
@@ -2268,6 +2295,18 @@ function setup() {
     promptOf,
     page,
     timeOut,
+  };
+}
+
+/** Makes the navigation of a blank tab to `url` first report the blank tab's own load. */
+function reportBlankLoadBefore(fake: FakeBrowser, url: string): void {
+  const update = fake.browser.tabs.update;
+  fake.browser.tabs.update = (tabId, properties) => {
+    if (properties.url === url && fake.tabs.get(tabId)?.url === "about:blank") {
+      fake.emitStatus(tabId, "loading");
+      fake.emitStatus(tabId, "complete");
+    }
+    return update(tabId, properties);
   };
 }
 
