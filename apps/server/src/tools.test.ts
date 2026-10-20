@@ -96,6 +96,8 @@ describe("tools", () => {
     assert.deepEqual(readPage?.inputSchema.required, ["tabId"]);
     for (const words of [
       "protected, never their value",
+      "marks as such for autofill",
+      "stays protected only if read_page read it while it was a password field",
       "50,000 characters",
       "read_page never asks",
     ]) {

@@ -42,14 +42,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   random id, so text in a page cannot pass for the end of it.
 - Your agent can read a page's structure with the `read_page` tool: its elements with their
   roles, names and states, its visible text, and a reference to each element. The values of
-  password, one-time code and card number fields are never read out, only whether they are
-  filled.
+  password fields, and of one-time code and card number fields that the page marks as such
+  for autofill, are never read out, only whether they are filled.
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also
-  in the background, or of one element, on sites you approved, with the text of password,
-  one-time code and card number fields hidden. With `saveTo` it also saves the screenshot as
-  a new file in its working folder, never over an existing file.
+  in the background, or of one element, on sites you approved, with the text of password
+  fields, and of one-time code and card number fields that the page marks as such for
+  autofill, hidden. With `saveTo` it also saves the screenshot as a new file in its working
+  folder, never over an existing file.
 - Your agent can upload files from your computer with the `upload_file` tool, into a page's
   file field or dropped on the page, on sites you approved. It reads only from the upload
   folders (its working folder and `~/Downloads` unless you set `FOXHAND_UPLOAD_DIRS`), never
