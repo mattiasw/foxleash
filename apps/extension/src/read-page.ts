@@ -1,4 +1,5 @@
 import { type ElementRefs, refError } from "./element-refs.ts";
+import { detailsSummaryOf, inDetailsContent, isClosedDetails, shadowRootOf } from "./flat-tree.ts";
 import { PageError } from "./page-messages.ts";
 import {
   createTextBuffer,
@@ -51,17 +52,28 @@ interface Scope {
   boxed: boolean;
   textVisible: boolean;
   block: boolean;
+  /** For a details: the state of what its content box holds. */
+  content: TextState | undefined;
+}
+
+/** Text here has a box, and the user sees it. */
+interface TextState {
+  boxed: boolean;
+  visible: boolean;
 }
 
 type Presence = "skip" | "noLine" | "shown";
 
 /** One element the text collection for a name is inside of. */
 interface TextScope {
+  element: Element;
   block: boolean;
   /** Text directly inside has a box: not under content-visibility hidden. */
   boxed: boolean;
   /** Text directly inside counts. */
   shown: boolean;
+  /** For a details: the state of what its content box holds. */
+  content: TextState | undefined;
 }
 
 // Their child nodes are default values or fallback content, which the user does not see.
@@ -81,27 +93,6 @@ const CHILDLESS: ReadonlySet<string> = new Set([
   "noscript",
 ]);
 export const UNREAD: ReadonlySet<string> = new Set(["script", "style", "template", "noscript"]);
-// Firefox also exposes its own widget roots (video controls, date inputs) as shadow roots.
-const SHADOW_HOSTS: ReadonlySet<string> = new Set([
-  "article",
-  "aside",
-  "blockquote",
-  "body",
-  "div",
-  "footer",
-  "h1",
-  "h2",
-  "h3",
-  "h4",
-  "h5",
-  "h6",
-  "header",
-  "main",
-  "nav",
-  "p",
-  "section",
-  "span",
-]);
 const HEADING = /^h([1-6])$/;
 const WHOLE_NUMBER = /^[0-9]+$/;
 const VALUE_ROLES: ReadonlySet<string> = new Set([
@@ -113,12 +104,6 @@ const VALUE_ROLES: ReadonlySet<string> = new Set([
 ]);
 const BUTTON_INPUTS: ReadonlySet<string> = new Set(["submit", "reset", "button"]);
 const SECTIONING = "article, aside, main, nav, section";
-
-interface ShadowAccess {
-  readonly shadowRoot: ShadowRoot | null;
-  /** Firefox's, for content scripts only: the shadow root, closed ones included. */
-  readonly openOrClosedShadowRoot?: ShadowRoot | null;
-}
 
 /** read_page in the page: the tree of the document, or of the element `ref` names. */
 export function readPage(
@@ -178,6 +163,7 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
   const rootBoxed =
     rootStyle.contentVisibility !== "hidden" &&
     (root.checkVisibility() || rootStyle.display === "contents");
+  const rootTextVisible = rootStyle.visibility === "visible" && rootBoxed;
   const rootScope: Scope = {
     element: root,
     lineLevel: rootRole === undefined ? undefined : 0,
@@ -186,8 +172,9 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
     pending: undefined,
     quiet: rootRole !== undefined && nameOf(root, rootRole, page).fromContent,
     boxed: rootBoxed,
-    textVisible: rootStyle.visibility === "visible" && rootBoxed,
+    textVisible: rootTextVisible,
     block: true,
+    content: detailsContent(root, { boxed: rootBoxed, visible: rootTextVisible }),
   };
   if (rootRole !== undefined) rootScope.owner = rootScope;
   const scopes: Scope[] = [rootScope];
@@ -225,8 +212,14 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
       if (block || lined) flushRun();
       if (cutAt !== undefined) return false;
       const parent = top();
+      // What a details' content box holds passes on that box's state through display contents.
+      const parentBoxed =
+        parent.content !== undefined && inDetailsContent(parent.element, element)
+          ? parent.content.boxed
+          : parent.boxed;
       const boxed =
-        style.contentVisibility !== "hidden" && (style.display !== "contents" || parent.boxed);
+        style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
+      const textVisible = style.visibility === "visible" && boxed;
       const scope: Scope = {
         element,
         lineLevel: undefined,
@@ -235,8 +228,9 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
         pending: undefined,
         quiet: parent.quiet,
         boxed,
-        textVisible: style.visibility === "visible" && boxed,
+        textVisible,
         block,
+        content: detailsContent(element, { boxed, visible: textVisible }),
       };
       if (lined) {
         if (!flushPending()) return false;
@@ -272,7 +266,9 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
     },
     text(value) {
       const scope = top();
-      if (!all || cutAt !== undefined || scope.quiet || !scope.textVisible) return;
+      // Text directly in a details is laid out in its content box (it is never the summary).
+      const visible = scope.content?.visible ?? scope.textVisible;
+      if (!all || cutAt !== undefined || scope.quiet || !visible) return;
       addText(value);
     },
     done: () => tree.full,
@@ -380,11 +376,9 @@ function pushChildren(steps: Step[], parent: Element): void {
 /** An element's children in the flattened tree, as far as the user can see them. */
 function childrenOf(element: Element): ArrayLike<Node> {
   if (CHILDLESS.has(element.localName)) return [];
-  if (element.localName === "details" && !element.hasAttribute("open")) {
-    for (const child of element.children) {
-      if (child.localName === "summary") return [child];
-    }
-    return [];
+  if (isClosedDetails(element)) {
+    const summary = detailsSummaryOf(element);
+    return summary === undefined ? [] : [summary];
   }
   const shadow = shadowRootOf(element);
   if (shadow !== null) return shadow.childNodes;
@@ -393,14 +387,6 @@ function childrenOf(element: Element): ArrayLike<Node> {
     if (assigned.length > 0) return assigned;
   }
   return element.childNodes;
-}
-
-/** The author shadow root of an element that may carry one, open or closed. */
-export function shadowRootOf(element: Element): ShadowRoot | null {
-  if (!element.localName.includes("-") && !SHADOW_HOSTS.has(element.localName)) return null;
-  const access: ShadowAccess = element;
-  const root = access.openOrClosedShadowRoot;
-  return root === undefined ? element.shadowRoot : root;
 }
 
 /** The focused element, followed into shadow roots. */
@@ -472,6 +458,27 @@ function presenceOf(element: Element, style: CSSStyleDeclaration): Presence {
     return style.display === "contents" ? "noLine" : "skip";
   }
   return style.visibility === "visible" ? "shown" : "noLine";
+}
+
+/**
+ * The state of what a details' content box holds, from the details' own state: Firefox lays out
+ * every child but the shown summary in its ::details-content box, styled from that box, which a
+ * page can hide while the details is open. Undefined for any other element, a details in another
+ * namespace included: it has no such box, but a page may still give that pseudo a style.
+ */
+function detailsContent(element: Element, own: TextState): TextState | undefined {
+  if (!(element instanceof HTMLDetailsElement)) return undefined;
+  // Before Firefox 143 there is no ::details-content, and no page can style that box.
+  if (!CSS.supports("selector(::details-content)")) return own;
+  const style = getComputedStyle(element, "::details-content");
+  // checkVisibility() cannot be asked of the pseudo, so it takes the details' own state. An
+  // unresolved style (empty display) counts as hidden.
+  const boxed =
+    own.boxed &&
+    style.display !== "" &&
+    style.display !== "none" &&
+    style.contentVisibility !== "hidden";
+  return { boxed, visible: boxed && style.visibility === "visible" };
 }
 
 function isOptionInSelect(element: Element): boolean {
@@ -753,10 +760,13 @@ function collectText(start: Element, withHidden: boolean): string {
   const buffer = createTextBuffer();
   const startStyle = getComputedStyle(start);
   const startBoxed = startStyle.contentVisibility !== "hidden";
+  const startShown = startStyle.visibility === "visible" && startBoxed;
   const outer: TextScope = {
+    element: start,
     block: false,
     boxed: startBoxed,
-    shown: withHidden || (startStyle.visibility === "visible" && startBoxed),
+    shown: withHidden || startShown,
+    content: detailsContent(start, { boxed: startBoxed, visible: startShown }),
   };
   const scopes: TextScope[] = [];
   walkChildren(start, {
@@ -773,9 +783,14 @@ function collectText(start: Element, withHidden: boolean): string {
       if (!withHidden && (skipped(element) || presenceOf(element, style) === "skip")) return false;
       const parent = scopes.at(-1) ?? outer;
       // As in walkTree: content-visibility is not inherited, but display contents passes it on.
+      const parentBoxed =
+        parent.content !== undefined && inDetailsContent(parent.element, element)
+          ? parent.content.boxed
+          : parent.boxed;
       const boxed =
-        style.contentVisibility !== "hidden" && (style.display !== "contents" || parent.boxed);
-      const shown = withHidden || (style.visibility === "visible" && boxed);
+        style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
+      const visible = style.visibility === "visible" && boxed;
+      const shown = withHidden || visible;
       // As in accname, a descendant's own label or an image's alt stands for its content.
       const alternative = shown ? alternativeOf(element) : "";
       if (alternative !== "") {
@@ -785,14 +800,23 @@ function collectText(start: Element, withHidden: boolean): string {
       if (image) return false;
       const block = isBlock(style);
       if (block) buffer.add(" ");
-      scopes.push({ block, boxed, shown });
+      scopes.push({
+        element,
+        block,
+        boxed,
+        shown,
+        content: detailsContent(element, { boxed, visible }),
+      });
       return true;
     },
     leave() {
       if (scopes.pop()?.block === true) buffer.add(" ");
     },
     text(value) {
-      if ((scopes.at(-1) ?? outer).shown) buffer.add(value);
+      const scope = scopes.at(-1) ?? outer;
+      if (scope.content === undefined ? scope.shown : withHidden || scope.content.visible) {
+        buffer.add(value);
+      }
     },
     done: () => buffer.full,
   });

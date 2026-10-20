@@ -1,7 +1,8 @@
 import type { PageText, PageTextSource } from "@foxhand/protocol";
+import { detailsSummaryOf, isClosedDetails, slottedAway } from "./flat-tree.ts";
 import { composePageText } from "./page-text.ts";
 import { clean, explicitRole } from "./page-tree.ts";
-import { shadowRootOf, UNREAD } from "./read-page.ts";
+import { UNREAD } from "./read-page.ts";
 
 /** The least text, in characters, a block needs to count as the page's main content. */
 const MIN_BLOCK_CHARS = 200;
@@ -149,18 +150,11 @@ function pushChildren(steps: Node[], parent: Element): void {
   }
 }
 
-/**
- * An element's child nodes, except that a closed details has only its summary. Only an `open`
- * attribute in no namespace opens one, as only that one matches the `details[open]` UA style.
- */
+/** An element's child nodes, except that a closed details has only its summary. */
 function shownChildren(element: Element): ArrayLike<Node> & Iterable<Node> {
-  if (element.localName !== "details" || element.hasAttributeNS(null, "open")) {
-    return element.childNodes;
-  }
-  for (const child of element.children) {
-    if (isDetailsSummary(child)) return [child];
-  }
-  return [];
+  if (!isClosedDetails(element)) return element.childNodes;
+  const summary = detailsSummaryOf(element);
+  return summary === undefined ? [] : [summary];
 }
 
 /**
@@ -192,26 +186,6 @@ function textShown(node: Text, range: Range): boolean {
   }
   range.selectNodeContents(node);
   return range.getClientRects().length > 0;
-}
-
-/**
- * Whether `child` is assigned to a slot of `holder`'s shadow tree: every child of an author
- * shadow host, and every child of a details but its summary, which goes to the details' content
- * box. That box is hidden with `content-visibility: hidden` while the details is closed, which
- * still gives client rects, and the page can hide it while open through `::details-content`.
- */
-function slottedAway(holder: Element, child: Node): boolean {
-  if (shadowRootOf(holder) !== null) return true;
-  return holder.localName === "details" && !(child instanceof Element && isDetailsSummary(child));
-}
-
-/** Whether the element is the first HTML summary among its siblings, the one a details shows. */
-function isDetailsSummary(element: Element): boolean {
-  return (
-    element instanceof HTMLElement &&
-    element.localName === "summary" &&
-    element.matches(":first-of-type")
-  );
 }
 
 /** An element with a box whose own content is shown, so its innerText is its rendered text. */

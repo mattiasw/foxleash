@@ -56,6 +56,18 @@ export const READ_HIDDEN = {
   contentVisibility: "hidden-content-visibility-Vj0",
   fallback: "hidden-fallback-Xg7",
   frame: "frame-inner-text-Yh8",
+  namespacedOpen: "hidden-namespaced-open-Ha2",
+  foreignSummary: "hidden-foreign-summary-Ib3",
+  detailsVisibility: "hidden-details-visibility-Jc4",
+  detailsContentVisibilityChild: "hidden-details-cv-child-Le6",
+  detailsDisplay: "hidden-details-display-Mf7",
+  detailsDisplayChild: "hidden-details-display-child-Ng8",
+  detailsOwnBox: "hidden-details-own-box-Sm4",
+  detailsInName: "hidden-details-in-name-Qj1",
+  detailsInNameChild: "hidden-details-in-name-child-Tn5",
+  detailsOwnName: "hidden-details-own-name-Rk2",
+  detailsContentVisibility: "hidden-details-content-visibility-Kd5",
+  foreignDetails: "hidden-foreign-details-Wq8",
 } as const;
 
 /** Text the get_page_text pages hold in each region, to find where each region went. */
@@ -110,6 +122,14 @@ export const TEXT_TOKENS = {
 } as const;
 
 export const READ_VISIBLE_MARKER = "visible-marker-Zi9";
+/** Text an open disclosure on the read-hidden page shows, which both read tools must keep. */
+export const READ_OPEN_DETAILS = {
+  answer: "visible-open-answer-Oh9",
+  paragraph: "visible-open-paragraph-Pi0",
+  contentsChild: "visible-open-contents-child-Sl3",
+  inName: "visible-open-in-name-Vp7",
+  revealed: "visible-revealed-Uo6",
+} as const;
 /** The number of items on the large page, enough for a tree over 50,000 characters. */
 export const READ_LARGE_ITEMS = 2000;
 
@@ -352,8 +372,28 @@ const READ_LANDMARKS_PAGE = `<!doctype html>
 </body></html>
 `;
 
+// Text hidden in each way a page can hide it: display none, the hidden attribute, aria-hidden,
+// inert, visibility hidden, content-visibility hidden, video fallback, and in disclosures: a
+// closed one, one whose open attribute is in a namespace, one whose first summary is not HTML,
+// and open ones whose ::details-content box is hidden, or that are hidden themselves, also
+// inside a heading's name and in a button's; and a hidden details in another namespace, which
+// has no content box, whose ::details-content rule asks for visible text. Two open disclosures
+// and one whose content box is visible inside a hidden details show their text. Each details is
+// on one line, with no whitespace inside it.
 const READ_HIDDEN_PAGE = `<!doctype html>
-<html><head><meta charset="utf-8"><title>${TITLES.readHidden}</title></head>
+<html><head><meta charset="utf-8"><title>${TITLES.readHidden}</title>
+<style>
+@namespace fixture url(urn:fixture);
+fixture|summary { display: contents; }
+#details-visibility::details-content,
+#details-pressable::details-content { visibility: hidden; }
+#details-content-visibility::details-content,
+#details-named::details-content { content-visibility: hidden; }
+#details-display::details-content { display: none; }
+#details-foreign-ns { visibility: hidden; }
+#details-revealed::details-content,
+#details-foreign-ns::details-content { visibility: visible; }
+</style></head>
 <body>
 <p style="display: none">${READ_HIDDEN.display}</p>
 <p hidden>${READ_HIDDEN.attribute}</p>
@@ -361,9 +401,31 @@ const READ_HIDDEN_PAGE = `<!doctype html>
 <p inert>${READ_HIDDEN.inert}</p>
 <div style="visibility: hidden">${READ_HIDDEN.visibility}<button style="visibility: visible">Visible child</button></div>
 <details><summary>Question</summary>${READ_HIDDEN.answer}</details>
+<details id="details-namespaced"><summary>Namespaced</summary>${READ_HIDDEN.namespacedOpen}</details>
+<details id="details-foreign"><summary>Foreign</summary></details>
+<details id="details-visibility" open aria-label="Visibility box"><summary>Visibility</summary>${READ_HIDDEN.detailsVisibility}</details>
+<details id="details-content-visibility" open><summary>Content visibility</summary>${READ_HIDDEN.detailsContentVisibility}<span style="display: contents">${READ_HIDDEN.detailsContentVisibilityChild}</span></details>
+<details id="details-display" open><summary>Display</summary>${READ_HIDDEN.detailsDisplay}<span style="display: contents">${READ_HIDDEN.detailsDisplayChild}</span></details>
+<details open style="content-visibility: hidden"><summary>Own box</summary>${READ_HIDDEN.detailsOwnBox}</details>
+<h2>Named <details id="details-named" open><summary>Inner</summary>${READ_HIDDEN.detailsInName}<span style="display: contents">${READ_HIDDEN.detailsInNameChild}</span></details></h2>
+<details id="details-pressable" open role="button"><summary>Pressable</summary>${READ_HIDDEN.detailsOwnName}</details>
+<details open><summary>Shown</summary>${READ_OPEN_DETAILS.answer}<p>${READ_OPEN_DETAILS.paragraph}</p><span style="display: contents">${READ_OPEN_DETAILS.contentsChild}</span></details>
+<h2>Plain <details open><summary>Sum</summary>${READ_OPEN_DETAILS.inName}</details></h2>
+<details id="details-revealed" open style="visibility: hidden"><summary>Revealed</summary>${READ_OPEN_DETAILS.revealed}</details>
 <div style="content-visibility: hidden">${READ_HIDDEN.contentVisibility}</div>
 <video controls>${READ_HIDDEN.fallback}</video>
 <p>${READ_VISIBLE_MARKER}</p>
+<script>
+document.getElementById("details-namespaced").setAttributeNS("urn:fixture", "open", "");
+const foreign = document.createElementNS("urn:fixture", "summary");
+foreign.textContent = "${READ_HIDDEN.foreignSummary}";
+document.getElementById("details-foreign").prepend(foreign);
+const foreignDetails = document.createElementNS("urn:fixture", "details");
+foreignDetails.id = "details-foreign-ns";
+foreignDetails.setAttribute("open", "");
+foreignDetails.textContent = "${READ_HIDDEN.foreignDetails}";
+document.currentScript.before(foreignDetails);
+</script>
 </body></html>
 `;
 

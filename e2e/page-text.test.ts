@@ -4,6 +4,7 @@ import type { PageText } from "@foxhand/protocol";
 import {
   type FixtureServer,
   READ_HIDDEN,
+  READ_OPEN_DETAILS,
   READ_SECRETS,
   READ_VISIBLE_MARKER,
   startFixtureServer,
@@ -170,6 +171,18 @@ describe("get_page_text in real Firefox", () => {
         READ_HIDDEN.answer,
         READ_HIDDEN.contentVisibility,
         READ_HIDDEN.fallback,
+        READ_HIDDEN.namespacedOpen,
+        READ_HIDDEN.foreignSummary,
+        READ_HIDDEN.detailsVisibility,
+        READ_HIDDEN.detailsContentVisibilityChild,
+        READ_HIDDEN.detailsDisplay,
+        READ_HIDDEN.detailsDisplayChild,
+        READ_HIDDEN.detailsOwnBox,
+        READ_HIDDEN.detailsInName,
+        READ_HIDDEN.detailsInNameChild,
+        READ_HIDDEN.detailsOwnName,
+        READ_HIDDEN.detailsContentVisibility,
+        READ_HIDDEN.foreignDetails,
       ]);
     }
     assertIn(text.main, [
@@ -177,6 +190,11 @@ describe("get_page_text in real Firefox", () => {
       READ_HIDDEN.inert,
       READ_VISIBLE_MARKER,
       "Visible child",
+      READ_OPEN_DETAILS.answer,
+      READ_OPEN_DETAILS.paragraph,
+      READ_OPEN_DETAILS.contentsChild,
+      READ_OPEN_DETAILS.inName,
+      READ_OPEN_DETAILS.revealed,
     ]);
   });
 

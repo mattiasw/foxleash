@@ -5,6 +5,7 @@ import {
   type FixtureServer,
   READ_HIDDEN,
   READ_LARGE_ITEMS,
+  READ_OPEN_DETAILS,
   READ_SECRETS,
   READ_VISIBLE_MARKER,
   startFixtureServer,
@@ -201,13 +202,42 @@ describe("read_page in real Firefox", () => {
       READ_HIDDEN.answer,
       READ_HIDDEN.contentVisibility,
       READ_HIDDEN.fallback,
+      READ_HIDDEN.namespacedOpen,
+      READ_HIDDEN.foreignSummary,
+      READ_HIDDEN.detailsVisibility,
+      READ_HIDDEN.detailsContentVisibilityChild,
+      READ_HIDDEN.detailsDisplay,
+      READ_HIDDEN.detailsDisplayChild,
+      READ_HIDDEN.detailsOwnBox,
+      READ_HIDDEN.detailsInName,
+      READ_HIDDEN.detailsInNameChild,
+      READ_HIDDEN.detailsOwnName,
+      READ_HIDDEN.detailsContentVisibility,
+      READ_HIDDEN.foreignDetails,
     ]);
     assertLines(tree, [
       'button "Visible child" [*]',
       "group [*]",
       '  button "Question" [*]',
       `text "${READ_VISIBLE_MARKER}"`,
+      '  button "Namespaced" [*]',
+      '  button "Foreign" [*]',
+      'group "Visibility box" [*]',
+      '  button "Visibility" [*]',
+      '  button "Content visibility" [*]',
+      '  button "Display" [*]',
+      'button "Pressable" [*]',
+      '  button "Shown" [*]',
+      `  text "${READ_OPEN_DETAILS.answer}"`,
+      `  text "${READ_OPEN_DETAILS.paragraph}"`,
+      `  text "${READ_OPEN_DETAILS.contentsChild}"`,
+      'heading "Named Inner" [*] level=2',
+      `heading "Plain Sum ${READ_OPEN_DETAILS.inName}" [*] level=2`,
+      `text "${READ_OPEN_DETAILS.revealed}"`,
     ]);
+    const sub = await read(tabId, { ref: refOf(tree, 'group "Visibility box"') });
+    assertNoSecrets(sub.texts, [READ_HIDDEN.detailsVisibility]);
+    assertLines(sub.tree, ['group "Visibility box" [*]', '  button "Visibility" [*]']);
   });
 
   test("open and closed shadow roots and their slotted text are read", async () => {
