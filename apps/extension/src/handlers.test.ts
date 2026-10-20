@@ -1608,6 +1608,130 @@ describe("get_page_text", { timeout: 10000 }, () => {
   });
 });
 
+describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
+  const REF = "0a1b2c3d-4";
+  const TARGET_REF = "0a1b2c3d-9";
+  const tools: {
+    method: "click" | "hover" | "scroll" | "drag";
+    params: Record<string, unknown>;
+    options: Record<string, unknown>;
+    bad: [Record<string, unknown>, string];
+    reply: Record<string, unknown>;
+    badReplies: unknown[];
+  }[] = [
+    {
+      method: "click",
+      params: { ref: REF, extra: true },
+      options: { ref: REF, button: "left", doubleClick: false },
+      bad: [
+        { ref: REF, x: 1, y: 2 },
+        "click needs either ref or both x and y, not both and not neither.",
+      ],
+      reply: { ref: REF, x: 10, y: 20.5 },
+      badReplies: [
+        { ref: "1", x: 10, y: 20 },
+        { ref: REF, x: -1, y: 0 },
+        { ref: REF, x: 1 },
+      ],
+    },
+    {
+      method: "hover",
+      params: { x: 3, y: 4 },
+      options: { x: 3, y: 4 },
+      bad: [{}, "hover needs either ref or both x and y, not both and not neither."],
+      reply: { ref: REF, x: 3, y: 4 },
+      badReplies: [{ ref: REF, x: 3, y: Number.NaN }, Object.create({ ref: REF, x: 3, y: 4 })],
+    },
+    {
+      method: "scroll",
+      params: { direction: "down", amount: 300 },
+      options: { direction: "down", amount: 300 },
+      bad: [{ amount: 300 }, "scroll takes amount only with a direction."],
+      reply: { scrollLeft: 0, scrollTop: 300, moved: true },
+      badReplies: [
+        { scrollLeft: 0, scrollTop: 300 },
+        { ref: "x", scrollLeft: 0, scrollTop: 0, moved: true },
+      ],
+    },
+    {
+      method: "drag",
+      params: { ref: REF, targetX: 5, targetY: 6 },
+      options: { ref: REF, targetX: 5, targetY: 6 },
+      bad: [
+        { ref: REF },
+        "drag needs either targetRef or both targetX and targetY for the end, not both and not neither.",
+      ],
+      reply: { ref: REF, targetRef: TARGET_REF, mode: "html5", dropped: false },
+      badReplies: [{ ref: REF, targetRef: TARGET_REF, mode: "native", dropped: true }],
+    },
+  ];
+
+  it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const { method, params } of tools) {
+      for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+        await assert.rejects(
+          call("s1", method, tabId === undefined ? params : { ...params, tabId }),
+          {
+            code: "invalid_params",
+            message: `${method} needs a tab id that is a whole number of 0 or more.`,
+          },
+        );
+      }
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("refuses bad options with their sentence before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const { method, bad } of tools) {
+      const [params, message] = bad;
+      await assert.rejects(call("s1", method, { tabId: 3, ...params }), {
+        code: "invalid_params",
+        message,
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page with the parsed options and returns only the result's fields", async () => {
+    for (const { method, params, options, reply } of tools) {
+      const { call, pageCalls, replyWith } = setup();
+      replyWith(async () => ({ ...reply, extra: "page" }));
+      assert.deepEqual(await call("s2", method, { tabId: 0, ...params }), reply);
+      assert.deepEqual(pageCalls, [{ session: "s2", tabId: 0, type: method, params: options }]);
+    }
+  });
+
+  it("refuses a reply it cannot read as page_error", async () => {
+    for (const { method, params, badReplies } of tools) {
+      const { call, replyWith } = setup();
+      for (const reply of [undefined, null, "done", [], ...badReplies]) {
+        replyWith(async () => reply);
+        await assert.rejects(call("s1", method, { tabId: 3, ...params }), {
+          code: "page_error",
+          message: "Foxhand could not complete the request in the page in tab 3.",
+        });
+      }
+    }
+  });
+
+  it("passes the page's refusal through unchanged", async () => {
+    for (const { method, params } of tools) {
+      const { call, replyWith } = setup();
+      const refusal = new ToolError(
+        "element_covered",
+        `Element ${REF} is covered at its visible centre by element ${TARGET_REF} (div); close or act on that element first.`,
+      );
+      replyWith(() => Promise.reject(refusal));
+      await assert.rejects(
+        call("s1", method, { tabId: 3, ...params }),
+        (error: unknown) => error === refusal,
+      );
+    }
+  });
+});
+
 describe("screenshot", { timeout: 10000 }, () => {
   const PNG = ONE_PIXEL_PNG.slice("data:image/png;base64,".length);
   const BOX = {

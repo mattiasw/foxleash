@@ -532,6 +532,11 @@ describe("parsePageReply", () => {
       "stale_ref",
       "ref_not_found",
       "invalid_target",
+      "element_covered",
+      "element_not_visible",
+      "no_element_at_point",
+      "in_frame",
+      "cross_site_navigation",
     ]) {
       assert.throws(
         () => parsePageReply({ ok: false, site: SITE, code, message: "Plain words." }, SITE, 7),

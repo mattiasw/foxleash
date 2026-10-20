@@ -79,6 +79,10 @@ describe("parseMessage accepts", () => {
         "screenshot",
         "upload_chunk",
         "upload_file",
+        "click",
+        "hover",
+        "scroll",
+        "drag",
         "probe_input",
       ] as const
     ).map((method) => ({

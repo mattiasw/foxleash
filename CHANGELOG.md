@@ -54,3 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   file field or dropped on the page, on sites you approved. It reads only from the upload
   folders (its working folder and `~/Downloads` unless you set `FOXHAND_UPLOAD_DIRS`), never
   dotfiles or files named like keys, and at most 10 MB per upload.
+- Your agent can click, hover, scroll and drag in a page with the `click`, `hover`, `scroll`
+  and `drag` tools, on an element from `read_page` or at a point, on sites you approved.
+  Clicks on links and form buttons that lead to another site are refused; your agent opens
+  such a page with `navigate`, which asks you first.

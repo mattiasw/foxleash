@@ -62,6 +62,25 @@ const SAVED_ONLY =
   "The screenshot is too large to return as an image; it is only in the saved file.";
 const UPLOAD_FILE =
   "Upload files from this computer to the page in a tab of this session's Foxhand tab group, as if the user had picked or dropped them. With ref of a file field, Foxhand sets the field's files; any other element gets the files dropped on it, which works only where the page takes dropped files. Foxhand reads files only from the upload folders: by default the folder Foxhand was started in, normally your working folder (unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and ~/Downloads. The user chooses other folders with FOXHAND_UPLOAD_DIRS in the MCP client's configuration; no tool can change them. Files and folders whose names start with a dot, and files named like keys (id_*, *.pem, *.key and similar), are refused. At most 100 files and 10 MB in total per call. The tab must show a site the user approved; upload_file never asks.";
+const POINTING =
+  "Give ref, an element reference from read_page, or x and y in CSS pixels of the tab's viewport, as in a screenshot of it; an element given by ref is scrolled into view first.";
+const ACTING_LIMITS =
+  "The events are synthetic (isTrusted is false). An element covered by another one is refused, naming the covering element. Frames are not entered.";
+const CLICK = `Click in the page in a tab of this session's Foxhand tab group as a mouse does: move the pointer onto the element, then send pointerdown, mousedown, pointerup, mouseup and click; with doubleClick a second press and click, then dblclick; with the right button, contextmenu instead of click. ${POINTING} ${ACTING_LIMITS} Links and form buttons that lead to another site are refused: open such a page with navigate. The result gives the ref of the element the events went to and the point used. The tab must show a site the user approved; click never asks.`;
+const HOVER = `Move the pointer onto an element or point in the page in a tab of this session's Foxhand tab group: the element the pointer was over gets pointerout, pointerleave, mouseout and mouseleave, the new one pointerover, pointerenter, mouseover and mouseenter, then pointermove and mousemove. ${POINTING} ${ACTING_LIMITS} CSS :hover styles do not apply, so a menu that only CSS :hover opens stays closed. The result gives the ref of the element under the pointer and the point used. The tab must show a site the user approved; hover never asks.`;
+const SCROLL = `Scroll in the page in a tab of this session's Foxhand tab group. With ref and no direction, scroll that element into view. With direction, send a wheel event at the element given by ref, at x and y in CSS pixels of the tab's viewport, or at the centre of the viewport when neither is given, then scroll what that wheel would scroll, an inner scrolling box or the page, by amount CSS pixels: by default 80% of its height or width. A page that cancels the wheel event is not scrolled. An element given by ref is scrolled into view first. ${ACTING_LIMITS} The result gives the ref of the box that scrolled (none when the page itself scrolled), its scrollLeft and scrollTop (the page's when scrolling an element into view), and moved, false when nothing moved. The tab must show a site the user approved; scroll never asks.`;
+const DRAG = `Drag from one element or point to another in the page in a tab of this session's Foxhand tab group. Give the start as ref or x and y, and the end as targetRef or targetX and targetY: element references from read_page, or CSS pixels of the tab's viewport, as in a screenshot of it. With targetRef, the start is scrolled into view first; with targetX and targetY it is not, since that would move the end, so the start must be in view. The end must be visible and not covered. Foxhand presses at the start (pointerdown, mousedown). When the element there is draggable, it sends HTML drag-and-drop events with a shared dataTransfer: dragstart, pointercancel, drag, dragenter and dragover, then drop if the end accepts it, else dragleave, then dragend. Otherwise, or when the page cancels dragstart, it moves the pointer to the end in 5 steps and releases it there (pointerup, mouseup). ${ACTING_LIMITS} The result gives the refs of the start and end elements, mode (html5 or pointer) and dropped: in html5 mode, whether the end accepted the drop. The tab must show a site the user approved; drag never asks.`;
+const CLICK_TARGET = "click needs either ref or both x and y, not both and not neither.";
+const HOVER_TARGET = "hover needs either ref or both x and y, not both and not neither.";
+const DOUBLE_RIGHT = "click takes doubleClick only with the left button.";
+const SCROLL_TARGET = "scroll takes either ref or both x and y, not both.";
+const SCROLL_POINT = "scroll needs both x and y, not one of them.";
+const SCROLL_HOW =
+  "scroll needs a direction to scroll at x and y or at the centre of the page, or a ref to scroll into view.";
+const SCROLL_AMOUNT = "scroll takes amount only with a direction.";
+const DRAG_START = "drag needs either ref or both x and y for the start, not both and not neither.";
+const DRAG_END =
+  "drag needs either targetRef or both targetX and targetY for the end, not both and not neither.";
 const UNREADABLE_UPLOAD = "Firefox returned an upload result Foxhand cannot read.";
 const DROP_NOTE =
   "The page decides what to do with dropped files; read the page to check that it took them.";
@@ -277,6 +296,153 @@ export function registerTools(
       return sendUpload(bridge, upload.log, { tabId, ref }, files);
     },
   );
+  server.registerTool(
+    "click",
+    {
+      description: CLICK,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        ...pointSchema("click"),
+        button: z
+          .enum(["left", "right"])
+          .optional()
+          .describe("The mouse button: left (the default) or right"),
+        doubleClick: z
+          .boolean()
+          .optional()
+          .describe("Click twice, then send dblclick; left button only"),
+      },
+    },
+    async ({ tabId, ref, x, y, button, doubleClick }) => {
+      const target = pointTarget(ref, x, y);
+      if (target === undefined) return errorResult(CLICK_TARGET);
+      if (doubleClick === true && button === "right") return errorResult(DOUBLE_RIGHT);
+      const params: Params<"click"> = { tabId, ...target };
+      if (button !== undefined) params.button = button;
+      if (doubleClick !== undefined) params.doubleClick = doubleClick;
+      return run(bridge, "click", params);
+    },
+  );
+  server.registerTool(
+    "hover",
+    {
+      description: HOVER,
+      inputSchema: { tabId: tabIdSchema(), ...pointSchema("hover over") },
+    },
+    async ({ tabId, ref, x, y }) => {
+      const target = pointTarget(ref, x, y);
+      if (target === undefined) return errorResult(HOVER_TARGET);
+      return run(bridge, "hover", { tabId, ...target });
+    },
+  );
+  server.registerTool(
+    "scroll",
+    {
+      description: SCROLL,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        ...pointSchema("send the wheel event to, or without direction to scroll into view"),
+        direction: z
+          .enum(["up", "down", "left", "right"])
+          .optional()
+          .describe("The way to scroll; without it, ref is scrolled into view"),
+        amount: z
+          .number()
+          .int()
+          .min(1)
+          .optional()
+          .describe("CSS pixels to scroll; by default 80% of the scrolled box's height or width"),
+      },
+    },
+    async ({ tabId, ref, x, y, direction, amount }) => {
+      if (ref !== undefined && (x !== undefined || y !== undefined)) {
+        return errorResult(SCROLL_TARGET);
+      }
+      if ((x === undefined) !== (y === undefined)) return errorResult(SCROLL_POINT);
+      if (direction === undefined) {
+        if (amount !== undefined) return errorResult(SCROLL_AMOUNT);
+        if (ref === undefined) return errorResult(SCROLL_HOW);
+        return run(bridge, "scroll", { tabId, ref });
+      }
+      const target = pointTarget(ref, x, y);
+      const params: Params<"scroll"> = { tabId, ...target, direction };
+      if (amount !== undefined) params.amount = amount;
+      return run(bridge, "scroll", params);
+    },
+  );
+  server.registerTool(
+    "drag",
+    {
+      description: DRAG,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        ...pointSchema("drag from"),
+        targetRef: z
+          .string()
+          .optional()
+          .describe(
+            "An element reference from an earlier read_page of the same page: the element to drag to",
+          ),
+        targetX: z
+          .number()
+          .min(0)
+          .optional()
+          .describe("The end's distance from the viewport's left edge in CSS pixels"),
+        targetY: z
+          .number()
+          .min(0)
+          .optional()
+          .describe("The end's distance from the viewport's top edge in CSS pixels"),
+      },
+    },
+    async ({ tabId, ref, x, y, targetRef, targetX, targetY }) => {
+      const start = pointTarget(ref, x, y);
+      if (start === undefined) return errorResult(DRAG_START);
+      const end = pointTarget(targetRef, targetX, targetY);
+      if (end === undefined) return errorResult(DRAG_END);
+      const params: Params<"drag"> =
+        "ref" in end
+          ? { tabId, ...start, targetRef: end.ref }
+          : { tabId, ...start, targetX: end.x, targetY: end.y };
+      return run(bridge, "drag", params);
+    },
+  );
+}
+
+function tabIdSchema() {
+  return z.number().int().min(0).describe("The id of a tab in this session's Foxhand tab group");
+}
+
+/** ref or x and y, for a tool that acts on an element or at a point. */
+function pointSchema(purpose: string) {
+  return {
+    ref: z
+      .string()
+      .optional()
+      .describe(
+        `An element reference from an earlier read_page of the same page: the element to ${purpose}`,
+      ),
+    x: z
+      .number()
+      .min(0)
+      .optional()
+      .describe("The point's distance from the viewport's left edge in CSS pixels; give y too"),
+    y: z
+      .number()
+      .min(0)
+      .optional()
+      .describe("The point's distance from the viewport's top edge in CSS pixels; give x too"),
+  };
+}
+
+/** A ref, or both coordinates; undefined for both, neither, or one coordinate alone. */
+function pointTarget(
+  ref: string | undefined,
+  x: number | undefined,
+  y: number | undefined,
+): { ref: string } | { x: number; y: number } | undefined {
+  if (ref !== undefined) return x === undefined && y === undefined ? { ref } : undefined;
+  return x !== undefined && y !== undefined ? { x, y } : undefined;
 }
 
 interface UploadedFile {

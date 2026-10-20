@@ -61,6 +61,29 @@ export function shadowRootOf(element: Element): ShadowRoot | null {
 }
 
 /**
+ * The element's parent in the flat tree: the host of a shadow root's child, the slot a shadow
+ * host's child is assigned to, else the parent element.
+ */
+export function flatParentOf(element: Element): Element | null {
+  const parent = element.parentNode;
+  if (parent instanceof ShadowRoot) return parent.host;
+  if (!(parent instanceof Element)) return null;
+  const root = shadowRootOf(parent);
+  if (root === null) return parent;
+  // assignedSlot is null for a slot in a closed shadow root, also for content scripts.
+  return element.assignedSlot ?? slotHolding(root, element) ?? parent;
+}
+
+/** The slot of `root` that `element` is assigned to, if any. */
+function slotHolding(root: ShadowRoot, element: Element): HTMLSlotElement | undefined {
+  for (const slot of root.querySelectorAll("slot")) {
+    // SVG and MathML elements named slot match too, and assign nothing.
+    if (slot instanceof HTMLSlotElement && slot.assignedNodes().includes(element)) return slot;
+  }
+  return undefined;
+}
+
+/**
  * Whether `child` of `holder` goes to a details' content box: every child but its shown
  * summary, text included.
  */

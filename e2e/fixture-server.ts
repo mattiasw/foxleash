@@ -24,7 +24,18 @@ export const TITLES = {
   shotFields: "Fixture shot fields",
   shotPdfFrame: "Fixture shot PDF frame",
   upload: "Fixture upload",
+  act: "Fixture act",
+  actLinks: "Fixture act links",
+  actScroll: "Fixture act scroll",
+  actModal: "Fixture act modal",
+  actBodyScroll: "Fixture act body scroll",
+  actDrag: "Fixture act drag",
+  actBase: "Fixture act base",
+  actEmbed: "Fixture act embed",
 } as const;
+
+/** The data the act-drag page's draggable source puts in its dataTransfer. */
+export const ACT_DRAG_DATA = "drag-payload-Kx7";
 
 /** The CSS size of the shot page's box, which a screenshot by its ref must have. */
 export const SHOT_BOX = { width: 120, height: 80 } as const;
@@ -233,6 +244,28 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end(minimalPdf());
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
+    } else if (path === "/act") {
+      sendHtml(response, ACT_PAGE);
+    } else if (path === "/act-links") {
+      // The other site is the same server under localhost.
+      sendHtml(response, actLinksPage(request.socket.localPort ?? 0));
+    } else if (path === "/act-scroll") {
+      sendHtml(response, ACT_SCROLL_PAGE);
+    } else if (path === "/act-modal") {
+      sendHtml(response, ACT_MODAL_PAGE);
+    } else if (path === "/act-body-scroll") {
+      sendHtml(response, ACT_BODY_SCROLL_PAGE);
+    } else if (path === "/act-drag") {
+      sendHtml(response, ACT_DRAG_PAGE);
+    } else if (path === "/act-base") {
+      // Relative links resolve against the other site.
+      sendHtml(response, actBasePage(request.socket.localPort ?? 0));
+    } else if (path === "/act-embed") {
+      sendHtml(response, ACT_EMBED_PAGE);
+    } else if (path === "/act-redirect") {
+      // To the act page on another site, which the tests never approve.
+      response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/act` });
+      response.end();
     } else if (path === "/read-redirect") {
       // To the same server under another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
@@ -805,6 +838,273 @@ zone.addEventListener("drop", (event) => {
 document.addEventListener("drop", () => {
   window.events.documentDrops += 1;
 });
+</script>
+</body></html>
+`;
+
+// Elements at fixed places for click and hover, each recording what reaches it in window.log as
+// "type:id", with "type:id:detail" for clicks and "type:id:pointerId:pointerType" for pointer
+// presses. The toggle opens only on a mousedown followed by a mouseup, as Closure's menu
+// buttons do. The menu opens on mouseenter of its trigger and closes on mouseleave. The listed
+// button starts scrolled out of its scrolling box, and focus-host holds a field and plain text
+// in a closed shadow root. A click focuses tabbed, editable and delegating-host's autofocus
+// field, though none of them is focusable by default; it focuses neither the scrolling box in
+// editable nor the one delegating-host would pass focus to by script. The root's tabindex is
+// invalid, so a click on plain text still moves focus to the body.
+const ACT_PAGE = `<!doctype html>
+<html tabindex=""><head><meta charset="utf-8"><title>${TITLES.act}</title>
+<style>
+body { margin: 0; height: 3000px; font: 14px sans-serif; }
+.at { position: absolute; box-sizing: border-box; width: 120px; height: 30px; margin: 0; }
+</style></head>
+<body>
+<button id="toggle" class="at" style="left: 10px; top: 10px" aria-expanded="false">Toggle</button>
+<button id="fixed" style="position: fixed; left: 150px; top: 10px; width: 120px; height: 30px; margin: 0">Fixed</button>
+<button id="covered" class="at" style="left: 290px; top: 600px">Covered</button>
+<div id="cover" style="position: absolute; left: 280px; top: 590px; width: 150px; height: 50px; background: rgba(0, 0, 0, 0.2)"></div>
+<button id="removed" class="at" style="left: 10px; top: 60px">Removed</button>
+<input id="field" class="at" style="left: 150px; top: 60px" aria-label="Field">
+<button id="mouse" class="at" style="left: 290px; top: 60px">Mouse</button>
+<shadow-button class="at" style="left: 10px; top: 110px; display: block"></shadow-button>
+<iframe title="Inner" src="/a" style="position: absolute; left: 150px; top: 110px; width: 200px; height: 80px; border: 0"></iframe>
+<button id="trigger" class="at" style="left: 10px; top: 200px">Trigger</button>
+<div id="menu" style="position: absolute; left: 10px; top: 240px" hidden><button>Menu item</button></div>
+<button id="elsewhere" class="at" style="left: 290px; top: 200px">Elsewhere</button>
+<input id="blurred" class="at" style="left: 10px; top: 300px" aria-label="Blurred">
+<p id="plain" class="at" style="left: 150px; top: 300px">Plain text</p>
+<button id="held" class="at" style="left: 290px; top: 300px">Held</button>
+<button id="below" class="at" style="left: 10px; top: 2000px">Below</button>
+<div id="list" style="position: absolute; left: 450px; top: 10px; width: 120px; height: 40px; overflow: auto"><div style="height: 100px"></div><button id="listed" style="display: block; width: 100px; height: 30px; margin: 0">Listed</button></div>
+<focus-host style="position: absolute; left: 450px; top: 60px; width: 120px; display: block"></focus-host>
+<div id="tabbed" class="at" tabindex="-1" style="left: 600px; top: 10px">Tabbed</div>
+<div id="editable" class="at" contenteditable="true" style="left: 600px; top: 60px"><div style="overflow: auto; white-space: nowrap; height: 30px">Editable text wider than its box</div></div>
+<delegating-host style="position: absolute; left: 600px; top: 110px; width: 120px; display: block"></delegating-host>
+<script>
+window.log = [];
+window.shadowClicks = 0;
+window.events = 0;
+for (const type of ["pointerover", "pointermove", "pointerdown", "mousedown"]) {
+  document.addEventListener(type, () => { window.events += 1; }, true);
+}
+const PRESSES = ["pointerdown", "mousedown", "pointerup", "mouseup", "click"];
+for (const id of ["toggle", "fixed", "covered", "removed", "mouse", "below", "listed", "held"]) {
+  const element = document.getElementById(id);
+  for (const type of [...PRESSES, "contextmenu", "dblclick"]) {
+    element.addEventListener(type, (event) => {
+      if (type.startsWith("pointer")) {
+        window.log.push(type + ":" + id + ":" + event.pointerId + ":" + event.pointerType);
+      } else if (type.endsWith("click")) {
+        window.log.push(type + ":" + id + ":" + event.detail);
+      } else {
+        window.log.push(type + ":" + id);
+      }
+    });
+  }
+}
+const toggle = document.getElementById("toggle");
+let armed = false;
+toggle.addEventListener("mousedown", () => { armed = true; });
+toggle.addEventListener("mouseup", () => {
+  if (armed) toggle.setAttribute("aria-expanded", String(toggle.getAttribute("aria-expanded") !== "true"));
+  armed = false;
+});
+const trigger = document.getElementById("trigger");
+const menu = document.getElementById("menu");
+trigger.addEventListener("mouseenter", () => { menu.hidden = false; window.log.push("mouseenter:trigger"); });
+trigger.addEventListener("mouseleave", () => { menu.hidden = true; window.log.push("mouseleave:trigger"); });
+document.getElementById("held").addEventListener("pointerdown", (event) => event.preventDefault());
+const blurred = document.getElementById("blurred");
+blurred.addEventListener("blur", () => window.log.push("blur:blurred"));
+customElements.define("shadow-button", class extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "closed" });
+    root.innerHTML = '<button style="width: 120px; height: 30px; margin: 0">Shadow button</button>';
+    root.querySelector("button").addEventListener("click", () => { window.shadowClicks += 1; });
+  }
+});
+customElements.define("focus-host", class extends HTMLElement {
+  constructor() {
+    super();
+    const root = this.attachShadow({ mode: "closed" });
+    root.innerHTML = '<input aria-label="Inner field" style="display: block; box-sizing: border-box; width: 120px; height: 30px; margin: 0"><p style="height: 30px; margin: 0">Inner text</p>';
+    window.innerField = root.querySelector("input");
+    window.innerField.addEventListener("blur", () => window.log.push("blur:inner"));
+  }
+});
+customElements.define("delegating-host", class extends HTMLElement {
+  constructor() {
+    super();
+    window.delegatingRoot = this.attachShadow({ mode: "closed", delegatesFocus: true });
+    window.delegatingRoot.innerHTML = '<p style="height: 60px; margin: 0">Delegating text</p><div autofocus style="overflow: auto; height: 20px"><div style="height: 200px"></div></div><input aria-label="Delegated field"><input aria-label="Autofocus field" autofocus>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// Elements that lead to the other site (the same server under localhost), each at a fixed place,
+// and a same-site link. window.clicks counts the click events that reach the document,
+// window.events the pointer and mouse events before a click, and window.log the presses on the
+// link whose mousedown listener rewrites its href.
+function actLinksPage(port: number): string {
+  const other = `http://localhost:${port}/a`;
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actLinks}</title>
+<style>
+body { margin: 0; font: 14px sans-serif; }
+.at { position: absolute; box-sizing: border-box; display: block; width: 120px; height: 30px; margin: 0; }
+</style></head>
+<body>
+<a id="other" class="at" style="left: 10px; top: 10px" href="${other}">Other site</a>
+<a id="same" class="at" style="left: 150px; top: 10px" href="/a">Same site</a>
+<form action="${other}" method="get">
+<input name="action" value="1" type="hidden">
+<input name="getAttributeNS" value="2" type="hidden">
+<button id="submit" class="at" style="left: 10px; top: 60px" type="submit">Send</button>
+</form>
+<label class="at" style="left: 150px; top: 60px" for="submit">Send label</label>
+<svg class="at" style="left: 10px; top: 110px" width="120" height="30"><a href="${other}"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
+<svg class="at" style="left: 150px; top: 110px" width="120" height="30"><a><set attributeName="href" to="${other}"></set><rect width="120" height="30" fill="#ccc"></rect></a></svg>
+<div class="at" style="left: 290px; top: 110px"><template shadowrootmode="closed"><svg style="position: absolute; width: 0; height: 0"><slot></slot></svg><a href="${other}"><slot></slot></a></template><span class="at" style="position: static">Continue</span></div>
+<a id="rewritten" class="at" style="left: 10px; top: 160px" href="/b">Rewritten</a>
+<svg class="at" style="left: 290px; top: 10px" width="120" height="30"><a xlink:href="${other}"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
+<svg class="at" style="left: 430px; top: 110px" width="120" height="30"><a><set attributeName="href" to="${other}" begin="click"></set><rect width="120" height="30" fill="#ccc"></rect></a></svg>
+<form action="/a" method="get"><button class="at" style="left: 150px; top: 160px" type="submit" formaction="${other}">Send elsewhere</button></form>
+<form id="cross" action="${other}" method="get"></form>
+<a id="namespaced" class="at" style="left: 430px; top: 10px">Namespaced</a>
+<a class="at" style="left: 10px; top: 2000px" href="${other}">Far other</a>
+<input type="image" form="cross" alt="Image send" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" class="at" style="left: 290px; top: 160px">
+<script>
+window.clicks = 0;
+window.events = 0;
+// A same-site href in another namespace first, which getAttribute("href") would answer with.
+const namespaced = document.getElementById("namespaced");
+namespaced.setAttributeNS("urn:x", "href", "/a");
+namespaced.setAttributeNS(null, "href", ${JSON.stringify(other)});
+for (const type of ["pointerover", "pointerdown", "mousedown"]) {
+  document.addEventListener(type, () => { window.events += 1; }, true);
+}
+window.log = [];
+document.addEventListener("click", () => { window.clicks += 1; }, true);
+const rewritten = document.getElementById("rewritten");
+for (const type of ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]) {
+  rewritten.addEventListener(type, () => window.log.push(type));
+}
+rewritten.addEventListener("mousedown", () => { rewritten.href = ${JSON.stringify(other)}; });
+</script>
+</body></html>
+`;
+}
+
+// A tall page with a scrolling panel, a panel whose own wheel listener cancels the wheel, and a
+// button far down. The viewport's centre is on the plain wrapper.
+const ACT_SCROLL_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actScroll}</title></head>
+<body style="margin: 0">
+<div style="height: 4000px">
+<div id="panel" role="region" aria-label="Panel" style="position: absolute; left: 10px; top: 10px; width: 200px; height: 100px; overflow: auto"><div style="height: 1000px">Panel content</div></div>
+<div id="stuck" role="region" aria-label="Stuck" style="position: absolute; left: 250px; top: 10px; width: 200px; height: 100px; overflow: auto"><div style="height: 1000px">Stuck content</div></div>
+<button id="far" style="position: absolute; left: 10px; top: 3000px">Far</button>
+</div>
+<script>
+document.getElementById("stuck").addEventListener("wheel", (event) => event.preventDefault());
+</script>
+</body></html>
+`;
+
+// An open modal: body's overflow hidden, which the viewport takes, so a wheel scrolls nothing.
+const ACT_MODAL_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actModal}</title></head>
+<body style="margin: 0; overflow: hidden"><div style="height: 4000px">Modal page</div></body></html>
+`;
+
+// The root does not scroll and body does: the viewport takes the root's overflow, not body's.
+// A link whose relative address resolves against a base on the other site.
+function actBasePage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actBase}</title>
+<base href="http://localhost:${port}/"></head>
+<body style="margin: 0"><a href="a">Relative</a>
+<svg width="100" height="30" style="position: absolute; left: 0; top: 50px"><a href=""><rect width="100" height="30"/></a></svg>
+</body></html>
+`;
+}
+
+// A tall page with a frame fixed over the viewport's centre.
+const ACT_EMBED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actEmbed}</title></head>
+<body style="margin: 0"><div style="height: 4000px">Embed page</div>
+<iframe title="Embed" src="/a" style="position: fixed; left: 25%; top: 25%; width: 50%; height: 50%; border: 0"></iframe>
+</body></html>
+`;
+
+const ACT_BODY_SCROLL_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actBodyScroll}</title>
+<style>
+html { overflow: hidden; height: 100%; }
+body { overflow: auto; height: 100%; margin: 0; }
+</style></head>
+<body><h1>Body scroll</h1><div style="height: 4000px"></div></body></html>
+`;
+
+// An item that follows the pointer while pressed and cancels its pointerdown, a draggable source
+// that sets ACT_DRAG_DATA, a target that takes drops and one that does not, and a draggable item
+// whose page cancels dragstart and follows the pointer instead. window.log records the drag
+// events of the targets, window.pressed the mouse events of a pressed button.
+const ACT_DRAG_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actDrag}</title>
+<style>
+body { margin: 0; font: 14px sans-serif; }
+.at { position: absolute; box-sizing: border-box; margin: 0; }
+</style></head>
+<body>
+<div id="item" class="at" role="button" aria-label="Item" style="left: 10px; top: 10px; width: 60px; height: 30px; background: #9cf"></div>
+<div id="target" class="at" role="region" aria-label="Target" style="left: 300px; top: 10px; width: 100px; height: 60px; background: #eee"></div>
+<div id="source" class="at" draggable="true" role="button" aria-label="Source" style="left: 10px; top: 100px; width: 80px; height: 30px; background: #fc9"></div>
+<div id="accept" class="at" role="region" aria-label="Accept" style="left: 300px; top: 100px; width: 100px; height: 60px; background: #eee"></div>
+<div id="refuse" class="at" role="region" aria-label="Refuse" style="left: 450px; top: 100px; width: 100px; height: 60px; background: #eee"></div>
+<div id="sortable" class="at" draggable="true" role="button" aria-label="Sortable" style="left: 10px; top: 200px; width: 60px; height: 30px; background: #9fc"></div>
+<div id="slot" class="at" role="region" aria-label="Slot" style="left: 300px; top: 200px; width: 100px; height: 60px; background: #eee"></div>
+<div id="far" class="at" role="button" aria-label="Far item" style="left: 10px; top: 2000px; width: 60px; height: 30px; background: #9cf"></div>
+<script>
+window.log = [];
+window.pressed = [];
+window.dropped = null;
+let held = null;
+for (const id of ["item", "sortable"]) {
+  const element = document.getElementById(id);
+  element.addEventListener("pointerdown", (event) => {
+    held = { element, dx: event.clientX - element.offsetLeft, dy: event.clientY - element.offsetTop };
+    if (id === "item") event.preventDefault();
+  });
+}
+for (const type of ["mousedown", "mousemove", "mouseup"]) {
+  document.addEventListener(type, (event) => {
+    if (type !== "mousemove" || event.buttons !== 0) window.pressed.push(type);
+  }, true);
+}
+document.addEventListener("pointermove", (event) => {
+  if (held === null) return;
+  held.element.style.left = event.clientX - held.dx + "px";
+  held.element.style.top = event.clientY - held.dy + "px";
+});
+document.addEventListener("pointerup", () => { held = null; });
+document.getElementById("sortable").addEventListener("dragstart", (event) => event.preventDefault());
+document.getElementById("source").addEventListener("pointercancel", () => window.log.push("pointercancel:source"));
+document.getElementById("source").addEventListener("dragstart", (event) => {
+  event.dataTransfer.setData("text/plain", ${JSON.stringify(ACT_DRAG_DATA)});
+});
+for (const id of ["accept", "refuse"]) {
+  const element = document.getElementById(id);
+  for (const type of ["dragenter", "dragover", "dragleave", "drop"]) {
+    element.addEventListener(type, (event) => {
+      window.log.push(type + ":" + id);
+      if (id === "accept" && type !== "dragleave") event.preventDefault();
+      if (type === "drop") window.dropped = event.dataTransfer.getData("text/plain");
+    });
+  }
+}
 </script>
 </body></html>
 `;

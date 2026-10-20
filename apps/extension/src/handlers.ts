@@ -17,6 +17,15 @@ import type {
   TabUpdatedListener,
   Timers,
 } from "./browser-api.ts";
+import {
+  clickOptions,
+  dragOptions,
+  dragResultOf,
+  hoverOptions,
+  pointResultOf,
+  scrollOptions,
+  scrollResultOf,
+} from "./page-actions.ts";
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
@@ -117,6 +126,11 @@ export function createHandlers<Handle>({
     screenshot,
     upload_chunk: uploadChunk,
     upload_file: uploadFile,
+    click: (session, params) => pageAction(session, params, "click", clickOptions, pointResultOf),
+    hover: (session, params) => pageAction(session, params, "hover", hoverOptions, pointResultOf),
+    scroll: (session, params) =>
+      pageAction(session, params, "scroll", scrollOptions, scrollResultOf),
+    drag: (session, params) => pageAction(session, params, "drag", dragOptions, dragResultOf),
     probe_input: probeInput,
   };
 
@@ -471,6 +485,37 @@ export function createHandlers<Handle>({
       );
     }
     return { target, files: files.map(({ name, size }) => ({ name, size })) };
+  }
+
+  /**
+   * Acts in a page through the content script, which runs only after the site gate: the tool's
+   * options parsed here and again in the page, and the page's reply checked.
+   */
+  async function pageAction<R>(
+    session: string,
+    params: Params,
+    tool: "click" | "hover" | "scroll" | "drag",
+    parse: (params: Params) => Params | string,
+    check: (reply: unknown) => R | undefined,
+  ): Promise<R> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        `${tool} needs a tab id that is a whole number of 0 or more.`,
+      );
+    }
+    const options = parse(params);
+    if (typeof options === "string") throw new ToolError("invalid_params", options);
+    // The reply comes from the page's content process: own fields only, of exact types.
+    const result = check(await pages.request(session, tabId, tool, options));
+    if (result === undefined) {
+      throw new ToolError(
+        "page_error",
+        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+      );
+    }
+    return result;
   }
 
   /** Records the site of every URL the tab moves to until `stop`. */

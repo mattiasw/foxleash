@@ -48,14 +48,18 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the seven tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the eleven tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "click",
+      "drag",
       "get_page_text",
+      "hover",
       "navigate",
       "read_page",
       "screenshot",
+      "scroll",
       "tab_open",
       "tabs_list",
       "upload_file",
@@ -65,7 +69,16 @@ describe("tools", () => {
       assert.equal(tool.description.includes(EM_DASH), false, tool.name);
       assert.equal(
         tool.description.includes(REDACTED_TABS),
-        !["read_page", "get_page_text", "screenshot", "upload_file"].includes(tool.name),
+        ![
+          "read_page",
+          "get_page_text",
+          "screenshot",
+          "upload_file",
+          "click",
+          "hover",
+          "scroll",
+          "drag",
+        ].includes(tool.name),
         tool.name,
       );
     }
@@ -135,6 +148,221 @@ describe("tools", () => {
     ]) {
       assert.ok(uploadFile?.description?.includes(words), words);
     }
+  });
+
+  it("describes click, hover, scroll and drag with their schemas", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const schemas: Record<string, { properties: string[]; words: string[] }> = {
+      click: {
+        properties: ["tabId", "ref", "x", "y", "button", "doubleClick"],
+        words: [
+          "pointerdown, mousedown, pointerup, mouseup and click",
+          "Links and form buttons that lead to another site are refused: open such a page with navigate.",
+          "click never asks",
+        ],
+      },
+      hover: {
+        properties: ["tabId", "ref", "x", "y"],
+        words: [
+          "pointerover, pointerenter, mouseover and mouseenter",
+          "CSS :hover",
+          "hover never asks",
+        ],
+      },
+      scroll: {
+        properties: ["tabId", "ref", "x", "y", "direction", "amount"],
+        words: [
+          "With ref and no direction, scroll that element into view.",
+          "and moved, false when nothing moved.",
+          "scroll never asks",
+        ],
+      },
+      drag: {
+        properties: ["tabId", "ref", "x", "y", "targetRef", "targetX", "targetY"],
+        words: [
+          "dragstart, pointercancel, drag, dragenter and dragover",
+          "when the page cancels dragstart, it moves the pointer to the end in 5 steps",
+          "drag never asks",
+        ],
+      },
+    };
+    for (const [name, { properties, words }] of Object.entries(schemas)) {
+      const tool = tools.find((listed) => listed.name === name);
+      assert.deepEqual(tool?.inputSchema.required, ["tabId"], name);
+      assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), properties, name);
+      assert.equal(tool?.description?.includes(ASKS_FIRST), false, name);
+      for (const phrase of [
+        ...words,
+        "The events are synthetic (isTrusted is false). An element covered by another one is refused, naming the covering element. Frames are not entered.",
+      ]) {
+        assert.ok(tool?.description?.includes(phrase), `${name}: ${phrase}`);
+      }
+    }
+  });
+
+  it("passes click, hover, scroll and drag only the arguments given", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const cases: [string, Record<string, unknown>][] = [
+      ["click", { tabId: 1, ref: "0a1b2c3d-4" }],
+      ["click", { tabId: 0, x: 0, y: 12.5, button: "right", doubleClick: false }],
+      ["click", { tabId: 2, ref: "0a1b2c3d-4", button: "left", doubleClick: true }],
+      ["hover", { tabId: 1, ref: "0a1b2c3d-4" }],
+      ["hover", { tabId: 1, x: 3, y: 4 }],
+      ["scroll", { tabId: 1, ref: "0a1b2c3d-4" }],
+      ["scroll", { tabId: 1, direction: "down" }],
+      ["scroll", { tabId: 1, x: 3, y: 4, direction: "left", amount: 300 }],
+      ["scroll", { tabId: 1, ref: "0a1b2c3d-4", direction: "up" }],
+      ["drag", { tabId: 1, ref: "0a1b2c3d-4", targetRef: "0a1b2c3d-5" }],
+      ["drag", { tabId: 1, x: 0, y: 0, targetX: 10, targetY: 20 }],
+    ];
+    for (const [name, args] of cases) {
+      const output = await client.callTool({ name, arguments: args });
+      assert.equal(output.isError, undefined, name);
+    }
+    assert.deepEqual(
+      calls,
+      cases.map(([method, params]) => ({ method, params })),
+    );
+    assert.deepEqual(
+      calls.map((call) => Object.keys(record(call.params))),
+      cases.map(([, params]) => Object.keys(params)),
+    );
+  });
+
+  it("refuses click, hover, scroll and drag arguments that do not go together", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const ref = "0a1b2c3d-4";
+    const clickTarget = "click needs either ref or both x and y, not both and not neither.";
+    const hoverTarget = "hover needs either ref or both x and y, not both and not neither.";
+    const scrollHow =
+      "scroll needs a direction to scroll at x and y or at the centre of the page, or a ref to scroll into view.";
+    const dragStart =
+      "drag needs either ref or both x and y for the start, not both and not neither.";
+    const dragEnd =
+      "drag needs either targetRef or both targetX and targetY for the end, not both and not neither.";
+    const cases: [string, Record<string, unknown>, string][] = [
+      ["click", { tabId: 1 }, clickTarget],
+      ["click", { tabId: 1, ref, x: 1, y: 2 }, clickTarget],
+      ["click", { tabId: 1, ref, y: 2 }, clickTarget],
+      ["click", { tabId: 1, x: 1 }, clickTarget],
+      ["click", { tabId: 1, y: 1 }, clickTarget],
+      [
+        "click",
+        { tabId: 1, ref, button: "right", doubleClick: true },
+        "click takes doubleClick only with the left button.",
+      ],
+      ["hover", { tabId: 1 }, hoverTarget],
+      ["hover", { tabId: 1, ref, x: 1 }, hoverTarget],
+      ["hover", { tabId: 1, x: 1 }, hoverTarget],
+      [
+        "scroll",
+        { tabId: 1, ref, x: 1, y: 2, direction: "down" },
+        "scroll takes either ref or both x and y, not both.",
+      ],
+      [
+        "scroll",
+        { tabId: 1, ref, y: 2, direction: "down" },
+        "scroll takes either ref or both x and y, not both.",
+      ],
+      [
+        "scroll",
+        { tabId: 1, x: 1, direction: "down" },
+        "scroll needs both x and y, not one of them.",
+      ],
+      [
+        "scroll",
+        { tabId: 1, y: 1, direction: "down" },
+        "scroll needs both x and y, not one of them.",
+      ],
+      ["scroll", { tabId: 1 }, scrollHow],
+      ["scroll", { tabId: 1, x: 1, y: 2 }, scrollHow],
+      ["scroll", { tabId: 1, ref, amount: 10 }, "scroll takes amount only with a direction."],
+      ["scroll", { tabId: 1, amount: 10 }, "scroll takes amount only with a direction."],
+      ["drag", { tabId: 1, targetRef: ref }, dragStart],
+      ["drag", { tabId: 1, ref, x: 1, y: 2, targetRef: ref }, dragStart],
+      ["drag", { tabId: 1, x: 1, targetRef: ref }, dragStart],
+      ["drag", { tabId: 1, ref }, dragEnd],
+      ["drag", { tabId: 1, ref, targetRef: ref, targetX: 1, targetY: 2 }, dragEnd],
+      ["drag", { tabId: 1, ref, targetX: 1 }, dragEnd],
+      ["drag", { tabId: 1, ref, targetY: 1 }, dragEnd],
+    ];
+    for (const [name, args, message] of cases) {
+      const output = await client.callTool({ name, arguments: args });
+      assert.deepEqual(
+        output,
+        { content: [{ type: "text", text: message }], isError: true },
+        `${name} ${JSON.stringify(args)}`,
+      );
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses click, hover, scroll and drag arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const cases: [string, Record<string, unknown>, string][] = [
+      ["click", { tabId: 1, x: -1, y: 0 }, "Too small: expected number to be >=0 at x"],
+      ["click", { tabId: 1, x: 0, y: -0.5 }, "Too small: expected number to be >=0 at y"],
+      [
+        "click",
+        { tabId: 1, ref: "a", button: "middle" },
+        'Invalid option: expected one of "left"|"right" at button',
+      ],
+      ["hover", { tabId: -1, ref: "a" }, "Too small: expected number to be >=0 at tabId"],
+      [
+        "scroll",
+        { tabId: 1, direction: "in" },
+        'Invalid option: expected one of "up"|"down"|"left"|"right" at direction',
+      ],
+      [
+        "scroll",
+        { tabId: 1, direction: "up", amount: 0 },
+        "Too small: expected number to be >=1 at amount",
+      ],
+      [
+        "scroll",
+        { tabId: 1, direction: "up", amount: 1.5 },
+        "Invalid input: expected int, received number at amount",
+      ],
+      [
+        "drag",
+        { tabId: 1, ref: "a", targetX: -1, targetY: 0 },
+        "Too small: expected number to be >=0 at targetX",
+      ],
+      [
+        "drag",
+        { tabId: 1, ref: "a", targetX: 0, targetY: -1 },
+        "Too small: expected number to be >=0 at targetY",
+      ],
+    ];
+    for (const [name, args, reason] of cases) {
+      const output = await client.callTool({ name, arguments: args });
+      assert.deepEqual(
+        output,
+        {
+          content: [
+            {
+              type: "text",
+              text: `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: ${reason}`,
+            },
+          ],
+          isError: true,
+        },
+        `${name} ${JSON.stringify(args)}`,
+      );
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("returns a drag result as JSON in one untrusted frame", LIMIT, async () => {
+    const result = { ref: "0a1b2c3d-4", targetRef: "0a1b2c3d-5", mode: "html5", dropped: true };
+    const { client } = await start(() => result);
+    const output = await client.callTool({
+      name: "drag",
+      arguments: { tabId: 1, ref: "0a1b2c3d-4", targetRef: "0a1b2c3d-5" },
+    });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(result));
   });
 
   it("passes get_page_text only the arguments given", LIMIT, async () => {

@@ -25,6 +25,11 @@ export const PAGE_ERROR_CODES: readonly string[] = [
   "ref_not_found",
   "page_changed",
   "invalid_target",
+  "element_covered",
+  "element_not_visible",
+  "no_element_at_point",
+  "in_frame",
+  "cross_site_navigation",
 ];
 
 /** The background's cap on the length of a reply as JSON. */

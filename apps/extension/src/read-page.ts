@@ -409,7 +409,7 @@ function childrenOf(element: Element): ArrayLike<Node> {
 }
 
 /** The focused element, followed into shadow roots. */
-function focusedElement(): Element | null {
+export function focusedElement(): Element | null {
   let focused = document.activeElement;
   while (focused !== null) {
     const inner = shadowRootOf(focused)?.activeElement ?? null;
@@ -675,7 +675,7 @@ function isInteractive(element: Element, role: string | undefined): boolean {
   );
 }
 
-function isEditingHost(element: Element): boolean {
+export function isEditingHost(element: Element): boolean {
   if (!(element instanceof HTMLElement) || !element.isContentEditable) return false;
   const parent = element.parentElement;
   return !(parent instanceof HTMLElement && parent.isContentEditable);

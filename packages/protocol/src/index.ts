@@ -23,6 +23,8 @@ export type {
 } from "./messages.ts";
 export { parseMessage } from "./messages.ts";
 export type {
+  ClickButton,
+  DragMode,
   MethodName,
   Methods,
   NavigateAction,
@@ -35,6 +37,7 @@ export type {
   ProbeResult,
   Request,
   Result,
+  ScrollDirection,
   TabInfo,
 } from "./methods.ts";
 export {

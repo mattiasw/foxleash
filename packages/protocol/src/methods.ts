@@ -7,6 +7,21 @@ export interface TabInfo {
 
 export type NavigateAction = "back" | "forward" | "reload";
 
+export type ClickButton = "left" | "right";
+
+export type ScrollDirection = "up" | "down" | "left" | "right";
+
+/** How drag moved the element: HTML drag-and-drop events, or pointer and mouse events only. */
+export type DragMode = "html5" | "pointer";
+
+/** An element by ref from read_page, or a point in the viewport in CSS pixels. */
+type Target = { ref: string; x?: never; y?: never } | { x: number; y: number; ref?: never };
+
+/** Where drag ends: an element by ref, or a point in the viewport in CSS pixels. */
+type DragEnd =
+  | { targetRef: string; targetX?: never; targetY?: never }
+  | { targetX: number; targetY: number; targetRef?: never };
+
 export type ProbeCheckName =
   | "click_button"
   | "click_link"
@@ -94,6 +109,27 @@ export interface Methods {
     };
     result: { target: "input" | "drop"; files: { name: string; size: number }[] };
   };
+  /** `ref` is the element the events went to, `x` and `y` the point in the viewport. */
+  click: {
+    params: { tabId: number; button?: ClickButton; doubleClick?: boolean } & Target;
+    result: { ref: string; x: number; y: number };
+  };
+  hover: { params: { tabId: number } & Target; result: { ref: string; x: number; y: number } };
+  /**
+   * With a direction, at the target or the viewport's centre; without one, `ref` is scrolled
+   * into view. `ref` in the result is absent when the page itself scrolled.
+   */
+  scroll: {
+    params: { tabId: number; direction?: ScrollDirection; amount?: number } & (
+      | Target
+      | { ref?: never; x?: never; y?: never }
+    );
+    result: { ref?: string; scrollLeft: number; scrollTop: number; moved: boolean };
+  };
+  drag: {
+    params: { tabId: number } & Target & DragEnd;
+    result: { ref: string; targetRef: string; mode: DragMode; dropped: boolean };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -116,6 +152,10 @@ export const METHOD_NAMES = [
   "screenshot",
   "upload_chunk",
   "upload_file",
+  "click",
+  "hover",
+  "scroll",
+  "drag",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

@@ -11,7 +11,7 @@ export interface ElementRefs<T> {
   resolve(ref: unknown): RefLookup<T>;
 }
 
-const REF = /^([0-9a-f]{8})-[1-9][0-9]{0,15}$/;
+export const REF = /^([0-9a-f]{8})-[1-9][0-9]{0,15}$/;
 const SWEEP_AT = 10_000;
 
 /**

@@ -231,6 +231,11 @@ describe("the page constants", () => {
       "ref_not_found",
       "page_changed",
       "invalid_target",
+      "element_covered",
+      "element_not_visible",
+      "no_element_at_point",
+      "in_frame",
+      "cross_site_navigation",
     ]);
     assert.equal(PAGE_REQUEST_KIND, "foxhand-page");
     assert.equal(MAX_PAGE_REPLY_CHARS, 2_000_000);

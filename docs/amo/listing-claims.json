@@ -138,6 +138,19 @@
         { "file": "apps/extension/src/screenshot.ts", "contains": "'input[type=\"password\" i]'" },
         { "file": "apps/extension/src/content.ts", "contains": "password_fields:" }
       ]
+    },
+    {
+      "listing": "it refuses clicks on links and form buttons that lead to another site",
+      "evidence": [
+        {
+          "file": "apps/extension/src/page-actions.ts",
+          "contains": "export function crossSiteDestination"
+        },
+        {
+          "file": "apps/extension/src/page-actions-dom.ts",
+          "contains": "\"cross_site_navigation\""
+        }
+      ]
     }
   ]
 }
