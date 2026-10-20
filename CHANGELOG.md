@@ -49,3 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also
   in the background, or of one element, on sites you approved. With `saveTo` it also saves
   the screenshot as a new file in its working folder, never over an existing file.
+- Your agent can upload files from your computer with the `upload_file` tool, into a page's
+  file field or dropped on the page, on sites you approved. It reads only from the upload
+  folders (its working folder and `~/Downloads` unless you set `FOXHAND_UPLOAD_DIRS`), never
+  dotfiles or files named like keys, and at most 10 MB per upload.

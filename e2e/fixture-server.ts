@@ -21,6 +21,7 @@ export const TITLES = {
   textSlotted: "Fixture text slotted",
   textDetails: "Fixture text details",
   shot: "Fixture shot",
+  upload: "Fixture upload",
 } as const;
 
 /** The CSS size of the shot page's box, which a screenshot by its ref must have. */
@@ -185,6 +186,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, TEXT_DETAILS_PAGE);
     } else if (path === "/shot") {
       sendHtml(response, SHOT_PAGE);
+    } else if (path === "/upload") {
+      sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/read-redirect") {
       // To the same server under another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
@@ -592,6 +595,44 @@ body { background: rgb(${SHOT_COLOURS.page.join(", ")}); min-height: 3000px; }
 }
 </style></head>
 <body><div style="padding: 1500px 0 0 40px"><button id="shot-box" type="button">Shot box</button></div></body></html>
+`;
+
+// Two file fields, one taking several files, a drop zone that cancels dragover and drop, and a
+// button that takes no drops. The page keeps the files each target got in window.received and
+// the events it saw in window.events, with the drops that reached the document.
+const UPLOAD_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.upload}</title></head>
+<body>
+<main>
+<input id="single" type="file" aria-label="Single file">
+<input id="many" type="file" multiple aria-label="Many files">
+<section id="zone" aria-label="Drop zone"><p>Drop files here</p></section>
+<button id="plain" type="button">No drops</button>
+</main>
+<script>
+window.received = { single: [], many: [], zone: [] };
+window.events = { single: [], many: [], zone: [], documentDrops: 0 };
+for (const id of ["single", "many"]) {
+  const input = document.getElementById(id);
+  input.addEventListener("input", () => window.events[id].push("input"));
+  input.addEventListener("change", () => {
+    window.events[id].push("change");
+    window.received[id] = Array.from(input.files);
+  });
+}
+const zone = document.getElementById("zone");
+zone.addEventListener("dragenter", (event) => event.preventDefault());
+zone.addEventListener("dragover", (event) => event.preventDefault());
+zone.addEventListener("drop", (event) => {
+  event.preventDefault();
+  window.events.zone.push("drop");
+  window.received.zone = Array.from(event.dataTransfer.files);
+});
+document.addEventListener("drop", () => {
+  window.events.documentDrops += 1;
+});
+</script>
+</body></html>
 `;
 
 export function counterTitle(count: number): string {

@@ -1,14 +1,22 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { randomBytes, randomUUID } from "node:crypto";
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import type { MethodName, Params } from "@foxhand/protocol";
+import { type MethodName, type Params, UPLOAD_CHUNK_BYTES } from "@foxhand/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { BridgeError, HostError } from "./bridge.ts";
+import { NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { createMcpServer } from "./mcp.ts";
-import { SCREENSHOT_NOTE, type ToolBridge, UNTRUSTED_FRAME, untrusted } from "./tools.ts";
+import {
+  SCREENSHOT_NOTE,
+  type ToolBridge,
+  UNTRUSTED_FRAME,
+  type UploadContext,
+  untrusted,
+} from "./tools.ts";
 
 interface Call {
   method: MethodName;
@@ -39,7 +47,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the six tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the seven tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -49,13 +57,14 @@ describe("tools", () => {
       "screenshot",
       "tab_open",
       "tabs_list",
+      "upload_file",
     ]);
     for (const tool of tools) {
       assert.ok(tool.description !== undefined && tool.description.length > 0, tool.name);
       assert.equal(tool.description.includes(EM_DASH), false, tool.name);
       assert.equal(
         tool.description.includes(REDACTED_TABS),
-        !["read_page", "get_page_text", "screenshot"].includes(tool.name),
+        !["read_page", "get_page_text", "screenshot", "upload_file"].includes(tool.name),
         tool.name,
       );
     }
@@ -105,6 +114,25 @@ describe("tools", () => {
       "screenshot never asks",
     ]) {
       assert.ok(screenshot?.description?.includes(words), words);
+    }
+    const uploadFile = tools.find((tool) => tool.name === "upload_file");
+    assert.equal(uploadFile?.description?.includes(ASKS_FIRST), false);
+    assert.deepEqual(uploadFile?.inputSchema.required, ["tabId", "ref", "paths"]);
+    assert.deepEqual(Object.keys(uploadFile?.inputSchema.properties ?? {}), [
+      "tabId",
+      "ref",
+      "paths",
+    ]);
+    for (const words of [
+      "With ref of a file field, Foxhand sets the field's files; any other element gets the files dropped on it",
+      "by default the folder Foxhand was started in",
+      "(unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and ~/Downloads",
+      "FOXHAND_UPLOAD_DIRS in the MCP client's configuration; no tool can change them",
+      "Files and folders whose names start with a dot, and files named like keys",
+      "At most 100 files and 10 MB in total per call.",
+      "upload_file never asks",
+    ]) {
+      assert.ok(uploadFile?.description?.includes(words), words);
     }
   });
 
@@ -766,7 +794,352 @@ describe("screenshot", () => {
   }
 });
 
-async function start(answer: Answer, saveFolder?: string): Promise<Harness> {
+describe("upload_file", () => {
+  const CHUNK = UPLOAD_CHUNK_BYTES;
+  const REF = "0a1b2c3d-7";
+  const DROP_NOTE =
+    "The page decides what to do with dropped files; read the page to check that it took them.";
+  let home = "";
+  let folder = "";
+
+  before(async () => {
+    home = await realpath(await mkdtemp(join(tmpdir(), "fh-upload-")));
+    folder = join(home, "work");
+    await mkdir(folder);
+  });
+
+  after(async () => {
+    await rm(home, { recursive: true, force: true });
+  });
+
+  it("sends the bytes in order in chunks under one id, then upload_file", LIMIT, async () => {
+    const big = randomBytes(1_500_000);
+    const small = Buffer.from("hello");
+    await writeFile(join(folder, "big.txt"), big);
+    await writeFile(join(folder, "small.PDF"), small);
+    const { client, calls, logs } = await startUpload(() => ({ target: "input" }));
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 3, ref: REF, paths: [join(folder, "big.txt"), "small.PDF"] },
+    });
+    const chunks = calls
+      .filter((call) => call.method === "upload_chunk")
+      .map((call) => record(call.params));
+    assert.deepEqual(
+      chunks.map((chunk) => chunk.index),
+      [0, 1, 2],
+    );
+    const upload = chunks[0]?.upload;
+    assert.match(String(upload), /^[0-9a-f]{16}$/);
+    for (const chunk of chunks) {
+      assert.equal(chunk.upload, upload);
+      assert.deepEqual(Object.keys(chunk), ["upload", "index", "data"]);
+    }
+    const decoded = chunks.map((chunk) => Buffer.from(String(chunk.data), "base64"));
+    assert.deepEqual(
+      decoded.map((bytes) => bytes.length),
+      [CHUNK, CHUNK, big.length + small.length - 2 * CHUNK],
+    );
+    assert.deepEqual(Buffer.concat(decoded), Buffer.concat([big, small]));
+    assert.deepEqual(calls.at(-1), {
+      method: "upload_file",
+      params: {
+        tabId: 3,
+        ref: REF,
+        upload,
+        files: [
+          { name: "big.txt", type: "text/plain", size: big.length },
+          { name: "small.PDF", type: "application/pdf", size: 5 },
+        ],
+      },
+    });
+    assert.equal(calls.length, 4);
+    assert.deepEqual(output, {
+      content: [
+        {
+          type: "text",
+          text: [
+            `Put 2 files into the file field ${REF} in tab 3:`,
+            `- ${JSON.stringify(join(folder, "big.txt"))}, 1,500,000 bytes`,
+            `- ${JSON.stringify(join(folder, "small.PDF"))}, 5 bytes`,
+          ].join("\n"),
+        },
+      ],
+    });
+    assert.deepEqual(logs, [
+      {
+        message: "upload",
+        detail: {
+          tabId: 3,
+          ref: REF,
+          files: [
+            { path: join(folder, "big.txt"), bytes: big.length },
+            { path: join(folder, "small.PDF"), bytes: 5 },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("keeps the largest chunk request within one native message", LIMIT, async () => {
+    await writeFile(join(folder, "full.bin"), randomBytes(CHUNK));
+    const { client, calls } = await startUpload(() => ({ target: "input" }));
+    await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: ["full.bin"] },
+    });
+    const chunk = calls[0];
+    assert.equal(chunk?.method, "upload_chunk");
+    const json = JSON.stringify({
+      type: "request",
+      id: "r9999999999",
+      session: randomUUID(),
+      method: chunk.method,
+      params: chunk.params,
+    });
+    assert.ok(Buffer.byteLength(json) <= NATIVE_MESSAGE_LIMIT, String(Buffer.byteLength(json)));
+    assert.equal(calls.length, 2);
+  });
+
+  it("sends no chunk for empty files, and says 1 file and 1 byte", LIMIT, async () => {
+    await writeFile(join(folder, "empty.txt"), "");
+    await writeFile(join(home, "one.bin"), "x");
+    const { client, calls } = await startUpload(() => ({ target: "input" }), [folder, home]);
+    const empty = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 2, ref: REF, paths: ["empty.txt"] },
+    });
+    assert.deepEqual(calls, [
+      {
+        method: "upload_file",
+        params: {
+          tabId: 2,
+          ref: REF,
+          upload: record(calls[0]?.params).upload,
+          files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
+        },
+      },
+    ]);
+    assert.equal(
+      text(empty),
+      `Put 1 file into the file field ${REF} in tab 2:\n- ${JSON.stringify(join(folder, "empty.txt"))}, 0 bytes`,
+    );
+    const one = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 2, ref: REF, paths: ["~/one.bin"] },
+    });
+    assert.equal(
+      text(one),
+      `Put 1 file into the file field ${REF} in tab 2:\n- ${JSON.stringify(join(home, "one.bin"))}, 1 byte`,
+    );
+  });
+
+  it("says where dropped files went, and that the page decides", LIMIT, async () => {
+    await writeFile(join(folder, "a.png"), "a");
+    await writeFile(join(folder, "b.csv"), "bb");
+    const { client } = await startUpload(() => ({ target: "drop" }));
+    const two = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["a.png", "b.csv"] },
+    });
+    assert.equal(
+      text(two),
+      [
+        `Dropped 2 files on ${REF} in tab 5:`,
+        `- ${JSON.stringify(join(folder, "a.png"))}, 1 byte`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+        DROP_NOTE,
+      ].join("\n"),
+    );
+    const one = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["b.csv"] },
+    });
+    assert.equal(
+      text(one),
+      [
+        `Dropped 1 file on ${REF} in tab 5:`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+        DROP_NOTE,
+      ].join("\n"),
+    );
+  });
+
+  it("quotes a path whose name holds a line break", LIMIT, async () => {
+    const name = "two\nlines.txt";
+    await writeFile(join(folder, name), "t");
+    const { client } = await startUpload(() => ({ target: "input" }));
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: [name] },
+    });
+    assert.equal(text(output).split("\n").length, 2);
+    assert.ok(text(output).endsWith(`- ${JSON.stringify(join(folder, name))}, 1 byte`));
+  });
+
+  it("refuses the whole call on one refused path and sends nothing", LIMIT, async () => {
+    await writeFile(join(folder, "ok.txt"), "ok");
+    await writeFile(join(home, "outside.txt"), "no");
+    const { client, calls, logs } = await startUpload(() => ({ target: "input" }));
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: ["ok.txt", join(home, "outside.txt")] },
+    });
+    const reason = `is outside the upload folders (${folder}); the user can change them with FOXHAND_UPLOAD_DIRS.`;
+    assert.deepEqual(output, {
+      content: [
+        {
+          type: "text",
+          text: `Foxhand uploaded nothing: ${JSON.stringify(join(home, "outside.txt"))} ${reason}`,
+        },
+      ],
+      isError: true,
+    });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(logs, [
+      { message: "upload refused", detail: { path: join(home, "outside.txt"), reason } },
+    ]);
+  });
+
+  it("refuses files over 10 MB together before anything is sent", LIMIT, async () => {
+    await writeFile(join(folder, "six-a.bin"), Buffer.alloc(6 * 1024 * 1024));
+    await writeFile(join(folder, "six-b.bin"), Buffer.alloc(6 * 1024 * 1024));
+    await writeFile(join(folder, "four.bin"), Buffer.alloc(4 * 1024 * 1024));
+    const { client, calls } = await startUpload(() => ({ target: "input" }));
+    const over = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: ["six-a.bin", "six-b.bin"] },
+    });
+    assert.equal(
+      text(over),
+      `Foxhand uploaded nothing: "six-b.bin" would bring this upload over 10 MB, the most Foxhand uploads in one call.`,
+    );
+    assert.equal(calls.length, 0);
+    const exactly = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: ["six-a.bin", "four.bin"] },
+    });
+    assert.equal(exactly.isError, undefined, text(exactly));
+    assert.equal(calls.filter((call) => call.method === "upload_chunk").length, 20);
+  });
+
+  it("stops at a chunk the bridge refuses", LIMIT, async () => {
+    await writeFile(join(folder, "three.bin"), randomBytes(2 * CHUNK + 1));
+    let chunks = 0;
+    const sentence = "The Foxhand native host did not answer in time.";
+    const { client, calls, logs } = await startUpload((method) => {
+      if (method === "upload_chunk" && ++chunks === 2) throw new BridgeError(sentence);
+      return { received: 0 };
+    });
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 4, ref: REF, paths: ["three.bin"] },
+    });
+    assert.deepEqual(output, { content: [{ type: "text", text: sentence }], isError: true });
+    assert.deepEqual(
+      calls.map((call) => [call.method, record(call.params).index]),
+      [
+        ["upload_chunk", 0],
+        ["upload_chunk", 1],
+      ],
+    );
+    assert.deepEqual(logs.at(-1), {
+      message: "upload failed",
+      detail: { tabId: 4, ref: REF, step: "upload_chunk", index: 1 },
+    });
+    assert.equal(logs.length, 2);
+  });
+
+  it("returns a host error on upload_file as for the other tools", LIMIT, async () => {
+    await writeFile(join(folder, "h.txt"), "h");
+    const { client, logs } = await startUpload((method) => {
+      if (method === "upload_file") {
+        throw new HostError("invalid_target", "That file field is disabled.");
+      }
+      return { received: 1 };
+    });
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 6, ref: REF, paths: ["h.txt"] },
+    });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), "That file field is disabled.");
+    assert.deepEqual(logs.at(-1), {
+      message: "upload failed",
+      detail: { tabId: 6, ref: REF, step: "upload_file" },
+    });
+    assert.equal(logs.length, 2);
+  });
+
+  it("refuses an upload result it cannot read", LIMIT, async () => {
+    await writeFile(join(folder, "r.txt"), "r");
+    for (const result of [null, "input", { target: "file" }, Object.create({ target: "input" })]) {
+      const { client, logs } = await startUpload((method) =>
+        method === "upload_file" ? result : { received: 1 },
+      );
+      const output = await client.callTool({
+        name: "upload_file",
+        arguments: { tabId: 6, ref: REF, paths: ["r.txt"] },
+      });
+      assert.deepEqual(
+        output,
+        {
+          content: [
+            { type: "text", text: "Firefox returned an upload result Foxhand cannot read." },
+          ],
+          isError: true,
+        },
+        pretty(result),
+      );
+      assert.deepEqual(logs.at(-1), {
+        message: "upload failed",
+        detail: { tabId: 6, ref: REF, step: "upload_file" },
+      });
+    }
+  });
+
+  it("refuses arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await startUpload(() => ({ target: "input" }));
+    const prefix =
+      "MCP error -32602: Input validation error: Invalid arguments for tool upload_file: ";
+    const many = Array.from({ length: 101 }, (_, index) => `f${index}.txt`);
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: -1, ref: REF, paths: ["a"] }, "Too small: expected number to be >=0 at tabId"],
+      [{ tabId: 1, ref: REF, paths: [] }, "Too small: expected array to have >=1 items at paths"],
+      [
+        { tabId: 1, ref: REF, paths: [""] },
+        "Too small: expected string to have >=1 characters at paths[0]",
+      ],
+      [{ tabId: 1, ref: REF, paths: many }, "Too big: expected array to have <=100 items at paths"],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "upload_file", arguments: args });
+      assert.equal(text(output), prefix + reason);
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  /** A server whose upload folder is `work` in a temp home, unless `folders` says otherwise. */
+  async function startUpload(
+    answer: Answer,
+    folders: string[] = [folder],
+  ): Promise<Harness & { logs: { message: string; detail: unknown }[] }> {
+    const logs: { message: string; detail: unknown }[] = [];
+    const harness = await start(answer, undefined, {
+      folders,
+      cwd: folder,
+      home,
+      log: (message, detail) => logs.push({ message, detail }),
+    });
+    return { ...harness, logs };
+  }
+});
+
+async function start(
+  answer: Answer,
+  saveFolder?: string,
+  upload: UploadContext = { folders: [], cwd: undefined, home: "/nonexistent", log: () => {} },
+): Promise<Harness> {
   const calls: Call[] = [];
   const bridge: ToolBridge = {
     async call<M extends MethodName>(method: M, params: Params<M>): Promise<unknown> {
@@ -776,8 +1149,8 @@ async function start(answer: Answer, saveFolder?: string): Promise<Harness> {
   };
   const server = createMcpServer(
     saveFolder === undefined
-      ? { bridge, version: "1.2.3" }
-      : { bridge, version: "1.2.3", saveFolder },
+      ? { bridge, version: "1.2.3", upload }
+      : { bridge, version: "1.2.3", upload, saveFolder },
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client({ name: "test", version: "1.0.0" });

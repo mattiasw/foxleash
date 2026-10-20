@@ -24,6 +24,7 @@ export const PAGE_ERROR_CODES: readonly string[] = [
   "stale_ref",
   "ref_not_found",
   "page_changed",
+  "invalid_target",
 ];
 
 /** The background's cap on the length of a reply as JSON. */

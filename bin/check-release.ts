@@ -128,6 +128,7 @@ const LIST_TOOLS_SCRIPT = [
   "registerTools(",
   "  { registerTool(name) { names.push(name); } },",
   '  { call: () => Promise.reject(new Error("no bridge")) },',
+  '  { folders: [], cwd: undefined, home: "/nonexistent", log() {} },',
   ");",
   "process.stdout.write(JSON.stringify(names));",
 ].join("\n");

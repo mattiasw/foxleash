@@ -70,6 +70,7 @@ describe("createMcpServer", () => {
     const server = createMcpServer({
       bridge: { call: async () => null },
       version: SERVER_VERSION,
+      upload: { folders: [], cwd: undefined, home: root, log: () => {} },
     });
     const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
     const client = new Client({ name: "test", version: "1.0.0" });
@@ -189,6 +190,22 @@ describe("runMcp", () => {
     assert.equal(run.stdin.listenerCount("data"), 0);
   });
 
+  it("logs a default upload folder it leaves out", LIMIT, async () => {
+    const home = path.join(root, "home");
+    const run = startRun(privateBase().env, new PassThrough(), { cwd: home, home });
+    run.stdin.end();
+    assert.equal(await run.done, 0);
+    assert.deepEqual(run.logs, [
+      {
+        message: "upload folder skipped",
+        detail: {
+          folder: home,
+          reason: "is your home folder or contains it, so it would cover your whole home folder",
+        },
+      },
+    ]);
+  });
+
   it("closes when stdin fails", LIMIT, async () => {
     const run = startRun(privateBase().env);
     await initialize(run);
@@ -208,6 +225,19 @@ describe("mcpCommand", () => {
     proc.stdin.end();
     assert.equal(await done, 0);
     assert.equal(proc.text(), "");
+  });
+
+  it("serves when the folder it was started in is gone", LIMIT, async () => {
+    const proc = fakeProcess(privateBase().env, true, () => {
+      throw errnoError("ENOENT");
+    });
+    const done = mcpCommand(proc);
+    proc.stdin.end();
+    assert.equal(await done, 0);
+    assert.equal(
+      proc.text(),
+      'foxhand mcp: upload folder skipped {"folder":"the folder Foxhand was started in","reason":"no longer exists"}\n',
+    );
   });
 
   it("refuses to run without process.getuid", LIMIT, async () => {
@@ -262,6 +292,7 @@ describe("foxhand mcp", () => {
         "screenshot",
         "tab_open",
         "tabs_list",
+        "upload_file",
       ]);
       child.stdin.end();
       assert.deepEqual(await exited, [0, null]);
@@ -294,7 +325,15 @@ async function fakeHost(
   return host;
 }
 
-function startRun(env: NodeJS.ProcessEnv, stdin = new PassThrough()): Run {
+/** By default in a working folder that neither is nor holds the home folder. */
+function startRun(
+  env: NodeJS.ProcessEnv,
+  stdin = new PassThrough(),
+  place: { cwd: string | undefined; home: string } = {
+    cwd: path.join(root, "work"),
+    home: path.join(root, "home"),
+  },
+): Run {
   const stdout = new PassThrough();
   const logs: LogLine[] = [];
   const done = runMcp({
@@ -303,6 +342,7 @@ function startRun(env: NodeJS.ProcessEnv, stdin = new PassThrough()): Run {
     env,
     uid,
     log: (message, detail) => logs.push({ message, detail }),
+    ...place,
   });
   const run = { stdin, stdout, out: lineQueue(stdout, 2000), logs, done };
   runs.push(run);
@@ -378,7 +418,11 @@ interface FakeProcess extends McpProcess {
   text(): string;
 }
 
-function fakeProcess(env: NodeJS.ProcessEnv, withUid = true): FakeProcess {
+function fakeProcess(
+  env: NodeJS.ProcessEnv,
+  withUid = true,
+  cwd: () => string = () => root,
+): FakeProcess {
   const stderr = new PassThrough();
   const chunks: Buffer[] = [];
   stderr.on("data", (chunk: Buffer) => chunks.push(chunk));
@@ -387,6 +431,7 @@ function fakeProcess(env: NodeJS.ProcessEnv, withUid = true): FakeProcess {
     stdout: new PassThrough(),
     stderr,
     env,
+    cwd,
     text: () => Buffer.concat(chunks).toString("utf8"),
   };
   if (withUid) {

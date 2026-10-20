@@ -4,15 +4,27 @@ import {
   MAX_PAGE_TEXT_CHARS,
   type MethodName,
   type Params,
+  UPLOAD_CHUNK_BYTES,
+  UPLOAD_MAX_BYTES,
 } from "@foxhand/protocol";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { BridgeError, HostError } from "./bridge.ts";
+import type { Log } from "./log.ts";
 import { type SaveResult, savePathProblem, savePng } from "./save-file.ts";
+import { fileType, readAllowedFile } from "./upload-policy.ts";
 
 export interface ToolBridge {
   call<M extends MethodName>(method: M, params: Params<M>): Promise<unknown>;
+}
+
+/** What upload_file reads files with: the allowed folders are fixed when the server starts. */
+export interface UploadContext {
+  folders: readonly string[];
+  cwd: string | undefined;
+  home: string;
+  log: Log;
 }
 
 /** Foxhand's own text before a screenshot: an image cannot be framed like page text. */
@@ -48,6 +60,11 @@ const NO_SAVE_FOLDER =
   "The folder Foxhand was started in no longer exists, so it cannot save screenshots; take one without saveTo.";
 const SAVED_ONLY =
   "The screenshot is too large to return as an image; it is only in the saved file.";
+const UPLOAD_FILE =
+  "Upload files from this computer to the page in a tab of this session's Foxhand tab group, as if the user had picked or dropped them. With ref of a file field, Foxhand sets the field's files; any other element gets the files dropped on it, which works only where the page takes dropped files. Foxhand reads files only from the upload folders: by default the folder Foxhand was started in, normally your working folder (unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and ~/Downloads. The user chooses other folders with FOXHAND_UPLOAD_DIRS in the MCP client's configuration; no tool can change them. Files and folders whose names start with a dot, and files named like keys (id_*, *.pem, *.key and similar), are refused. At most 100 files and 10 MB in total per call. The tab must show a site the user approved; upload_file never asks.";
+const UNREADABLE_UPLOAD = "Firefox returned an upload result Foxhand cannot read.";
+const DROP_NOTE =
+  "The page decides what to do with dropped files; read the page to check that it took them.";
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 // Below the 10 MiB line limit of the SDK's stdio transports, with room for the JSON-RPC envelope.
@@ -56,12 +73,14 @@ const MAX_RESULT_BYTES = 8 * 1024 * 1024;
 const IMAGE_ALLOWANCE = 64 * 1024;
 
 /**
- * `saveFolder` is where screenshot saves files, undefined when the folder this process started
- * in was removed; nothing reads it until a screenshot is saved.
+ * `upload` is what upload_file reads files with. `saveFolder` is where screenshot saves files,
+ * undefined when the folder this process started in was removed; nothing reads either until a
+ * tool is called.
  */
 export function registerTools(
   server: McpServer,
   bridge: ToolBridge,
+  upload: UploadContext,
   saveFolder: string | undefined = startingFolder(),
 ): void {
   server.registerTool(
@@ -212,6 +231,58 @@ export function registerTools(
       return screenshotResult(png.data, saved);
     },
   );
+  server.registerTool(
+    "upload_file",
+    {
+      description: UPLOAD_FILE,
+      inputSchema: {
+        tabId: z
+          .number()
+          .int()
+          .min(0)
+          .describe("The id of a tab in this session's Foxhand tab group"),
+        ref: z
+          .string()
+          .describe(
+            "An element reference from an earlier read_page of the same page: a file field gets the files, any other element gets them dropped on it",
+          ),
+        paths: z
+          .array(z.string().min(1))
+          .min(1)
+          .max(100)
+          .describe(
+            "The files to upload, in order: absolute paths, paths starting with ~/, or paths relative to the folder Foxhand was started in",
+          ),
+      },
+    },
+    async ({ tabId, ref, paths }) => {
+      // All or nothing: every file is read before anything is sent.
+      const files: UploadedFile[] = [];
+      let remaining = UPLOAD_MAX_BYTES;
+      for (const requested of paths) {
+        const read = await readAllowedFile(requested, upload.folders, {
+          cwd: upload.cwd,
+          home: upload.home,
+          remaining,
+        });
+        if (!read.ok) {
+          upload.log("upload refused", { path: requested, reason: read.reason });
+          return errorResult(
+            `Foxhand uploaded nothing: ${JSON.stringify(requested)} ${read.reason}`,
+          );
+        }
+        files.push(read);
+        remaining -= read.bytes.length;
+      }
+      return sendUpload(bridge, upload.log, { tabId, ref }, files);
+    },
+  );
+}
+
+interface UploadedFile {
+  path: string;
+  name: string;
+  bytes: Buffer;
 }
 
 /**
@@ -302,9 +373,9 @@ function pageTreeOf(result: unknown): { tree: string; truncated: boolean } | und
 }
 
 /** The folder this process started in, or undefined when it was removed before then. */
-function startingFolder(): string | undefined {
+export function startingFolder(cwd: () => string = () => process.cwd()): string | undefined {
   try {
-    return process.cwd();
+    return cwd();
   } catch {
     return undefined;
   }
@@ -347,6 +418,85 @@ function screenshotResult(data: string, saved: SaveResult | undefined): CallTool
       ...savedLine,
     ],
   };
+}
+
+/**
+ * Sends the files' bytes in chunks under one upload id, then asks the extension to hand them to
+ * the element. Logged before the first byte leaves, and again when a step fails.
+ */
+async function sendUpload(
+  bridge: ToolBridge,
+  log: Log,
+  target: { tabId: number; ref: string },
+  files: readonly UploadedFile[],
+): Promise<CallToolResult> {
+  const { tabId, ref } = target;
+  log("upload", {
+    tabId,
+    ref,
+    files: files.map((file) => ({ path: file.path, bytes: file.bytes.length })),
+  });
+  const upload = frameId();
+  const all = Buffer.concat(files.map((file) => file.bytes));
+  for (let index = 0; index * UPLOAD_CHUNK_BYTES < all.length; index += 1) {
+    const chunk = all.subarray(index * UPLOAD_CHUNK_BYTES, (index + 1) * UPLOAD_CHUNK_BYTES);
+    const sent = await callBridge(bridge, "upload_chunk", {
+      upload,
+      index,
+      data: chunk.toString("base64"),
+    });
+    if (!sent.ok) {
+      log("upload failed", { tabId, ref, step: "upload_chunk", index });
+      return sent.error;
+    }
+  }
+  const called = await callBridge(bridge, "upload_file", {
+    tabId,
+    ref,
+    upload,
+    files: files.map((file) => ({
+      name: file.name,
+      type: fileType(file.name),
+      size: file.bytes.length,
+    })),
+  });
+  if (!called.ok) {
+    log("upload failed", { tabId, ref, step: "upload_file" });
+    return called.error;
+  }
+  const where = uploadTargetOf(called.result);
+  if (where === undefined) {
+    log("upload failed", { tabId, ref, step: "upload_file" });
+    return errorResult(UNREADABLE_UPLOAD);
+  }
+  return { content: [{ type: "text", text: uploadText(where, target, files) }] };
+}
+
+function uploadTargetOf(result: unknown): "input" | "drop" | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const target = Object.hasOwn(result, "target") ? Reflect.get(result, "target") : undefined;
+  return target === "input" || target === "drop" ? target : undefined;
+}
+
+/** Foxhand's own text, with the real paths quoted so a file name cannot shape it. */
+function uploadText(
+  where: "input" | "drop",
+  { tabId, ref }: { tabId: number; ref: string },
+  files: readonly UploadedFile[],
+): string {
+  const count = files.length === 1 ? "1 file" : `${files.length} files`;
+  const head =
+    where === "input"
+      ? `Put ${count} into the file field ${ref} in tab ${tabId}:`
+      : `Dropped ${count} on ${ref} in tab ${tabId}:`;
+  const lines = files.map(
+    (file) => `- ${JSON.stringify(file.path)}, ${byteCount(file.bytes.length)}`,
+  );
+  return [head, ...lines, ...(where === "drop" ? [DROP_NOTE] : [])].join("\n");
+}
+
+function byteCount(size: number): string {
+  return size === 1 ? "1 byte" : `${size.toLocaleString("en-US")} bytes`;
 }
 
 function tooLarge(text: string): boolean {

@@ -4,6 +4,7 @@ import { createElementRefs } from "./element-refs.ts";
 import { handlePageMessage, PageError, type PageHandlers } from "./page-messages.ts";
 import { pageTextOptions } from "./page-text.ts";
 import { readPageText } from "./page-text-dom.ts";
+import { uploadFile } from "./page-upload.ts";
 import { readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
 
@@ -31,6 +32,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
       return readPageText(document, options.maxChars);
     },
     element_rect: (params) => elementRect(params, { refs }),
+    upload_file: (params) => uploadFile(params, { refs }),
   };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),

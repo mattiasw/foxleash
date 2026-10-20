@@ -19,6 +19,7 @@ import {
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
 import { createSiteAccess, type OpenPrompt, type SessionMemory } from "./site-access.ts";
+import { createUploads } from "./uploads.ts";
 
 const SITE = "https://a.example";
 
@@ -525,7 +526,13 @@ describe("parsePageReply", () => {
   });
 
   it("passes an allowed error code through, with its message", () => {
-    for (const code of ["invalid_params", "invalid_ref", "stale_ref", "ref_not_found"]) {
+    for (const code of [
+      "invalid_params",
+      "invalid_ref",
+      "stale_ref",
+      "ref_not_found",
+      "invalid_target",
+    ]) {
       assert.throws(
         () => parsePageReply({ ok: false, site: SITE, code, message: "Plain words." }, SITE, 7),
         (error: unknown) =>
@@ -718,6 +725,7 @@ function setup() {
     access,
     probe: async () => null,
     pages,
+    uploads: createUploads(timers),
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

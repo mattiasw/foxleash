@@ -1,0 +1,581 @@
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { constants } from "node:fs";
+import { mkdir, mkdtemp, open, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { after, before, describe, it } from "node:test";
+import {
+  fileType,
+  type ReadContext,
+  type ReadHandle,
+  type ReadResult,
+  readAllowedFile,
+  uploadFolders,
+} from "./upload-policy.ts";
+
+const LIMIT = { timeout: 10_000 };
+const BUDGET = 10 * 1024 * 1024;
+const DOT =
+  "has a folder or file name starting with a dot below its upload folder; Foxhand never uploads those.";
+const KEY = "is named like a key file; Foxhand never uploads those.";
+const NOT_FILE = "is not a regular file; Foxhand uploads only files.";
+const MISSING = "does not exist.";
+const UNREADABLE = "cannot be read.";
+const CHANGED = "changed while Foxhand read it; try again.";
+const HOME_NOTE = "is your home folder or contains it, so it would cover your whole home folder";
+const DOT_NOTE = "is inside a folder whose name starts with a dot";
+const FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
+
+let root = "";
+let home = "";
+let work = "";
+let outside = "";
+
+before(async () => {
+  // Not tmpdir(), which may lie in a dot folder, where no default folder is allowed.
+  root = await realpath(await mkdtemp("/tmp/fh-policy-"));
+  home = join(root, "home");
+  work = join(home, "work");
+  outside = join(root, "outside");
+  for (const folder of [home, work, outside, join(home, ".config", "app"), join(home, ".aws")]) {
+    await mkdir(folder, { recursive: true });
+  }
+  await mkdir(join(work, ".hidden"));
+  await mkdir(join(work, "dir"));
+  await writeFile(join(work, "ok.txt"), "ok bytes");
+  await writeFile(join(work, "server.pem"), "-----BEGIN PRIVATE KEY-----");
+  await writeFile(join(work, ".hidden", "x.txt"), "hidden");
+  await writeFile(join(work, ".env.local"), "TOKEN=1");
+  await writeFile(join(outside, "x.txt"), "outside");
+  await writeFile(join(home, ".aws", "credentials"), "secret");
+  await writeFile(join(home, ".config", "app", "settings.txt"), "settings");
+});
+
+after(async () => {
+  await rm(root, { recursive: true, force: true });
+});
+
+describe("uploadFolders", () => {
+  it("defaults to the working folder and ~/Downloads", () => {
+    assert.deepEqual(uploadFolders({ env: {}, cwd: work, home }), {
+      folders: [work, join(home, "Downloads")],
+      notes: [],
+    });
+    assert.deepEqual(uploadFolders({ env: { FOXHAND_UPLOAD_DIRS: "" }, cwd: work, home }), {
+      folders: [work, join(home, "Downloads")],
+      notes: [],
+    });
+  });
+
+  it("leaves out a working folder that is home or holds it", () => {
+    for (const cwd of [home, root, "/"]) {
+      assert.deepEqual(
+        uploadFolders({ env: {}, cwd, home }),
+        { folders: [join(home, "Downloads")], notes: [{ folder: cwd, reason: HOME_NOTE }] },
+        cwd,
+      );
+    }
+  });
+
+  it("leaves out a working folder under a dot folder", () => {
+    const config = join(home, ".config", "app");
+    assert.deepEqual(uploadFolders({ env: {}, cwd: config, home }), {
+      folders: [join(home, "Downloads")],
+      notes: [{ folder: config, reason: DOT_NOTE }],
+    });
+  });
+
+  it("leaves out ~/Downloads when it links to home", async () => {
+    const linked = join(root, "linked-home");
+    await mkdir(linked);
+    await symlink(linked, join(linked, "Downloads"));
+    assert.deepEqual(uploadFolders({ env: {}, cwd: work, home: linked }), {
+      folders: [work],
+      notes: [{ folder: join(linked, "Downloads"), reason: HOME_NOTE }],
+    });
+  });
+
+  it("compares a working folder to home on real paths", async () => {
+    const link = join(root, "home-link");
+    await symlink(home, link);
+    assert.deepEqual(uploadFolders({ env: {}, cwd: link, home }).notes, [
+      { folder: link, reason: HOME_NOTE },
+    ]);
+  });
+
+  it("notes a working folder that is gone and keeps ~/Downloads", () => {
+    assert.deepEqual(uploadFolders({ env: {}, cwd: undefined, home }), {
+      folders: [join(home, "Downloads")],
+      notes: [{ folder: "the folder Foxhand was started in", reason: "no longer exists" }],
+    });
+  });
+
+  it("replaces the defaults with FOXHAND_UPLOAD_DIRS", () => {
+    const env = { FOXHAND_UPLOAD_DIRS: `~:~/x::/abs/y/../z:rel/dir:~user/z:${home}/.config/app:/` };
+    assert.deepEqual(uploadFolders({ env, cwd: work, home }), {
+      folders: [home, join(home, "x"), "/abs/z", join(home, ".config", "app"), "/"],
+      notes: [
+        { folder: "rel/dir", reason: "is not an absolute path" },
+        { folder: "~user/z", reason: "is not an absolute path" },
+      ],
+    });
+  });
+
+  it("leaves no folder when no entry of FOXHAND_UPLOAD_DIRS is usable", () => {
+    assert.deepEqual(uploadFolders({ env: { FOXHAND_UPLOAD_DIRS: "a:b" }, cwd: work, home }), {
+      folders: [],
+      notes: [
+        { folder: "a", reason: "is not an absolute path" },
+        { folder: "b", reason: "is not an absolute path" },
+      ],
+    });
+  });
+});
+
+describe("readAllowedFile accepts", () => {
+  it("a file in an upload folder, with its real path, name and bytes", LIMIT, async () => {
+    assert.deepEqual(await read(join(work, "ok.txt")), {
+      ok: true,
+      path: join(work, "ok.txt"),
+      name: "ok.txt",
+      bytes: Buffer.from("ok bytes"),
+    });
+  });
+
+  it(
+    "a link from outside to a file inside, under its real path and the link's name",
+    LIMIT,
+    async () => {
+      const link = join(outside, "named.txt");
+      await symlink(join(work, "ok.txt"), link);
+      assert.deepEqual(await read(link), {
+        ok: true,
+        path: join(work, "ok.txt"),
+        name: "named.txt",
+        bytes: Buffer.from("ok bytes"),
+      });
+    },
+  );
+
+  it(
+    "a path starting with ~/, a relative path, and an absolute one with no cwd",
+    LIMIT,
+    async () => {
+      for (const [requested, cwd] of [
+        ["~/work/ok.txt", work],
+        ["ok.txt", work],
+        ["../work/./ok.txt", work],
+        [join(work, "ok.txt"), undefined],
+      ] as const) {
+        const result = await read(requested, [work], { cwd });
+        assert.equal(result.ok && result.path, join(work, "ok.txt"), requested);
+      }
+    },
+  );
+
+  it("a file in a dot folder that is itself an upload folder", LIMIT, async () => {
+    const app = join(home, ".config", "app");
+    for (const folders of [[app], [home, app]]) {
+      const result = await read(join(app, "settings.txt"), folders);
+      assert.equal(result.ok && result.bytes.toString(), "settings", folders.join(":"));
+    }
+  });
+
+  it("names with a key word only before the first dot or inside a part", LIMIT, async () => {
+    for (const name of ["key", "pem.txt", "notes.keys", "a.pem-notes", "keystore~"]) {
+      await writeFile(join(work, name), "plain");
+      assert.equal((await read(join(work, name))).ok, true, name);
+    }
+  });
+
+  it("a file that fills the budget exactly", LIMIT, async () => {
+    const result = await read(join(work, "ok.txt"), [work], { remaining: 8 });
+    assert.equal(result.ok, true);
+  });
+
+  it("a file read in several short reads", LIMIT, async () => {
+    const result = await read(join(work, "ok.txt"), [work], {
+      open: async (file, flags) => shortReads(await open(file, flags)),
+    });
+    assert.deepEqual(result.ok && result.bytes, Buffer.from("ok bytes"));
+  });
+
+  it("a file when its descriptor fails to close", LIMIT, async () => {
+    const result = await read(join(work, "ok.txt"), [work], {
+      open: async (file, flags) => {
+        const handle = await open(file, flags);
+        return {
+          fd: handle.fd,
+          stat: () => handle.stat(),
+          read: (buffer, offset, length, position) => handle.read(buffer, offset, length, position),
+          close: async () => {
+            await handle.close();
+            throw Object.assign(new Error("close failed"), { code: "EIO" });
+          },
+        };
+      },
+    });
+    assert.equal(result.ok, true);
+  });
+
+  it("a file only once its descriptor is closed", LIMIT, async () => {
+    let closed = false;
+    const result = await read(join(work, "ok.txt"), [work], {
+      open: async (file, flags) => {
+        const handle = await open(file, flags);
+        return {
+          fd: handle.fd,
+          stat: () => handle.stat(),
+          read: (buffer, offset, length, position) => handle.read(buffer, offset, length, position),
+          close: async () => {
+            await new Promise((resolve) => setImmediate(resolve));
+            await handle.close();
+            closed = true;
+          },
+        };
+      },
+    });
+    assert.equal(result.ok, true);
+    assert.equal(closed, true);
+  });
+
+  it("a file in the second folder when the first does not exist", LIMIT, async () => {
+    const result = await read(join(work, "ok.txt"), [join(root, "missing"), work]);
+    assert.equal(result.ok, true);
+  });
+});
+
+describe("readAllowedFile refuses", () => {
+  it("a file outside every folder, naming the folders", LIMIT, async () => {
+    assert.deepEqual(await read(join(outside, "x.txt"), [work, join(home, "Downloads")]), {
+      ok: false,
+      reason: `is outside the upload folders (${work}, ${join(home, "Downloads")}); the user can change them with FOXHAND_UPLOAD_DIRS.`,
+    });
+    assert.deepEqual(await read(join(outside, "x.txt"), []), {
+      ok: false,
+      reason:
+        "is outside the upload folders (none); the user can change them with FOXHAND_UPLOAD_DIRS.",
+    });
+  });
+
+  it("a link inside that leads outside, and a path that climbs out", LIMIT, async () => {
+    await symlink(join(outside, "x.txt"), join(work, "out-link.txt"));
+    for (const requested of [
+      join(work, "out-link.txt"),
+      join(work, "..", "..", "outside", "x.txt"),
+    ]) {
+      assert.match(reasonOf(await read(requested)), /^is outside the upload folders/, requested);
+    }
+  });
+
+  it("a name below the folder starting with a dot", LIMIT, async () => {
+    assert.equal(reasonOf(await read(join(home, ".aws", "credentials"), [home])), DOT);
+    assert.equal(reasonOf(await read(join(work, ".hidden", "x.txt"))), DOT);
+    assert.equal(reasonOf(await read(join(work, ".env.local"))), DOT);
+  });
+
+  it("key-shaped names, whatever their case", LIMIT, async () => {
+    for (const name of [
+      "id_ed25519",
+      "ID_RSA",
+      "server.PEM",
+      "tls.key",
+      "cert.p12",
+      "cert.pfx",
+      "putty.ppk",
+      "store.jks",
+      "release.keystore",
+      "server.pem.bak",
+      "tls.key~",
+      "tls.KEY~~.1",
+      "backup.p12.zip",
+    ]) {
+      await writeFile(join(work, name), "key");
+      assert.equal(reasonOf(await read(join(work, name))), KEY, name);
+    }
+  });
+
+  it("links named like a key or a dotfile, and a plain link to a key", LIMIT, async () => {
+    await symlink(join(work, "ok.txt"), join(work, "id_rsa"));
+    await symlink(join(work, "ok.txt"), join(work, ".x"));
+    await symlink(join(work, "server.pem"), join(work, "notes.txt"));
+    assert.equal(reasonOf(await read(join(work, "id_rsa"))), KEY);
+    assert.equal(reasonOf(await read(join(work, ".x"))), DOT);
+    assert.equal(reasonOf(await read(join(work, "notes.txt"))), KEY);
+  });
+
+  it("a folder and a FIFO", LIMIT, async () => {
+    const fifo = join(work, "pipe");
+    assert.equal(spawnSync("mkfifo", [fifo]).status, 0);
+    assert.equal(reasonOf(await read(join(work, "dir"))), NOT_FILE);
+    assert.equal(reasonOf(await read(fifo)), NOT_FILE);
+  });
+
+  it("a file over what is left of the budget", LIMIT, async () => {
+    assert.equal(
+      reasonOf(await read(join(work, "ok.txt"), [work], { remaining: 7 })),
+      "would bring this upload over 10 MB, the most Foxhand uploads in one call.",
+    );
+  });
+
+  it("a missing path as missing inside a folder and as outside elsewhere", LIMIT, async () => {
+    assert.equal(reasonOf(await read(join(work, "gone.txt"))), MISSING);
+    assert.equal(reasonOf(await read(join(work, "ok.txt", "below"))), MISSING);
+    assert.equal(
+      reasonOf(await read(join(root, "missing", "gone.txt"), [join(root, "missing")])),
+      MISSING,
+    );
+    assert.match(reasonOf(await read(join(outside, "gone.txt"))), /^is outside the upload folders/);
+    assert.equal(reasonOf(await read(join(work, ".ssh", "gone.txt"))), DOT);
+  });
+
+  it("a missing path behind a link inside by where the link leads", LIMIT, async () => {
+    await symlink(outside, join(work, "out-dir"));
+    await symlink(join(work, ".hidden"), join(work, "hidden-dir"));
+    for (const requested of [
+      join(work, "out-dir", "gone.txt"),
+      join(work, "out-dir", "gone", "deeper.txt"),
+    ]) {
+      assert.match(reasonOf(await read(requested)), /^is outside the upload folders/, requested);
+    }
+    assert.equal(reasonOf(await read(join(work, "hidden-dir", "gone.txt"))), DOT);
+    assert.equal(reasonOf(await read("/fh-missing-root/gone.txt", ["/fh-missing-root"])), MISSING);
+  });
+
+  it("a path it cannot resolve inside a folder as unreadable", LIMIT, async () => {
+    await symlink("loop.txt", join(work, "loop.txt"));
+    assert.equal(reasonOf(await read(join(work, "loop.txt"))), UNREADABLE);
+  });
+
+  it("a NUL in the path, and a relative path with no cwd", LIMIT, async () => {
+    assert.equal(
+      reasonOf(await read(`${work}/ok.txt\0`)),
+      "contains a NUL character; give a path without one.",
+    );
+    assert.equal(
+      reasonOf(await read("ok.txt", [work], { cwd: undefined })),
+      "is a relative path, and the folder Foxhand was started in no longer exists; give an absolute path.",
+    );
+  });
+});
+
+describe("readAllowedFile before it opens", () => {
+  it(
+    "refuses without opening an outside file, a device, a FIFO, a folder or a key",
+    LIMIT,
+    async () => {
+      const fifo = join(work, "pipe-2");
+      assert.equal(spawnSync("mkfifo", [fifo]).status, 0);
+      await symlink("/dev/null", join(work, "null-link"));
+      const opened: string[] = [];
+      const seam = async (file: string, flags: number): Promise<ReadHandle> => {
+        opened.push(file);
+        return open(file, flags);
+      };
+      for (const requested of [
+        join(outside, "x.txt"),
+        join(work, "null-link"),
+        fifo,
+        join(work, "dir"),
+        join(work, "server.pem"),
+        join(work, "gone.txt"),
+      ]) {
+        assert.equal((await read(requested, [work], { open: seam })).ok, false, requested);
+      }
+      assert.deepEqual(opened, []);
+      assert.equal((await read(join(work, "ok.txt"), [work], { open: seam })).ok, true);
+      assert.deepEqual(opened, [join(work, "ok.txt")]);
+    },
+  );
+
+  it("opens read-only, without a controlling terminal and without blocking", LIMIT, async () => {
+    const flags: number[] = [];
+    await read(join(work, "ok.txt"), [work], {
+      open: (file, given) => {
+        flags.push(given);
+        return open(file, given);
+      },
+    });
+    assert.deepEqual(flags, [FLAGS]);
+  });
+});
+
+describe("readAllowedFile on the open descriptor", () => {
+  it(
+    "refuses a link swapped after the check to outside, a key or a dot folder",
+    LIMIT,
+    async () => {
+      const link = join(work, "swap.txt");
+      for (const [target, reason] of [
+        [join(outside, "x.txt"), /^is outside the upload folders/],
+        [join(work, "server.pem"), new RegExp(`^${literal(KEY)}$`)],
+        [join(work, ".hidden", "x.txt"), new RegExp(`^${literal(DOT)}$`)],
+      ] as const) {
+        await rm(link, { force: true });
+        await symlink(join(work, "ok.txt"), link);
+        const result = await read(link, [work], {
+          open: async (file, flags) => {
+            await unlink(link);
+            await symlink(target, link);
+            return open(file, flags);
+          },
+        });
+        assert.match(reasonOf(result), reason, target);
+      }
+    },
+  );
+
+  it("refuses a FIFO swapped in after the check without hanging", LIMIT, async () => {
+    const swapped = join(work, "swapped.txt");
+    await writeFile(swapped, "plain");
+    let release: (() => Promise<void>) | undefined;
+    const reading = read(swapped, [work], {
+      open: async (file, flags) => {
+        await unlink(swapped);
+        assert.equal(spawnSync("mkfifo", [swapped]).status, 0);
+        release = async () => {
+          // O_RDWR on a FIFO never blocks on Linux, and gives a blocked reader its writer.
+          await (await open(swapped, constants.O_RDWR | constants.O_NONBLOCK)).close();
+        };
+        return open(file, flags);
+      },
+    });
+    const { promise: timeout, resolve } = Promise.withResolvers<"timeout">();
+    const timer = setTimeout(() => resolve("timeout"), 2000);
+    const first = await Promise.race([reading, timeout]);
+    clearTimeout(timer);
+    if (first === "timeout") {
+      await release?.();
+      await reading;
+      assert.fail("opening the FIFO blocked");
+    }
+    assert.equal(reasonOf(first), NOT_FILE);
+  });
+
+  it("refuses a file deleted after it was opened", LIMIT, async () => {
+    const doomed = join(work, "doomed.pem");
+    await writeFile(doomed, "-----BEGIN PRIVATE KEY-----");
+    const result = await read(join(work, "ok.txt"), [work], {
+      open: async (_file, flags) => {
+        const handle = await open(doomed, flags);
+        await unlink(doomed);
+        return handle;
+      },
+    });
+    assert.equal(reasonOf(result), CHANGED);
+  });
+
+  it("refuses a file that grew or shrank while it was read", LIMIT, async () => {
+    for (const change of [1, -1]) {
+      const result = await read(join(work, "ok.txt"), [work], {
+        open: async (file, flags) => {
+          const handle = await open(file, flags);
+          return {
+            fd: handle.fd,
+            stat: async () => {
+              const info = await handle.stat();
+              return { isFile: () => info.isFile(), nlink: info.nlink, size: info.size + change };
+            },
+            read: (buffer, offset, length, position) =>
+              handle.read(buffer, offset, length, position),
+            close: () => handle.close(),
+          };
+        },
+      });
+      assert.equal(reasonOf(result), CHANGED, String(change));
+    }
+  });
+
+  it(
+    "refuses a file that fails after the open as unreadable, without throwing",
+    LIMIT,
+    async () => {
+      const result = await read(join(work, "ok.txt"), [work], {
+        open: async (file, flags) => {
+          const handle = await open(file, flags);
+          return {
+            fd: handle.fd,
+            stat: () => handle.stat(),
+            read: () => Promise.reject(Object.assign(new Error("read failed"), { code: "EIO" })),
+            close: () => handle.close(),
+          };
+        },
+      });
+      assert.equal(reasonOf(result), UNREADABLE);
+    },
+  );
+
+  it("refuses an open that fails, by its error", LIMIT, async () => {
+    for (const [code, reason] of [
+      ["ENOENT", MISSING],
+      ["ENOTDIR", MISSING],
+      ["EACCES", UNREADABLE],
+    ] as const) {
+      const result = await read(join(work, "ok.txt"), [work], {
+        open: () => Promise.reject(Object.assign(new Error("open failed"), { code })),
+      });
+      assert.equal(reasonOf(result), reason, code);
+    }
+  });
+});
+
+describe("fileType", () => {
+  it("names the MIME type of known extensions, in any case", () => {
+    const expected: Record<string, string> = {
+      "a.pdf": "application/pdf",
+      "a.png": "image/png",
+      "a.jpg": "image/jpeg",
+      "a.JPEG": "image/jpeg",
+      "a.gif": "image/gif",
+      "a.webp": "image/webp",
+      "a.svg": "image/svg+xml",
+      "a.txt": "text/plain",
+      "a.csv": "text/csv",
+      "a.json": "application/json",
+      "a.html": "text/html",
+      "a.htm": "text/html",
+      "a.zip": "application/zip",
+      "a.doc": "application/msword",
+      "a.docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "a.xls": "application/vnd.ms-excel",
+      "a.xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      "a.mp3": "audio/mpeg",
+      "a.MP4": "video/mp4",
+    };
+    for (const [name, type] of Object.entries(expected)) assert.equal(fileType(name), type, name);
+  });
+
+  it("is empty for other extensions and for none", () => {
+    for (const name of ["a.exe", "README", "archive.tar.gz", "a.", "a.constructor"]) {
+      assert.equal(fileType(name), "", name);
+    }
+  });
+});
+
+function read(
+  requested: string,
+  folders: readonly string[] = [work],
+  ctx: Partial<ReadContext> = {},
+): Promise<ReadResult> {
+  return readAllowedFile(requested, folders, { cwd: work, home, remaining: BUDGET, ...ctx });
+}
+
+function reasonOf(result: ReadResult): string {
+  assert.ok(!result.ok, `accepted ${result.ok ? result.path : ""}`);
+  return result.reason;
+}
+
+/** Reads at most three bytes at a time. */
+function shortReads(handle: ReadHandle): ReadHandle {
+  return {
+    fd: handle.fd,
+    stat: () => handle.stat(),
+    read: (buffer, offset, length, position) =>
+      handle.read(buffer, offset, Math.min(length, 3), position),
+    close: () => handle.close(),
+  };
+}
+
+function literal(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}

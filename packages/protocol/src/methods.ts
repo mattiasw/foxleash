@@ -58,6 +58,11 @@ export interface PageText {
   totalChars: number;
 }
 
+/** The most bytes upload_file takes in one call, across all its files. */
+export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+/** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
+export const UPLOAD_CHUNK_BYTES = 512 * 1024;
+
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
   tab_open: { params: { url?: string }; result: { tab: TabInfo } };
@@ -74,6 +79,21 @@ export interface Methods {
   get_page_text: { params: { tabId: number; maxChars?: number }; result: PageText };
   /** `data` is the base64 PNG, without a `data:` prefix. */
   screenshot: { params: { tabId: number; ref?: string }; result: { data: string } };
+  /** Not an MCP tool: `upload_file` sends the files' bytes with it first. `data` is base64. */
+  upload_chunk: {
+    params: { upload: string; index: number; data: string };
+    result: { received: number };
+  };
+  /** The files' sizes split the bytes staged for `upload`, in order, and add up to all of them. */
+  upload_file: {
+    params: {
+      tabId: number;
+      ref: string;
+      upload: string;
+      files: { name: string; type: string; size: number }[];
+    };
+    result: { target: "input" | "drop"; files: { name: string; size: number }[] };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -94,6 +114,8 @@ export const METHOD_NAMES = [
   "read_page",
   "get_page_text",
   "screenshot",
+  "upload_chunk",
+  "upload_file",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

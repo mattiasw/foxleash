@@ -31,6 +31,7 @@ import {
   type SiteAccess,
   siteBlocked,
 } from "./site-access.ts";
+import type { Uploads } from "./uploads.ts";
 import { waitForLoad } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
@@ -55,6 +56,8 @@ export interface HandlerDeps<Handle> {
   probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
   /** Requests to Foxhand's content script; `import type`, since page-scripts.ts imports this file. */
   pages: Pick<PageScripts, "request">;
+  /** The bytes upload_chunk stages; `import type`, since uploads.ts imports this file. */
+  uploads: Pick<Uploads, "add" | "take">;
 }
 
 type Params = Record<string, unknown>;
@@ -78,6 +81,9 @@ export const PROBE_TIMEOUT_MS = 30_000;
  * its longest check, since Firefox may start it late, once the page is idle.
  */
 export const PROBE_CUTOFF_MS = 25_000;
+/** The longest file name upload_file hands to a page. */
+const MAX_UPLOAD_NAME = 255;
+
 /** With page-scripts' 20 s injection and 10 s reply, below the host's 60 s request timeout. */
 export const CAPTURE_TIMEOUT_MS = 20_000;
 
@@ -88,6 +94,7 @@ export function createHandlers<Handle>({
   access,
   probe,
   pages,
+  uploads,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = {
     tabs_list: tabsList,
@@ -96,6 +103,8 @@ export function createHandlers<Handle>({
     read_page: readPage,
     get_page_text: getPageText,
     screenshot,
+    upload_chunk: uploadChunk,
+    upload_file: uploadFile,
     probe_input: probeInput,
   };
 
@@ -317,6 +326,65 @@ export function createHandlers<Handle>({
     }
   }
 
+  async function uploadChunk(session: string, params: Params): Promise<Result<"upload_chunk">> {
+    return {
+      received: uploads.add(
+        session,
+        own(params, "upload"),
+        own(params, "index"),
+        own(params, "data"),
+      ),
+    };
+  }
+
+  /**
+   * Hands the bytes staged for the upload to the element `ref` names, through the content
+   * script, which runs only after the site gate. The bytes are taken first, so any failure
+   * leaves nothing staged.
+   */
+  async function uploadFile(session: string, params: Params): Promise<Result<"upload_file">> {
+    const upload = own(params, "upload");
+    if (typeof upload !== "string") {
+      throw new ToolError("invalid_params", "upload_file needs upload to be a string.");
+    }
+    const staged = uploads.take(session, upload) ?? new Uint8Array(0);
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "upload_file needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const ref = own(params, "ref");
+    if (typeof ref !== "string") {
+      throw new ToolError("invalid_params", "upload_file needs ref to be a string.");
+    }
+    const files = uploadFiles(own(params, "files"));
+    const total = files.reduce((sum, file) => sum + file.size, 0);
+    if (total !== staged.length) {
+      throw new ToolError(
+        "invalid_params",
+        `The files of upload_file add up to ${total} bytes, but Foxhand holds ${staged.length} for that upload.`,
+      );
+    }
+    let offset = 0;
+    const handed = files.map(({ name, type, size }) => {
+      const bytes = staged.subarray(offset, offset + size);
+      offset += size;
+      return { name, type, bytes };
+    });
+    const reply = await pages.request(session, tabId, "upload_file", { ref, files: handed });
+    // The reply comes from the page's content process: only its own target is read.
+    const target = isRecord(reply) ? ownField(reply, "target") : undefined;
+    if (target !== "input" && target !== "drop") {
+      throw new ToolError(
+        "page_error",
+        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+      );
+    }
+    return { target, files: files.map(({ name, size }) => ({ name, size })) };
+  }
+
   /** Records the site of every URL the tab moves to until `stop`. */
   function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
     const sites = new Set<string | undefined>();
@@ -487,6 +555,45 @@ function tabOpenUrl(params: Params): string | undefined {
   }
   if (url === "about:blank") return undefined;
   return webUrl(url, "Foxhand opens only http and https URLs, or about:blank.");
+}
+
+/** upload_file's file list, read own field by own field. */
+function uploadFiles(value: unknown): { name: string; type: string; size: number }[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new ToolError(
+      "invalid_params",
+      "upload_file needs files to be a list of one or more files.",
+    );
+  }
+  return value.map((file: unknown) => {
+    const name = isRecord(file) ? ownField(file, "name") : undefined;
+    const type = isRecord(file) ? ownField(file, "type") : undefined;
+    const size = isRecord(file) ? ownField(file, "size") : undefined;
+    if (
+      typeof name !== "string" ||
+      name === "" ||
+      name.length > MAX_UPLOAD_NAME ||
+      name.includes("/")
+    ) {
+      throw new ToolError(
+        "invalid_params",
+        `upload_file needs each file name to be 1 to ${MAX_UPLOAD_NAME} characters without a slash.`,
+      );
+    }
+    if (typeof type !== "string" || type.length > MAX_UPLOAD_NAME) {
+      throw new ToolError(
+        "invalid_params",
+        `upload_file needs each file type to be a string of at most ${MAX_UPLOAD_NAME} characters.`,
+      );
+    }
+    if (typeof size !== "number" || !Number.isSafeInteger(size) || size < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "upload_file needs each file size to be a whole number of 0 or more.",
+      );
+    }
+    return { name, type, size };
+  });
 }
 
 function screenshotRef(params: Params): string | undefined {

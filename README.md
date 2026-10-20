@@ -120,6 +120,13 @@ only by you (mode 0600). A screenshot larger than about 6 MB is too large to ret
 can then take one of a single element or save it. `screenshot` works only on a tab showing a
 site you approved, and never asks.
 
+The agent uploads files from your computer with `upload_file`, naming the files and an element
+from `read_page`. A file field gets the files as if you had picked them; any other element gets
+them dropped on it, which works only where the page takes dropped files. Foxhand reads files
+only from the upload folders (see Security below), never files or folders whose names start
+with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
+works only on a tab showing a site you approved, and never asks.
+
 ## Security
 
 Foxhand acts in your logged-in browser, so read this before you use it.
@@ -141,7 +148,15 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   opens or reloads a page, and shows the agent a tab on a blocked site only as the site's
   address.
 - File uploads only read from allowed folders (the agent's working folder and
-  `~/Downloads` by default) and never dotfiles or key files.
+  `~/Downloads` by default) and never dotfiles or key files. The working folder is not an
+  upload folder when it is your home folder or contains it, or lies in a folder whose name
+  starts with a dot. To choose the folders yourself, set `FOXHAND_UPLOAD_DIRS` to absolute
+  folders separated by `:` (a leading `~` stands for your home folder) in the environment your
+  MCP client starts `foxhand mcp` with: for Claude Code, `claude mcp add -e
+  FOXHAND_UPLOAD_DIRS=~/uploads ...` or the `env` of the server's entry. It replaces the
+  defaults. Files and folders whose names start with a dot below an upload folder, and files
+  named like keys (`id_*`, `*.pem`, `*.key` and similar), are refused in any folder, and an
+  upload takes at most 10 MB.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 - Text results never return the values of password, one-time code and card number fields,

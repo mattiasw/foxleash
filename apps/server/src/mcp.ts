@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { homedir } from "node:os";
 import type { Readable, Writable } from "node:stream";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -6,7 +7,8 @@ import { Bridge } from "./bridge.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { createLog, type Log } from "./log.ts";
 import { resolveSocketDir } from "./socket-dir.ts";
-import { registerTools, type ToolBridge } from "./tools.ts";
+import { registerTools, startingFolder, type ToolBridge, type UploadContext } from "./tools.ts";
+import { uploadFolders } from "./upload-policy.ts";
 import { SERVER_VERSION } from "./version.ts";
 
 export interface McpProcess {
@@ -14,6 +16,7 @@ export interface McpProcess {
   stdout: Writable;
   stderr: Writable;
   env: NodeJS.ProcessEnv;
+  cwd(): string;
   getuid?: () => number;
 }
 
@@ -23,6 +26,9 @@ export interface McpOptions {
   env: NodeJS.ProcessEnv;
   uid: number;
   log: Log;
+  /** The folder the process started in, undefined when it was removed before then. */
+  cwd: string | undefined;
+  home: string;
 }
 
 export async function mcpCommand(proc: McpProcess): Promise<number> {
@@ -47,11 +53,13 @@ export async function mcpCommand(proc: McpProcess): Promise<number> {
     env: proc.env,
     uid: proc.getuid(),
     log,
+    cwd: startingFolder(() => proc.cwd()),
+    home: homedir(),
   });
 }
 
 export async function runMcp(options: McpOptions): Promise<number> {
-  const { stdin, stdout, env, uid, log } = options;
+  const { stdin, stdout, env, uid, log, cwd, home } = options;
   const bridge = new Bridge({
     socketDir: resolveSocketDir(env, uid).dir,
     uid,
@@ -59,7 +67,13 @@ export async function runMcp(options: McpOptions): Promise<number> {
     session: randomUUID(),
     log,
   });
-  const server = createMcpServer({ bridge, version: SERVER_VERSION });
+  const { folders, notes } = uploadFolders({ env, cwd, home });
+  for (const note of notes) log("upload folder skipped", note);
+  const server = createMcpServer({
+    bridge,
+    version: SERVER_VERSION,
+    upload: { folders, cwd, home, log },
+  });
   const { promise: done, resolve } = Promise.withResolvers<number>();
   let closing = false;
 
@@ -102,12 +116,13 @@ export async function runMcp(options: McpOptions): Promise<number> {
 export function createMcpServer(options: {
   bridge: ToolBridge;
   version: string;
+  upload: UploadContext;
   saveFolder?: string;
 }): McpServer {
   const server = new McpServer(
     { name: "foxhand", version: options.version },
     { instructions: INSTRUCTIONS },
   );
-  registerTools(server, options.bridge, options.saveFolder);
+  registerTools(server, options.bridge, options.upload, options.saveFolder);
   return server;
 }

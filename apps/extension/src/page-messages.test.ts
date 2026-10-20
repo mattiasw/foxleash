@@ -230,6 +230,7 @@ describe("the page constants", () => {
       "stale_ref",
       "ref_not_found",
       "page_changed",
+      "invalid_target",
     ]);
     assert.equal(PAGE_REQUEST_KIND, "foxhand-page");
     assert.equal(MAX_PAGE_REPLY_CHARS, 2_000_000);

@@ -14,7 +14,8 @@ export interface Refusal {
 }
 
 const PNG_PREFIX = "data:image/png;base64,";
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+/** Base64 text; exact only together with a `length % 4` check. */
+export const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 
 /**
  * The area of the page to capture for an element, from the content script's reply: the

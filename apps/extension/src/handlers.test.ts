@@ -28,6 +28,7 @@ import {
   type SessionMemory,
   type SessionState,
 } from "./site-access.ts";
+import { createUploads } from "./uploads.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
   it("returns only the tabs in the session's group", async () => {
@@ -1917,6 +1918,246 @@ describe("screenshot", { timeout: 10000 }, () => {
   }
 });
 
+describe("upload_chunk", { timeout: 10000 }, () => {
+  it("stages the chunk and returns the bytes staged for the upload", async () => {
+    const { call, uploads } = setup();
+    assert.deepEqual(await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQID" }), {
+      received: 3,
+    });
+    assert.deepEqual(await call("s1", "upload_chunk", { upload: "u1", index: 1, data: "BA==" }), {
+      received: 4,
+    });
+    assert.deepEqual(uploads.take("s1", "u1"), new Uint8Array([1, 2, 3, 4]));
+  });
+
+  it("refuses each invalid param, reading own fields only", async () => {
+    const { call, uploads } = setup();
+    const cases: [Record<string, unknown>, string][] = [
+      [{ index: 0, data: "AQID" }, "upload_chunk needs an upload id of 1 to 64 characters."],
+      [
+        { upload: 1, index: 0, data: "AQID" },
+        "upload_chunk needs an upload id of 1 to 64 characters.",
+      ],
+      [
+        { upload: "u1", data: "AQID" },
+        "upload_chunk got a chunk out of order; Foxhand expected chunk 0 of that upload.",
+      ],
+      [{ upload: "u1", index: 0 }, "upload_chunk needs data to be base64."],
+      [{ upload: "u1", index: 0, data: "A?ID" }, "upload_chunk needs data to be base64."],
+      [
+        Object.assign(Object.create({ upload: "u1", index: 0, data: "AQID" }), {}),
+        "upload_chunk needs an upload id of 1 to 64 characters.",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      await assert.rejects(call("s1", "upload_chunk", params), { code: "invalid_params", message });
+    }
+    assert.equal(uploads.take("s1", "u1"), undefined);
+  });
+});
+
+describe("upload_file", { timeout: 10000 }, () => {
+  const REF = "0a1b2c3d-5";
+
+  it("hands each file its slice of the staged bytes, and answers from the request", async () => {
+    const { call, pageCalls, replyWith } = setup();
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQIDBA==" });
+    await call("s1", "upload_chunk", { upload: "u1", index: 1, data: "BQ==" });
+    replyWith(async () => ({ target: "drop", files: [{ name: "page.txt", size: 99 }] }));
+    const result = await call("s1", "upload_file", {
+      tabId: 3,
+      ref: REF,
+      upload: "u1",
+      files: [
+        { name: "a.txt", type: "text/plain", size: 2 },
+        { name: "empty", type: "", size: 0 },
+        { name: "b.png", type: "image/png", size: 3 },
+      ],
+    });
+    assert.deepEqual(result, {
+      target: "drop",
+      files: [
+        { name: "a.txt", size: 2 },
+        { name: "empty", size: 0 },
+        { name: "b.png", size: 3 },
+      ],
+    });
+    assert.deepEqual(pageCalls, [
+      {
+        session: "s1",
+        tabId: 3,
+        type: "upload_file",
+        params: {
+          ref: REF,
+          files: [
+            { name: "a.txt", type: "text/plain", bytes: new Uint8Array([1, 2]) },
+            { name: "empty", type: "", bytes: new Uint8Array([]) },
+            { name: "b.png", type: "image/png", bytes: new Uint8Array([3, 4, 5]) },
+          ],
+        },
+      },
+    ]);
+  });
+
+  it("takes nothing staged as no bytes, for empty files", async () => {
+    const { call, pageCalls, replyWith } = setup();
+    replyWith(async () => ({ target: "input" }));
+    const result = await call("s1", "upload_file", {
+      tabId: 0,
+      ref: REF,
+      upload: "never-sent",
+      files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
+    });
+    assert.deepEqual(result, { target: "input", files: [{ name: "empty.txt", size: 0 }] });
+    assert.deepEqual(pageCalls[0]?.params.files, [
+      { name: "empty.txt", type: "text/plain", bytes: new Uint8Array([]) },
+    ]);
+  });
+
+  it("refuses an upload id that is not a string, and touches nothing staged", async () => {
+    const { call, uploads, pageCalls } = setup();
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    for (const upload of [undefined, 1]) {
+      await assert.rejects(call("s1", "upload_file", { ...valid(), upload }), {
+        code: "invalid_params",
+        message: "upload_file needs upload to be a string.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(uploads.take("s1", "u1"), new Uint8Array([1]));
+  });
+
+  it("refuses each other invalid param before asking the page, and drops the bytes", async () => {
+    const { call, uploads, pageCalls } = setup();
+    const name = (files: unknown) => ({ files });
+    const file = { name: "a.txt", type: "text/plain", size: 1 };
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: undefined }, "upload_file needs a tab id that is a whole number of 0 or more."],
+      [{ tabId: -1 }, "upload_file needs a tab id that is a whole number of 0 or more."],
+      [{ tabId: 1.5 }, "upload_file needs a tab id that is a whole number of 0 or more."],
+      [{ tabId: "3" }, "upload_file needs a tab id that is a whole number of 0 or more."],
+      [{ ref: 5 }, "upload_file needs ref to be a string."],
+      [{ ref: undefined }, "upload_file needs ref to be a string."],
+      [name(undefined), "upload_file needs files to be a list of one or more files."],
+      [name([]), "upload_file needs files to be a list of one or more files."],
+      [name({ 0: file, length: 1 }), "upload_file needs files to be a list of one or more files."],
+    ];
+    const badName = "upload_file needs each file name to be 1 to 255 characters without a slash.";
+    for (const value of [undefined, 1, "", "n".repeat(256), "a/b"]) {
+      cases.push([name([{ ...file, name: value }]), badName]);
+    }
+    const badType = "upload_file needs each file type to be a string of at most 255 characters.";
+    for (const value of [undefined, 1, "t".repeat(256)]) {
+      cases.push([name([{ ...file, type: value }]), badType]);
+    }
+    const badSize = "upload_file needs each file size to be a whole number of 0 or more.";
+    for (const value of [undefined, -1, 0.5, "1", 2 ** 53]) {
+      cases.push([name([{ ...file, size: value }]), badSize]);
+    }
+    cases.push([name([null]), badName], [name([Object.create(file)]), badName]);
+    for (const [change, message] of cases) {
+      await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+      await assert.rejects(
+        call("s1", "upload_file", { ...valid(), ...change }),
+        { code: "invalid_params", message },
+        JSON.stringify(change),
+      );
+      assert.equal(uploads.take("s1", "u1"), undefined, JSON.stringify(change));
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("accepts names and types at the length limit", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ target: "input" }));
+    const name = "n".repeat(255);
+    const result = await call("s1", "upload_file", {
+      ...valid(),
+      upload: "none",
+      files: [{ name, type: "t".repeat(255), size: 0 }],
+    });
+    assert.deepEqual(result, { target: "input", files: [{ name, size: 0 }] });
+  });
+
+  it("refuses sizes that do not add up to the staged bytes, and drops them", async () => {
+    const { call, uploads, pageCalls } = setup();
+    for (const [size, held] of [
+      [2, 1],
+      [0, 1],
+      [1, 0],
+    ] as const) {
+      if (held > 0) await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+      await assert.rejects(
+        call("s1", "upload_file", {
+          ...valid(),
+          files: [{ name: "a.txt", type: "", size }],
+        }),
+        {
+          code: "invalid_params",
+          message: `The files of upload_file add up to ${size} bytes, but Foxhand holds ${held} for that upload.`,
+        },
+      );
+      assert.equal(uploads.take("s1", "u1"), undefined);
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("finds only the bytes of its own session", async () => {
+    const { call } = setup();
+    await call("s2", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    await assert.rejects(call("s1", "upload_file", valid()), {
+      code: "invalid_params",
+      message: "The files of upload_file add up to 1 bytes, but Foxhand holds 0 for that upload.",
+    });
+  });
+
+  it("drops the bytes when the page request fails", async () => {
+    const { call, replyWith } = setup();
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    const refusal = new ToolError("invalid_target", "That file field is disabled.");
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(call("s1", "upload_file", valid()), (error: unknown) => error === refusal);
+    replyWith(async () => ({ target: "input" }));
+    await assert.rejects(call("s1", "upload_file", valid()), {
+      code: "invalid_params",
+      message: "The files of upload_file add up to 1 bytes, but Foxhand holds 0 for that upload.",
+    });
+  });
+
+  it("refuses a reply without a target it knows as page_error", async () => {
+    const { call, replyWith } = setup();
+    for (const reply of [
+      undefined,
+      null,
+      "input",
+      ["input"],
+      { target: "file" },
+      {},
+      Object.create({ target: "input" }),
+    ]) {
+      await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+      replyWith(async () => reply);
+      await assert.rejects(
+        call("s1", "upload_file", valid()),
+        {
+          code: "page_error",
+          message: "Foxhand could not complete the request in the page in tab 3.",
+        },
+        String(reply),
+      );
+    }
+  });
+
+  function valid(): Record<string, unknown> {
+    return {
+      tabId: 3,
+      ref: REF,
+      upload: "u1",
+      files: [{ name: "a.txt", type: "text/plain", size: 1 }],
+    };
+  }
+});
+
 interface PageCall {
   session: string;
   tabId: number;
@@ -1933,6 +2174,7 @@ function setup() {
   const probe = async function probe(_site: string): Promise<ProbeResult | null> {
     return null;
   };
+  const uploads = createUploads(timers);
   const pageCalls: PageCall[] = [];
   let pageReply: () => Promise<unknown> = async () => ({ tree: "", truncated: false });
   const pages = {
@@ -1948,6 +2190,7 @@ function setup() {
     access,
     probe,
     pages,
+    uploads,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -2014,6 +2257,7 @@ function setup() {
     sessions,
     access,
     probe,
+    uploads,
     pageCalls,
     replyWith,
     call,

@@ -84,11 +84,11 @@ function failed(): boolean {
   return false;
 }
 
-function isInside(relative: string): boolean {
+export function isInside(relative: string): boolean {
   return relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 
-function hasDotPart(relative: string): boolean {
+export function hasDotPart(relative: string): boolean {
   return relative.split(path.sep).some((part) => part.startsWith("."));
 }
 
@@ -100,7 +100,7 @@ function fileSystemProblem(error: unknown, requested: string): string {
   return couldNotSave(requested);
 }
 
-function codeOf(error: unknown): unknown {
+export function codeOf(error: unknown): unknown {
   return error instanceof Error && "code" in error ? error.code : undefined;
 }
 

@@ -77,6 +77,8 @@ describe("parseMessage accepts", () => {
         "read_page",
         "get_page_text",
         "screenshot",
+        "upload_chunk",
+        "upload_file",
         "probe_input",
       ] as const
     ).map((method) => ({
@@ -90,6 +92,46 @@ describe("parseMessage accepts", () => {
         params: { tabId: 2 },
       } as const,
     })),
+    {
+      name: "an upload_chunk request with its params",
+      input: {
+        ...request,
+        method: "upload_chunk",
+        params: { upload: "u1", index: 0, data: "AA==" },
+      },
+      expected: {
+        type: "request",
+        id: "r1",
+        session: "s1",
+        method: "upload_chunk",
+        params: { upload: "u1", index: 0, data: "AA==" },
+      },
+    },
+    {
+      name: "an upload_file request with its params",
+      input: {
+        ...request,
+        method: "upload_file",
+        params: {
+          tabId: 2,
+          ref: "0a1b2c3d-1",
+          upload: "u1",
+          files: [{ name: "a.txt", type: "text/plain", size: 1 }],
+        },
+      },
+      expected: {
+        type: "request",
+        id: "r1",
+        session: "s1",
+        method: "upload_file",
+        params: {
+          tabId: 2,
+          ref: "0a1b2c3d-1",
+          upload: "u1",
+          files: [{ name: "a.txt", type: "text/plain", size: 1 }],
+        },
+      },
+    },
     ...[0, null, false].map((result) => ({
       name: `a successful response with the result ${String(result)}`,
       input: { ...success, result },

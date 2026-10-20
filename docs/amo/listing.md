@@ -80,7 +80,7 @@ Why Foxhand requests each permission in its manifest:
 - nativeMessaging: the extension talks to the Foxhand program on the same computer, which relays between the extension and the user's AI agent. Without it the extension cannot work at all.
 - tabs: Foxhand reads the URL and title of the tabs in the agent's tab group, so the agent can list its tabs and see where a tab ended up after it opened or navigated it. Without this permission Firefox gives an extension a tab's URL and title only for sites its host permissions cover, and the user can withdraw those in the add-ons manager.
 - tabGroups: Foxhand keeps each agent session's tabs in its own orange tab group titled Foxhand, and acts only on tabs in that group.
-- scripting: Foxhand runs its own scripts, bundled in the extension, in the pages of the agent's tabs to read them, click, type, fill in forms, record console messages and hand an uploaded file to a page's file field. It never runs code received from outside the extension.
+- scripting: Foxhand runs its own scripts, bundled in the extension, in the pages of the agent's tabs to read them, click, type, fill in forms, record console messages and hand an uploaded file to a page's file field or drop it on the page. It never runs code received from outside the extension.
 - webRequest: lets the agent read the network requests of the tabs in its group (URLs, methods, status and headers), with the Cookie, Set-Cookie and Authorization headers redacted. Foxhand does not block or change any request.
 - webNavigation: the agent's wait tool uses it to know when a navigation in one of the agent's tabs has finished, so the next step starts on the loaded page.
 - storage: keeps the user's settings, such as the sites the user approved and the blocklist, in the extension's local storage in the user's Firefox profile.
@@ -110,7 +110,7 @@ The extension declares these kinds of data to Firefox:
 - Browsing activity (browsingActivity): the URLs and titles of the tabs on sites you approved in the agent's tab group, the site address of its other tabs, and where their navigations end.
 - Authentication information (authenticationInfo): declared because the URLs and titles of tabs on sites you approved, network request URLs and headers, console messages and page content the agent reads can carry account details, passwords or sign-in tokens, even though the Cookie, Set-Cookie and Authorization headers are redacted. Other tabs in the group show the agent only their site's address.
 
-When the agent uploads a file, the Foxhand program reads it only from folders you allowed and refuses dotfiles and files named like keys. The extension hands it to the page's file field. The page then sends it to that site as a manual upload would.
+When the agent uploads a file, the Foxhand program reads it only from folders you allowed and refuses dotfiles and files named like keys. The extension hands it to the page's file field, or drops it where the page takes dropped files. The page then sends it to that site as a manual upload would.
 
 When the agent asks to save a screenshot, the Foxhand program on your computer writes it as a PNG file in the folder the agent works in, never outside that folder and never over an existing file. The file holds what the page showed.
 

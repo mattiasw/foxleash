@@ -37,4 +37,10 @@ export type {
   Result,
   TabInfo,
 } from "./methods.ts";
-export { DEFAULT_PAGE_TEXT_CHARS, MAX_PAGE_TEXT_CHARS, METHOD_NAMES } from "./methods.ts";
+export {
+  DEFAULT_PAGE_TEXT_CHARS,
+  MAX_PAGE_TEXT_CHARS,
+  METHOD_NAMES,
+  UPLOAD_CHUNK_BYTES,
+  UPLOAD_MAX_BYTES,
+} from "./methods.ts";
