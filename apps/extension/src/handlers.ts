@@ -9,7 +9,10 @@ import type {
 import type {
   BrowserApi,
   CaptureArea,
+  CssInjection,
+  FrameDetails,
   InjectionResult,
+  NavigationDetails,
   Tab,
   TabUpdatedListener,
   Timers,
@@ -18,7 +21,14 @@ import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
-import { captureRect, pngData, screenshotFailed } from "./screenshot.ts";
+import {
+  captureRect,
+  FIELD_MASK_CSS,
+  INPUT_MASK_CSS,
+  pngData,
+  revealedReply,
+  screenshotFailed,
+} from "./screenshot.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
 import { siteOf } from "./site.ts";
@@ -84,8 +94,10 @@ export const PROBE_CUTOFF_MS = 25_000;
 /** The longest file name upload_file hands to a page. */
 const MAX_UPLOAD_NAME = 255;
 
-/** With page-scripts' 20 s injection and 10 s reply, below the host's 60 s request timeout. */
+/** Bounds listing a tab's frames, hiding their field text and capturing the tab. */
 export const CAPTURE_TIMEOUT_MS = 20_000;
+/** Bounds a whole screenshot, its page requests included, below the host's 60 s request timeout. */
+export const SCREENSHOT_TIMEOUT_MS = 50_000;
 
 export function createHandlers<Handle>({
   browser,
@@ -269,7 +281,8 @@ export function createHandlers<Handle>({
 
   /**
    * Captures the tab's viewport, or with ref one element's box in it, in a tab on a site the
-   * session may act on. Never asks, and never captures whichever tab happens to be active.
+   * session may act on, with the text of protected fields hidden. Never asks, and never captures
+   * whichever tab happens to be active.
    */
   async function screenshot(session: string, params: Params): Promise<Result<"screenshot">> {
     const tabId = own(params, "tabId");
@@ -280,16 +293,46 @@ export function createHandlers<Handle>({
       );
     }
     const ref = screenshotRef(params);
+    const timeout = screenshotTimeout(tabId);
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    let expired = false;
+    const timer = timers.setTimeout(() => {
+      expired = true;
+      reject(timeout);
+    }, SCREENSHOT_TIMEOUT_MS);
+    try {
+      return await Promise.race([maskedScreenshot(session, tabId, ref, () => expired), timedOut]);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+
+  async function maskedScreenshot(
+    session: string,
+    tabId: number,
+    ref: string | undefined,
+    expired: () => boolean,
+  ): Promise<Result<"screenshot">> {
     // From before the first gate, so a tab that shows another site and comes back between the
     // two gates, which see only their own moments, is caught too.
     const visits = watchSites(tabId);
+    // A frame that loads a new document has no sheet, and a same-site load can bring back a
+    // revealed field the first check did not see.
+    const frames = watchFrames(tabId);
     try {
       const gateDeps = { browser, groups, access };
       const site = await allowedPageSite(gateDeps, session, tabId);
       const rect = ref === undefined ? undefined : await elementArea(session, tabId, ref);
-      const dataUrl = await capture(tabId, rect);
+      const revealed = await passwordRevealed(session, tabId);
+      const dataUrl = await maskedCapture(tabId, rect, revealed, expired);
+      // A field revealed after the check was captured without the input mask.
+      if (!revealed && (await passwordRevealed(session, tabId))) throw pageChanged(tabId);
       // Nothing from the page reaches the agent once the user has withdrawn access.
-      if ((await allowedPageSite(gateDeps, session, tabId)) !== site || visits.left(site)) {
+      if (
+        (await allowedPageSite(gateDeps, session, tabId)) !== site ||
+        visits.left(site) ||
+        frames.committed()
+      ) {
         throw pageChanged(tabId);
       }
       const png = pngData(dataUrl, tabId);
@@ -297,6 +340,7 @@ export function createHandlers<Handle>({
       return png;
     } finally {
       visits.stop();
+      frames.stop();
     }
   }
 
@@ -307,14 +351,47 @@ export function createHandlers<Handle>({
     return area.rect;
   }
 
-  async function capture(tabId: number, rect: CaptureArea | undefined): Promise<string> {
+  /** Whether the page turned a field read_page saw as a password field into another kind. */
+  async function passwordRevealed(session: string, tabId: number): Promise<boolean> {
+    const reply = revealedReply(await pages.request(session, tabId, "password_fields", {}), tabId);
+    if ("code" in reply) throw new ToolError(reply.code, reply.message);
+    return reply.revealed;
+  }
+
+  /**
+   * Captures the tab with the text of protected fields hidden in every frame, and of every input
+   * of the top document when `revealed`. One insertion per frame, since Firefox skips a frame it
+   * will not enter without an error when given all frames at once; a frame refusing the sheet
+   * refuses the screenshot.
+   */
+  async function maskedCapture(
+    tabId: number,
+    rect: CaptureArea | undefined,
+    revealed: boolean,
+    expired: () => boolean,
+  ): Promise<string> {
     const timeout = new ToolError(
       "page_timeout",
       `Firefox did not take the screenshot of tab ${tabId} in time; try again.`,
     );
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
     const timer = timers.setTimeout(() => reject(timeout), CAPTURE_TIMEOUT_MS);
+    // Firefox shares one sheet between insertions of the same text, so each screenshot marks its
+    // own, also across restarts of the background page.
+    const marker = `/* ${crypto.randomUUID()} */\n`;
+    const inserted: { mask: CssInjection; insert: Promise<void> }[] = [];
     try {
+      const frames = await Promise.race([browser.webNavigation.getAllFrames({ tabId }), timedOut]);
+      // The screenshot answered already: nothing more goes into the page, nothing is captured.
+      if (expired()) throw timeout;
+      if (frames === null || !frames.some((frame) => frame.frameId === 0)) {
+        throw screenshotFailedError(tabId);
+      }
+      for (const mask of masksFor(tabId, frames, revealed, marker)) {
+        inserted.push({ mask, insert: browser.scripting.insertCSS(mask) });
+      }
+      await Promise.race([Promise.all(inserted.map(({ insert }) => insert)), timedOut]);
+      if (expired()) throw timeout;
       return await Promise.race([
         browser.tabs.captureTab(
           tabId,
@@ -325,10 +402,15 @@ export function createHandlers<Handle>({
     } catch (error: unknown) {
       if (error === timeout) throw timeout;
       // Firefox's own error text can repeat the page's URL.
-      const failed = screenshotFailed(tabId);
-      throw new ToolError(failed.code, failed.message);
+      throw screenshotFailedError(tabId);
     } finally {
       timers.clearTimeout(timer);
+      // Not awaited: Firefox removes a sheet only once the frame is idle, which may take long.
+      // Each once its own insertion settles: never before it, nor held by another frame's.
+      for (const { mask, insert } of inserted) {
+        const remove = () => browser.scripting.removeCSS(mask);
+        void insert.then(remove, remove).catch(() => undefined);
+      }
     }
   }
 
@@ -401,6 +483,19 @@ export function createHandlers<Handle>({
     return {
       left: (site) => [...sites].some((shown) => shown !== site),
       stop: () => browser.tabs.onUpdated.removeListener(listener),
+    };
+  }
+
+  /** Notes whether any frame of the tab, the top one included, commits a document until `stop`. */
+  function watchFrames(tabId: number): { committed(): boolean; stop(): void } {
+    let committed = false;
+    const listener = (details: NavigationDetails) => {
+      if (details.tabId === tabId) committed = true;
+    };
+    browser.webNavigation.onCommitted.addListener(listener);
+    return {
+      committed: () => committed,
+      stop: () => browser.webNavigation.onCommitted.removeListener(listener),
     };
   }
 
@@ -609,6 +704,36 @@ function screenshotRef(params: Params): string | undefined {
     throw new ToolError("invalid_params", "screenshot needs ref to be a string.");
   }
   return ref;
+}
+
+function screenshotTimeout(tabId: number): ToolError {
+  return new ToolError(
+    "page_timeout",
+    `Foxhand did not finish the screenshot of tab ${tabId} in time; try again.`,
+  );
+}
+
+function screenshotFailedError(tabId: number): ToolError {
+  const failed = screenshotFailed(tabId);
+  return new ToolError(failed.code, failed.message);
+}
+
+/** The sheets of one screenshot: the field mask in every frame, the input mask in the top one. */
+function masksFor(
+  tabId: number,
+  frames: FrameDetails[],
+  revealed: boolean,
+  marker: string,
+): CssInjection[] {
+  const masks: CssInjection[] = frames.map(({ frameId }) => ({
+    target: { tabId, frameIds: [frameId] },
+    css: FIELD_MASK_CSS + marker,
+    origin: "USER",
+  }));
+  if (revealed) {
+    masks.push({ target: { tabId, frameIds: [0] }, css: INPUT_MASK_CSS + marker, origin: "USER" });
+  }
+  return masks;
 }
 
 function navigationTarget(params: Params): NavigationTarget {

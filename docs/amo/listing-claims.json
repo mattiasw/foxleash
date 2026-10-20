@@ -113,6 +113,31 @@
         },
         { "file": "apps/extension/src/read-page.ts", "contains": "noteFields(page);" }
       ]
+    },
+    {
+      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxhand adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxhand takes no screenshot.",
+      "evidence": [
+        { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "browser.scripting.insertCSS(mask)"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "target: { tabId, frameIds: [frameId] }"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "throw screenshotFailedError(tabId);"
+        },
+        { "file": "apps/extension/src/screenshot.ts", "contains": "CREDENTIAL_TOKENS" },
+        {
+          "file": "apps/extension/src/screenshot.ts",
+          "contains": "-webkit-text-fill-color: transparent !important"
+        },
+        { "file": "apps/extension/src/screenshot.ts", "contains": "'input[type=\"password\" i]'" },
+        { "file": "apps/extension/src/content.ts", "contains": "password_fields:" }
+      ]
     }
   ]
 }

@@ -68,6 +68,8 @@ export interface Firefox {
   navigate(context: string, url: string): Promise<void>;
   /** Evaluates `expression` in the tab's page, awaiting a promise, and returns a primitive. */
   evaluate(context: string, expression: string): Promise<unknown>;
+  /** The tab's viewport as Firefox draws it, a base64 PNG, taken without Foxhand. */
+  captureViewport(context: string): Promise<string>;
   /** Clicks the first element matching `cssSelector` with real (trusted) input. */
   click(context: string, cssSelector: string): Promise<void>;
   /**
@@ -254,6 +256,20 @@ export async function launchFirefox({
       return withDeadline(load(context, url), HELPER_TIMEOUT_MS, `navigate ${context} ${url}`);
     },
     evaluate,
+    captureViewport(context) {
+      return withDeadline(
+        (async () => {
+          const result = await session.send("browsingContext.captureScreenshot", { context });
+          const data = isRecord(result) ? result.data : undefined;
+          if (typeof data !== "string") {
+            throw new Error(`browsingContext.captureScreenshot returned ${JSON.stringify(result)}`);
+          }
+          return data;
+        })(),
+        HELPER_TIMEOUT_MS,
+        `captureViewport ${context}`,
+      );
+    },
     click(context, cssSelector) {
       return withDeadline(
         (async () => {

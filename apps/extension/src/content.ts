@@ -5,7 +5,7 @@ import { handlePageMessage, PageError, type PageHandlers } from "./page-messages
 import { pageTextOptions } from "./page-text.ts";
 import { readPageText } from "./page-text-dom.ts";
 import { uploadFile } from "./page-upload.ts";
-import { readPage } from "./read-page.ts";
+import { passwordFieldsRevealed, readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
 
 declare const browser: Pick<BrowserApi, "runtime">;
@@ -32,6 +32,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
       return readPageText(document, options.maxChars);
     },
     element_rect: (params) => elementRect(params, { refs }),
+    password_fields: () => passwordFieldsRevealed({ passwordFields }),
     upload_file: (params) => uploadFile(params, { refs }),
   };
   browser.runtime.onMessage.addListener((message) =>

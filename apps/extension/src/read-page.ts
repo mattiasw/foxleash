@@ -144,6 +144,25 @@ export function readPage(
   return tree.result();
 }
 
+/**
+ * Whether the page turned a field read_page remembers as a password field into another kind, so
+ * a screenshot must hide the text of every input. Remembers nothing new.
+ */
+export function passwordFieldsRevealed(page: Pick<PageMemory, "passwordFields">): {
+  revealed: boolean;
+} {
+  for (const element of documentElements()) {
+    if (
+      element instanceof HTMLInputElement &&
+      page.passwordFields.has(element) &&
+      element.type !== "password"
+    ) {
+      return { revealed: true };
+    }
+  }
+  return { revealed: false };
+}
+
 interface TreeContext {
   options: ReadPageOptions;
   page: PageMemory;
@@ -405,12 +424,19 @@ function focusedElement(): Element | null {
  * whatever the walk reaches, so it stays protected after the page turns it into text.
  */
 function noteFields(page: PageMemory): void {
+  for (const element of documentElements()) {
+    if (element instanceof HTMLInputElement && element.type === "password") {
+      page.passwordFields.add(element);
+    }
+  }
+}
+
+/** Every element of the document and of the shadow roots in it, closed ones included. */
+function* documentElements(): Generator<Element> {
   const roots: ParentNode[] = [document];
   for (let root = roots.pop(); root !== undefined; root = roots.pop()) {
     for (const element of root.querySelectorAll("*")) {
-      if (element instanceof HTMLInputElement && element.type === "password") {
-        page.passwordFields.add(element);
-      }
+      yield element;
       const shadow = shadowRootOf(element);
       if (shadow !== null) roots.push(shadow);
     }

@@ -1,6 +1,6 @@
 # 0011: Screenshots come from captureTab and are saved by the MCP server in its working folder
 
-**Status:** Accepted, 2026-10-20.
+**Status:** Accepted, 2026-10-20. Its consequence on form fields is superseded by [0013](0013-screenshots-hide-credential-field-text.md), 2026-10-20.
 
 ## Context
 

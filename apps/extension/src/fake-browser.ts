@@ -2,8 +2,11 @@ import type {
   BrowserApi,
   BrowserEvent,
   CaptureOptions,
+  CssInjection,
+  FrameDetails,
   InjectionResult,
   MessageSender,
+  NavigationDetails,
   Permissions,
   Port,
   RuntimePort,
@@ -53,6 +56,21 @@ export interface FakeBrowser {
   failNextCapture(error: unknown): void;
   /** Leaves the next `tabs.captureTab` pending until `release` runs; it then resolves with `captureResult`. */
   holdNextCapture(): () => void;
+  /** Every `scripting.insertCSS` and `removeCSS` call, in order. */
+  cssCalls: CssCall[];
+  /** What `webNavigation.getAllFrames` answers for the tab: its frame ids, or null when discarded. */
+  setFrames(tabId: number, frameIds: number[] | null): void;
+  /** Makes the next `scripting.insertCSS` into that frame reject with `error`, once. */
+  failInsertCSS(frameId: number, error: unknown): void;
+  /** Leaves the next `scripting.insertCSS` pending until `release` runs. */
+  holdNextInsertCSS(): () => void;
+  /** Leaves the next `scripting.removeCSS` pending until `release` runs. */
+  holdNextRemoveCSS(): () => void;
+  /** Makes the next `scripting.removeCSS` reject with `error`, once. */
+  failNextRemoveCSS(error: unknown): void;
+  /** Fires `webNavigation.onCommitted`. A load in a tab fires it for its top frame too. */
+  emitCommitted(details: NavigationDetails): void;
+  committedListenerCount(): number;
   /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
   tabMessages: TabMessage[];
   /**
@@ -70,6 +88,8 @@ export interface FakeBrowser {
   removeTab(tabId: number): void;
   /** The user loading a URL in the tab, as by typing it in the address bar. */
   navigateByUser(tabId: number, url: string): void;
+  /** The page changing its URL with `history.pushState`: no load, so no commit. */
+  pushState(tabId: number, url: string): void;
   /**
    * An extension page in a tab opening `runtime.connect({ name })`. Returns the page's end:
    * `posted` holds what the background posted, `deliver` sends a message as the page, `drop`
@@ -115,6 +135,14 @@ export interface Injection {
 
 export interface Capture extends CaptureOptions {
   tabId: number;
+}
+
+export interface CssCall {
+  method: "insertCSS" | "removeCSS";
+  tabId: number;
+  frameIds: number[];
+  css: string;
+  origin: string;
 }
 
 export interface TabMessage {
@@ -170,6 +198,12 @@ export function createFakeBrowser(): FakeBrowser {
   let injectionFailure: { error: unknown } | undefined;
   let captureFailure: { error: unknown } | undefined;
   let captureHold: Promise<void> | undefined;
+  const frames = new Map<number, number[] | null>();
+  const insertFailures = new Map<number, unknown>();
+  let insertHold: Promise<void> | undefined;
+  let removeHold: Promise<void> | undefined;
+  let removeFailure: { error: unknown } | undefined;
+  const onCommitted = createEvent<(details: NavigationDetails) => void>();
   const contentScripts = new Map<
     number,
     { handler: ContentScript; pending: Set<(error: Error) => void> }
@@ -317,6 +351,17 @@ export function createFakeBrowser(): FakeBrowser {
     },
     scripting: {
       executeScript,
+      insertCSS,
+      removeCSS,
+    },
+    webNavigation: {
+      getAllFrames: async ({ tabId }) => {
+        tabOf(tabId);
+        const listed = frames.get(tabId);
+        if (listed === null) return null;
+        return (listed ?? [0]).map((frameId): FrameDetails => ({ frameId }));
+      },
+      onCommitted,
     },
   };
 
@@ -351,6 +396,30 @@ export function createFakeBrowser(): FakeBrowser {
       captureHold = promise;
       return () => resolve();
     },
+    cssCalls: [],
+    setFrames: (tabId, frameIds) => {
+      frames.set(tabId, frameIds === null ? null : [...frameIds]);
+    },
+    failInsertCSS: (frameId, error) => {
+      insertFailures.set(frameId, error);
+    },
+    holdNextInsertCSS: () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      insertHold = promise;
+      return () => resolve();
+    },
+    holdNextRemoveCSS: () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      removeHold = promise;
+      return () => resolve();
+    },
+    failNextRemoveCSS: (error) => {
+      removeFailure = { error };
+    },
+    emitCommitted: (details) => {
+      for (const listener of [...onCommitted.listeners]) listener(details);
+    },
+    committedListenerCount: () => onCommitted.listeners.size,
     tabMessages: [],
     setContentScript: (tabId, handler) => {
       dropContentScript(tabId);
@@ -397,6 +466,13 @@ export function createFakeBrowser(): FakeBrowser {
       tab.history = [...tab.history.slice(0, tab.index + 1), url];
       tab.index += 1;
       load(tab, url);
+    },
+    pushState: (tabId, url) => {
+      const tab = tabOf(tabId);
+      tab.history = [...tab.history.slice(0, tab.index + 1), url];
+      tab.index += 1;
+      tab.url = url;
+      emit(tab, { url });
     },
     connectPage: (name, sender) => {
       const port = createPort();
@@ -473,6 +549,29 @@ export function createFakeBrowser(): FakeBrowser {
     tabOf(tabId);
     await hold;
     return fake.captureResult;
+  }
+
+  async function insertCSS(injection: CssInjection): Promise<void> {
+    fake.cssCalls.push(cssCall("insertCSS", injection));
+    const hold = insertHold;
+    insertHold = undefined;
+    for (const frameId of injection.target.frameIds) {
+      if (!insertFailures.has(frameId)) continue;
+      const error = insertFailures.get(frameId);
+      insertFailures.delete(frameId);
+      throw error;
+    }
+    await hold;
+  }
+
+  async function removeCSS(injection: CssInjection): Promise<void> {
+    fake.cssCalls.push(cssCall("removeCSS", injection));
+    const failure = removeFailure;
+    removeFailure = undefined;
+    const hold = removeHold;
+    removeHold = undefined;
+    if (failure !== undefined) throw failure.error;
+    await hold;
   }
 
   /** The document went away: its content script with it, and the replies it still owed. */
@@ -561,6 +660,7 @@ export function createFakeBrowser(): FakeBrowser {
     fake.badgeText.delete(tab.id);
     fake.badgeTitle.delete(tab.id);
     emit(tab, changed ? { status: "loading", url } : { status: "loading" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
     queueMicrotask(() => {
       if (!fake.tabs.has(tab.id)) return;
       tab.status = "complete";
@@ -594,6 +694,10 @@ export function createFakeBrowser(): FakeBrowser {
     if (group === undefined) throw new Error(`No group with id: ${groupId}`);
     return group;
   }
+}
+
+function cssCall(method: CssCall["method"], { target, css, origin }: CssInjection): CssCall {
+  return structuredClone({ method, tabId: target.tabId, frameIds: target.frameIds, css, origin });
 }
 
 function createEvent<Listener>(): BrowserEvent<Listener> & { listeners: Set<Listener> } {

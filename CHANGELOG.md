@@ -47,8 +47,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also
-  in the background, or of one element, on sites you approved. With `saveTo` it also saves
-  the screenshot as a new file in its working folder, never over an existing file.
+  in the background, or of one element, on sites you approved, with the text of password,
+  one-time code and card number fields hidden. With `saveTo` it also saves the screenshot as
+  a new file in its working folder, never over an existing file.
 - Your agent can upload files from your computer with the `upload_file` tool, into a page's
   file field or dropped on the page, on sites you approved. It reads only from the upload
   folders (its working folder and `~/Downloads` unless you set `FOXHAND_UPLOAD_DIRS`), never

@@ -82,7 +82,36 @@ export interface BrowserApi {
       files: string[];
       injectImmediately?: boolean;
     }): Promise<InjectionResult<unknown>[]>;
+    /** Rejects when a frame of the target does not take the sheet. */
+    insertCSS(injection: CssInjection): Promise<void>;
+    /** Removes a sheet `insertCSS` added with the same details. */
+    removeCSS(injection: CssInjection): Promise<void>;
   };
+  webNavigation: {
+    /** Null for a tab Firefox has discarded. */
+    getAllFrames(details: { tabId: number }): Promise<FrameDetails[] | null>;
+    /** A frame of a tab, the top one included, committed to a new document. */
+    onCommitted: BrowserEvent<(details: NavigationDetails) => void>;
+  };
+}
+
+/** A style sheet for `scripting.insertCSS` and `removeCSS`, one frame at a time here. */
+export interface CssInjection {
+  target: { tabId: number; frameIds: number[] };
+  css: string;
+  origin: "USER";
+}
+
+/** One frame of `webNavigation.getAllFrames`, as far as the extension reads it. */
+export interface FrameDetails {
+  frameId: number;
+}
+
+/** The details of a `webNavigation` event, as far as the extension reads them. */
+export interface NavigationDetails {
+  tabId: number;
+  frameId: number;
+  url: string;
 }
 
 /** The options of `tabs.captureTab` that the extension uses. */

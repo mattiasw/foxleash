@@ -1,6 +1,7 @@
 import type { CaptureArea } from "./browser-api.ts";
 import type { ElementBox } from "./element-rect.ts";
 import { isRecord, ownField } from "./page-messages.ts";
+import { CREDENTIAL_TOKENS } from "./page-tree.ts";
 
 /** Below the host's 64 MiB frame, with room for the envelope. */
 export const MAX_SCREENSHOT_CHARS = 48 * 1024 * 1024;
@@ -12,6 +13,46 @@ export interface Refusal {
   code: string;
   message: string;
 }
+
+/**
+ * User-origin declarations that hide a field's text and every copy of it the page could draw:
+ * they beat the page's author `!important`, inline styles and animations.
+ */
+const MASK_DECLARATIONS: readonly string[] = [
+  "color: transparent !important",
+  // Firefox's forms.css forces `color: FieldText !important` on autofilled fields.
+  "-webkit-text-fill-color: transparent !important",
+  "-webkit-text-stroke-color: transparent !important",
+  "text-shadow: none !important",
+  "text-emphasis-color: transparent !important",
+  "text-decoration-color: transparent !important",
+  "caret-color: transparent !important",
+  "background-clip: border-box !important",
+  // Else a page transition on color animates the change, and the capture shows the text.
+  "transition: none !important",
+];
+const MASK_BODY = `{ ${MASK_DECLARATIONS.join("; ")}; }`;
+/** read_page's protected fields (ADR 0010), but for the ones it remembers as password fields. */
+const FIELD_SELECTORS: readonly string[] = [
+  'input[type="password" i]',
+  ...CREDENTIAL_TOKENS.flatMap((token) => [
+    `input[*|autocomplete~="${token}" i]`,
+    `textarea[*|autocomplete~="${token}" i]`,
+  ]),
+];
+
+/**
+ * Hides a view transition's old snapshot, taken before the sheet went in, from a capture that
+ * paints it: WebDriver's does, while Firefox 156's captureTab draws the live page. A rule of its
+ * own, as Firefox before view transitions rejects the selector.
+ */
+const SNAPSHOT_RULE =
+  "::view-transition-old(*) { opacity: 0 !important; transition: none !important; }\n";
+
+/** The style sheet that hides the text of protected fields in every frame of a screenshot. */
+export const FIELD_MASK_CSS = maskCss(FIELD_SELECTORS) + SNAPSHOT_RULE;
+/** The style sheet that hides the text of every input in the top document of a screenshot. */
+export const INPUT_MASK_CSS = maskCss(["input"]);
 
 const PNG_PREFIX = "data:image/png;base64,";
 /** Base64 text; exact only together with a `length % 4` check. */
@@ -40,6 +81,15 @@ export function captureRect(reply: unknown, tabId: number): { rect: CaptureArea 
   return { rect: { x: x + scroll.x, y: y + scroll.y, width, height } };
 }
 
+/**
+ * Whether the page turned a field read_page remembers as a password field into another kind,
+ * from the content script's reply, read as untrusted input: an own boolean field.
+ */
+export function revealedReply(reply: unknown, tabId: number): { revealed: boolean } | Refusal {
+  const revealed = isRecord(reply) ? ownField(reply, "revealed") : undefined;
+  return typeof revealed === "boolean" ? { revealed } : pageError(tabId);
+}
+
 /** The base64 PNG in the data URL that `tabs.captureTab` resolved to. */
 export function pngData(dataUrl: unknown, tabId: number): { data: string } | Refusal {
   if (typeof dataUrl !== "string" || !dataUrl.startsWith(PNG_PREFIX)) {
@@ -61,6 +111,15 @@ export function screenshotFailed(tabId: number): Refusal {
     code: "screenshot_failed",
     message: `Firefox could not take a screenshot of tab ${tabId}.`,
   };
+}
+
+/**
+ * Two rules, so a selector Firefox rejects, which drops its whole rule, cannot drop the other:
+ * the fields, and their selected text.
+ */
+function maskCss(selectors: readonly string[]): string {
+  const selected = selectors.map((selector) => `${selector}::selection`);
+  return `${selectors.join(", ")} ${MASK_BODY}\n${selected.join(", ")} ${MASK_BODY}\n`;
 }
 
 function elementBox(reply: unknown): ElementBox | undefined {

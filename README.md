@@ -117,8 +117,12 @@ in the folder `foxhand mcp` was started in, normally the agent's working folder:
 be inside that folder, end in `.png` and be in a folder that exists, with no folder or file
 name starting with a dot, and an existing file is never replaced. Saved files are readable
 only by you (mode 0600). A screenshot larger than about 6 MB is too large to return; the agent
-can then take one of a single element or save it. `screenshot` works only on a tab showing a
-site you approved, and never asks.
+can then take one of a single element or save it. Screenshots hide the text of password,
+one-time code and card number fields (see Security). When a frame of the page loads while the
+screenshot is taken, Foxhand refuses it and the agent can try again. A page Foxhand cannot get
+into, such as a PDF shown in Firefox's viewer, cannot be captured, and neither can a page with
+such a PDF in a frame or with a frame that never finishes loading. `screenshot` works only on a
+tab showing a site you approved, and never asks.
 
 The agent uploads files from your computer with `upload_file`, naming the files and an element
 from `read_page`. A file field gets the files as if you had picked them; any other element gets
@@ -161,9 +165,13 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   instructions found in pages.
 - Text results never return the values of password, one-time code and card number fields,
   only whether they are filled: Firefox fills saved passwords into login pages when they
-  load, and a page you approved could otherwise hand yours to the agent. A screenshot shows
-  such fields as the page draws them: Firefox masks password fields, but a card number or
-  one-time code field, or a password field the page shows as text, shows its value.
+  load, and a page you approved could otherwise hand yours to the agent. Screenshots hide the
+  text of these fields, also in frames from other sites, with a style sheet Foxhand adds to
+  each frame, and Foxhand takes no screenshot when a frame does not take it, such as another
+  add-on's frame (a password manager's menu). When the page turns a password field the agent
+  read into another kind of field, a screenshot hides the text of every input element in the
+  page, input buttons included, outside its frames. A field marked neither way still shows its
+  value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
 

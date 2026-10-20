@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { MethodName, ProbeResult, TabInfo } from "@foxhand/protocol";
-import type { Tab } from "./browser-api.ts";
+import type { Tab, TabChangeInfo } from "./browser-api.ts";
 import {
+  type CssCall,
   createFakeBrowser,
   createFakeTimers,
   FAKE_EXTENSION_ID,
@@ -16,10 +17,12 @@ import {
   createHandlers,
   PROBE_CUTOFF_MS,
   PROBE_TIMEOUT_MS,
+  SCREENSHOT_TIMEOUT_MS,
   ToolError,
 } from "./handlers.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
+import { FIELD_MASK_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
 import {
@@ -1612,6 +1615,12 @@ describe("screenshot", { timeout: 10000 }, () => {
     viewport: { width: 1280, height: 720 },
     scroll: { x: 0, y: 1500 },
   };
+  const CHECK = { session: "s1", type: "password_fields", params: {} };
+  /** The element's box for element_rect, and no revealed field for password_fields. */
+  const boxReply =
+    (box: unknown): PageReply =>
+    async (type) =>
+      type === "element_rect" ? box : { revealed: false };
 
   it("refuses a tab id that is not a whole number of 0 or more before anything else", async (t) => {
     const { fake, call, pageCalls } = setup();
@@ -1624,6 +1633,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     }
     assert.equal(get.mock.callCount(), 0);
     assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1646,6 +1656,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     }
     assert.equal(get.mock.callCount(), 0);
     assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1656,7 +1667,10 @@ describe("screenshot", { timeout: 10000 }, () => {
     const timersBefore = timers.pending();
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
     assert.deepEqual(fake.captures, [{ tabId: tab.id, format: "png", scale: 1 }]);
-    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(pageCalls, [
+      { ...CHECK, tabId: tab.id },
+      { ...CHECK, tabId: tab.id },
+    ]);
     assert.equal(timers.pending(), timersBefore);
   });
 
@@ -1689,6 +1703,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       "tab_not_in_group",
     );
     assert.deepEqual(pageCalls, []);
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1697,6 +1712,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     const opened = call("s1", "tab_open", { url: "https://a.example/" });
     const prompt = await promptOf("s1");
     await rejectsWith(call("s1", "screenshot", { tabId: prompt.tabId }), "approval_pending");
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
     void opened.catch(() => {});
   });
@@ -1717,6 +1733,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       await rejectsWith(call("s1", "screenshot", { tabId: tab.id }), code, url);
     }
     assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1725,7 +1742,8 @@ describe("screenshot", { timeout: 10000 }, () => {
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
     let capturesAtRequest = -1;
-    replyWith(async () => {
+    replyWith(async (type) => {
+      if (type !== "element_rect") return { revealed: false };
       capturesAtRequest = fake.captures.length;
       return BOX;
     });
@@ -1734,6 +1752,8 @@ describe("screenshot", { timeout: 10000 }, () => {
     });
     assert.deepEqual(pageCalls, [
       { session: "s1", tabId: tab.id, type: "element_rect", params: { ref: "0a1b2c3d-4" } },
+      { ...CHECK, tabId: tab.id },
+      { ...CHECK, tabId: tab.id },
     ]);
     assert.equal(capturesAtRequest, 0);
     assert.deepEqual(fake.captures, [
@@ -1750,16 +1770,17 @@ describe("screenshot", { timeout: 10000 }, () => {
     const { fake, call, open, grant, replyWith } = setup();
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
-    replyWith(async () => ({ ...BOX, rect: { left: 0, top: 0, width: 0, height: 0 } }));
+    replyWith(boxReply({ ...BOX, rect: { left: 0, top: 0, width: 0, height: 0 } }));
     await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
       code: "element_not_visible",
       message: `The element has no visible area in tab ${tab.id}.`,
     });
-    replyWith(async () => ({ ...BOX, scroll: undefined }));
+    replyWith(boxReply({ ...BOX, scroll: undefined }));
     await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
       code: "page_error",
       message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
     });
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1776,6 +1797,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }),
       (error: unknown) => error === refusal,
     );
+    assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
   });
 
@@ -1790,6 +1812,9 @@ describe("screenshot", { timeout: 10000 }, () => {
       message: `Firefox could not take a screenshot of tab ${tab.id}.`,
     });
     assert.equal(timers.pending(), timersBefore);
+    await flush();
+    assert.equal(fake.captures.length, 1);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
   });
 
@@ -1825,26 +1850,37 @@ describe("screenshot", { timeout: 10000 }, () => {
     timers.advance(CAPTURE_TIMEOUT_MS - 1);
     await flush();
     assert.equal(settled, false);
+    assert.deepEqual(
+      fake.cssCalls.map((css) => css.method),
+      ["insertCSS"],
+    );
     timers.advance(1);
     await assert.rejects(shot, {
       code: "page_timeout",
       message: `Firefox did not take the screenshot of tab ${tab.id} in time; try again.`,
     });
     assert.equal(timers.pending(), timersBefore);
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
     // Only that capture was held.
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
   });
 
-  it("has a fake captureTab that rejects a tab Firefox does not know", async () => {
+  it("has a fake captureTab and getAllFrames that reject a tab Firefox does not know", async () => {
     const { fake } = setup();
     await assert.rejects(fake.browser.tabs.captureTab(99, { format: "png" }), {
       message: "Invalid tab ID: 99",
     });
+    await assert.rejects(fake.browser.webNavigation.getAllFrames({ tabId: 99 }), {
+      message: "Invalid tab ID: 99",
+    });
   });
 
-  it("bounds the capture so a whole request stays below the host's 60 s timeout", () => {
+  it("bounds the capture and the whole screenshot below the host's 60 s timeout", () => {
     assert.equal(CAPTURE_TIMEOUT_MS, 20_000);
+    assert.equal(SCREENSHOT_TIMEOUT_MS, 50_000);
     assert.ok(PAGE_INJECTION_MS + PAGE_REPLY_MS + CAPTURE_TIMEOUT_MS < 60_000);
+    assert.ok(SCREENSHOT_TIMEOUT_MS < 60_000);
   });
 
   it("returns no data when the tab shows another site and comes back during the capture", async () => {
@@ -1866,27 +1902,457 @@ describe("screenshot", { timeout: 10000 }, () => {
         message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
       });
       assert.equal(fake.listenerCount(), listeners, away);
+      assert.equal(fake.committedListenerCount(), 0, away);
     }
   });
 
-  it("returns the data when the page moves within its site during the capture", async () => {
+  it("returns no data when the tab reports another site and back during the capture, with no commit", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const release = fake.holdNextCapture();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    // Only tabs.onUpdated reports the visit, so the site watch alone must catch it.
+    fake.pushState(tab.id, "https://c.example/");
+    fake.pushState(tab.id, "https://a.example/");
+    await flush();
+    release();
+    await assert.rejects(shot, {
+      code: "page_changed",
+      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+    });
+  });
+
+  it("returns the data when the page changes its URL within its site during the capture", async () => {
     const { fake, call, open, grant } = setup();
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
     const other = fake.openTab({ url: "https://a.example/" });
     const listeners = fake.listenerCount();
+    const updates: TabChangeInfo[] = [];
+    fake.browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+      if (tabId === tab.id) updates.push(changeInfo);
+    });
     const release = fake.holdNextCapture();
     const shot = call("s1", "screenshot", { tabId: tab.id });
     await flush();
-    fake.navigateByUser(tab.id, "https://a.example/next");
-    // Another tab moving to another site changes nothing for this one.
+    const indexBefore = fake.tabs.get(tab.id)?.index ?? -1;
+    fake.pushState(tab.id, "https://a.example/next");
+    // Another tab loading another site changes nothing for this one.
     fake.navigateByUser(other.id, "https://c.example/");
     await flush();
     release();
     assert.deepEqual(await shot, { data: PNG });
-    assert.equal(fake.listenerCount(), listeners);
+    assert.deepEqual(updates, [{ url: "https://a.example/next" }]);
+    assert.deepEqual(
+      [
+        fake.tabs.get(tab.id)?.url,
+        fake.tabs.get(tab.id)?.history.at(-1),
+        fake.tabs.get(tab.id)?.index,
+      ],
+      ["https://a.example/next", "https://a.example/next", indexBefore + 1],
+    );
+    assert.equal(fake.listenerCount(), listeners + 1);
     await rejectsWith(call("s1", "screenshot", { tabId: 99 }), "tab_not_found");
+    assert.equal(fake.listenerCount(), listeners + 1);
+  });
+
+  it("returns no data when the tab shows another site at the second gate before Firefox reports it", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/");
+    const release = fake.holdNextCapture();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    const shown = fake.tabs.get(tab.id);
+    assert.ok(shown !== undefined);
+    // No tabs.onUpdated and no commit yet.
+    shown.url = "https://b.example/";
+    release();
+    await assert.rejects(shot, {
+      code: "page_changed",
+      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+    });
+  });
+
+  it("hides field text in every frame of the tab while it captures, then removes each sheet", async () => {
+    const { fake, call, open, grant, pageCalls, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [0, 5, 9]);
+    const seen: { css: number; captures: number }[] = [];
+    replyWith(async () => {
+      seen.push({ css: fake.cssCalls.length, captures: fake.captures.length });
+      return { revealed: false };
+    });
+    let cssAtCapture = -1;
+    const captureTab = fake.browser.tabs.captureTab;
+    fake.browser.tabs.captureTab = (tabId, options) => {
+      cssAtCapture = fake.cssCalls.length;
+      return captureTab(tabId, options);
+    };
+    const timersBefore = timers.pending();
+    const listeners = fake.listenerCount();
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    await flush();
+    assert.deepEqual(pageCalls, [
+      { ...CHECK, tabId: tab.id },
+      { ...CHECK, tabId: tab.id },
+    ]);
+    // The first check before any sheet, the second after the capture.
+    assert.equal(seen[0]?.css, 0);
+    assert.equal(seen[1]?.captures, 1);
+    assert.equal(cssAtCapture, 3);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5, 9]);
+    assert.equal(timers.pending(), timersBefore);
+    assert.equal(fake.committedListenerCount(), 0);
     assert.equal(fake.listenerCount(), listeners);
+  });
+
+  it("hides field text in every frame for an element screenshot too", async () => {
+    const { fake, call, open, grant, pageCalls, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [0, 4]);
+    replyWith(boxReply(BOX));
+    let cssAtCapture = -1;
+    const captureTab = fake.browser.tabs.captureTab;
+    fake.browser.tabs.captureTab = (tabId, options) => {
+      cssAtCapture = fake.cssCalls.length;
+      return captureTab(tabId, options);
+    };
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
+      data: PNG,
+    });
+    await flush();
+    assert.deepEqual(
+      pageCalls.map((page) => page.type),
+      ["element_rect", "password_fields", "password_fields"],
+    );
+    assert.equal(cssAtCapture, 2);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 4]);
+  });
+
+  it("refuses without Firefox's error text and captures nothing when a frame refuses the sheet", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/secret");
+    fake.setFrames(tab.id, [0, 5, 9]);
+    fake.failInsertCSS(9, new Error("Missing host permission for https://a.example/secret"));
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+    await flush();
+    assert.deepEqual(fake.captures, []);
+    // A refused insertion may still have reached other frames: every sheet is removed.
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5, 9]);
+    // Only that insertion was refused.
+    fake.cssCalls.length = 0;
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+  });
+
+  it("refuses a tab whose frames it cannot list, or whose list has no top frame", async (t) => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    for (const frames of [null, [5, 9], []]) {
+      fake.setFrames(tab.id, frames);
+      await assert.rejects(
+        call("s1", "screenshot", { tabId: tab.id }),
+        {
+          code: "screenshot_failed",
+          message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+        },
+        JSON.stringify(frames),
+      );
+    }
+    fake.setFrames(tab.id, [0]);
+    t.mock.method(fake.browser.webNavigation, "getAllFrames", async () => {
+      throw new Error("Invalid tab ID: https://a.example/");
+    });
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+    await flush();
+    assert.deepEqual(fake.cssCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("times out a sheet that never goes in, and never captures after that", async () => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    const release = fake.holdNextInsertCSS();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    assert.equal(fake.cssCalls.length, 1);
+    timers.advance(CAPTURE_TIMEOUT_MS);
+    await assert.rejects(shot, {
+      code: "page_timeout",
+      message: `Firefox did not take the screenshot of tab ${tab.id} in time; try again.`,
+    });
+    assert.equal(timers.pending(), timersBefore);
+    // Only that insertion was held.
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls.splice(1), tab.id, [0]);
+    assert.equal(fake.captures.length, 1);
+    // No removal before its insertion settles.
+    assert.equal(fake.cssCalls.length, 1);
+    release();
+    await flush();
+    assert.equal(fake.captures.length, 1);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+  });
+
+  it("removes each sheet once its own insertion settles, not held by another frame's", async () => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [5, 0]);
+    const release = fake.holdNextInsertCSS();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    timers.advance(CAPTURE_TIMEOUT_MS);
+    await assert.rejects(shot, { code: "page_timeout" });
+    await flush();
+    const [held, top] = fake.cssCalls;
+    assert.deepEqual(held?.frameIds, [5]);
+    assert.deepEqual(top?.frameIds, [0]);
+    // The top frame's sheet goes while frame 5 has still not taken its own.
+    assert.deepEqual(fake.cssCalls, [held, top, { ...top, method: "removeCSS" }]);
+    release();
+    await flush();
+    assert.deepEqual(fake.cssCalls.slice(3), [{ ...held, method: "removeCSS" }]);
+  });
+
+  it("returns the image without waiting for the sheets to go", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [0, 5]);
+    const removals = settledRemovals(fake);
+    const listeners = fake.listenerCount();
+    const release = fake.holdNextRemoveCSS();
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    assert.equal(fake.committedListenerCount(), 0);
+    assert.equal(fake.listenerCount(), listeners);
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5]);
+    // Only the first removal is held.
+    assert.deepEqual(removals, { fulfilled: 1, rejected: 0 });
+    release();
+    await flush();
+    assert.deepEqual(removals, { fulfilled: 2, rejected: 0 });
+  });
+
+  it("returns the image, which was masked, when a sheet cannot be removed", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [0, 5]);
+    const removals = settledRemovals(fake);
+    fake.failNextRemoveCSS(new Error("Invalid tab ID"));
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5]);
+    assert.deepEqual(removals, { fulfilled: 1, rejected: 1 });
+  });
+
+  it("hides every input's text in the top document once the page revealed a password field", async () => {
+    const { fake, call, open, grant, pageCalls, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.setFrames(tab.id, [0, 5]);
+    replyWith(async () => ({ revealed: true }));
+    assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+    await flush();
+    // Revealed already: a second check could change nothing.
+    assert.deepEqual(pageCalls, [{ ...CHECK, tabId: tab.id }]);
+    const inserts = fake.cssCalls.filter((css) => css.method === "insertCSS");
+    assert.deepEqual(
+      inserts.map((css) => css.frameIds),
+      [[0], [5], [0]],
+    );
+    assert.ok(inserts[0]?.css.startsWith(FIELD_MASK_CSS));
+    assert.ok(inserts[1]?.css.startsWith(FIELD_MASK_CSS));
+    assert.ok(inserts[2]?.css.startsWith(INPUT_MASK_CSS));
+    assert.ok(inserts.every((css) => css.origin === "USER" && css.tabId === tab.id));
+    assert.deepEqual(fake.cssCalls, [
+      ...inserts,
+      ...inserts.map((css) => ({ ...css, method: "removeCSS" })),
+    ]);
+  });
+
+  it("returns no data when the page reveals a password field during the capture", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    let checks = 0;
+    replyWith(async () => {
+      checks += 1;
+      return { revealed: checks > 1 };
+    });
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "page_changed",
+      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+    });
+    await flush();
+    assert.equal(checks, 2);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+  });
+
+  it("refuses a password_fields reply it cannot read as page_error", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const pageError = {
+      code: "page_error",
+      message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
+    };
+    for (const reply of [{}, { revealed: "true" }, Object.create({ revealed: false }), null]) {
+      replyWith(async () => reply);
+      await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), pageError);
+    }
+    assert.deepEqual(fake.cssCalls, []);
+    assert.deepEqual(fake.captures, []);
+    let checks = 0;
+    replyWith(async () => {
+      checks += 1;
+      return checks > 1 ? { revealed: 0 } : { revealed: false };
+    });
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), pageError);
+    assert.equal(fake.captures.length, 1);
+  });
+
+  const commitPoints: {
+    name: string;
+    hold: (ctx: ReturnType<typeof setup>) => () => void;
+  }[] = [
+    { name: "while the page is checked", hold: (ctx) => holdCheck(ctx, 1) },
+    { name: "while a sheet goes in", hold: ({ fake }) => fake.holdNextInsertCSS() },
+    { name: "while the tab is captured", hold: ({ fake }) => fake.holdNextCapture() },
+    { name: "while the page is checked again", hold: (ctx) => holdCheck(ctx, 2) },
+  ];
+  for (const { name, hold } of commitPoints) {
+    it(`returns no data when a frame loads a document ${name}`, async () => {
+      const ctx = setup();
+      const { fake, call, open, grant } = ctx;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, 3]);
+      const release = hold(ctx);
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      fake.emitCommitted({ tabId: tab.id, frameId: 3, url: "https://ads.example/next" });
+      release();
+      await assert.rejects(shot, {
+        code: "page_changed",
+        message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      });
+      assert.equal(fake.committedListenerCount(), 0);
+    });
+  }
+
+  it("returns the data when a frame of another tab loads a document", async () => {
+    const ctx = setup();
+    const { fake, call, open, grant } = ctx;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const release = fake.holdNextCapture();
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    fake.emitCommitted({ tabId: tab.id + 1, frameId: 0, url: "https://a.example/" });
+    release();
+    assert.deepEqual(await shot, { data: PNG });
+  });
+
+  it("gives each of two screenshots of one tab its own sheets", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const shots = [
+      call("s1", "screenshot", { tabId: tab.id }),
+      call("s1", "screenshot", { tabId: tab.id }),
+    ];
+    assert.deepEqual(await Promise.all(shots), [{ data: PNG }, { data: PNG }]);
+    await flush();
+    const inserted = fake.cssCalls
+      .filter((css) => css.method === "insertCSS")
+      .map((css) => css.css);
+    const removed = fake.cssCalls.filter((css) => css.method === "removeCSS").map((css) => css.css);
+    assert.equal(inserted.length, 2);
+    assert.notEqual(inserted[0], inserted[1]);
+    assert.deepEqual([...removed].sort(), [...inserted].sort());
+  });
+
+  it("answers page_timeout once SCREENSHOT_TIMEOUT_MS passes, and stops there", async () => {
+    const ctx = setup();
+    const { fake, call, open, grant, timers } = ctx;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timeout = {
+      code: "page_timeout",
+      message: `Foxhand did not finish the screenshot of tab ${tab.id} in time; try again.`,
+    };
+    const timersBefore = timers.pending();
+    holdCheck(ctx, 2);
+    const late = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    assert.equal(fake.captures.length, 1);
+    timers.advance(SCREENSHOT_TIMEOUT_MS - 1);
+    await flush();
+    timers.advance(1);
+    await assert.rejects(late, timeout);
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+    assert.equal(timers.pending(), timersBefore);
+
+    fake.cssCalls.length = 0;
+    fake.captures.length = 0;
+    const release = holdCheck(ctx, 1);
+    const early = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    timers.advance(SCREENSHOT_TIMEOUT_MS);
+    await assert.rejects(early, timeout);
+    // The page answering after the deadline masks and captures nothing.
+    release();
+    await flush();
+    assert.deepEqual(fake.cssCalls, []);
+    assert.deepEqual(fake.captures, []);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
+  it("captures nothing once SCREENSHOT_TIMEOUT_MS passes while a sheet goes in", async () => {
+    const ctx = setup();
+    const { fake, call, open, grant, timers } = ctx;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    const answer = holdCheck(ctx, 1);
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    await flush();
+    timers.advance(SCREENSHOT_TIMEOUT_MS - 5_000);
+    const release = fake.holdNextInsertCSS();
+    answer();
+    await flush();
+    assert.equal(fake.cssCalls.length, 1);
+    // Within CAPTURE_TIMEOUT_MS of the insertion, but past the whole screenshot's deadline.
+    timers.advance(5_000);
+    await assert.rejects(shot, {
+      code: "page_timeout",
+      message: `Foxhand did not finish the screenshot of tab ${tab.id} in time; try again.`,
+    });
+    release();
+    await flush();
+    assert.deepEqual(fake.captures, []);
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+    assert.equal(timers.pending(), timersBefore);
   });
 
   const changes: {
@@ -1911,6 +2377,13 @@ describe("screenshot", { timeout: 10000 }, () => {
       name: "the user revoking the site",
       change: ({ fake }) => revokeSite(fake.browser, "https://a.example"),
       code: "site_not_approved",
+    },
+    {
+      name: "the tab reloading",
+      change: ({ fake }, tabId) => fake.browser.tabs.reload(tabId),
+      code: "page_changed",
+      message: (tabId) =>
+        `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
     },
     {
       name: "the tab leaving the session's group",
@@ -2192,6 +2665,8 @@ interface PageCall {
   params: Record<string, unknown>;
 }
 
+type PageReply = (type: string) => Promise<unknown>;
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -2203,11 +2678,11 @@ function setup() {
   };
   const uploads = createUploads(timers);
   const pageCalls: PageCall[] = [];
-  let pageReply: () => Promise<unknown> = async () => ({ tree: "", truncated: false });
+  let pageReply: PageReply = defaultReply;
   const pages = {
     async request(session: string, tabId: number, type: string, params: Record<string, unknown>) {
       pageCalls.push({ session, tabId, type, params });
-      return pageReply();
+      return pageReply(type);
     },
   };
   const handleRequest = createHandlers({
@@ -2273,8 +2748,8 @@ function setup() {
     return shown;
   }
 
-  /** What the fake content script answers from now on. */
-  function replyWith(reply: () => Promise<unknown>): void {
+  /** What the fake content script answers from now on, by request type. */
+  function replyWith(reply: PageReply): void {
     pageReply = reply;
   }
 
@@ -2296,6 +2771,65 @@ function setup() {
     page,
     timeOut,
   };
+}
+
+/**
+ * Holds the reply to the `nth` password_fields request of the context's next screenshot until
+ * the returned release runs; it then answers that no field was revealed.
+ */
+function holdCheck({ replyWith }: ReturnType<typeof setup>, nth: number): () => void {
+  const { promise, resolve } = Promise.withResolvers<void>();
+  let checks = 0;
+  replyWith(async (type) => {
+    if (type === "password_fields") {
+      checks += 1;
+      if (checks === nth) await promise;
+    }
+    return { revealed: false };
+  });
+  return () => resolve();
+}
+
+/** Counts the `scripting.removeCSS` calls from now on as they settle. */
+function settledRemovals(fake: FakeBrowser): { fulfilled: number; rejected: number } {
+  const counts = { fulfilled: 0, rejected: 0 };
+  const removeCSS = fake.browser.scripting.removeCSS;
+  fake.browser.scripting.removeCSS = (injection) => {
+    const removal = removeCSS(injection);
+    removal.then(
+      () => {
+        counts.fulfilled += 1;
+      },
+      () => {
+        counts.rejected += 1;
+      },
+    );
+    return removal;
+  };
+  return counts;
+}
+
+/** One field mask per frame inserted, then each removed with the same details. */
+function assertMaskedAndRemoved(calls: CssCall[], tabId: number, frameIds: number[]): void {
+  const inserts = calls.filter((css) => css.method === "insertCSS");
+  assert.deepEqual(
+    inserts.map((css) => css.frameIds),
+    frameIds.map((frameId) => [frameId]),
+  );
+  for (const insert of inserts) {
+    assert.equal(insert.tabId, tabId);
+    assert.equal(insert.origin, "USER");
+    assert.ok(insert.css.startsWith(FIELD_MASK_CSS), insert.css);
+  }
+  assert.deepEqual(calls, [
+    ...inserts,
+    ...inserts.map((insert) => ({ ...insert, method: "removeCSS" })),
+  ]);
+}
+
+/** No remembered password field revealed for a screenshot, an empty tree for anything else. */
+async function defaultReply(type: string): Promise<unknown> {
+  return type === "password_fields" ? { revealed: false } : { tree: "", truncated: false };
 }
 
 /** Makes the navigation of a blank tab to `url` first report the blank tab's own load. */

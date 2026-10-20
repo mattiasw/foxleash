@@ -21,6 +21,8 @@ export const TITLES = {
   textSlotted: "Fixture text slotted",
   textDetails: "Fixture text details",
   shot: "Fixture shot",
+  shotFields: "Fixture shot fields",
+  shotPdfFrame: "Fixture shot PDF frame",
   upload: "Fixture upload",
 } as const;
 
@@ -30,6 +32,19 @@ export const SHOT_BOX = { width: 120, height: 80 } as const;
 export const SHOT_COLOURS = {
   page: [255, 228, 181],
   box: [30, 144, 255],
+} as const;
+
+/**
+ * The text colours of the shot-fields page, as RGB: every protected field's, which nothing else
+ * there uses, a plain field's in each context, and the selected text of the top plain field.
+ */
+export const SHOT_FIELD_COLOURS = {
+  protected: [201, 17, 149],
+  top: [0, 128, 64],
+  shadow: [160, 96, 0],
+  frame: [0, 64, 192],
+  data: [112, 48, 160],
+  selection: [255, 120, 0],
 } as const;
 
 /** Field values the read form holds that read_page must never return. */
@@ -206,6 +221,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, TEXT_DETAILS_PAGE);
     } else if (path === "/shot") {
       sendHtml(response, SHOT_PAGE);
+    } else if (path === "/shot-fields") {
+      // The frame from another site is the same server under localhost.
+      sendHtml(response, shotFieldsPage(request.socket.localPort ?? 0));
+    } else if (path === "/shot-fields-frame") {
+      sendHtml(response, shotFieldsFrame(SHOT_FIELD_COLOURS.frame));
+    } else if (path === "/shot-pdf-frame") {
+      sendHtml(response, SHOT_PDF_FRAME_PAGE);
+    } else if (path === "/shot.pdf") {
+      response.writeHead(200, { "Content-Type": "application/pdf", "Cache-Control": "no-store" });
+      response.end(minimalPdf());
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/read-redirect") {
@@ -658,6 +683,93 @@ body { background: rgb(${SHOT_COLOURS.page.join(", ")}); min-height: 3000px; }
 </style></head>
 <body><div style="padding: 1500px 0 0 40px"><button id="shot-box" type="button">Shot box</button></div></body></html>
 `;
+
+const SHOT_FIELD_STYLE = `
+html, body { margin: 0; padding: 0; background: white; }
+input {
+  display: block; box-sizing: border-box; width: 320px; height: 44px; margin: 0 0 6px;
+  padding: 0 8px; border: 2px solid rgb(128, 128, 128); border-radius: 0; outline: none;
+  background: white; font: bold 24px monospace;
+}
+.protected { color: ${rgb(SHOT_FIELD_COLOURS.protected)}; }
+`;
+
+// Protected fields in the top document, an open shadow root, a frame from another site and a
+// data: frame, each next to a plain field in a colour of its own; all in the first 500 px.
+function shotFieldsPage(port: number): string {
+  const protectedColour = rgb(SHOT_FIELD_COLOURS.protected);
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotFields}</title>
+<style>${SHOT_FIELD_STYLE}
+.columns { display: flex; gap: 16px; padding: 8px; align-items: flex-start; }
+iframe { display: block; width: 320px; height: 100px; border: 0; margin: 0 0 8px; }
+#code {
+  transition: all 60s; text-shadow: 3px 3px 0 ${protectedColour};
+  -webkit-text-stroke: 2px ${protectedColour};
+}
+#code::selection { color: ${protectedColour}; }
+#plain { color: ${rgb(SHOT_FIELD_COLOURS.top)}; }
+#plain::selection { color: ${rgb(SHOT_FIELD_COLOURS.selection)}; }
+</style></head>
+<body><div class="columns"><div>
+<input id="card" class="protected" autocomplete="cc-number" value="4111 1111 1111 1111" aria-label="Card number">
+<input id="code" class="protected" autocomplete="one-time-code" value="492817" aria-label="One-time code">
+<input id="pw" class="protected" type="password" value="MMMMWWWW" aria-label="Password">
+<input id="plain" value="MMMM WWWW" aria-label="Plain">
+<div id="host"></div>
+</div><div>
+<iframe title="Other site" src="http://localhost:${port}/shot-fields-frame"></iframe>
+<iframe title="Data frame" src="data:text/html,${encodeURIComponent(shotFieldsFrame(SHOT_FIELD_COLOURS.data))}"></iframe>
+</div></div>
+<script>
+const shadow = document.getElementById("host").attachShadow({ mode: "open" });
+shadow.innerHTML = \`<style>${SHOT_FIELD_STYLE}</style>
+<input class="protected" autocomplete="cc-csc" value="123" aria-label="Security code">
+<input style="color: ${rgb(SHOT_FIELD_COLOURS.shadow)}" value="MMMM WWWW" aria-label="Shadow plain">\`;
+</script>
+</body></html>
+`;
+}
+
+function shotFieldsFrame(plain: readonly number[]): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Shot fields frame</title><style>${SHOT_FIELD_STYLE}</style></head>
+<body>
+<input class="protected" autocomplete="cc-number" value="5555 5555 5555 4444" aria-label="Frame card number">
+<input style="color: ${rgb(plain)}" value="MMMM WWWW" aria-label="Frame plain">
+</body></html>
+`;
+}
+
+function rgb(colour: readonly number[]): string {
+  return `rgb(${colour.join(", ")})`;
+}
+
+// A frame Firefox keeps add-ons out of: its PDF viewer.
+const SHOT_PDF_FRAME_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotPdfFrame}</title></head>
+<body><iframe title="PDF" src="/shot.pdf" style="width: 400px; height: 300px"></iframe></body></html>
+`;
+
+/** A valid one-page PDF with nothing on its page. */
+function minimalPdf(): string {
+  const objects = [
+    "<< /Type /Catalog /Pages 2 0 R >>",
+    "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+    "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 200 200] >>",
+  ];
+  let pdf = "%PDF-1.4\n";
+  const offsets: number[] = [];
+  for (const [index, object] of objects.entries()) {
+    offsets.push(pdf.length);
+    pdf += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  }
+  const xref = pdf.length;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
+  pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+  return pdf;
+}
 
 // Two file fields, one taking several files, a drop zone that cancels dragover and drop, and a
 // button that takes no drops. The page keeps the files each target got in window.received and

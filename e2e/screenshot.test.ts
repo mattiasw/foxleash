@@ -5,11 +5,12 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { inflateSync } from "node:zlib";
 import { SCREENSHOT_NOTE } from "../apps/server/src/tools.ts";
-import type { Firefox } from "./firefox.ts";
+import { type Firefox, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
   SHOT_BOX,
   SHOT_COLOURS,
+  SHOT_FIELD_COLOURS,
   startFixtureServer,
   TITLES,
 } from "./fixture-server.ts";
@@ -26,6 +27,13 @@ import {
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const BOX_REF = /button "Shot box" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
+const CARD_REF = /textbox "Card number" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
+const PROTECTED = SHOT_FIELD_COLOURS.protected;
+const FIELD_BORDER = [128, 128, 128] as const;
+// Enough pixels to tell a field's text was drawn.
+const DRAWN = 20;
+// How long the page may take to apply the removal of the sheets, which is not awaited.
+const SHEET_REMOVAL_MS = 5_000;
 const VIEWPORT = "JSON.stringify([window.innerWidth, window.innerHeight])";
 const SCROLL_AND_BOX = `JSON.stringify({
   scrollY: window.scrollY,
@@ -53,6 +61,7 @@ describe("screenshot in real Firefox", () => {
   let outer = "";
   let work = "";
   let shotTab = -1;
+  let fieldsTab = -1;
 
   before(
     async () => {
@@ -178,6 +187,142 @@ describe("screenshot in real Firefox", () => {
     assert.deepEqual(result.images, []);
   });
 
+  test("a screenshot hides protected fields' text in every frame, only while it is taken", async () => {
+    // Opened last, so it is the active tab.
+    fieldsTab = await open(session, "/shot-fields", TITLES.shotFields);
+    const png = await shotOf({ tabId: fieldsTab });
+    assertNone(png, PROTECTED, "protected");
+    for (const name of ["top", "shadow", "frame", "data"] as const) {
+      assertDrawn(png, SHOT_FIELD_COLOURS[name], name);
+    }
+    const context = await contextOf(fixtures.url("/shot-fields"));
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, colourOf("card"))) === rgb(PROTECTED) ? true : undefined,
+      SHEET_REMOVAL_MS,
+      "the card number field's own colour again",
+    );
+  });
+
+  test("a remembered password field that stays one leaves other fields' text, by ref too", async () => {
+    const read = await harness.call(session, "read_page", { tabId: fieldsTab });
+    assert.equal(read.isError, false, read.text);
+    const viewport = await shotOf({ tabId: fieldsTab });
+    assertNone(viewport, PROTECTED, "protected");
+    assertDrawn(viewport, SHOT_FIELD_COLOURS.top, "top");
+    const tree = untrustedContent(read.text) ?? "";
+    const ref = CARD_REF.exec(tree)?.[1];
+    assert.ok(ref !== undefined, `no ref for the card number field in:\n${tree}`);
+    const field = await shotOf({ tabId: fieldsTab, ref });
+    assertDrawn(field, FIELD_BORDER, "the field's border");
+    assertNone(field, PROTECTED, "protected");
+  });
+
+  test("a screenshot hides the selected text of a protected field", async () => {
+    const context = await contextOf(fixtures.url("/shot-fields"));
+    await firefox.evaluate(context, selectText("plain"));
+    const plain = await shotOf({ tabId: fieldsTab });
+    const selected = countColour(plain, SHOT_FIELD_COLOURS.selection);
+    assert.ok(
+      selected >= DRAWN,
+      `selected text is not painted in this setup: ${selected} pixels of the selection colour`,
+    );
+    await firefox.evaluate(context, selectText("code"));
+    assertNone(await shotOf({ tabId: fieldsTab }), PROTECTED, "protected");
+  });
+
+  test("once the page turns a remembered password field into text, every input of the page is hidden", async () => {
+    const context = await contextOf(fixtures.url("/shot-fields"));
+    await firefox.evaluate(context, 'document.getElementById("pw").type = "text"');
+    const png = await shotOf({ tabId: fieldsTab });
+    assertNone(png, PROTECTED, "protected");
+    assertNone(png, SHOT_FIELD_COLOURS.top, "top");
+    assertNone(png, SHOT_FIELD_COLOURS.shadow, "shadow");
+    // The frames hold no remembered field, so they keep their plain text.
+    assertDrawn(png, SHOT_FIELD_COLOURS.frame, "frame");
+    assertDrawn(png, SHOT_FIELD_COLOURS.data, "data");
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, colourOf("plain"))) === rgb(SHOT_FIELD_COLOURS.top)
+          ? true
+          : undefined,
+      SHEET_REMOVAL_MS,
+      "the plain field's own colour again",
+    );
+  });
+
+  test("a screenshot during a view transition shows no snapshot taken before it", async () => {
+    const context = await contextOf(fixtures.url("/shot-fields"));
+    // The user sees only the old snapshot, unmasked, until the transition is skipped. Firefox
+    // 156's captureTab draws the live page instead, so this case passes without SNAPSHOT_RULE.
+    await firefox.evaluate(
+      context,
+      `(async () => {
+        const style = document.createElement("style");
+        style.id = "held-transition";
+        style.textContent = "::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation-duration: 3600s !important; } ::view-transition-new(*) { opacity: 0 !important; }";
+        document.head.append(style);
+        window.heldTransition = document.startViewTransition(() => {});
+        await window.heldTransition.ready;
+        return true;
+      })()`,
+    );
+    try {
+      // Firefox paints the snapshot, unmasked, into a capture taken without Foxhand.
+      assertDrawn(decodePng(await firefox.captureViewport(context)), PROTECTED, "snapshot");
+      const png = await shotOf({ tabId: fieldsTab });
+      assertNone(png, PROTECTED, "protected");
+      // The live page, not a blank one: a frame's plain field, which no mask hides here.
+      assertDrawn(png, SHOT_FIELD_COLOURS.frame, "frame");
+      assert.equal(
+        await firefox.evaluate(context, "document.activeViewTransition === window.heldTransition"),
+        true,
+        "the view transition ended before the screenshot",
+      );
+    } finally {
+      await firefox.evaluate(
+        context,
+        `(async () => {
+          window.heldTransition.skipTransition();
+          await window.heldTransition.finished;
+          document.getElementById("held-transition").remove();
+          return true;
+        })()`,
+      );
+    }
+  });
+
+  test("a page with a frame Foxhand cannot enter is refused with no image", async () => {
+    const tab = await open(session, "/shot-pdf-frame", TITLES.shotPdfFrame);
+    const result = await harness.call(session, "screenshot", { tabId: tab });
+    assert.equal(result.isError, true, result.text);
+    assert.ok(
+      result.text.includes(`Firefox could not take a screenshot of tab ${tab}.`),
+      result.text,
+    );
+    assert.deepEqual(result.images, [], result.text);
+  });
+
+  test("a PDF in Firefox's viewer is refused with no image", async () => {
+    const url = fixtures.url("/shot.pdf");
+    const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+    // Shown in the tab, not downloaded.
+    assert.equal(tab.url, url);
+    const result = await harness.call(session, "screenshot", { tabId: tab.id });
+    assert.equal(result.isError, true, result.text);
+    assert.ok(
+      result.text.includes(`Firefox did not let Foxhand into the page in tab ${tab.id}.`),
+      result.text,
+    );
+    assert.deepEqual(result.images, [], result.text);
+  });
+
+  async function shotOf(args: Record<string, unknown>): Promise<Png> {
+    const result = await harness.call(session, "screenshot", args);
+    assert.equal(result.isError, false, result.text);
+    return onlyImage(result);
+  }
+
   async function open(on: Session, path: string, title: string): Promise<number> {
     const tab = tabOf(await harness.ok(on, "tab_open", { url: fixtures.url(path) }));
     assert.equal(tab.title, title);
@@ -198,12 +343,54 @@ function onlyImage(result: ToolResult): Png {
   return decodePng(image?.data ?? "");
 }
 
+function colourOf(id: string): string {
+  return `getComputedStyle(document.getElementById(${JSON.stringify(id)})).color`;
+}
+
+function selectText(id: string): string {
+  return `(() => {
+    const field = document.getElementById(${JSON.stringify(id)});
+    field.focus();
+    field.select();
+    return true;
+  })()`;
+}
+
+function rgb(colour: readonly number[]): string {
+  return `rgb(${colour.join(", ")})`;
+}
+
+function assertNone(png: Png, colour: readonly number[], name: string): void {
+  const count = countColour(png, colour);
+  assert.equal(count, 0, `${count} pixels of the ${name} colour ${rgb(colour)}`);
+}
+
+function assertDrawn(png: Png, colour: readonly number[], name: string): void {
+  const count = countColour(png, colour);
+  assert.ok(count >= DRAWN, `only ${count} pixels of the ${name} colour ${rgb(colour)}`);
+}
+
+/** The pixels within TOLERANCE of the colour. */
+function countColour(png: Png, colour: readonly number[]): number {
+  let count = 0;
+  for (let at = 0; at < png.pixels.length; at += png.channels) {
+    if (sameColour(png.pixels.subarray(at, at + 3), colour)) count += 1;
+  }
+  return count;
+}
+
 function assertColour(png: Png, x: number, y: number, expected: readonly number[]): void {
   const at = (y * png.width + x) * png.channels;
-  const actual = [...png.pixels.subarray(at, at + 3)];
+  const actual = png.pixels.subarray(at, at + 3);
   assert.ok(
-    actual.every((channel, index) => Math.abs(channel - (expected[index] ?? -999)) <= TOLERANCE),
-    `pixel (${x}, ${y}) is rgb(${actual.join(", ")}), not rgb(${expected.join(", ")})`,
+    sameColour(actual, expected),
+    `pixel (${x}, ${y}) is ${rgb([...actual])}, not ${rgb(expected)}`,
+  );
+}
+
+function sameColour(actual: Uint8Array, expected: readonly number[]): boolean {
+  return [...actual].every(
+    (channel, index) => Math.abs(channel - (expected[index] ?? -999)) <= TOLERANCE,
   );
 }
 

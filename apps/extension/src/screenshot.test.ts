@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { CREDENTIAL_TOKENS } from "./page-tree.ts";
 import {
   captureRect,
+  FIELD_MASK_CSS,
+  INPUT_MASK_CSS,
   MAX_SCREENSHOT_CHARS,
   MAX_VIEWPORT_SIDE,
   pngData,
+  revealedReply,
   screenshotFailed,
 } from "./screenshot.ts";
 
@@ -190,6 +194,77 @@ describe("captureRect", () => {
   });
 });
 
+describe("the mask style sheets", () => {
+  const DECLARATIONS = [
+    "color: transparent !important",
+    "-webkit-text-fill-color: transparent !important",
+    "-webkit-text-stroke-color: transparent !important",
+    "text-shadow: none !important",
+    "text-emphasis-color: transparent !important",
+    "text-decoration-color: transparent !important",
+    "caret-color: transparent !important",
+    "background-clip: border-box !important",
+    "transition: none !important",
+  ];
+
+  it("hides password fields, every credential autocomplete field, their selection and old snapshots", () => {
+    const fields = [
+      'input[type="password" i]',
+      ...CREDENTIAL_TOKENS.flatMap((token) => [
+        `input[*|autocomplete~="${token}" i]`,
+        `textarea[*|autocomplete~="${token}" i]`,
+      ]),
+    ];
+    assert.ok(fields.includes('input[*|autocomplete~="cc-number" i]'));
+    assert.deepEqual(rulesOf(FIELD_MASK_CSS), [
+      { selectors: fields, declarations: DECLARATIONS },
+      { selectors: fields.map((field) => `${field}::selection`), declarations: DECLARATIONS },
+      {
+        selectors: ["::view-transition-old(*)"],
+        declarations: ["opacity: 0 !important", "transition: none !important"],
+      },
+    ]);
+  });
+
+  it("hides every input and its selection in the input mask", () => {
+    assert.deepEqual(rulesOf(INPUT_MASK_CSS), [
+      { selectors: ["input"], declarations: DECLARATIONS },
+      { selectors: ["input::selection"], declarations: DECLARATIONS },
+    ]);
+  });
+
+  it("marks every declaration important, so the page's own styles cannot win", () => {
+    for (const css of [FIELD_MASK_CSS, INPUT_MASK_CSS]) {
+      for (const { declarations } of rulesOf(css)) {
+        assert.ok(declarations.every((declaration) => declaration.endsWith(" !important")));
+      }
+    }
+  });
+});
+
+describe("revealedReply", () => {
+  it("reads an own boolean revealed field", () => {
+    assert.deepEqual(revealedReply({ revealed: true }, 7), { revealed: true });
+    assert.deepEqual(revealedReply({ revealed: false }, 7), { revealed: false });
+  });
+
+  it("refuses a reply it cannot read as page_error", () => {
+    const bad: unknown[] = [
+      Object.create({ revealed: true }),
+      {},
+      { revealed: "true" },
+      { revealed: 1 },
+      null,
+      [],
+      "x",
+      undefined,
+    ];
+    for (const value of bad) {
+      assert.deepEqual(revealedReply(value, 7), PAGE_ERROR, JSON.stringify(value));
+    }
+  });
+});
+
 describe("pngData", () => {
   it("returns the base64 without the data URL prefix", () => {
     for (const data of ["AAAA", "AAA=", "AA==", "iVBORw0KGgoAAAAN+/8="]) {
@@ -240,3 +315,19 @@ describe("pngData", () => {
     assert.deepEqual(screenshotFailed(7), FAILED);
   });
 });
+
+/** The rules of a mask sheet, one per line: its selectors and its declarations. */
+function rulesOf(css: string): { selectors: string[]; declarations: string[] }[] {
+  assert.ok(css.endsWith("\n"));
+  return css
+    .slice(0, -1)
+    .split("\n")
+    .map((rule) => {
+      const match = /^([^{}]+) \{ ([^{}]+); \}$/.exec(rule);
+      assert.ok(match !== null, rule);
+      return {
+        selectors: (match[1] ?? "").split(", "),
+        declarations: (match[2] ?? "").split("; "),
+      };
+    });
+}
