@@ -92,6 +92,27 @@
         { "file": "apps/extension/src/indicator.ts", "contains": "setBadgeText" },
         { "file": "apps/extension/manifest.json", "contains": "default_area" }
       ]
+    },
+    {
+      "listing": "never gives it the values of password fields, or of one-time code and card number fields that the page marks as such for autofill",
+      "evidence": [
+        { "file": "apps/extension/src/page-tree.ts", "contains": "isProtectedField" },
+        {
+          "file": "apps/extension/src/page-tree.ts",
+          "contains": "isCredentialAutocomplete(autocomplete)"
+        },
+        { "file": "apps/extension/src/page-tree.ts", "contains": "\"one-time-code\"" },
+        { "file": "apps/extension/src/page-tree.ts", "contains": "\"cc-number\"" },
+        {
+          "file": "apps/extension/src/read-page.ts",
+          "contains": "isProtected(element, page)) return { protected: true"
+        },
+        {
+          "file": "apps/extension/src/read-page.ts",
+          "contains": "!isProtected(element, page) ? [element.value]"
+        },
+        { "file": "apps/extension/src/read-page.ts", "contains": "noteFields(page);" }
+      ]
     }
   ]
 }
