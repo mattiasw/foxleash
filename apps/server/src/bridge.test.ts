@@ -21,6 +21,7 @@ interface Harness {
 }
 
 interface StartOptions {
+  handshakeTimeoutMs?: number;
   requestTimeoutMs?: number;
   onLog?: (line: LogLine) => void;
 }
@@ -37,7 +38,10 @@ const uid = currentUid();
 const root = mkdtempSync("/tmp/foxhand-test-");
 const VERSION = "1.2.3";
 const SESSION = "session-1";
-const HANDSHAKE_MS = 200;
+// As in production: a stall in the test process must not skip a live host.
+const HANDSHAKE_MS = 2_000;
+// For the tests about the handshake timer.
+const SHORT_HANDSHAKE_MS = 200;
 const REQUEST_MS = 100;
 const LIMIT = { timeout: 3000 };
 const NO_HOST =
@@ -109,7 +113,7 @@ describe("Bridge, finding the host", () => {
     age(live.path, 100);
     const silent = await fakeHost({ dir, pid: 32, welcome: null, respond: silence });
     const silentClosed = once(silent.events, "close");
-    const h = start(dir);
+    const h = start(dir, { handshakeTimeoutMs: SHORT_HANDSHAKE_MS });
     assert.equal(await h.bridge.call("tabs_list", {}), "live");
     await silentClosed;
     assert.equal(silent.closes, 1);
@@ -117,7 +121,7 @@ describe("Bridge, finding the host", () => {
       message: "skipped a socket",
       detail: {
         path: silent.path,
-        error: `The Foxhand native host at ${silent.path} did not answer within ${HANDSHAKE_MS} ms.`,
+        error: `The Foxhand native host at ${silent.path} did not answer within ${SHORT_HANDSHAKE_MS} ms.`,
       },
     });
   });
@@ -272,7 +276,7 @@ describe("Bridge, the handshake", () => {
     const logs: LogLine[] = [];
     const connection = await connectToHost(host.path, {
       version: VERSION,
-      handshakeTimeoutMs: 20,
+      handshakeTimeoutMs: SHORT_HANDSHAKE_MS,
       log: (message, detail) => logs.push({ message, detail }),
     });
     peerSockets.push(connection.socket);
@@ -281,7 +285,7 @@ describe("Bridge, the handshake", () => {
       assert.equal(connection.socket.listenerCount(event), 0, event);
     }
     // Past the handshake timeout, the connection is still open.
-    await delay(60);
+    await delay(SHORT_HANDSHAKE_MS + 60);
     assert.equal(connection.socket.destroyed, false);
     assert.equal(host.closes, 0);
     assert.deepEqual(logs, []);
@@ -687,7 +691,7 @@ function start(socketDir: string, options: StartOptions = {}): Harness {
       logs.push(line);
       options.onLog?.(line);
     },
-    handshakeTimeoutMs: HANDSHAKE_MS,
+    handshakeTimeoutMs: options.handshakeTimeoutMs ?? HANDSHAKE_MS,
     requestTimeoutMs: options.requestTimeoutMs ?? REQUEST_MS,
   });
   bridges.push(bridge);
