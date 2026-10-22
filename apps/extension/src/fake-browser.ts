@@ -17,6 +17,7 @@ import type {
   TabUpdatedFilter,
   TabUpdatedListener,
   Timers,
+  WebRequestEvent,
 } from "./browser-api.ts";
 
 /** An in-memory stand-in for Firefox's `browser.*`, for unit tests. */
@@ -68,8 +69,12 @@ export interface FakeBrowser {
   holdNextRemoveCSS(): () => void;
   /** Makes the next `scripting.removeCSS` reject with `error`, once. */
   failNextRemoveCSS(error: unknown): void;
-  /** Fires `webNavigation.onCommitted`. A load in a tab fires it for its top frame too. */
-  emitCommitted(details: NavigationDetails): void;
+  /**
+   * Fires `webNavigation.onCommitted`. A load in a tab fires it for its top frame too. Without a
+   * `timeStamp`, the commit gets one later than every `timeStamp` fired so far, as a commit comes
+   * after the requests that led to it.
+   */
+  emitCommitted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   committedListenerCount(): number;
   /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
   tabMessages: TabMessage[];
@@ -111,6 +116,28 @@ export interface FakeBrowser {
   /** Fires `storage.onChanged` with no changes, as for a storage area the fake does not keep. */
   emitStorageChanged(areaName: string): void;
   listenerCount(): number;
+  /** Every `webRequest` listener added, in order, with the filter and extra info it was given. */
+  webRequestRegistrations: WebRequestRegistration[];
+  /** Fires a `webRequest` event; returns what each listener returned, in order. */
+  emitWebRequest<E extends WebRequestEventName>(
+    event: E,
+    details: WebRequestDetailsOf<E>,
+  ): unknown[];
+}
+
+type WebRequestEvents = BrowserApi["webRequest"];
+export type WebRequestEventName = keyof WebRequestEvents;
+type WebRequestListenerOf<E extends WebRequestEventName> = Parameters<
+  WebRequestEvents[E]["addListener"]
+>[0];
+export type WebRequestDetailsOf<E extends WebRequestEventName> = Parameters<
+  WebRequestListenerOf<E>
+>[0];
+
+export interface WebRequestRegistration {
+  event: WebRequestEventName;
+  filter: { urls: string[] };
+  extraInfoSpec?: string[];
 }
 
 export interface FakeTab {
@@ -207,10 +234,13 @@ export function createFakeBrowser(): FakeBrowser {
   let removeHold: Promise<void> | undefined;
   let removeFailure: { error: unknown } | undefined;
   const onCommitted = createEvent<(details: NavigationDetails) => void>();
+  // The latest timeStamp a commit or a webRequest event carried.
+  let latestTimeStamp = 0;
   const contentScripts = new Map<
     number,
     { handler: ContentScript; pending: Set<(error: Error) => void> }
   >();
+  const webRequestListeners = new Map<WebRequestEventName, Set<(details: never) => void>>();
 
   const browser: BrowserApi = {
     runtime: {
@@ -367,6 +397,14 @@ export function createFakeBrowser(): FakeBrowser {
       },
       onCommitted,
     },
+    webRequest: {
+      onBeforeRequest: createWebRequestEvent("onBeforeRequest"),
+      onSendHeaders: createWebRequestEvent("onSendHeaders"),
+      onHeadersReceived: createWebRequestEvent("onHeadersReceived"),
+      onBeforeRedirect: createWebRequestEvent("onBeforeRedirect"),
+      onCompleted: createWebRequestEvent("onCompleted"),
+      onErrorOccurred: createWebRequestEvent("onErrorOccurred"),
+    },
   };
 
   const fake: FakeBrowser = {
@@ -420,8 +458,9 @@ export function createFakeBrowser(): FakeBrowser {
     failNextRemoveCSS: (error) => {
       removeFailure = { error };
     },
-    emitCommitted: (details) => {
-      for (const listener of [...onCommitted.listeners]) listener(details);
+    emitCommitted: ({ timeStamp = latestTimeStamp + 1, ...details }) => {
+      latestTimeStamp = Math.max(latestTimeStamp, timeStamp);
+      for (const listener of [...onCommitted.listeners]) listener({ ...details, timeStamp });
     },
     committedListenerCount: () => onCommitted.listeners.size,
     tabMessages: [],
@@ -513,8 +552,31 @@ export function createFakeBrowser(): FakeBrowser {
       for (const listener of [...onTabDetached.listeners]) listener(tabId);
     },
     listenerCount: () => updatedListeners.length,
+    webRequestRegistrations: [],
+    emitWebRequest: (event, details) => {
+      latestTimeStamp = Math.max(latestTimeStamp, details.timeStamp);
+      return [...(webRequestListeners.get(event) ?? [])].map(
+        (listener: (details: never) => unknown) => listener(details as never),
+      );
+    },
   };
   return fake;
+
+  function createWebRequestEvent<E extends WebRequestEventName>(
+    event: E,
+  ): WebRequestEvent<WebRequestListenerOf<E>> {
+    const listeners = new Set<(details: never) => void>();
+    webRequestListeners.set(event, listeners);
+    return {
+      addListener: (listener, filter, extraInfoSpec) => {
+        const registration: WebRequestRegistration = { event, filter: structuredClone(filter) };
+        if (extraInfoSpec !== undefined) registration.extraInfoSpec = [...extraInfoSpec];
+        fake.webRequestRegistrations.push(registration);
+        listeners.add(listener);
+      },
+      removeListener: (listener) => listeners.delete(listener),
+    };
+  }
 
   function executeScript<Args extends unknown[], Result>(injection: {
     target: { tabId: number; frameIds?: number[] };

@@ -63,3 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can read a page's console messages, uncaught errors and unhandled promise
   rejections with the `read_console` tool, filtered by level and pattern, only from pages
   that loaded on sites you approved.
+- Your agent can read a tab's network requests with the `read_network` tool (URLs, methods,
+  status, timing and headers, filtered by URL text), with the Cookie, Set-Cookie,
+  Authorization and Proxy-Authorization values hidden and no bodies, only from pages that
+  loaded on sites you approved.

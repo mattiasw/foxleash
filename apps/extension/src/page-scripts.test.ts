@@ -732,6 +732,7 @@ function setup() {
     pages,
     uploads: createUploads(timers),
     recordings: { liveRecording: () => undefined },
+    network: { read: () => ({ recording: false, requests: [], truncated: false }) },
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

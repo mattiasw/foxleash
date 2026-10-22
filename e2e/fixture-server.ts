@@ -35,6 +35,9 @@ export const TITLES = {
   actEmbed: "Fixture act embed",
   console: "Fixture console",
   consoleCsp: "Fixture console CSP",
+  network: "Fixture network",
+  networkDone: "Fixture network done",
+  networkHop: "Fixture network hop",
 } as const;
 
 /** What the console pages log, each in one message. */
@@ -51,6 +54,15 @@ export const CONSOLE_TOKENS = {
 
 /** The only nonce the console CSP page's policy lets scripts run with. */
 export const CONSOLE_CSP_NONCE = "fixtureNonce7Jk";
+
+/** The credentials the network page sends and gets, which read_network must never show. */
+export const NETWORK_SECRETS = {
+  bearer: "network-bearer-Vb3Nq8",
+  cookie: "network-cookie-Hs5Tz2",
+} as const;
+
+/** The name of the cookie /api/fetch sets. */
+export const NETWORK_COOKIE = "fixture_session";
 
 /** The middle of the Log button on both console pages, in CSS pixels. */
 export const CONSOLE_LOG_POINT = { x: 70, y: 30 } as const;
@@ -299,6 +311,31 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, CONSOLE_CSP_PAGE, {
         "Content-Security-Policy": `script-src 'nonce-${CONSOLE_CSP_NONCE}'`,
       });
+    } else if (path === "/network") {
+      // The frame from another site is the same server under localhost.
+      sendHtml(response, networkPage(request.socket.localPort ?? 0));
+    } else if (path === "/network-frame") {
+      sendHtml(response, NETWORK_FRAME_PAGE);
+    } else if (path === "/network-hop") {
+      // Leaves at once for the other site, which the tests never approve.
+      sendHtml(response, networkHopPage(request.socket.localPort ?? 0));
+    } else if (path === "/network-old") {
+      sendHtml(response, networkOldPage(request.socket.localPort ?? 0));
+    } else if (path === "/network-old-frame") {
+      sendHtml(response, NETWORK_OLD_FRAME_PAGE);
+    } else if (path === "/api/fetch") {
+      response.writeHead(200, {
+        "Content-Type": "application/json",
+        "Cache-Control": "no-store",
+        "Set-Cookie": `${NETWORK_COOKIE}=${NETWORK_SECRETS.cookie}; Path=/`,
+      });
+      response.end('{"ok":true}');
+    } else if (path === "/api/xhr" || path === "/api/frame") {
+      response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+      response.end("ok");
+    } else if (path === "/api/beacon-top" || path === "/api/beacon-frame") {
+      response.writeHead(204, { "Cache-Control": "no-store" });
+      response.end();
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
@@ -1251,6 +1288,64 @@ for (const id of ["accept", "refuse"]) {
 }
 </script>
 </body></html>
+`;
+
+// On load: a fetch with an Authorization header, whose response sets a cookie, then an
+// XMLHttpRequest that sends the cookie back; the title says when both finished. The frame is on
+// the other site (the same server under localhost) and makes a request of its own.
+function networkPage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.network}</title></head>
+<body><h1>${TITLES.network}</h1>
+<iframe title="Other site" src="http://localhost:${port}/network-frame"></iframe>
+<script>
+window.addEventListener("load", async () => {
+  await fetch("/api/fetch", {
+    headers: { Authorization: "Bearer ${NETWORK_SECRETS.bearer}", "X-Fixture": "visible" },
+  });
+  await new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", "/api/xhr");
+    xhr.addEventListener("loadend", resolve);
+    xhr.send();
+  });
+  document.title = "${TITLES.networkDone}";
+});
+</script>
+</body></html>
+`;
+}
+
+const NETWORK_FRAME_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Network frame</title></head>
+<body><script>fetch("/api/frame");</script></body></html>
+`;
+
+function networkHopPage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkHop}</title></head>
+<body><script>location.href = "http://localhost:${port}/network-old";</script></body></html>
+`;
+}
+
+// On the other site, in a frame from the fixture site: both send a beacon to the fixture site as
+// they unload, which Firefox does after the next page in the tab committed.
+function networkOldPage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>Network old page</title></head>
+<body><iframe title="Fixture site" src="http://127.0.0.1:${port}/network-old-frame"></iframe>
+<script>
+window.addEventListener("pagehide", () => navigator.sendBeacon("http://127.0.0.1:${port}/api/beacon-top"));
+</script>
+</body></html>
+`;
+}
+
+const NETWORK_OLD_FRAME_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Network old frame</title></head>
+<body><script>
+window.addEventListener("pagehide", () => navigator.sendBeacon("/api/beacon-frame"));
+</script></body></html>
 `;
 
 export function counterTitle(count: number): string {

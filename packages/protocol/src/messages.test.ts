@@ -84,6 +84,7 @@ describe("parseMessage accepts", () => {
         "scroll",
         "drag",
         "read_console",
+        "read_network",
         "probe_input",
       ] as const
     ).map((method) => ({

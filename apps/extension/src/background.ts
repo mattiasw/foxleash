@@ -3,6 +3,7 @@ import { createConnection } from "./connection.ts";
 import { createConsoleRecording } from "./console-recording.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
+import { createNetworkLog } from "./network-log.ts";
 import { createPageScripts } from "./page-scripts.ts";
 import { probePage } from "./probe-page.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -24,9 +25,13 @@ const access = createSiteAccess({
   groups,
   sessions: new Map(),
   timers,
-  onWithdraw: (session, site) => recordings.withdraw(session, site),
+  onWithdraw: (session, site) => {
+    recordings.withdraw(session, site);
+    network.withdraw(session, site);
+  },
 });
 const recordings = createConsoleRecording({ browser, groups, access });
+const network = createNetworkLog({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });
 const uploads = createUploads(timers);
 const handleRequest = createHandlers({
@@ -38,6 +43,7 @@ const handleRequest = createHandlers({
   pages,
   uploads,
   recordings,
+  network,
 });
 const connection = createConnection({
   browser,

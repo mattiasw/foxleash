@@ -96,6 +96,42 @@ export const MAX_CONSOLE_MESSAGES = 300;
  */
 export const MAX_CONSOLE_TEXT = 1000;
 
+export interface NetworkHeader {
+  name: string;
+  value: string;
+}
+
+export interface NetworkRequest {
+  url: string;
+  method: string;
+  /** webRequest's resource type: main_frame, xmlhttprequest (fetch too), script, image, ... */
+  type: string;
+  /** When the request started, in ms since the epoch. */
+  startTime: number;
+  /** Set once the request completed, failed or was redirected. */
+  durationMs?: number;
+  status?: number;
+  redirectUrl?: string;
+  /** Firefox's error for a failed request. */
+  error?: string;
+  fromCache?: boolean;
+  requestHeaders: NetworkHeader[];
+  responseHeaders: NetworkHeader[];
+}
+
+/** The most requests a page keeps, and the largest limit read_network takes. */
+export const MAX_NETWORK_REQUESTS = 500;
+/** How many requests read_network returns when the request gives no limit. */
+export const DEFAULT_NETWORK_LIMIT = 100;
+/** The longest pattern read_network takes. */
+export const MAX_NETWORK_PATTERN = 1_000;
+/** A request's URL and redirect target are cut to this many UTF-16 units. */
+export const MAX_NETWORK_URL = 2_000;
+/** Each header name and value, a request's method, type and error are cut to this many. */
+export const MAX_NETWORK_HEADER = 1_000;
+/** The most headers kept in each direction of a request. */
+export const MAX_NETWORK_HEADERS = 100;
+
 /** The most bytes upload_file takes in one call, across all its files. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
@@ -158,6 +194,11 @@ export interface Methods {
     params: { tabId: number };
     result: { recording: boolean; messages: ConsoleMessage[]; dropped: number };
   };
+  /** `recording` is false when Foxhand has not recorded the page since it loaded. */
+  read_network: {
+    params: { tabId: number; pattern?: string; limit?: number };
+    result: { recording: boolean; requests: NetworkRequest[]; truncated: boolean };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -185,6 +226,7 @@ export const METHOD_NAMES = [
   "scroll",
   "drag",
   "read_console",
+  "read_network",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

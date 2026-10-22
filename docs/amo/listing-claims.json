@@ -73,8 +73,21 @@
       "evidence": [{ "file": "apps/extension/src/handlers.ts", "contains": "tab_not_in_group" }]
     },
     {
-      "listing": "with the Cookie, Set-Cookie and Authorization headers redacted",
-      "evidence": []
+      "listing": "with the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers redacted",
+      "evidence": [
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"cookie\"" },
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"set-cookie\"" },
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"authorization\"" },
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"proxy-authorization\"" },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "REDACTED_HEADERS.has(name.toLowerCase())"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "return network.read(session, tabId, site, options);"
+        }
+      ]
     },
     {
       "listing": "It never runs code received from outside the extension",

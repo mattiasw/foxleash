@@ -1,10 +1,13 @@
-import type {
-  MethodName,
-  NavigateAction,
-  ProbeResult,
-  RequestMessage,
-  Result,
-  TabInfo,
+import {
+  DEFAULT_NETWORK_LIMIT,
+  MAX_NETWORK_PATTERN,
+  MAX_NETWORK_REQUESTS,
+  type MethodName,
+  type NavigateAction,
+  type ProbeResult,
+  type RequestMessage,
+  type Result,
+  type TabInfo,
 } from "@foxhand/protocol";
 import type {
   BrowserApi,
@@ -19,6 +22,7 @@ import type {
 } from "./browser-api.ts";
 import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
+import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
 import {
   clickOptions,
   dragOptions,
@@ -81,6 +85,8 @@ export interface HandlerDeps<Handle> {
   uploads: Pick<Uploads, "add" | "take">;
   /** Which tabs' console records may be read; `import type`, since it imports this file. */
   recordings: Pick<ConsoleRecording, "liveRecording">;
+  /** The tabs' network requests; `import type`, since it imports this file. */
+  network: Pick<NetworkLog, "read">;
 }
 
 type Params = Record<string, unknown>;
@@ -121,6 +127,7 @@ export function createHandlers<Handle>({
   pages,
   uploads,
   recordings,
+  network,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = {
     tabs_list: tabsList,
@@ -137,6 +144,7 @@ export function createHandlers<Handle>({
       pageAction(session, params, "scroll", scrollOptions, scrollResultOf),
     drag: (session, params) => pageAction(session, params, "drag", dragOptions, dragResultOf),
     read_console: readConsole,
+    read_network: readNetwork,
     probe_input: probeInput,
   };
 
@@ -550,6 +558,20 @@ export function createHandlers<Handle>({
     return result;
   }
 
+  /** Reads the network requests Foxhand recorded for the page in a tab. */
+  async function readNetwork(session: string, params: Params): Promise<Result<"read_network">> {
+    const tabId = own(params, "tabId");
+    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+      throw new ToolError(
+        "invalid_params",
+        "read_network needs a tab id that is a whole number of 0 or more.",
+      );
+    }
+    const options = networkOptions(params);
+    const site = await allowedPageSite({ browser, groups, access }, session, tabId);
+    return network.read(session, tabId, site, options);
+  }
+
   /** Records the site of every URL the tab moves to until `stop`. */
   function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
     const sites = new Set<string | undefined>();
@@ -823,6 +845,34 @@ function masksFor(
     masks.push({ target: { tabId, frameIds: [0] }, css: INPUT_MASK_CSS + marker, origin: "USER" });
   }
   return masks;
+}
+
+/** read_network's pattern and limit, the limit's default filled in. */
+function networkOptions(params: Params): NetworkReadOptions {
+  const pattern = own(params, "pattern");
+  if (
+    pattern !== undefined &&
+    (typeof pattern !== "string" || pattern.length > MAX_NETWORK_PATTERN)
+  ) {
+    throw new ToolError(
+      "invalid_params",
+      `read_network needs pattern to be text of at most ${MAX_NETWORK_PATTERN.toLocaleString("en-US")} characters.`,
+    );
+  }
+  const given = own(params, "limit");
+  const limit = given === undefined ? DEFAULT_NETWORK_LIMIT : given;
+  if (
+    typeof limit !== "number" ||
+    !Number.isSafeInteger(limit) ||
+    limit < 1 ||
+    limit > MAX_NETWORK_REQUESTS
+  ) {
+    throw new ToolError(
+      "invalid_params",
+      `read_network needs limit to be a whole number from 1 to ${MAX_NETWORK_REQUESTS}.`,
+    );
+  }
+  return pattern === undefined ? { limit } : { pattern, limit };
 }
 
 function navigationTarget(params: Params): NavigationTarget {

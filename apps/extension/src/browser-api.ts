@@ -96,6 +96,75 @@ export interface BrowserApi {
     /** A frame of a tab, the top one included, committed to a new document. */
     onCommitted: BrowserEvent<(details: NavigationDetails) => void>;
   };
+  /** Non-blocking listeners only: Foxhand watches requests and never blocks or changes one. */
+  webRequest: {
+    onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
+    onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>;
+    onHeadersReceived: WebRequestEvent<(details: HeadersReceivedDetails) => void>;
+    onBeforeRedirect: WebRequestEvent<(details: RedirectDetails) => void>;
+    onCompleted: WebRequestEvent<(details: CompletedDetails) => void>;
+    onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>;
+  };
+}
+
+export interface WebRequestEvent<Listener> {
+  addListener(
+    listener: Listener,
+    filter: { urls: string[] },
+    extraInfoSpec?: ("requestHeaders" | "responseHeaders")[],
+  ): void;
+  removeListener(listener: Listener): void;
+}
+
+/** What every `webRequest` event carries, as far as the extension reads it. */
+export interface WebRequestDetails {
+  requestId: string;
+  /** -1 for a request that belongs to no tab. */
+  tabId: number;
+  /** ms since the epoch. */
+  timeStamp: number;
+}
+
+export interface RequestDetails extends WebRequestDetails {
+  frameId: number;
+  url: string;
+  method: string;
+  type: string;
+  documentUrl?: string;
+  originUrl?: string;
+  /** From the requesting frame's parent up to the top-level document. */
+  frameAncestors?: { url: string; frameId: number }[];
+}
+
+export interface SendHeadersDetails extends WebRequestDetails {
+  requestHeaders?: HttpHeader[];
+}
+
+export interface HeadersReceivedDetails extends WebRequestDetails {
+  statusCode: number;
+  responseHeaders?: HttpHeader[];
+}
+
+export interface RedirectDetails extends WebRequestDetails {
+  statusCode: number;
+  redirectUrl: string;
+  fromCache: boolean;
+}
+
+export interface CompletedDetails extends WebRequestDetails {
+  statusCode: number;
+  fromCache: boolean;
+  responseHeaders?: HttpHeader[];
+}
+
+export interface ErrorDetails extends WebRequestDetails {
+  error: string;
+}
+
+/** Firefox's `webRequest.HttpHeaders` entry; its `binaryValue` is never read. */
+export interface HttpHeader {
+  name: string;
+  value?: string;
 }
 
 /** A style sheet for `scripting.insertCSS` and `removeCSS`, one frame at a time here. */
@@ -115,6 +184,8 @@ export interface NavigationDetails {
   tabId: number;
   frameId: number;
   url: string;
+  /** ms since the epoch, the clock of `webRequest`'s `timeStamp`. */
+  timeStamp: number;
 }
 
 /** The options of `tabs.captureTab` that the extension uses. */

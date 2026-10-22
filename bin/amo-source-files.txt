@@ -20,7 +20,9 @@ apps/extension/src/element-refs.ts
 apps/extension/src/flat-tree.ts
 apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
+apps/extension/src/live-documents.ts
 apps/extension/src/log.ts
+apps/extension/src/network-log.ts
 apps/extension/src/options.html
 apps/extension/src/options.ts
 apps/extension/src/page-actions-dom.ts

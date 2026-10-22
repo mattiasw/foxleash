@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { MethodName, ProbeResult, TabInfo } from "@foxhand/protocol";
+import {
+  DEFAULT_NETWORK_LIMIT,
+  MAX_NETWORK_PATTERN,
+  type MethodName,
+  type ProbeResult,
+  type Result,
+  type TabInfo,
+} from "@foxhand/protocol";
 import type { Tab, TabChangeInfo } from "./browser-api.ts";
 import {
   type CssCall,
@@ -20,6 +27,7 @@ import {
   SCREENSHOT_TIMEOUT_MS,
   ToolError,
 } from "./handlers.ts";
+import type { NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
 import { FIELD_MASK_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
@@ -1714,6 +1722,140 @@ describe("read_console", { timeout: 10000 }, () => {
   });
 });
 
+describe("read_network", { timeout: 10000 }, () => {
+  const SITE = "https://a.example";
+  const recorded: Result<"read_network"> = {
+    recording: true,
+    requests: [
+      {
+        url: `${SITE}/api`,
+        method: "GET",
+        type: "xmlhttprequest",
+        startTime: 1000,
+        requestHeaders: [],
+        responseHeaders: [],
+      },
+    ],
+    truncated: false,
+  };
+
+  async function approvedTab(context: ReturnType<typeof setup>): Promise<TabInfo> {
+    await context.grant(SITE);
+    return context.open("s1", `${SITE}/page`);
+  }
+
+  it("refuses a tab id that is not a whole number of 0 or more before reading", async () => {
+    const context = setup();
+    await approvedTab(context);
+    for (const tabId of [undefined, -1, 1.5, "1", Number.NaN, 2 ** 53]) {
+      await assert.rejects(
+        context.call("s1", "read_network", tabId === undefined ? {} : { tabId }),
+        {
+          code: "invalid_params",
+          message: "read_network needs a tab id that is a whole number of 0 or more.",
+        },
+      );
+    }
+    assert.deepEqual(context.networkReads, []);
+  });
+
+  it("takes 0 as a tab id", async () => {
+    const { call } = setup();
+    await rejectsWith(call("s1", "read_network", { tabId: 0 }), "tab_not_found");
+  });
+
+  it("refuses a pattern that is not text of at most 1,000 characters", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    for (const pattern of [1, null, ["a"], "a".repeat(MAX_NETWORK_PATTERN + 1)]) {
+      await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, pattern }), {
+        code: "invalid_params",
+        message: "read_network needs pattern to be text of at most 1,000 characters.",
+      });
+    }
+    assert.deepEqual(context.networkReads, []);
+  });
+
+  it("refuses a limit that is not a whole number from 1 to 500", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    for (const limit of [0, 501, 1.5, "10", null, Number.NaN, -1]) {
+      await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, limit }), {
+        code: "invalid_params",
+        message: "read_network needs limit to be a whole number from 1 to 500.",
+      });
+    }
+    assert.deepEqual(context.networkReads, []);
+  });
+
+  it("reads the gated site's requests with the pattern and limit, or the default limit", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    context.networkWith(recorded);
+    const longest = "a".repeat(MAX_NETWORK_PATTERN);
+    assert.equal(await context.call("s1", "read_network", { tabId: tab.id }), recorded);
+    assert.equal(
+      await context.call("s1", "read_network", { tabId: tab.id, pattern: longest, limit: 500 }),
+      recorded,
+    );
+    await context.call("s1", "read_network", {
+      tabId: tab.id,
+      pattern: "",
+      limit: 1,
+      extra: true,
+    });
+    await context.call("s1", "read_network", {
+      tabId: tab.id,
+      pattern: undefined,
+      limit: undefined,
+    });
+    assert.deepEqual(context.networkReads, [
+      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
+      { session: "s1", tabId: tab.id, site: SITE, options: { pattern: longest, limit: 500 } },
+      { session: "s1", tabId: tab.id, site: SITE, options: { pattern: "", limit: 1 } },
+      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
+    ]);
+    assert.equal(DEFAULT_NETWORK_LIMIT, 100);
+  });
+
+  it("reads params as own fields only", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    const params = Object.assign(Object.create({ pattern: 1, limit: 0 }), { tabId: tab.id });
+    await context.call("s1", "read_network", params);
+    assert.deepEqual(context.networkReads, [
+      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
+    ]);
+  });
+
+  it("passes the gate's refusals through without reading", async () => {
+    const context = setup();
+    const { fake, call, open, grant, promptOf } = context;
+    const tab = await approvedTab(context);
+    await rejectsWith(call("s1", "read_network", { tabId: 99 }), "tab_not_found");
+    const outside = fake.openTab({ url: `${SITE}/` });
+    await rejectsWith(call("s1", "read_network", { tabId: outside.id }), "tab_not_in_group");
+    await rejectsWith(call("s2", "read_network", { tabId: tab.id }), "tab_not_in_group");
+    const other = await open("s1");
+    const cases: [string, string][] = [
+      ["about:blank", "page_not_web"],
+      ["https://b.example/x", "site_not_approved"],
+      ["https://www.paypal.com/", "site_blocked"],
+    ];
+    await grant("https://www.paypal.com");
+    for (const [url, code] of cases) {
+      fake.navigateByUser(other.id, url);
+      await flush();
+      await rejectsWith(call("s1", "read_network", { tabId: other.id }), code, url);
+    }
+    const opened = call("s3", "tab_open", { url: "https://c.example/" });
+    const prompt = await promptOf("s3");
+    await rejectsWith(call("s3", "read_network", { tabId: prompt.tabId }), "approval_pending");
+    void opened.catch(() => {});
+    assert.deepEqual(context.networkReads, []);
+  });
+});
+
 describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
   const REF = "0a1b2c3d-4";
   const TARGET_REF = "0a1b2c3d-9";
@@ -2899,6 +3041,13 @@ type PageReply = (type: string) => Promise<unknown>;
 
 type Live = (session: string, tabId: number) => object | undefined;
 
+interface NetworkRead {
+  session: string;
+  tabId: number;
+  site: string;
+  options: NetworkReadOptions;
+}
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -2921,6 +3070,14 @@ function setup() {
   const recordings = {
     liveRecording: (session: string, tabId: number) => live(session, tabId),
   };
+  const networkReads: NetworkRead[] = [];
+  let networkResult: Result<"read_network"> = { recording: false, requests: [], truncated: false };
+  const network = {
+    read: (session: string, tabId: number, site: string, options: NetworkReadOptions) => {
+      networkReads.push({ session, tabId, site, options });
+      return networkResult;
+    },
+  };
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -2930,6 +3087,7 @@ function setup() {
     pages,
     uploads,
     recordings,
+    network,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -2995,6 +3153,11 @@ function setup() {
     live = answer;
   }
 
+  /** What the network log answers from now on. */
+  function networkWith(result: Result<"read_network">): void {
+    networkResult = result;
+  }
+
   return {
     fake,
     timers,
@@ -3005,6 +3168,8 @@ function setup() {
     pageCalls,
     replyWith,
     liveWith,
+    networkReads,
+    networkWith,
     call,
     open,
     list,

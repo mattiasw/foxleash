@@ -48,7 +48,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the twelve tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the thirteen tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -58,6 +58,7 @@ describe("tools", () => {
       "hover",
       "navigate",
       "read_console",
+      "read_network",
       "read_page",
       "screenshot",
       "scroll",
@@ -80,6 +81,7 @@ describe("tools", () => {
           "scroll",
           "drag",
           "read_console",
+          "read_network",
         ].includes(tool.name),
         tool.name,
       );
@@ -1116,6 +1118,262 @@ describe("read_console", () => {
     const output = await hosted.client.callTool({ name: "read_console", arguments: { tabId: 1 } });
     assert.equal(output.isError, true);
     assert.equal(unframed(output), "Foxhand is not allowed on https://a.example.");
+  });
+});
+
+describe("read_network", () => {
+  const UNREADABLE = "Firefox returned network requests Foxhand cannot read.";
+
+  function request(path: string, extra: Record<string, unknown> = {}) {
+    return {
+      url: `https://a.example${path}`,
+      method: "GET",
+      type: "xmlhttprequest",
+      startTime: 1000.5,
+      durationMs: 12.25,
+      status: 200,
+      fromCache: false,
+      requestHeaders: [{ name: "Cookie", value: "[redacted]" }],
+      responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
+      ...extra,
+    };
+  }
+
+  function result(requests: unknown[] = [request("/a")], truncated = false) {
+    return { recording: true, requests, truncated };
+  }
+
+  async function read(args: Record<string, unknown>, answer: unknown = result()) {
+    const { client, calls } = await start(() => answer);
+    const output = await client.callTool({ name: "read_network", arguments: args });
+    return { output, calls };
+  }
+
+  it("is described with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "read_network");
+    assert.deepEqual(tool?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), [
+      "tabId",
+      "pattern",
+      "limit",
+    ]);
+    assert.equal(tool?.description?.includes(ASKS_FIRST), false);
+    for (const words of [
+      "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted].",
+      "Request and response bodies are not included.",
+      "Requests made by the page's frames are included.",
+      "recording false means Foxhand has not recorded the page since it loaded",
+      "Foxhand keeps the newest 500 requests of a page (fewer when their headers are long), with URLs cut to 2,000 characters, header names and values to 1,000 and at most 100 headers each way.",
+      "pattern is plain text, case-sensitive",
+      "the newest limit (100 unless given, at most 500) are returned, fewer when they would not fit in one result",
+      "truncated is true when matching requests were left out or the page made more requests than Foxhand kept",
+      "read_network never asks",
+    ]) {
+      assert.ok(tool?.description?.includes(words), words);
+    }
+  });
+
+  it("refuses arguments outside the schema without asking Firefox", LIMIT, async () => {
+    const { client, calls } = await start(() => result());
+    const prefix =
+      "MCP error -32602: Input validation error: Invalid arguments for tool read_network: ";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: -1 }, "Too small: expected number to be >=0 at tabId"],
+      [{ tabId: 1.5 }, "Invalid input: expected int, received number at tabId"],
+      [{ tabId: 1, limit: 0 }, "Too small: expected number to be >=1 at limit"],
+      [{ tabId: 1, limit: 501 }, "Too big: expected number to be <=500 at limit"],
+      [{ tabId: 1, limit: 1.5 }, "Invalid input: expected int, received number at limit"],
+      [{ tabId: 1, pattern: 1 }, "Invalid input: expected string, received number at pattern"],
+      [
+        { tabId: 1, pattern: "a".repeat(1001) },
+        "Too big: expected string to have <=1000 characters at pattern",
+      ],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "read_network", arguments: args });
+      assert.deepEqual(output, {
+        content: [{ type: "text", text: prefix + reason }],
+        isError: true,
+      });
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("asks Firefox with the tab id and only the options given", LIMIT, async () => {
+    const all = await read({ tabId: 2, pattern: "/api", limit: 500 });
+    assert.deepEqual(all.calls, [
+      { method: "read_network", params: { tabId: 2, pattern: "/api", limit: 500 } },
+    ]);
+    const longest = await read({ tabId: 0, pattern: "a".repeat(1000), limit: 1 });
+    assert.deepEqual(longest.calls[0]?.params, { tabId: 0, pattern: "a".repeat(1000), limit: 1 });
+    for (const [args, keys] of [
+      [{ tabId: 3 }, ["tabId"]],
+      [{ tabId: 3, pattern: "" }, ["tabId", "pattern"]],
+      [{ tabId: 3, limit: 7 }, ["tabId", "limit"]],
+    ] as const) {
+      const { calls } = await read(args);
+      assert.deepEqual(Object.keys(record(calls[0]?.params)), keys);
+    }
+  });
+
+  it("returns the result framed as untrusted, as Firefox gives it", LIMIT, async () => {
+    const requests = [
+      request("/a"),
+      {
+        url: "https://a.example/b",
+        method: "GET",
+        type: "script",
+        startTime: 2,
+        durationMs: 3,
+        status: 302,
+        redirectUrl: "https://a.example/c",
+        fromCache: true,
+        requestHeaders: [],
+        responseHeaders: [{ name: "Location", value: "/c" }],
+      },
+      {
+        url: "https://a.example/d",
+        method: "POST",
+        type: "main_frame",
+        startTime: 1,
+        error: "NS_ERROR_NET_RESET",
+        requestHeaders: [],
+        responseHeaders: [],
+      },
+    ];
+    for (const answer of [
+      result(requests),
+      result(requests, true),
+      { recording: false, requests: [], truncated: false },
+    ]) {
+      const { output } = await read({ tabId: 1 }, answer);
+      assert.equal(output.isError, undefined);
+      assert.equal(unframed(output), pretty(answer));
+    }
+  });
+
+  it("returns only the fields of the result it knows", LIMIT, async () => {
+    const { output } = await read(
+      { tabId: 1 },
+      {
+        ...result([
+          {
+            ...request("/a", { extra: "page text" }),
+            requestHeaders: [{ name: "a", value: "b", extra: 1 }],
+          },
+        ]),
+        extra: true,
+      },
+    );
+    assert.equal(
+      unframed(output),
+      pretty(result([{ ...request("/a"), requestHeaders: [{ name: "a", value: "b" }] }])),
+    );
+  });
+
+  it("refuses a result it cannot read", LIMIT, async () => {
+    const header = { name: "a", value: "b" };
+    const headers = (count: number, value = header) => Array.from({ length: count }, () => value);
+    const nothing = await start(() => undefined);
+    assert.deepEqual(
+      await nothing.client.callTool({ name: "read_network", arguments: { tabId: 1 } }),
+      { content: [{ type: "text", text: UNREADABLE }], isError: true },
+    );
+    const answers: unknown[] = [
+      null,
+      "text",
+      { requests: [], truncated: false },
+      { recording: "yes", requests: [], truncated: false },
+      { recording: true, requests: {}, truncated: false },
+      { recording: true, requests: [], truncated: "no" },
+      { recording: true, requests: [] },
+      result(Array.from({ length: 501 }, () => request("/a"))),
+      result([{ ...request("/a"), url: 1 }]),
+      result([{ ...request("/a"), url: `https://a.example/${"u".repeat(1983)}` }]),
+      result([{ ...request("/a"), redirectUrl: `https://a.example/${"u".repeat(1983)}` }]),
+      result([{ ...request("/a"), method: "m".repeat(1001) }]),
+      result([{ ...request("/a"), type: "t".repeat(1001) }]),
+      result([{ ...request("/a"), error: "e".repeat(1001) }]),
+      result([{ ...request("/a"), startTime: "1000" }]),
+      result([{ ...request("/a"), durationMs: "1" }]),
+      result([{ ...request("/a"), status: 200.5 }]),
+      result([{ ...request("/a"), fromCache: "no" }]),
+      result([{ ...request("/a"), requestHeaders: headers(101) }]),
+      result([{ ...request("/a"), responseHeaders: headers(101) }]),
+      result([{ ...request("/a"), requestHeaders: [{ name: "a" }] }]),
+      result([{ ...request("/a"), responseHeaders: [{ name: "n".repeat(1001), value: "" }] }]),
+      result([{ ...request("/a"), responseHeaders: [{ name: "a", value: "v".repeat(1001) }] }]),
+      result([{ url: "https://a.example/", method: "GET", type: "image", startTime: 1 }]),
+    ];
+    for (const answer of answers) {
+      const { output } = await read({ tabId: 1 }, answer);
+      assert.deepEqual(
+        output,
+        { content: [{ type: "text", text: UNREADABLE }], isError: true },
+        JSON.stringify(answer)?.slice(0, 200),
+      );
+    }
+    const longest = {
+      ...request("/a"),
+      url: `https://a.example/${"u".repeat(1982)}`,
+      redirectUrl: `https://a.example/${"u".repeat(1982)}`,
+      method: "m".repeat(1000),
+      type: "t".repeat(1000),
+      error: "e".repeat(1000),
+      requestHeaders: headers(100, { name: "n".repeat(1000), value: "v".repeat(1000) }),
+      responseHeaders: headers(100),
+    };
+    const most = await read({ tabId: 1 }, result([longest]));
+    assert.deepEqual(JSON.parse(unframed(most.output)), result([longest]));
+    const many = await read({ tabId: 1 }, result(Array.from({ length: 500 }, () => request("/a"))));
+    assert.equal(JSON.parse(unframed(many.output)).requests.length, 500);
+  });
+
+  it("returns the newest requests that fit when the whole result does not", LIMIT, async () => {
+    // Each quote escapes twice on the wire: about 800 KB per request.
+    const quotes = Array.from({ length: 100 }, (_, index) => ({
+      name: `x-${index}`,
+      value: '"'.repeat(1000),
+    }));
+    const requests = Array.from({ length: 20 }, (_, index) =>
+      request(`/${index}`, { requestHeaders: quotes, responseHeaders: quotes }),
+    );
+    const { output } = await read({ tabId: 1 }, result(requests));
+    assert.equal(output.isError, undefined);
+    const shown = JSON.parse(unframed(output));
+    const count = shown.requests.length;
+    assert.ok(count > 0 && count < requests.length, String(count));
+    assert.equal(unframed(output), pretty(result(requests.slice(-count), true)));
+    assert.ok(Buffer.byteLength(JSON.stringify(text(output))) <= MAX_RESULT_BYTES);
+    // One more would not have fit.
+    const more = untrusted(pretty(result(requests.slice(-count - 1), true)), () => SOME_ID);
+    assert.ok(Buffer.byteLength(JSON.stringify(more)) > MAX_RESULT_BYTES);
+    for (const kept of [1, 2, 3]) {
+      const fewer = requests.slice(0, count + kept);
+      const cut = await read({ tabId: 1 }, result(fewer));
+      assert.equal(unframed(cut.output), pretty(result(fewer.slice(-count), true)), String(kept));
+    }
+    const whole = await read({ tabId: 1 }, result(requests.slice(0, count)));
+    assert.equal(unframed(whole.output), pretty(result(requests.slice(0, count))));
+  });
+
+  it("returns read_network's bridge and host errors as for the other tools", LIMIT, async () => {
+    const sentence = "The Foxhand native host did not answer in time.";
+    const bridged = await start(() => {
+      throw new BridgeError(sentence);
+    });
+    assert.deepEqual(
+      await bridged.client.callTool({ name: "read_network", arguments: { tabId: 1 } }),
+      { content: [{ type: "text", text: sentence }], isError: true },
+    );
+    const hosted = await start(() => {
+      throw new HostError("tab_not_in_group", "Tab 1 is not in this session's tab group.");
+    });
+    const output = await hosted.client.callTool({ name: "read_network", arguments: { tabId: 1 } });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), "Tab 1 is not in this session's tab group.");
   });
 });
 

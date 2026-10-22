@@ -124,6 +124,20 @@ withdrew the approval or the tab left the agent's group, the result says it is n
 with no messages, until the page is loaded again. `read_console` works only on a tab showing a
 site you approved, and never asks.
 
+The agent reads a page's network requests with `read_network`: each request's URL, method,
+resource type, start time, duration, status, redirect target, error and whether it came from
+the cache, with its request and response headers, oldest first. The values of the `Cookie`,
+`Set-Cookie`, `Authorization` and `Proxy-Authorization` headers are replaced with
+`[redacted]`, and request and response bodies are not included. Requests made by the page's
+frames are included. Foxhand records a page's requests from when it starts loading in a tab of
+the agent's group on a site you approved, and loading a new page in the tab starts a new list.
+Foxhand keeps the newest 500 requests of a page, fewer when their headers are long. The agent
+can ask for the requests whose URL contains a piece of plain text, and at most a number of the
+newest ones (100 unless it asks for up to 500). When the page loaded before you approved the
+site, or since it loaded you withdrew the approval or the tab left the agent's group, the
+result says it is not recording, with no requests, until the page is loaded again.
+`read_network` works only on a tab showing a site you approved, and never asks.
+
 The agent acts in a page with `click`, `hover`, `scroll` and `drag`, on an element from
 `read_page` (scrolled into view first) or at a point in the tab's viewport, as in a
 screenshot. They send the pointer and mouse events a real mouse sends, in order: a click is

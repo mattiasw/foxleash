@@ -294,6 +294,7 @@ describe("foxhand mcp", () => {
         "hover",
         "navigate",
         "read_console",
+        "read_network",
         "read_page",
         "screenshot",
         "scroll",
