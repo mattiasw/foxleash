@@ -29,6 +29,7 @@ export const TITLES = {
   shot: "Fixture shot",
   shotFields: "Fixture shot fields",
   shotPdfFrame: "Fixture shot PDF frame",
+  shotErrorFrames: "Fixture shot error frames",
   upload: "Fixture upload",
   act: "Fixture act",
   actLinks: "Fixture act links",
@@ -282,6 +283,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const timers = new Set<NodeJS.Timeout>();
   let counter = 0;
   const hits = new Map<string, number>();
+  const closedPort = await unusedPort();
   const downloadHeaders: IncomingHttpHeaders[] = [];
 
   const server = createServer((request, response) => {
@@ -355,6 +357,10 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, shotFieldsFrame(SHOT_FIELD_COLOURS.frame));
     } else if (path === "/shot-pdf-frame") {
       sendHtml(response, SHOT_PDF_FRAME_PAGE);
+    } else if (path === "/shot-error-frames") {
+      sendHtml(response, shotErrorFramesPage(closedPort));
+    } else if (path === "/shot-xfo-frame") {
+      sendHtml(response, SHOT_XFO_FRAME_PAGE, { "X-Frame-Options": "DENY" });
     } else if (path === "/shot.pdf") {
       response.writeHead(200, { "Content-Type": "application/pdf", "Cache-Control": "no-store" });
       response.end(minimalPdf());
@@ -490,6 +496,23 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       await closed.promise;
     },
   };
+}
+
+/** A port on 127.0.0.1 that nothing listened on a moment ago. */
+async function unusedPort(): Promise<number> {
+  const probe = createServer();
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  probe.once("error", reject);
+  probe.listen(0, "127.0.0.1", resolve);
+  await promise;
+  const address: AddressInfo | string | null = probe.address();
+  const closed = Promise.withResolvers<void>();
+  probe.close(() => closed.resolve());
+  await closed.promise;
+  if (address === null || typeof address === "string") {
+    throw new Error("the probe server has no TCP address");
+  }
+  return address.port;
 }
 
 function sendPage(
@@ -1298,6 +1321,29 @@ function rgb(colour: readonly number[]): string {
 const SHOT_PDF_FRAME_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.shotPdfFrame}</title></head>
 <body><iframe title="PDF" src="/shot.pdf" style="width: 400px; height: 300px"></iframe></body></html>
+`;
+
+// A frame whose response refuses to be framed and one whose load fails, both showing Firefox's
+// error page; their query strings are escaped in the error page's address.
+function shotErrorFramesPage(closedPort: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotErrorFrames}</title>
+<style>${SHOT_FIELD_STYLE}
+iframe { display: block; width: 320px; height: 100px; border: 0; margin: 0 0 8px; }
+#plain { color: ${rgb(SHOT_FIELD_COLOURS.top)}; }
+</style></head>
+<body>
+<input id="card" class="protected" autocomplete="cc-number" value="4111 1111 1111 1111" aria-label="Card number">
+<input id="plain" value="MMMM WWWW" aria-label="Plain">
+<iframe title="Refused frame" src="/shot-xfo-frame?a=1&amp;b=c+d"></iframe>
+<iframe title="Unreachable frame" src="http://127.0.0.1:${closedPort}/?x=1&amp;y=a+b"></iframe>
+</body></html>
+`;
+}
+
+const SHOT_XFO_FRAME_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Shot XFO frame</title></head>
+<body><p>Not shown in a frame.</p></body></html>
 `;
 
 /** What /download/receipt.pdf serves. */

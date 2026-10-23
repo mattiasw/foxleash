@@ -29,6 +29,7 @@ import type {
 import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
 import { type Downloads, downloadNameProblem } from "./downloads.ts";
+import { watchFrameErrors } from "./frame-errors.ts";
 import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
 import {
   clickOptions,
@@ -143,6 +144,7 @@ export function createHandlers<Handle>({
   network,
   downloads,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
+  const frameErrors = watchFrameErrors(browser);
   const handlers: Handlers = {
     tabs_list: tabsList,
     tab_open: tabOpen,
@@ -480,8 +482,9 @@ export function createHandlers<Handle>({
   /**
    * Captures the tab with the text of protected fields hidden in every frame, and of every input
    * of the top document when `revealed`. One insertion per frame, since Firefox skips a frame it
-   * will not enter without an error when given all frames at once; a frame refusing the sheet
-   * refuses the screenshot.
+   * will not enter without an error when given all frames at once. A frame refusing the sheet
+   * refuses the screenshot, unless Firefox reported the frame's current document as its error
+   * page, which shows nothing of the page.
    */
   async function maskedCapture(
     tabId: number,
@@ -498,18 +501,26 @@ export function createHandlers<Handle>({
     // Firefox shares one sheet between insertions of the same text, so each screenshot marks its
     // own, also across restarts of the background page.
     const marker = `/* ${crypto.randomUUID()} */\n`;
-    const inserted: { mask: CssInjection; insert: Promise<void> }[] = [];
+    const inserted: { mask: CssInjection; frame: FrameDetails; insert: Promise<void> }[] = [];
     try {
       const frames = await Promise.race([browser.webNavigation.getAllFrames({ tabId }), timedOut]);
       // The screenshot answered already: nothing more goes into the page, nothing is captured.
       if (expired()) throw timeout;
-      if (frames === null || !frames.some((frame) => frame.frameId === 0)) {
+      const top = frames?.find((frame) => frame.frameId === 0);
+      if (frames === null || top === undefined) {
         throw screenshotFailedError(tabId);
       }
-      for (const mask of masksFor(tabId, frames, revealed, marker)) {
-        inserted.push({ mask, insert: browser.scripting.insertCSS(mask) });
+      for (const { mask, frame } of masksFor(tabId, frames, top, revealed, marker)) {
+        inserted.push({ mask, frame, insert: browser.scripting.insertCSS(mask) });
       }
-      await Promise.race([Promise.all(inserted.map(({ insert }) => insert)), timedOut]);
+      const taken = inserted.map(({ frame, insert }) =>
+        insert.catch((error: unknown) => {
+          // Firefox's error page takes no sheet and holds no field of the page.
+          if (frame.frameId !== 0 && frameErrors.showsErrorPage(tabId, frame)) return;
+          throw error;
+        }),
+      );
+      await Promise.race([Promise.all(taken), timedOut]);
       if (expired()) throw timeout;
       return await Promise.race([
         browser.tabs.captureTab(
@@ -1021,20 +1032,33 @@ function screenshotFailedError(tabId: number): ToolError {
   return new ToolError(failed.code, failed.message);
 }
 
-/** The sheets of one screenshot: the field mask in every frame, the input mask in the top one. */
+/**
+ * The sheets of one screenshot, each with the listed frame it goes into: the field mask in every
+ * frame, the input mask in the top one.
+ */
 function masksFor(
   tabId: number,
   frames: FrameDetails[],
+  top: FrameDetails,
   revealed: boolean,
   marker: string,
-): CssInjection[] {
-  const masks: CssInjection[] = frames.map(({ frameId }) => ({
-    target: { tabId, frameIds: [frameId] },
-    css: FIELD_MASK_CSS + marker,
-    origin: "USER",
-  }));
+): { mask: CssInjection; frame: FrameDetails }[] {
+  const masks = frames.map((frame) => {
+    const { frameId } = frame;
+    const mask: CssInjection = {
+      target: { tabId, frameIds: [frameId] },
+      css: FIELD_MASK_CSS + marker,
+      origin: "USER",
+    };
+    return { mask, frame };
+  });
   if (revealed) {
-    masks.push({ target: { tabId, frameIds: [0] }, css: INPUT_MASK_CSS + marker, origin: "USER" });
+    const mask: CssInjection = {
+      target: { tabId, frameIds: [0] },
+      css: INPUT_MASK_CSS + marker,
+      origin: "USER",
+    };
+    masks.push({ mask, frame: top });
   }
   return masks;
 }

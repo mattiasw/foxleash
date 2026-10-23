@@ -19,6 +19,7 @@ apps/extension/src/downloads.ts
 apps/extension/src/element-rect.ts
 apps/extension/src/element-refs.ts
 apps/extension/src/flat-tree.ts
+apps/extension/src/frame-errors.ts
 apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
 apps/extension/src/live-documents.ts

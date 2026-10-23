@@ -4,6 +4,7 @@ import type {
   BrowserWindow,
   CaptureOptions,
   CssInjection,
+  DocumentDetails,
   DownloadDelta,
   DownloadItem,
   FrameDetails,
@@ -64,8 +65,12 @@ export interface FakeBrowser {
   holdNextCapture(): () => void;
   /** Every `scripting.insertCSS` and `removeCSS` call, in order. */
   cssCalls: CssCall[];
-  /** What `webNavigation.getAllFrames` answers for the tab: its frame ids, or null when discarded. */
-  setFrames(tabId: number, frameIds: number[] | null): void;
+  /**
+   * What `webNavigation.getAllFrames` answers for the tab, or null when discarded. A frame id `n`
+   * lists `{ frameId: n, documentId: "document-<tabId>-<n>" }`; an object is listed as given.
+   * Without it, the tab lists its top frame only.
+   */
+  setFrames(tabId: number, frames: readonly (number | FrameDetails)[] | null): void;
   /** Makes the next `scripting.insertCSS` into that frame reject with `error`, once. */
   failInsertCSS(frameId: number, error: unknown): void;
   /** Leaves the next `scripting.insertCSS` pending until `release` runs. */
@@ -89,6 +94,8 @@ export interface FakeBrowser {
   ): void;
   /** Listeners on `webNavigation.onCompleted` and `onHistoryStateUpdated` together. */
   navigationListenerCount(): number;
+  /** Fires `webNavigation.onDOMContentLoaded`. */
+  emitDOMContentLoaded(details: DocumentDetails): void;
   /** Listeners on `tabs.onRemoved`. */
   removedListenerCount(): number;
   /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
@@ -285,7 +292,7 @@ export function createFakeBrowser(): FakeBrowser {
   let injectionFailure: { error: unknown } | undefined;
   let captureFailure: { error: unknown } | undefined;
   let captureHold: Promise<void> | undefined;
-  const frames = new Map<number, number[] | null>();
+  const frames = new Map<number, FrameDetails[] | null>();
   const insertFailures = new Map<number, unknown>();
   let insertHold: Promise<void> | undefined;
   let removeHold: Promise<void> | undefined;
@@ -294,6 +301,7 @@ export function createFakeBrowser(): FakeBrowser {
   // Not `onCompleted`: in this file that name is webRequest's.
   const onNavigationCompleted = createEvent<(details: NavigationDetails) => void>();
   const onHistoryStateUpdated = createEvent<(details: NavigationDetails) => void>();
+  const onDOMContentLoaded = createEvent<(details: DocumentDetails) => void>();
   // The latest timeStamp a commit or a webRequest event carried.
   let latestTimeStamp = 0;
   const contentScripts = new Map<
@@ -467,11 +475,12 @@ export function createFakeBrowser(): FakeBrowser {
         tabOf(tabId);
         const listed = frames.get(tabId);
         if (listed === null) return null;
-        return (listed ?? [0]).map((frameId): FrameDetails => ({ frameId }));
+        return (listed ?? [frameOf(tabId, 0)]).map((frame) => ({ ...frame }));
       },
       onCommitted,
       onCompleted: onNavigationCompleted,
       onHistoryStateUpdated,
+      onDOMContentLoaded,
     },
     webRequest: {
       onBeforeRequest: createWebRequestEvent("onBeforeRequest"),
@@ -545,8 +554,15 @@ export function createFakeBrowser(): FakeBrowser {
       return () => resolve();
     },
     cssCalls: [],
-    setFrames: (tabId, frameIds) => {
-      frames.set(tabId, frameIds === null ? null : [...frameIds]);
+    setFrames: (tabId, listed) => {
+      frames.set(
+        tabId,
+        listed === null
+          ? null
+          : listed.map((frame) =>
+              typeof frame === "number" ? frameOf(tabId, frame) : { ...frame },
+            ),
+      );
     },
     failInsertCSS: (frameId, error) => {
       insertFailures.set(frameId, error);
@@ -570,6 +586,9 @@ export function createFakeBrowser(): FakeBrowser {
     emitHistoryStateUpdated: (details) => emitNavigation(onHistoryStateUpdated, details),
     navigationListenerCount: () =>
       onNavigationCompleted.listeners.size + onHistoryStateUpdated.listeners.size,
+    emitDOMContentLoaded: (details) => {
+      for (const listener of [...onDOMContentLoaded.listeners]) listener({ ...details });
+    },
     removedListenerCount: () => onTabRemoved.listeners.size,
     tabMessages: [],
     setContentScript: (tabId, handler) => {
@@ -915,6 +934,10 @@ export function createFakeBrowser(): FakeBrowser {
 
 function cssCall(method: CssCall["method"], { target, css, origin }: CssInjection): CssCall {
   return structuredClone({ method, tabId: target.tabId, frameIds: target.frameIds, css, origin });
+}
+
+function frameOf(tabId: number, frameId: number): FrameDetails {
+  return { frameId, documentId: `document-${tabId}-${frameId}` };
 }
 
 function createEvent<Listener>(): BrowserEvent<Listener> & { listeners: Set<Listener> } {

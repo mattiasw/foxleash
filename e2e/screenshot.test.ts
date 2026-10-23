@@ -303,6 +303,22 @@ describe("screenshot in real Firefox", () => {
     assert.deepEqual(result.images, [], result.text);
   });
 
+  test("a page with frames showing Firefox's error page is captured, its protected fields hidden", async () => {
+    const tab = await open(session, "/shot-error-frames", TITLES.shotErrorFrames);
+    // A frame's error page may show after the page's own load, and a screenshot before that refuses.
+    const png = await pollUntil(
+      async () => {
+        const result = await harness.call(session, "screenshot", { tabId: tab });
+        if (result.isError) throw new Error(result.text);
+        return onlyImage(result);
+      },
+      10_000,
+      "a screenshot of the page with error-page frames",
+    );
+    assertNone(png, PROTECTED, "protected");
+    assertDrawn(png, SHOT_FIELD_COLOURS.top, "top");
+  });
+
   test("a PDF in Firefox's viewer is refused with no image", async () => {
     const url = fixtures.url("/shot.pdf");
     const tab = tabOf(await harness.ok(session, "tab_open", { url }));

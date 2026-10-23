@@ -2932,6 +2932,214 @@ describe("screenshot", { timeout: 10000 }, () => {
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
   });
 
+  describe("a frame showing Firefox's error page", () => {
+    const FAILED = "https://b.example/frame?x=1&y=a+b";
+    const ERROR_PAGE =
+      "about:neterror?e=xfoBlocked&u=https%3A//b.example/frame%3Fx%3D1%26y%3Da+b&c=UTF-8&d=x";
+    const MISSING = new Error("Missing host permission for the tab or frames");
+
+    async function refusedWithNoImage(
+      { fake, call }: ReturnType<typeof setup>,
+      tabId: number,
+      frameIds: number[],
+    ): Promise<void> {
+      await assert.rejects(call("s1", "screenshot", { tabId }), {
+        code: "screenshot_failed",
+        message: `Firefox could not take a screenshot of tab ${tabId}.`,
+      });
+      await flush();
+      assert.deepEqual(fake.captures, []);
+      assertMaskedAndRemoved(fake.cssCalls, tabId, frameIds);
+    }
+
+    it("is passed over when Firefox reported the frame's document as its error page", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, { frameId: 9, documentId: "err", url: FAILED }]);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 9, documentId: "err", url: ERROR_PAGE });
+      fake.failInsertCSS(9, MISSING);
+      assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+      await flush();
+      assert.equal(fake.captures.length, 1);
+      assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 9]);
+    });
+
+    it("refuses when no error page was reported for the frame", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      context.fake.setFrames(tab.id, [0, { frameId: 9, documentId: "err", url: FAILED }]);
+      context.fake.failInsertCSS(9, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9]);
+    });
+
+    it("refuses when the error page was another document than the frame shows now", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      context.fake.setFrames(tab.id, [0, { frameId: 9, documentId: "next", url: FAILED }]);
+      context.fake.emitDOMContentLoaded({
+        tabId: tab.id,
+        frameId: 9,
+        documentId: "err",
+        url: ERROR_PAGE,
+      });
+      context.fake.failInsertCSS(9, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9]);
+    });
+
+    it("refuses when the URL that failed is not the one the frame shows", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      // The error page's address arrived with the id of the document the frame loaded next.
+      context.fake.setFrames(tab.id, [
+        0,
+        { frameId: 9, documentId: "err", url: "https://c.example/pay" },
+      ]);
+      context.fake.emitDOMContentLoaded({
+        tabId: tab.id,
+        frameId: 9,
+        documentId: "err",
+        url: ERROR_PAGE,
+      });
+      context.fake.failInsertCSS(9, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9]);
+    });
+
+    it("refuses a frame whose document Firefox reported with its own address", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      const pdf = "https://b.example/doc.pdf";
+      context.fake.setFrames(tab.id, [0, { frameId: 9, documentId: "pdf", url: pdf }]);
+      context.fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 9, documentId: "pdf", url: pdf });
+      context.fake.failInsertCSS(9, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9]);
+    });
+
+    for (const [missing, frame] of [
+      ["a document id", { frameId: 9, url: FAILED }],
+      ["an address", { frameId: 9, documentId: "err" }],
+    ] as const) {
+      it(`refuses a frame listed without ${missing}`, async () => {
+        const context = setup();
+        await context.grant("https://a.example");
+        const tab = await context.open("s1", "https://a.example/");
+        context.fake.setFrames(tab.id, [0, frame]);
+        context.fake.emitDOMContentLoaded({
+          tabId: tab.id,
+          frameId: 9,
+          documentId: "err",
+          url: ERROR_PAGE,
+        });
+        context.fake.failInsertCSS(9, MISSING);
+        await refusedWithNoImage(context, tab.id, [0, 9]);
+      });
+    }
+
+    it("refuses when the error page was reported in another tab", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      context.fake.setFrames(tab.id, [0, { frameId: 9, documentId: "err", url: FAILED }]);
+      context.fake.emitDOMContentLoaded({
+        tabId: tab.id + 1,
+        frameId: 9,
+        documentId: "err",
+        url: ERROR_PAGE,
+      });
+      context.fake.failInsertCSS(9, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9]);
+    });
+
+    it("refuses when the top frame refuses the sheet, error page or not", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      context.fake.setFrames(tab.id, [{ frameId: 0, documentId: "err", url: FAILED }, 5]);
+      context.fake.emitDOMContentLoaded({
+        tabId: tab.id,
+        frameId: 0,
+        documentId: "err",
+        url: ERROR_PAGE,
+      });
+      context.fake.failInsertCSS(0, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 5]);
+    });
+
+    it("refuses when another frame refuses the sheet", async () => {
+      const context = setup();
+      await context.grant("https://a.example");
+      const tab = await context.open("s1", "https://a.example/");
+      context.fake.setFrames(tab.id, [0, { frameId: 9, documentId: "err", url: FAILED }, 5]);
+      context.fake.emitDOMContentLoaded({
+        tabId: tab.id,
+        frameId: 9,
+        documentId: "err",
+        url: ERROR_PAGE,
+      });
+      context.fake.failInsertCSS(9, MISSING);
+      context.fake.failInsertCSS(5, MISSING);
+      await refusedWithNoImage(context, tab.id, [0, 9, 5]);
+    });
+
+    it("refuses when the top document refuses the input mask", async () => {
+      const { fake, call, open, grant, replyWith } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, { frameId: 9, documentId: "err", url: FAILED }]);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 9, documentId: "err", url: ERROR_PAGE });
+      fake.failInsertCSS(9, MISSING);
+      replyWith(async () => ({ revealed: true }));
+      const insertCSS = fake.browser.scripting.insertCSS;
+      fake.browser.scripting.insertCSS = async (injection) => {
+        await insertCSS(injection);
+        if (injection.css.startsWith(INPUT_MASK_CSS)) throw MISSING;
+      };
+      await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+        code: "screenshot_failed",
+        message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+      });
+      await flush();
+      assert.deepEqual(fake.captures, []);
+      const inserts = fake.cssCalls.filter((css) => css.method === "insertCSS");
+      assert.deepEqual(
+        inserts.map((css) => css.frameIds),
+        [[0], [9], [0]],
+      );
+      assert.deepEqual(fake.cssCalls, [
+        ...inserts,
+        ...inserts.map((css) => ({ ...css, method: "removeCSS" })),
+      ]);
+    });
+
+    it("still times out when the frame's sheet never goes in", async () => {
+      const { fake, call, open, grant, timers } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [{ frameId: 9, documentId: "err", url: FAILED }, 0]);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 9, documentId: "err", url: ERROR_PAGE });
+      const release = fake.holdNextInsertCSS();
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      timers.advance(CAPTURE_TIMEOUT_MS);
+      await assert.rejects(shot, {
+        code: "page_timeout",
+        message: `Firefox did not take the screenshot of tab ${tab.id} in time; try again.`,
+      });
+      await flush();
+      assert.deepEqual(fake.captures, []);
+      const [held, top] = fake.cssCalls;
+      assert.deepEqual(held?.frameIds, [9]);
+      assert.deepEqual(fake.cssCalls, [held, top, { ...top, method: "removeCSS" }]);
+      release();
+      await flush();
+      assert.deepEqual(fake.cssCalls.slice(3), [{ ...held, method: "removeCSS" }]);
+    });
+  });
+
   it("refuses a tab whose frames it cannot list, or whose list has no top frame", async (t) => {
     const { fake, call, open, grant } = setup();
     await grant("https://a.example");

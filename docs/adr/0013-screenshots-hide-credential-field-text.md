@@ -2,7 +2,9 @@
 
 **Status:** Accepted, 2026-10-20. Supersedes the consequence of
 [0011](0011-screenshots-saved-by-the-mcp-server-in-its-working-folder.md) that screenshots show
-form fields as the page draws them.
+form fields as the page draws them. Its rule that a frame refusing the sheet refuses the
+screenshot is superseded by [0020](0020-screenshots-pass-over-frames-showing-an-error-page.md),
+2026-10-23.
 
 ## Context
 

@@ -187,7 +187,9 @@ and of one-time code and card number fields that the page marks as such for auto
 Security). When a frame of the page loads while the screenshot is taken, Foxhand refuses it and
 the agent can try again. A page Foxhand cannot get into, such as a PDF shown in Firefox's
 viewer, cannot be captured, and neither can a page with such a PDF in a frame or with a frame
-that never finishes loading. `screenshot` works only on a tab showing a site you approved, and
+that never finishes loading. A frame showing Firefox's error page for a page that could not be
+loaded or does not allow being shown in a frame does not stop a screenshot, but one showing a
+certificate error or a blocked-site warning does. `screenshot` works only on a tab showing a site you approved, and
 never asks.
 
 The agent uploads files from your computer with `upload_file`, naming the files and an element
@@ -261,7 +263,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   still a password field, and a text field that the page puts in its place shows its value.
   Screenshots hide the text of these fields, also in frames from other sites, with a style
   sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a frame does not
-  take it, such as another add-on's frame (a password manager's menu). When the page turns a
+  take it, such as another add-on's frame (a password manager's menu); a frame showing
+  Firefox's error page for a page that could not be loaded or does not allow being shown in a
+  frame is the exception. When the page turns a
   password field the agent read into another kind of field, a screenshot hides the text of
   every input element in the page, input buttons included, outside its frames. A field
   marked neither way still shows its value.

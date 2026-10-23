@@ -103,6 +103,8 @@ export interface BrowserApi {
     onCompleted: BrowserEvent<(details: NavigationDetails) => void>;
     /** A frame's page changed its address with the History API, without a load. */
     onHistoryStateUpdated: BrowserEvent<(details: NavigationDetails) => void>;
+    /** A frame's document finished parsing. */
+    onDOMContentLoaded: BrowserEvent<(details: DocumentDetails) => void>;
   };
   /** Non-blocking listeners only: Foxhand watches requests and never blocks or changes one. */
   webRequest: {
@@ -212,6 +214,23 @@ export interface CssInjection {
 /** One frame of `webNavigation.getAllFrames`, as far as the extension reads it. */
 export interface FrameDetails {
   frameId: number;
+  /** Firefox's id of the frame's current document. */
+  documentId?: string;
+  /** The address the frame shows; for Firefox's error page, the URL that failed. */
+  url?: string;
+}
+
+/** The details of `webNavigation.onDOMContentLoaded`, as far as the extension reads them. */
+export interface DocumentDetails {
+  tabId: number;
+  frameId: number;
+  /**
+   * The document's own address: `about:neterror?...` for Firefox's error page, where
+   * `onCommitted` gives the URL that failed.
+   */
+  url: string;
+  /** The document the frame shows when Firefox handles the event. */
+  documentId?: string;
 }
 
 /** The details of a `webNavigation` event, as far as the extension reads them. */

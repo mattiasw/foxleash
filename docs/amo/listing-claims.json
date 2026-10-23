@@ -150,7 +150,7 @@
       ]
     },
     {
-      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxhand adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxhand takes no screenshot.",
+      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxhand adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxhand takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame.",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
         {
@@ -164,6 +164,14 @@
         {
           "file": "apps/extension/src/handlers.ts",
           "contains": "throw screenshotFailedError(tabId);"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "frameErrors.showsErrorPage(tabId, frame)"
+        },
+        {
+          "file": "apps/extension/src/frame-errors.ts",
+          "contains": "url.startsWith(ERROR_PAGE_PREFIX)"
         },
         { "file": "apps/extension/src/screenshot.ts", "contains": "CREDENTIAL_TOKENS" },
         {
