@@ -176,6 +176,50 @@ describe("check-test-integrity.sh", () => {
       `test /*/ flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
     ],
     [
+      "a skip split from its receiver by a block comment that closes on the skip's line",
+      `test /${m("*")}\n ${m("*", "/", ".skip(")}"t", () => {\n  run();\n});\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over two lines",
+      `test\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip below a receiver line that opens a block comment, a comment line and a closing line",
+      `test /${m("* flaky")}\n     on CI\n  ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over two lines holding a quote and two slashes",
+      `test\n  /${m("* don't retry,")}\n     see https://x ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip after a block comment that closes before the dot on its line",
+      `test\n  /* flaky */ ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over two lines, after a regex literal holding a quote",
+      `x(/'/), test /${m("* flaky")}\n     on CI ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment glued to it, after a regex literal holding a quote",
+      `x(/'/), test/${m("* flaky *", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over two lines, after a string holding two slashes",
+      `run("http://x"), test /${m("*")}\n   flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over two lines, below a regex literal holding a comment's start",
+      `const trim = (u) => u.replace(/\\/${m("*")}$/, "");\ntest\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip after a regex literal holding a comment's start",
+      `const re = /\\/${m("*")}/; test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
+      "a split skip on a receiver after a block comment over two lines holding two slashes",
+      `/${m("* see")}\n   http://x ${m("*", "/")} test\n  ${m(".", "skip(")}"t", fn);\n`,
+    ],
+    [
       "a skip split from its receiver by a trailing comment after a regex literal holding quotes",
       `x.split(/["']/), test // flaky\n  ${m(".", "skip(")}"t", fn);\n`,
     ],
@@ -1054,6 +1098,13 @@ describe("check-test-integrity.sh", () => {
     assert.match(out, REJECTED);
   });
 
+  // Two hunks: hunk 1 ends inside a block comment that closes between the hunks, so hunk 2,
+  // where the skip is edited in on the line that closes another comment, starts outside one.
+  const COMMENT_HUNK_BEFORE = `a();\n/${m("*")}\n one\n two\n three\n${m("*", "/")}\nb();\nc();\nd();\ne();\nf();\ng();\ntest /${m("*")}\n ${m("*", "/", ".todo(")}"t", fn);\n`;
+  const COMMENT_HUNK_AFTER = COMMENT_HUNK_BEFORE.replace("a();", "a(1);").replace(
+    m(".", "todo("),
+    m(".", "skip("),
+  );
   const caughtEdits: Array<[string, string, string, boolean]> = [
     [
       "a skip edited in under an unchanged receiver chain over two lines",
@@ -1083,6 +1134,42 @@ describe("check-test-integrity.sh", () => {
       "a skip edited in under an unchanged receiver line and block comment line",
       'test\n  /* flaky */\n  .todo("t", fn);\n',
       `test\n  /* flaky */\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line and an unchanged block comment over two lines",
+      `test\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  .concurrent("t", fn);\n`,
+      `test\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in on the line that closes an unchanged block comment",
+      `test /${m("*")}\n   flaky\n ${m("*", "/", ".todo(")}"t", fn);\n`,
+      `test /${m("*")}\n   flaky\n ${m("*", "/", ".skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip edited in below a hunk whose context ends inside a block comment",
+      COMMENT_HUNK_BEFORE,
+      COMMENT_HUNK_AFTER,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver after a block comment over two lines holding two slashes",
+      `/${m("* see")}\n   http://x ${m("*", "/")} test\n  .concurrent("t", fn);\n`,
+      `/${m("* see")}\n   http://x ${m("*", "/")} test\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line, opening a block comment, is edited above the comment's unchanged closing line and skip line",
+      `const q = db /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+      false,
+    ],
+    [
+      "a skip whose receiver line is edited above an unchanged block comment over two lines and skip line",
+      `const q = db\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
+      `test\n  /${m("* reason:")}\n     flaky ${m("*", "/")}\n  ${m(".", "skip(")}"t", fn);\n`,
       false,
     ],
     [
@@ -1269,12 +1356,20 @@ describe("check-test-integrity.sh", () => {
     });
   }
 
-  // The hunk-boundary row tests the reset at a hunk header only while its edits diff as two
+  // The hunk-boundary rows test the reset at a hunk header only while their edits diff as two
   // hunks, which depends on the gate's diff context.
   test("the hunk-boundary case diffs as two hunks at the gate's context", () => {
     const context = /--unified=(\d+)/.exec(readFileSync(SCRIPT, "utf8"));
     assert.ok(context, "the script names its diff context");
     commitChange(dir, "bad.test.ts", HUNK_BOUNDARY_BEFORE, HUNK_BOUNDARY_AFTER);
+    const diff = git(dir, "diff", `--unified=${context[1]}`, "base...HEAD");
+    assert.equal(diff.match(/^@@ /gm)?.length, 2, diff);
+  });
+
+  test("the block-comment hunk-boundary case diffs as two hunks at the gate's context", () => {
+    const context = /--unified=(\d+)/.exec(readFileSync(SCRIPT, "utf8"));
+    assert.ok(context, "the script names its diff context");
+    commitChange(dir, "bad.test.ts", COMMENT_HUNK_BEFORE, COMMENT_HUNK_AFTER);
     const diff = git(dir, "diff", `--unified=${context[1]}`, "base...HEAD");
     assert.equal(diff.match(/^@@ /gm)?.length, 2, diff);
   });
@@ -1287,6 +1382,22 @@ describe("check-test-integrity.sh", () => {
     [
       "a skip on the test context below a trailing comment holding a quote",
       `test("t", (t) => {\n  t // don't run on CI\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a skip on the test context below a block comment over two lines",
+      `test("t", (t) => {\n  t /${m("* no Firefox")}\n     here ${m("*", "/")}\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a locator chain split by a block comment over two lines",
+      `test("t", async ({ page }) => {\n  await page\n    /${m("* the first")}\n       link ${m("*", "/")}\n    .locator("a")\n    .click();\n});\n`,
+    ],
+    [
+      "a skip on another receiver below a string holding a test-root word and a comment's start, then a block comment line",
+      `test("q", async () => {\n  const rows = await db\n    .collection("files")\n    .find({ path: { $regex: "^suite/${m("*")}" } })\n    /${m("* page two *", "/")}\n    ${m(".", "skip(")}10)\n    .toArray();\n});\n`,
+    ],
+    [
+      "a skip on another receiver below a block comment glued to the code before it and ending in a test-root word",
+      `test("q", async () => {\n  const rows = await db.find()/${m("* page two, see test")}\n     above ${m("*", "/")}\n    ${m(".", "skip(")}10);\n});\n`,
     ],
     [
       "a skip on another receiver below a trailing comment after a regex literal holding quotes",
@@ -1559,6 +1670,34 @@ describe("check-test-integrity.sh", () => {
       "the second join pass",
       "awk",
       'for a in "$@"; do [ "$a" = plain=0 ] && exit 2; done',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the join pass with plain=1 and carry=0",
+      "awk",
+      'p=; c=; for a in "$@"; do case "$a" in plain=1) p=1 ;; carry=0) c=1 ;; esac; done; [ "$p$c" = 11 ] && exit 2',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the join pass with plain=0 and carry=0",
+      "awk",
+      'p=; c=; for a in "$@"; do case "$a" in plain=0) p=1 ;; carry=0) c=1 ;; esac; done; [ "$p$c" = 11 ] && exit 2',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the join pass with plain=1 and carry=1",
+      "awk",
+      'p=; c=; for a in "$@"; do case "$a" in plain=1) p=1 ;; carry=1) c=1 ;; esac; done; [ "$p$c" = 11 ] && exit 2',
+      FOCUSED,
+      /scanner \(awk\) failed/,
+    ],
+    [
+      "the join pass with plain=0 and carry=1",
+      "awk",
+      'p=; c=; for a in "$@"; do case "$a" in plain=0) p=1 ;; carry=1) c=1 ;; esac; done; [ "$p$c" = 11 ] && exit 2',
       FOCUSED,
       /scanner \(awk\) failed/,
     ],

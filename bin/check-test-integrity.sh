@@ -14,10 +14,10 @@
 #      literal as its value, and a method-shorthand key (`{ todo() {} }`). A member access may
 #      have whitespace before its dot or be optional (?.), a marker's call may be optional too
 #      (?.()) and carry TypeScript type arguments (`test.only<T>(`), and a call split over
-#      lines before a dot or a parenthesis is joined first, across blank lines and comments
-#      closed on their line. Each line is also read as the engine reads its names: through a
-#      computed literal key (`test["only"](`), an escaped name (`test.\u006fnly(`) and a block
-#      comment inside the line (`test./* x */only(`).
+#      lines before a dot or a parenthesis is joined first, across blank lines and comments,
+#      block comments over several lines included. Each line is also read as the engine reads
+#      its names: through a computed literal key (`test["only"](`), an escaped name
+#      (`test.\u006fnly(`) and a block comment inside the line (`test./* x */only(`).
 #      Allowed: the conditional `{ skip: !process.env.X }` and `{ todo: !process.env.X }`
 #      options, t.skip("reason") and t.todo("reason") in a test body, a bodiless
 #      test.todo("name"), and an empty env-gated placeholder test on one line (a skip option
@@ -95,18 +95,22 @@ DIFF_OUT=$(unset GIT_DIFF_OPTS GIT_LITERAL_PATHSPECS GIT_GLOB_PATHSPECS GIT_NOGL
 # are merged by the same rule, so an edit under an unchanged receiver line is seen whole. Context
 # lines below an added line are joined onto it and printed too, so an edit above an unchanged
 # .skip( line is seen whole as far as the diff's context lines reach. Blank lines and comments
-# closed on their line do not break a chain. The join runs twice and both outputs are scanned:
-# codeend reads strings but not regex literals, so a quote in a regex can make it misread the
-# rest of the line. With plain=1 the join reads no strings: chainend cuts only a trailing //
-# comment holding no quote, and only blank and // lines are stepped over.
+# closed on their line do not break a chain. The join runs four times and every output is
+# scanned: codeend reads strings but not regex literals, so a quote in a regex can make it
+# misread the rest of the line. With plain=1 and carry=0 the join reads no strings: chainend
+# cuts only a trailing // comment holding no quote, and only blank and // lines are stepped
+# over. With carry=1 a block comment's state is carried from one line of the new file to the
+# next: lines inside it are stepped over and a link starts after the comments before it. The
+# carry=0 runs stay because a /* in a regex literal, or with plain=1 in a string, opens a
+# comment that is not one and would hide the lines below it.
 JOIN='
-  # A blank line or one holding only comments.
-  function nocode(s) {
-    return plain ? (s == "" || s ~ /^\/\//) : codeend(s) == 0
+  # A blank line or one holding only comments; st is the comment state at its start.
+  function nocode(s, st) {
+    return plain && !carry ? (s == "" || s ~ /^\/\//) : codeend(s, st) == 0
   }
   # Trailing whitespace and trailing comments are not part of the chain.
-  function chainend(s) {
-    if (!plain) return substr(s, 1, codeend(s))
+  function chainend(s, st) {
+    if (!plain || carry) return substr(s, 1, codeend(s, st))
     sub(/[[:space:]]+$/, "", s)
     if (match(s, "//[^\"\047`]*$")) s = substr(s, 1, RSTART - 1)
     sub(/[[:space:]]+$/, "", s)
@@ -115,12 +119,18 @@ JOIN='
   # The index of the last character of s that is neither whitespace nor in a // or closed /* */
   # comment outside a string, 0 when there is none. Regex literals and ${...} in template
   # literals are not tracked; a line ending inside a string falls back to cutting a trailing //
-  # comment that holds no quote.
-  function codeend(s,   n, i, c, q, blk, last, blast) {
+  # comment that holds no quote. st is 1 when s starts inside a block comment. A comment left
+  # open ends the code at its last byte that is not whitespace, or with carry set before it. Sets
+  # cend to 1 when s ends inside a block comment and cfirst to the index of its first byte of
+  # code, 0 when there is none. With plain set it reads no strings, so it reads a /* right after
+  # code ("suite/*") that does not close on its line as code: it may be in a string, and the
+  # string text before it could join the next link.
+  function codeend(s, st,   n, i, c, q, blk, last, blast) {
     n = length(s)
     q = ""
-    blk = 0
+    blk = st
     last = 0
+    cfirst = 0
     for (i = 1; i <= n; i++) {
       c = substr(s, i, 1)
       if (blk) {
@@ -134,47 +144,61 @@ JOIN='
         } else if (c == q) q = ""
       } else if (c == "/" && substr(s, i + 1, 1) == "/") {
         break
-      } else if (c == "/" && substr(s, i + 1, 1) == "*") {
+      } else if (c == "/" && substr(s, i + 1, 1) == "*" && !(plain && last && last == i - 1 &&
+        !index(substr(s, i + 2), "*/"))) {
         blk = 1
         i++
         blast = i
       } else {
-        if (c == "\"" || c == "\047" || c == "`") q = c
-        if (c !~ /[[:space:]]/) last = i
+        if (!plain && (c == "\"" || c == "\047" || c == "`")) q = c
+        if (c !~ /[[:space:]]/) { last = i; if (!cfirst) cfirst = i }
       }
     }
-    if (blk) last = blast
+    if (blk) { if (!carry) last = blast }
     else if (q != "" && match(s, "//[^\"\047`]*$")) {
       last = RSTART - 1
       while (last > 0 && substr(s, last, 1) ~ /[[:space:]]/) last--
     }
+    cend = blk
     return last
+  }
+  # s from its first byte of code; with carry set, the comments before it are dropped.
+  function linkstart(s, st) {
+    if (carry) { codeend(s, st); s = substr(s, cfirst) }
+    sub(/^[[:space:]]+/, "", s)
+    return s
   }
   function joins(prev, more) {
     return (prev ~ /[A-Za-z0-9_$]$/ && more ~ /^([.]|[?][.]|[(]|`)/) ||
       (prev ~ /[)]$/ && more ~ /^[?]?[.]/) ||
       (prev ~ /[?][.]$/ && more ~ /^[(]/)
   }
-  function flush(   i, m, more, prev, head) {
+  # cmt: the new file is inside a block comment at the start of its next line. cs and hs: the
+  # state at the start of ctx and of merged[head].
+  function flush(   i, m, more, prev, head, st) {
     m = 0
     head = -1
     for (i = 0; i < n; i++) {
+      st = cmt
+      if (carry) { codeend(added[i], st); cmt = cend }
       more = added[i]
       sub(/^[[:space:]]+/, "", more)
-      if (nocode(more)) { merged[m++] = added[i]; continue }
-      prev = chainend(head >= 0 ? merged[head] : ctx)
+      if (nocode(more, st)) { merged[m++] = added[i]; continue }
+      prev = chainend(head >= 0 ? merged[head] : ctx, head >= 0 ? hs : cs)
+      more = linkstart(more, st)
       if (joins(prev, more)) {
-        if (head < 0) { head = m; m++ }
+        if (head < 0) { head = m; m++; hs = cs }
         merged[head] = prev more
         continue
       }
       merged[m] = added[i]
       head = m
+      hs = st
       m++
     }
     for (i = 0; i < m; i++) print merged[i]
     # hot: ctx ends in an added line, so context lines that join it are printed.
-    if (head >= 0) { ctx = merged[head]; hot = 1 }
+    if (head >= 0) { ctx = merged[head]; cs = hs; hot = 1 }
     n = 0
   }
   BEGIN { n = 0; ctx = "" }
@@ -186,15 +210,19 @@ JOIN='
   /^( |$)/ {
     flush()
     cline = substr($0, 2)
+    st = cmt
+    if (carry) { codeend(cline, st); cmt = cend }
     cmore = cline
     sub(/^[[:space:]]+/, "", cmore)
-    if (nocode(cmore)) next
-    cprev = chainend(ctx)
+    if (nocode(cmore, st)) next
+    cprev = chainend(ctx, cs)
+    cmore = linkstart(cmore, st)
     if (joins(cprev, cmore)) {
       ctx = cprev cmore
       if (hot) print ctx
     } else {
       ctx = cline
+      cs = st
       hot = 0
     }
     next
@@ -203,7 +231,7 @@ JOIN='
   /^-/ { flush(); next }
   /^\\/ { flush(); next }
   # Headers clear the context.
-  { flush(); ctx = "" }
+  { flush(); ctx = ""; cmt = 0; cs = 0 }
   END { flush() }
 '
 # Prints each joined line as written, then twice more as jsnorm() reads it, with its block
@@ -263,8 +291,10 @@ READINGS='
   }
   { print; print jsnorm($0, 1); print jsnorm($0, 0) }
 '
-JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=1 "$JOIN" &&
-  printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=0 "$JOIN") &&
+JOINED=$(printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=1 -v carry=0 "$JOIN" &&
+  printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=0 -v carry=0 "$JOIN" &&
+  printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=1 -v carry=1 "$JOIN" &&
+  printf '%s\n' "$DIFF_OUT" | LC_ALL=C awk -v plain=0 -v carry=1 "$JOIN") &&
   JOINED=$(printf '%s\n' "$JOINED" | LC_ALL=C awk "$READINGS") &&
   JOINED=$(printf '%s\n' "$JOINED" | LC_ALL=C awk '!seen[$0]++') || {
   echo "check-test-integrity: the added-line scanner (awk) failed; gate 2 cannot see the diff." >&2
