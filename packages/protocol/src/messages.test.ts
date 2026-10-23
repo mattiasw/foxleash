@@ -91,6 +91,7 @@ describe("parseMessage accepts", () => {
         "press_key",
         "read_console",
         "read_network",
+        "download",
         "probe_input",
       ] as const
     ).map((method) => ({

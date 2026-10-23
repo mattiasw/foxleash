@@ -290,6 +290,7 @@ describe("foxhand mcp", () => {
       assert.ok(Array.isArray(tools));
       assert.deepEqual(tools.map((tool) => field(tool, "name")).sort(), [
         "click",
+        "download",
         "drag",
         "get_page_text",
         "hover",

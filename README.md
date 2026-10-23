@@ -197,6 +197,18 @@ only from the upload folders (see Security below), never files or folders whose 
 with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
 works only on a tab showing a site you approved, and never asks.
 
+The agent saves a file from the web with `download`, giving its URL (such as a link's address
+from `read_page`) and a plain file name such as `receipt.pdf`. Foxhand fetches the file with
+your cookies for the site, as following the link would, saves it in your Firefox download
+folder and returns its absolute path and size; the agent can move it from there. The file is
+saved even where Firefox would open it in another application, such as a PDF set to open in a
+PDF viewer. The URL, and the address the file comes from after any redirects, must be on sites
+you approved, and `download` never asks. The name must not contain a slash or backslash, control
+or formatting characters, or start with a dot, and Firefox refuses some others, such as names
+ending in `.desktop`; Firefox adds a number when the name is taken, so an existing file is never
+replaced. At most 100 MiB and 50 seconds per file, one download at a time. Each download shows
+in Firefox's downloads panel and history.
+
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
 selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
 asks for up to 30. Text is matched in the text the page shows, without the values of form
@@ -255,6 +267,11 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   marked neither way still shows its value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
+- Downloads save only a file served by a site you approved, after any redirects: Foxhand
+  checks the address before the request, and the final address before it reads or saves
+  anything. They go only into your Firefox download folder, under a plain file name, never
+  over an existing file. The file's content reaches the agent only when it reads the file
+  with its own tools, outside Foxhand's untrusted marking.
 
 Your agent's own permission settings still apply on top of this, but do not rely on them
 alone: many people run agents with prompts turned off.

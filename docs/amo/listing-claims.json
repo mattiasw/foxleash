@@ -23,7 +23,11 @@
       "listing": "read the console and network activity",
       "tools": ["read_console", "read_network"]
     },
-    { "listing": "upload files from allowed folders", "tools": ["upload_file"] }
+    { "listing": "upload files from allowed folders", "tools": ["upload_file"] },
+    {
+      "listing": "download files from sites you approved into your Firefox download folder",
+      "tools": ["download"]
+    }
   ],
   "safeguards": [
     {
@@ -48,6 +52,24 @@
         { "file": "apps/server/src/upload-policy.ts", "contains": "/proc/self/fd/" },
         { "file": "apps/server/src/upload-policy.ts", "contains": "hasDotPart(" },
         { "file": "apps/server/src/tools.ts", "contains": "readAllowedFile(" }
+      ]
+    },
+    {
+      "listing": "Downloads save only a file served by a site you approved, after any redirects",
+      "evidence": [
+        {
+          "file": "apps/extension/src/downloads.ts",
+          "contains": "await downloadGate(session, url, notApproved);"
+        },
+        {
+          "file": "apps/extension/src/downloads.ts",
+          "contains": "await downloadGate(session, response.url, ledElsewhere);"
+        },
+        { "file": "apps/extension/src/downloads.ts", "contains": "if (view.blocked(url))" },
+        { "file": "apps/extension/src/downloads.ts", "contains": "if (!view.allowed(url))" },
+        { "file": "apps/extension/src/downloads.ts", "contains": "conflictAction: \"uniquify\"" },
+        { "file": "apps/extension/src/downloads.ts", "contains": "!/[/\\\\]/.test(value)" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "downloadNameProblem(filename)" }
       ]
     },
     {

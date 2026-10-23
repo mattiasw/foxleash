@@ -113,6 +113,33 @@ export interface BrowserApi {
     onCompleted: WebRequestEvent<(details: CompletedDetails) => void>;
     onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>;
   };
+  downloads: {
+    /** Resolves to the new download's id; rejects when Firefox refuses the options. */
+    download(options: {
+      url: string;
+      filename: string;
+      saveAs: false;
+      conflictAction: "uniquify";
+    }): Promise<number>;
+    search(query: { id: number }): Promise<DownloadItem[]>;
+    cancel(id: number): Promise<void>;
+    onChanged: BrowserEvent<(delta: DownloadDelta) => void>;
+  };
+}
+
+/** Firefox's `downloads.DownloadItem`, as far as the extension reads it. */
+export interface DownloadItem {
+  id: number;
+  /** The absolute path of the file. */
+  filename: string;
+  /** "in_progress", "interrupted" or "complete". */
+  state: string;
+}
+
+/** Firefox's `downloads.onChanged` delta, as far as the extension reads it. */
+export interface DownloadDelta {
+  id: number;
+  state?: { current?: string };
 }
 
 export interface WebRequestEvent<Listener> {

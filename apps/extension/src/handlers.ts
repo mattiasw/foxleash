@@ -28,6 +28,7 @@ import type {
 } from "./browser-api.ts";
 import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
+import { type Downloads, downloadNameProblem } from "./downloads.ts";
 import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
 import {
   clickOptions,
@@ -95,6 +96,8 @@ export interface HandlerDeps<Handle> {
   recordings: Pick<ConsoleRecording, "liveRecording">;
   /** The tabs' network requests; `import type`, since it imports this file. */
   network: Pick<NetworkLog, "read">;
+  /** Saves files into the download folder; it imports this file too. */
+  downloads: Pick<Downloads, "save">;
 }
 
 type Params = Record<string, unknown>;
@@ -138,6 +141,7 @@ export function createHandlers<Handle>({
   uploads,
   recordings,
   network,
+  downloads,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const handlers: Handlers = {
     tabs_list: tabsList,
@@ -162,6 +166,7 @@ export function createHandlers<Handle>({
       pageAction(session, params, "press_key", pressKeyOptions, pressKeyResultOf),
     read_console: readConsole,
     read_network: readNetwork,
+    download,
     probe_input: probeInput,
   };
 
@@ -632,6 +637,23 @@ export function createHandlers<Handle>({
     const options = networkOptions(params);
     const site = await allowedPageSite({ browser, groups, access }, session, tabId);
     return network.read(session, tabId, site, options);
+  }
+
+  /**
+   * Saves the file at a URL on a site the session may already act on into Firefox's download
+   * folder. Never asks.
+   */
+  async function download(session: string, params: Params): Promise<Result<"download">> {
+    const url = own(params, "url");
+    if (typeof url !== "string") {
+      throw new ToolError("invalid_params", "download needs url to be a string.");
+    }
+    const href = webUrl(url, "Foxhand downloads only http and https URLs.");
+    const filename = own(params, "filename");
+    const problem = downloadNameProblem(filename);
+    if (problem !== undefined) throw new ToolError("invalid_params", problem);
+    // A string: downloadNameProblem refuses anything else.
+    return downloads.save(session, href, String(filename));
   }
 
   /** Records the site of every URL the tab moves to until `stop`. */

@@ -15,6 +15,7 @@ apps/extension/src/console-recorder.ts
 apps/extension/src/console-recording.ts
 apps/extension/src/content.ts
 apps/extension/src/default-blocklist.ts
+apps/extension/src/downloads.ts
 apps/extension/src/element-rect.ts
 apps/extension/src/element-refs.ts
 apps/extension/src/flat-tree.ts

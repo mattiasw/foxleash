@@ -1,4 +1,4 @@
-import { createServer, type ServerResponse } from "node:http";
+import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 
 export const TITLES = {
@@ -49,6 +49,7 @@ export const TITLES = {
   networkHop: "Fixture network hop",
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
+  downloadLogin: "Fixture download login",
 } as const;
 
 /** The text the wait-late page adds, in an element with the id late, after WAIT_LATE_MS. */
@@ -76,6 +77,11 @@ export const NETWORK_SECRETS = {
   bearer: "network-bearer-Vb3Nq8",
   cookie: "network-cookie-Hs5Tz2",
 } as const;
+
+/** The cookie /download/login sets, without which /download/private.txt answers 403. */
+export const DOWNLOAD_COOKIE = { name: "download_session", value: "download-cookie-Pq4Rt7" };
+/** What /download/private.txt holds. */
+export const DOWNLOAD_SECRET = "download-secret-Zx8Wm2";
 
 /** The name of the cookie /api/fetch sets. */
 export const NETWORK_COOKIE = "fixture_session";
@@ -266,6 +272,8 @@ export interface FixtureServer {
   url(path: string): string;
   /** How many requests reached this path, 404s included. */
   hits(path: string): number;
+  /** The headers of each request to a path under /download/, in order. */
+  downloadHeaders(): IncomingHttpHeaders[];
   close(): Promise<void>;
 }
 
@@ -274,10 +282,12 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const timers = new Set<NodeJS.Timeout>();
   let counter = 0;
   const hits = new Map<string, number>();
+  const downloadHeaders: IncomingHttpHeaders[] = [];
 
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
     hits.set(path, (hits.get(path) ?? 0) + 1);
+    if (path.startsWith("/download/")) downloadHeaders.push({ ...request.headers });
     if (path === "/a") {
       sendPage(response, TITLES.a);
     } else if (path === "/b") {
@@ -417,6 +427,34 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/api/beacon-top" || path === "/api/beacon-frame") {
       response.writeHead(204, { "Cache-Control": "no-store" });
       response.end();
+    } else if (path === "/download/receipt.pdf") {
+      response.writeHead(200, {
+        "Content-Type": "application/pdf",
+        "Content-Disposition": 'attachment; filename="Receipt-1234.pdf"',
+        "Cache-Control": "no-store",
+      });
+      response.end(receiptPdf());
+    } else if (path === "/download/login") {
+      sendPage(response, TITLES.downloadLogin, {
+        "Set-Cookie": `${DOWNLOAD_COOKIE.name}=${DOWNLOAD_COOKIE.value}; Path=/`,
+      });
+    } else if (path === "/download/private.txt") {
+      const cookie = `${DOWNLOAD_COOKIE.name}=${DOWNLOAD_COOKIE.value}`;
+      const signedIn = (request.headers.cookie ?? "").split("; ").includes(cookie);
+      response.writeHead(signedIn ? 200 : 403, {
+        "Content-Type": "text/plain",
+        "Cache-Control": "no-store",
+      });
+      response.end(signedIn ? DOWNLOAD_SECRET : "forbidden");
+    } else if (path === "/download/away") {
+      // To the same server under another site, which the tests never approve.
+      response.writeHead(302, {
+        Location: `http://localhost:${request.socket.localPort}/download/receipt.pdf`,
+      });
+      response.end();
+    } else if (path === "/download/same") {
+      response.writeHead(302, { Location: "/download/receipt.pdf" });
+      response.end();
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
@@ -442,6 +480,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     port: address.port,
     url: (path) => `${origin}${path}`,
     hits: (path) => hits.get(path) ?? 0,
+    downloadHeaders: () => [...downloadHeaders],
     close: async () => {
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
@@ -453,11 +492,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   };
 }
 
-function sendPage(response: ServerResponse, title: string): void {
+function sendPage(
+  response: ServerResponse,
+  title: string,
+  headers: Record<string, string> = {},
+): void {
   sendHtml(
     response,
     `<!doctype html>\n<html><head><meta charset="utf-8"><title>${title}</title></head>` +
       `<body><h1>${title}</h1></body></html>\n`,
+    headers,
   );
 }
 
@@ -1255,6 +1299,11 @@ const SHOT_PDF_FRAME_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.shotPdfFrame}</title></head>
 <body><iframe title="PDF" src="/shot.pdf" style="width: 400px; height: 300px"></iframe></body></html>
 `;
+
+/** What /download/receipt.pdf serves. */
+export function receiptPdf(): string {
+  return minimalPdf();
+}
 
 /** A valid one-page PDF with nothing on its page. */
 function minimalPdf(): string {

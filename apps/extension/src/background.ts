@@ -1,6 +1,7 @@
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createConsoleRecording } from "./console-recording.ts";
+import { createDownloads } from "./downloads.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
 import { createNetworkLog } from "./network-log.ts";
@@ -34,6 +35,17 @@ const recordings = createConsoleRecording({ browser, groups, access });
 const network = createNetworkLog({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });
 const uploads = createUploads(timers);
+// Wrapped for the same reason as the timers.
+const downloads = createDownloads({
+  browser,
+  access,
+  timers,
+  fetch: (url, init) => fetch(url, init),
+  objectUrls: {
+    create: (blob) => URL.createObjectURL(blob),
+    revoke: (url) => URL.revokeObjectURL(url),
+  },
+});
 const handleRequest = createHandlers({
   browser,
   groups,
@@ -44,6 +56,7 @@ const handleRequest = createHandlers({
   uploads,
   recordings,
   network,
+  downloads,
 });
 const connection = createConnection({
   browser,

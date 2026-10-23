@@ -76,6 +76,8 @@ export interface Session {
 export interface Harness {
   root: string;
   run: string;
+  /** The folder Firefox saves downloads in. */
+  downloads: string;
   env: Record<string, string>;
   /** Installs the native host into the temp home only (`install --no-claude --no-extension`). */
   install(): void;
@@ -115,7 +117,9 @@ export function createHarness(): Harness {
   const home = join(root, "home");
   const run = join(root, "run");
   const profile = join(root, "profile");
+  const downloads = join(home, "Downloads");
   mkdirSync(home);
+  mkdirSync(downloads);
   mkdirSync(run, { mode: 0o700 });
   mkdirSync(profile);
   const env = childEnv(home, run);
@@ -195,6 +199,7 @@ export function createHarness(): Harness {
   return {
     root,
     run,
+    downloads,
     env,
 
     install() {
@@ -223,7 +228,12 @@ export function createHarness(): Harness {
       );
       const binary = await ensureFirefox();
       assertOpen();
-      const firefox = await launchFirefox({ binary, profileDir: profile, env });
+      const firefox = await launchFirefox({
+        binary,
+        profileDir: profile,
+        env,
+        downloadDir: downloads,
+      });
       if (closed) {
         // close() ran while Firefox started and could not reach it.
         await firefox.close();

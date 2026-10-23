@@ -76,3 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dialogs with Escape and picks options in a list with the arrow keys, on sites you approved.
   Enter on a link or in a form that leads to another site or out of the browser is refused, as
   clicks are.
+- Your agent can save the file at a link into your Firefox download folder with the `download`
+  tool, under a plain file name it chooses and never over an existing file, also where Firefox
+  would open the file in another application. The link, and the address the file comes from
+  after any redirects, must be on sites you approved; the request carries your cookies for the
+  site, and files are limited to 100 MiB.

@@ -3536,6 +3536,57 @@ describe("upload_file", { timeout: 10000 }, () => {
   }
 });
 
+describe("download", { timeout: 10000 }, () => {
+  const BAD_NAME =
+    "download needs filename to be a plain file name such as receipt.pdf: at most 200 bytes in UTF-8, no slash or backslash, no control or formatting characters, not starting with a dot.";
+
+  it("refuses a URL that is not http or https before saving", async () => {
+    const { call, saves } = setup();
+    for (const url of ["ftp://a.example/x", "file:///etc/passwd", "not a url", "about:blank"]) {
+      await assert.rejects(call("s1", "download", { url, filename: "x.pdf" }), {
+        code: "invalid_url",
+        message: "Foxhand downloads only http and https URLs.",
+      });
+    }
+    assert.deepEqual(saves, []);
+  });
+
+  it("refuses a url that is not a string", async () => {
+    const { call, saves } = setup();
+    for (const params of [{ filename: "x.pdf" }, { url: 1, filename: "x.pdf" }]) {
+      await assert.rejects(call("s1", "download", params), {
+        code: "invalid_params",
+        message: "download needs url to be a string.",
+      });
+    }
+    assert.deepEqual(saves, []);
+  });
+
+  it("refuses a filename that is not a plain file name before saving", async () => {
+    const { call, saves } = setup();
+    for (const filename of [undefined, 1, "", "a/b.pdf", ".x.pdf"]) {
+      const params = filename === undefined ? {} : { filename };
+      await assert.rejects(call("s1", "download", { url: "https://a.example/x", ...params }), {
+        code: "invalid_params",
+        message: BAD_NAME,
+      });
+    }
+    assert.deepEqual(saves, []);
+  });
+
+  it("saves the parsed URL under the name, for the session, and returns the result", async () => {
+    const { call, saves } = setup();
+    const result = await call("s1", "download", {
+      url: "HTTPS://A.example/x",
+      filename: "receipt.pdf",
+    });
+    assert.deepEqual(saves, [
+      { session: "s1", url: "https://a.example/x", filename: "receipt.pdf" },
+    ]);
+    assert.deepEqual(result, { path: "/downloads/receipt.pdf", bytes: 3 });
+  });
+});
+
 interface PageCall {
   session: string;
   tabId: number;
@@ -3552,6 +3603,12 @@ interface NetworkRead {
   tabId: number;
   site: string;
   options: NetworkReadOptions;
+}
+
+interface Save {
+  session: string;
+  url: string;
+  filename: string;
 }
 
 function setup() {
@@ -3584,6 +3641,13 @@ function setup() {
       return networkResult;
     },
   };
+  const saves: Save[] = [];
+  const downloads = {
+    save: async (session: string, url: string, filename: string) => {
+      saves.push({ session, url, filename });
+      return { path: `/downloads/${filename}`, bytes: 3 };
+    },
+  };
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -3594,6 +3658,7 @@ function setup() {
     uploads,
     recordings,
     network,
+    downloads,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -3676,6 +3741,7 @@ function setup() {
     liveWith,
     networkReads,
     networkWith,
+    saves,
     call,
     open,
     list,

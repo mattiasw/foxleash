@@ -4,6 +4,8 @@ import type {
   BrowserWindow,
   CaptureOptions,
   CssInjection,
+  DownloadDelta,
+  DownloadItem,
   FrameDetails,
   InjectionResult,
   MessageSender,
@@ -136,7 +138,41 @@ export interface FakeBrowser {
     event: E,
     details: WebRequestDetailsOf<E>,
   ): unknown[];
+  /** Every `downloads.download` call, in order. */
+  downloadCalls: DownloadCall[];
+  /** The downloads Firefox knows, by id, as `downloads.search` answers for them. */
+  downloads: Map<number, DownloadItem>;
+  /** The state the next downloads end in. */
+  downloadState: "complete" | "interrupted";
+  /**
+   * When the next downloads end. "immediate": already ended when `download()` resolves, with no
+   * `onChanged` event. "event_before_id": `onChanged` fires before `download()` resolves, while
+   * `search` still shows the download in progress. "held": in progress until `finishDownload`.
+   */
+  downloadTiming: "immediate" | "event_before_id" | "held";
+  /** Makes the next `downloads.download` reject with `error`, once. */
+  failNextDownload(error: unknown): void;
+  /** Ends the download in `state` and fires `downloads.onChanged`, even when it is not listed. */
+  finishDownload(id: number, state: "complete" | "interrupted"): void;
+  /** Fires `downloads.onChanged` alone. */
+  emitDownloadChanged(delta: DownloadDelta): void;
+  /** Every `downloads.cancel` call's id, in order. */
+  cancelledDownloads: number[];
+  /** Makes every later `downloads.cancel` reject with `error`. */
+  failCancel(error: unknown): void;
+  /** Listeners on `downloads.onChanged`. */
+  downloadListenerCount(): number;
 }
+
+export interface DownloadCall {
+  url: string;
+  filename: string;
+  saveAs: boolean;
+  conflictAction: string;
+}
+
+/** The folder the fake saves downloads in. */
+export const FAKE_DOWNLOAD_FOLDER = "/home/user/Downloads";
 
 type WebRequestEvents = BrowserApi["webRequest"];
 export type WebRequestEventName = keyof WebRequestEvents;
@@ -265,6 +301,10 @@ export function createFakeBrowser(): FakeBrowser {
     { handler: ContentScript; pending: Set<(error: Error) => void> }
   >();
   const webRequestListeners = new Map<WebRequestEventName, Set<(details: never) => void>>();
+  const onDownloadChanged = createEvent<(delta: DownloadDelta) => void>();
+  let downloadFailure: { error: unknown } | undefined;
+  let cancelFailure: { error: unknown } | undefined;
+  let nextDownloadId = 1;
 
   const browser: BrowserApi = {
     runtime: {
@@ -441,6 +481,35 @@ export function createFakeBrowser(): FakeBrowser {
       onCompleted: createWebRequestEvent("onCompleted"),
       onErrorOccurred: createWebRequestEvent("onErrorOccurred"),
     },
+    downloads: {
+      download: async (options) => {
+        fake.downloadCalls.push(structuredClone(options));
+        const failure = downloadFailure;
+        downloadFailure = undefined;
+        if (failure !== undefined) throw failure.error;
+        const id = nextDownloadId++;
+        const item: DownloadItem = {
+          id,
+          filename: `${FAKE_DOWNLOAD_FOLDER}/${options.filename}`,
+          state: "in_progress",
+        };
+        fake.downloads.set(id, item);
+        if (fake.downloadTiming === "immediate") item.state = fake.downloadState;
+        if (fake.downloadTiming === "event_before_id") {
+          emitDownloadChanged({ id, state: { current: fake.downloadState } });
+        }
+        return id;
+      },
+      search: async ({ id }) => {
+        const item = fake.downloads.get(id);
+        return item === undefined ? [] : [{ ...item }];
+      },
+      cancel: async (id) => {
+        fake.cancelledDownloads.push(id);
+        if (cancelFailure !== undefined) throw cancelFailure.error;
+      },
+      onChanged: onDownloadChanged,
+    },
   };
 
   const fake: FakeBrowser = {
@@ -599,8 +668,30 @@ export function createFakeBrowser(): FakeBrowser {
         (listener: (details: never) => unknown) => listener(details as never),
       );
     },
+    downloadCalls: [],
+    downloads: new Map(),
+    downloadState: "complete",
+    downloadTiming: "immediate",
+    failNextDownload: (error) => {
+      downloadFailure = { error };
+    },
+    finishDownload: (id, state) => {
+      const item = fake.downloads.get(id);
+      if (item !== undefined) item.state = state;
+      emitDownloadChanged({ id, state: { current: state } });
+    },
+    emitDownloadChanged: (delta) => emitDownloadChanged(delta),
+    cancelledDownloads: [],
+    failCancel: (error) => {
+      cancelFailure = { error };
+    },
+    downloadListenerCount: () => onDownloadChanged.listeners.size,
   };
   return fake;
+
+  function emitDownloadChanged(delta: DownloadDelta): void {
+    for (const listener of [...onDownloadChanged.listeners]) listener(delta);
+  }
 
   function emitNavigation(
     event: { listeners: Set<(details: NavigationDetails) => void> },

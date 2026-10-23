@@ -91,6 +91,8 @@ export interface LaunchOptions {
   binary: string;
   profileDir: string;
   env: Record<string, string>;
+  /** Where Firefox saves downloads. */
+  downloadDir: string;
   lifetimeSeconds?: number;
 }
 
@@ -105,9 +107,10 @@ export async function launchFirefox({
   binary,
   profileDir,
   env,
+  downloadDir,
   lifetimeSeconds = FIREFOX_LIFETIME_SECONDS,
 }: LaunchOptions): Promise<Firefox> {
-  writeFileSync(join(profileDir, "user.js"), buildUserJs());
+  writeFileSync(join(profileDir, "user.js"), buildUserJs(downloadDir));
   const child = spawn(
     "sh",
     [
@@ -331,7 +334,7 @@ export async function launchFirefox({
 }
 
 /** The throwaway profile's user.js. Every pref carries its reason. */
-function buildUserJs(): string {
+function buildUserJs(downloadDir: string): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
     [
       "browser.startup.page",
@@ -353,6 +356,16 @@ function buildUserJs(): string {
       "devtools.console.stdout.content",
       true,
       "Echo console output, the extension's warnings included, to stdout, whose tail a failing test shows.",
+    ],
+    [
+      "browser.download.folderList",
+      2,
+      "Save downloads in the folder browser.download.dir names, not the default one.",
+    ],
+    [
+      "browser.download.dir",
+      downloadDir,
+      "Downloads go into the test's temp home, never the developer's folder.",
     ],
   ];
   return prefs

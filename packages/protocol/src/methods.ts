@@ -167,6 +167,8 @@ export type KeyAction =
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
 export const UPLOAD_CHUNK_BYTES = 512 * 1024;
+/** The largest file download saves. */
+export const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
@@ -252,6 +254,8 @@ export interface Methods {
     params: { tabId: number; pattern?: string; limit?: number };
     result: { recording: boolean; requests: NetworkRequest[]; truncated: boolean };
   };
+  /** `path` is the absolute path Firefox saved the file at, `bytes` its size. */
+  download: { params: { url: string; filename: string }; result: { path: string; bytes: number } };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -286,6 +290,7 @@ export const METHOD_NAMES = [
   "press_key",
   "read_console",
   "read_network",
+  "download",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 
