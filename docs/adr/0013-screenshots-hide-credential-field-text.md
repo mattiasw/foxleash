@@ -5,7 +5,10 @@
 form fields as the page draws them. Its rule that a frame refusing the sheet refuses the
 screenshot is superseded by [0020](0020-screenshots-pass-over-frames-showing-an-error-page.md),
 2026-10-23. Its field mask's selectors are extended by
-[0021](0021-autofilled-fields-are-protected.md), 2026-10-23.
+[0021](0021-autofilled-fields-are-protected.md), 2026-10-23. Its wording that the remembered
+password fields are the ones read_page saw is superseded by
+[0022](0022-page-requests-remember-password-fields.md), 2026-10-23: they are the ones any page
+request saw.
 
 ## Context
 

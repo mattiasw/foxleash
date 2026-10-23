@@ -46,6 +46,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   values of password fields, of one-time code and card number fields that the page marks as
   such for autofill, and of text fields that Firefox filled in from your saved logins,
   addresses or cards, until you edit them, are never read out, only whether they are filled.
+  A password field the page turns into another kind of field stays protected once your agent
+  has read the page, taken a screenshot of it or acted in it while it was a password field.
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also

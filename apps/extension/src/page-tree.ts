@@ -60,7 +60,7 @@ export interface FieldFacts {
   type: string;
   /** The `autocomplete` attribute as written. */
   autocomplete: string | null;
-  /** The field was a password field when read_page saw it before in this document. */
+  /** The field was a password field at the start of a page request in this document. */
   wasPassword: boolean;
   /** The field matches `:autofill`: Firefox filled it and it was not edited since. */
   autofilled: boolean;

@@ -673,8 +673,9 @@ for (const type of ["click", "pointerdown", "mousedown", "pointerup", "mouseup",
 
 // A sign-in form with every kind of field read_page names, credential fields with values (one
 // set by the page's script), password fields the tests later turn into text and into a submit
-// button (one of them hidden until then), and enough content below to scroll the page, which
-// the script does.
+// button (one of them hidden until then), a show-password button whose page-world listener
+// turns the toggled field into text, and enough content below to scroll the page, which the
+// script does.
 const READ_FORM_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readForm}</title></head>
 <body>
@@ -699,6 +700,7 @@ const READ_FORM_PAGE = `<!doctype html>
 <label for="nickname">Nickname<span hidden> ${READ_HIDDEN.labelPart}</span></label>
 <input id="nickname" type="text">
 <input id="toggle" type="password" aria-label="Toggled password" value="${READ_SECRETS.toggled}">
+<button id="show-password" type="button">Show password</button>
 <input id="bare" type="password" value="${READ_SECRETS.bare}">
 <div id="later" hidden><input id="hidden-password" type="password" aria-label="Hidden password" value="${READ_SECRETS.hidden}"></div>
 <button type="submit">Sign in</button>
@@ -707,6 +709,9 @@ const READ_FORM_PAGE = `<!doctype html>
 </main>
 <script>
 document.getElementById("password-script").value = "${READ_SECRETS.passwordScript}";
+document.getElementById("show-password").addEventListener("click", () => {
+  document.getElementById("toggle").type = "text";
+});
 window.scrollTo(0, 120);
 </script>
 </body></html>

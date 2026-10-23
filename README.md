@@ -262,8 +262,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   your saved logins, addresses or cards, until you edit them, only whether they are filled:
   Firefox fills saved passwords into login pages when they load, and a page you approved
   could otherwise hand yours to the agent. In `read_page`, a password field that the page
-  turns into another kind of field stays protected only if `read_page` read it while it was
-  still a password field, and a text field that the page puts in its place shows its value.
+  turns into another kind of field stays protected only if the agent read the page, took a
+  screenshot of it or acted in it while it was still a password field, and a text field that
+  the page puts in its place shows its value.
   A text field Firefox filled in shows its value again once Firefox no longer highlights it
   as filled in: after you edit it, after the page's own scripts report a change to it or
   reload the page, and possibly after the agent goes back or forward to the page or Firefox
@@ -271,10 +272,10 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   sites, with a style sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a
   frame does not take it, such as another add-on's frame (a password manager's menu); a frame
   showing Firefox's error page for a page that could not be loaded or does not allow being
-  shown in a frame is the exception. When the page turns a
-  password field the agent read into another kind of field, a screenshot hides the text of
-  every input element in the page, input buttons included, outside its frames. A field
-  that is none of these still shows its value.
+  shown in a frame is the exception. When the page turns a password field into another kind
+  of field after the agent read the page, took a screenshot of it or acted in it while it was
+  a password field, a screenshot hides the text of every input element in the page, input
+  buttons included, outside its frames. A field that is none of these still shows its value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
 - Downloads save only a file served by a site you approved, after any redirects: Foxhand

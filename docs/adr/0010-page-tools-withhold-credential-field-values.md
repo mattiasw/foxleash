@@ -1,7 +1,9 @@
 # 0010: Page tools never return the value of a password, one-time code or card number field
 
 **Status:** Accepted, 2026-10-19. Its definition of a protected field is extended by
-[0021](0021-autofilled-fields-are-protected.md), 2026-10-23.
+[0021](0021-autofilled-fields-are-protected.md), 2026-10-23. Its rule that password fields are
+remembered at the start of every read is superseded by
+[0022](0022-page-requests-remember-password-fields.md), 2026-10-23.
 
 ## Context
 

@@ -32,7 +32,7 @@ const MASK_DECLARATIONS: readonly string[] = [
   "transition: none !important",
 ];
 const MASK_BODY = `{ ${MASK_DECLARATIONS.join("; ")}; }`;
-/** read_page's protected fields (ADR 0010, 0021), but for the ones it remembers as password fields. */
+/** read_page's protected fields (ADR 0010, 0021), but for the remembered password fields. */
 const FIELD_SELECTORS: readonly string[] = [
   'input[type="password" i]',
   ...CREDENTIAL_TOKENS.flatMap((token) => [
@@ -84,8 +84,8 @@ export function captureRect(reply: unknown, tabId: number): { rect: CaptureArea 
 }
 
 /**
- * Whether the page turned a field read_page remembers as a password field into another kind,
- * from the content script's reply, read as untrusted input: an own boolean field.
+ * Whether the page turned a remembered password field into another kind, from the content
+ * script's reply, read as untrusted input: an own boolean field.
  */
 export function revealedReply(reply: unknown, tabId: number): { revealed: boolean } | Refusal {
   const revealed = isRecord(reply) ? ownField(reply, "revealed") : undefined;

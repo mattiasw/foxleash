@@ -184,7 +184,9 @@ describe("page script requests", { timeout: 10000 }, () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     for (const site of ["https://b.example", undefined]) {
-      fake.setContentScript(tab.id, (message) => handlePageMessage(message, { site, handlers }));
+      fake.setContentScript(tab.id, (message) =>
+        handlePageMessage(message, { site, handlers, before: noop }),
+      );
       await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
         code: "page_changed",
         message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
@@ -815,7 +817,7 @@ function contentScript(site: string): ContentScript {
       throw new Error(`secret ${site}/private`);
     },
   };
-  return (message) => handlePageMessage(message, { site, handlers });
+  return (message) => handlePageMessage(message, { site, handlers, before: noop });
 }
 
 function assertNothingSent(fake: { injections: unknown[]; tabMessages: unknown[] }): void {
@@ -843,3 +845,5 @@ async function rejectsWith(promise: Promise<unknown>, code: string, label?: stri
     label,
   );
 }
+
+function noop(): void {}

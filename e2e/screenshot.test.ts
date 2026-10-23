@@ -294,6 +294,27 @@ describe("screenshot in real Firefox", () => {
     }
   });
 
+  test("a password field turned into text after a first screenshot hides every input of the page", async () => {
+    const tabId = await open(session, "/shot-fields?fresh=1", TITLES.shotFields);
+    const context = await contextOf(fixtures.url("/shot-fields?fresh=1"));
+    assertNone(await shotOf({ tabId }), PROTECTED, "protected");
+    await firefox.evaluate(context, 'document.getElementById("pw").type = "text"');
+    const png = await shotOf({ tabId });
+    assertNone(png, PROTECTED, "protected");
+    assertNone(png, SHOT_FIELD_COLOURS.top, "top");
+    assertNone(png, SHOT_FIELD_COLOURS.shadow, "shadow");
+    assertDrawn(png, SHOT_FIELD_COLOURS.frame, "frame");
+    assertDrawn(png, SHOT_FIELD_COLOURS.data, "data");
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, colourOf("plain"))) === rgb(SHOT_FIELD_COLOURS.top)
+          ? true
+          : undefined,
+      SHEET_REMOVAL_MS,
+      "the plain field's own colour again",
+    );
+  });
+
   test("a page with a frame Foxhand cannot enter is refused with no image", async () => {
     const tab = await open(session, "/shot-pdf-frame", TITLES.shotPdfFrame);
     const result = await harness.call(session, "screenshot", { tabId: tab });

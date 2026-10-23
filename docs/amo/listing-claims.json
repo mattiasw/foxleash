@@ -146,7 +146,18 @@
           "file": "apps/extension/src/read-page.ts",
           "contains": "!isProtected(element, page) ? [element.value]"
         },
-        { "file": "apps/extension/src/read-page.ts", "contains": "noteFields(page);" },
+        {
+          "file": "apps/extension/src/read-page.ts",
+          "contains": "export function notePasswordFields("
+        },
+        {
+          "file": "apps/extension/src/content.ts",
+          "contains": "before: () => notePasswordFields({ passwordFields })"
+        },
+        {
+          "file": "apps/extension/src/page-messages.ts",
+          "contains": "before();\n    const result: unknown = await handler(params);"
+        },
         { "file": "apps/extension/src/read-page.ts", "contains": "matches(\":autofill\")" },
         { "file": "apps/extension/src/page-tree.ts", "contains": "autofilled ||" },
         { "file": "apps/extension/src/page-input-dom.ts", "contains": "matches(\":autofill\")" }

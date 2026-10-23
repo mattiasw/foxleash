@@ -155,6 +155,34 @@ describe("read_page in real Firefox", () => {
     ]);
   });
 
+  test("a password field a click by coordinates turns into text before any read stays protected", async () => {
+    const tabId = await open("/read-form?fresh=1", TITLES.readForm);
+    const context = await contextOf(fixtures.url("/read-form?fresh=1"));
+    const answer = await firefox.evaluate(
+      context,
+      `(() => {
+        const button = document.getElementById("show-password");
+        button.scrollIntoView({ block: "center" });
+        const box = button.getBoundingClientRect();
+        return JSON.stringify({ x: box.left + box.width / 2, y: box.top + box.height / 2 });
+      })()`,
+    );
+    const centre: { x: number; y: number } = JSON.parse(String(answer));
+    // No ref: getting one needs read_page, which would remember the password fields first.
+    await harness.ok(session, "click", { tabId, x: centre.x, y: centre.y });
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, 'document.getElementById("toggle").type')) === "text"
+          ? true
+          : undefined,
+      PAGE_TIMEOUT_MS,
+      "the toggled field to turn into text",
+    );
+    const { tree, texts } = await read(tabId);
+    assertNoSecrets(texts, [READ_SECRETS.toggled]);
+    assertLines(tree, ['    textbox "Toggled password" [*] protected filled']);
+  });
+
   test("landmarks nest, with their headings and text", async () => {
     const tabId = await open("/read-landmarks", TITLES.readLandmarks);
     const home = fixtures.url("/a");

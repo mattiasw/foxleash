@@ -472,7 +472,7 @@ export function createHandlers<Handle>({
     return area.rect;
   }
 
-  /** Whether the page turned a field read_page saw as a password field into another kind. */
+  /** Whether the page turned a remembered password field into another kind. */
   async function passwordRevealed(session: string, tabId: number): Promise<boolean> {
     const reply = revealedReply(await pages.request(session, tabId, "password_fields", {}), tabId);
     if ("code" in reply) throw new ToolError(reply.code, reply.message);

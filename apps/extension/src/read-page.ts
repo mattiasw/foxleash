@@ -23,10 +23,10 @@ import {
   textLine,
 } from "./page-tree.ts";
 
-/** What read_page keeps per document, in the content script. */
+/** What the content script keeps per document for its page requests. */
 export interface PageMemory {
   refs: ElementRefs<Element>;
-  /** Every input that had type password at a read, which stays protected. */
+  /** Every input that had type password at the start of any page request, which stays protected. */
   passwordFields: WeakSet<Element>;
 }
 
@@ -118,7 +118,6 @@ export function readPage(
 ): { tree: string; truncated: boolean } {
   const options = readPageOptions(params);
   if (typeof options === "string") throw new PageError("invalid_params", options);
-  noteFields(page);
   const tree = createTreeText();
   if (options.ref === undefined) {
     const start = document.body ?? document.documentElement;
@@ -151,8 +150,8 @@ export function readPage(
 }
 
 /**
- * Whether the page turned a field read_page remembers as a password field into another kind, so
- * a screenshot must hide the text of every input. Remembers nothing new.
+ * Whether the page turned a remembered password field into another kind, so a screenshot must
+ * hide the text of every input.
  */
 export function passwordFieldsRevealed(page: Pick<PageMemory, "passwordFields">): {
   revealed: boolean;
@@ -425,10 +424,11 @@ export function focusedElement(): Element | null {
 }
 
 /**
- * Remembers every password field in the document, in shadow roots and hidden parts too and
- * whatever the walk reaches, so it stays protected after the page turns it into text.
+ * Remembers every password field in the document, in shadow roots and hidden parts too, so it
+ * stays protected after the page turns it into text. The content script runs it before every page
+ * request.
  */
-function noteFields(page: PageMemory): void {
+export function notePasswordFields(page: Pick<PageMemory, "passwordFields">): void {
   for (const element of documentElements()) {
     if (element instanceof HTMLInputElement && element.type === "password") {
       page.passwordFields.add(element);

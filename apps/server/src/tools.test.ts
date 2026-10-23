@@ -118,7 +118,7 @@ describe("tools", () => {
       "protected, never their value",
       "marks as such for autofill",
       "fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them",
-      "stays protected only if read_page read it while it was a password field",
+      "stays protected only if a Foxhand tool read the page, took a screenshot of it or acted in it while it was a password field",
       "marked file field",
       "50,000 characters",
       "read_page never asks",

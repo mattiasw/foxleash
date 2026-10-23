@@ -55,10 +55,12 @@ export function ownField(value: object, key: string): unknown {
 /**
  * The content script's answer to a message: undefined, synchronously, for anything that is not
  * a Foxhand page request, so Firefox sends no reply; else a reply promise that never rejects.
+ * `before` runs right before every handler, so memory the handlers share sees the page before the
+ * handler changes it; a throw from it fails the request.
  */
 export function handlePageMessage(
   message: unknown,
-  ctx: { site: string | undefined; handlers: PageHandlers },
+  ctx: { site: string | undefined; handlers: PageHandlers; before: () => void },
 ): Promise<PageReply> | undefined {
   if (!isRecord(message) || ownField(message, "kind") !== PAGE_REQUEST_KIND) return undefined;
   const site = ctx.site ?? "";
@@ -81,7 +83,7 @@ export function handlePageMessage(
       failure(site, "invalid_params", "Foxhand's page script has no request of that type."),
     );
   }
-  return run(handler, params, site);
+  return run(handler, params, site, ctx.before);
 }
 
 /**
@@ -112,8 +114,10 @@ async function run(
   handler: (params: Record<string, unknown>) => unknown,
   params: Record<string, unknown>,
   site: string,
+  before: () => void,
 ): Promise<PageReply> {
   try {
+    before();
     const result: unknown = await handler(params);
     return { ok: true, site, result };
   } catch (error: unknown) {

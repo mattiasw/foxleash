@@ -52,7 +52,7 @@ describe("handlePageMessage", () => {
       Object.create({ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }),
     ];
     for (const message of messages) {
-      assert.equal(handlePageMessage(message, { site: SITE, handlers }), undefined);
+      assert.equal(handlePageMessage(message, { site: SITE, handlers, before: noop }), undefined);
     }
     assert.deepEqual(calls, []);
   });
@@ -75,7 +75,7 @@ describe("handlePageMessage", () => {
     ];
     for (const request of requests) {
       assert.deepEqual(
-        await handlePageMessage(request, { site: SITE, handlers }),
+        await handlePageMessage(request, { site: SITE, handlers, before: noop }),
         UNREADABLE,
         JSON.stringify(request),
       );
@@ -87,14 +87,20 @@ describe("handlePageMessage", () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     const request = { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} };
-    assert.deepEqual(await handlePageMessage(request, { site: "https://b.example", handlers }), {
-      ...CHANGED,
-      site: "https://b.example",
-    });
-    assert.deepEqual(await handlePageMessage(request, { site: undefined, handlers }), {
-      ...CHANGED,
-      site: "",
-    });
+    assert.deepEqual(
+      await handlePageMessage(request, { site: "https://b.example", handlers, before: noop }),
+      {
+        ...CHANGED,
+        site: "https://b.example",
+      },
+    );
+    assert.deepEqual(
+      await handlePageMessage(request, { site: undefined, handlers, before: noop }),
+      {
+        ...CHANGED,
+        site: "",
+      },
+    );
     assert.deepEqual(calls, []);
   });
 
@@ -103,7 +109,10 @@ describe("handlePageMessage", () => {
       const calls: unknown[] = [];
       const handlers: PageHandlers = { echo: (params) => calls.push(params) };
       const request = { kind: PAGE_REQUEST_KIND, type, site: SITE, params: {} };
-      assert.deepEqual(await handlePageMessage(request, { site: SITE, handlers }), NO_SUCH_TYPE);
+      assert.deepEqual(
+        await handlePageMessage(request, { site: SITE, handlers, before: noop }),
+        NO_SUCH_TYPE,
+      );
       assert.deepEqual(calls, []);
     });
   }
@@ -121,7 +130,7 @@ describe("handlePageMessage", () => {
     assert.deepEqual(
       await handlePageMessage(
         { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params },
-        { site: SITE, handlers },
+        { site: SITE, handlers, before: noop },
       ),
       { ok: true, site: SITE, result: { echoed: "hi" } },
     );
@@ -130,7 +139,7 @@ describe("handlePageMessage", () => {
     assert.deepEqual(
       await handlePageMessage(
         { kind: PAGE_REQUEST_KIND, type: "later", site: SITE, params: {} },
-        { site: SITE, handlers },
+        { site: SITE, handlers, before: noop },
       ),
       { ok: true, site: SITE, result: "done" },
     );
@@ -176,10 +185,72 @@ describe("handlePageMessage", () => {
     }
   });
 
+  it("runs before once, right before a sync or an async handler starts", async () => {
+    for (const later of [false, true]) {
+      const calls: string[] = [];
+      const handlers: PageHandlers = {
+        act: later
+          ? async () => {
+              calls.push("handler");
+              return "done";
+            }
+          : () => {
+              calls.push("handler");
+              return "done";
+            },
+      };
+      const reply = handlePageMessage(
+        { kind: PAGE_REQUEST_KIND, type: "act", site: SITE, params: {} },
+        { site: SITE, handlers, before: () => calls.push("before") },
+      );
+      assert.deepEqual(calls, ["before", "handler"], `async: ${later}`);
+      assert.deepEqual(await reply, { ok: true, site: SITE, result: "done" });
+      assert.deepEqual(calls, ["before", "handler"], `async: ${later}`);
+    }
+  });
+
+  it("runs before for no request that reaches no handler", async () => {
+    let runs = 0;
+    const handlers: PageHandlers = { echo: () => "echoed" };
+    const before = () => {
+      runs += 1;
+    };
+    const requests: [unknown, string | undefined][] = [
+      [{ kind: "other", type: "echo", site: SITE, params: {} }, SITE],
+      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: null }, SITE],
+      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }, "https://b.example"],
+      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }, undefined],
+      [{ kind: PAGE_REQUEST_KIND, type: "missing", site: SITE, params: {} }, SITE],
+    ];
+    for (const [request, site] of requests) {
+      const reply = await handlePageMessage(request, { site, handlers, before });
+      assert.notEqual(reply?.ok, true, JSON.stringify(request));
+      assert.equal(runs, 0, JSON.stringify(request));
+    }
+  });
+
+  it("fails the request without running the handler when before throws", async () => {
+    const calls: unknown[] = [];
+    const handlers: PageHandlers = { echo: (params) => calls.push(params) };
+    const reply = await handlePageMessage(
+      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} },
+      {
+        site: SITE,
+        handlers,
+        before: () => {
+          throw new Error("secret https://a.example/private");
+        },
+      },
+    );
+    assert.deepEqual(reply, FAILED);
+    assert.equal(JSON.stringify(reply).includes("secret"), false);
+    assert.deepEqual(calls, []);
+  });
+
   function call(handlers: PageHandlers, type: string): Promise<unknown> | undefined {
     return handlePageMessage(
       { kind: PAGE_REQUEST_KIND, type, site: SITE, params: {} },
-      { site: SITE, handlers },
+      { site: SITE, handlers, before: noop },
     );
   }
 });
@@ -247,3 +318,5 @@ describe("the page constants", () => {
 function withInherited(own: object, inherited: object): object {
   return Object.assign(Object.create(inherited), own);
 }
+
+function noop(): void {}

@@ -10,7 +10,7 @@ import { handlePageMessage, ownField, PageError, type PageHandlers } from "./pag
 import { pageTextOptions, tidyText } from "./page-text.ts";
 import { readPageText, renderedText } from "./page-text-dom.ts";
 import { uploadFile } from "./page-upload.ts";
-import { passwordFieldsRevealed, readPage } from "./read-page.ts";
+import { notePasswordFields, passwordFieldsRevealed, readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
 
 declare const browser: Pick<BrowserApi, "runtime">;
@@ -50,7 +50,11 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     wait_for: (params) => conditionMet(params),
   };
   browser.runtime.onMessage.addListener((message) =>
-    handlePageMessage(message, { site: siteOf(location.href), handlers }),
+    handlePageMessage(message, {
+      site: siteOf(location.href),
+      handlers,
+      before: () => notePasswordFields({ passwordFields }),
+    }),
   );
   // Last, so a throw above leaves the next injection free to try again.
   Object.defineProperty(globalThis, STARTED, { value: true });
