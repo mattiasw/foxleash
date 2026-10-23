@@ -173,6 +173,57 @@ export const READ_HIDDEN = {
   legendAttribute: "hidden-legend-attribute-Oe2",
   figcaptionDisplay: "hidden-figcaption-display-Pf3",
   captionAttribute: "hidden-caption-attribute-Qg4",
+  canvasLabel: "hidden-canvas-label-Ah1",
+  canvasValue: "hidden-canvas-value-Bi2",
+  legendCanvas: "hidden-legend-canvas-Cj3",
+  legendSvg: "hidden-legend-svg-Dk4",
+  buttonSvg: "hidden-button-svg-El5",
+  selectText: "hidden-select-text-Fm6",
+  selectLabel: "hidden-select-label-Gn7",
+  selectHeading: "hidden-select-heading-Ho8",
+  svgDefs: "hidden-svg-defs-Ip9",
+  svgContentsTspan: "hidden-svg-contents-tspan-Jq1",
+  svgLanguage: "hidden-svg-language-Kr2",
+  svgSwitch: "hidden-svg-switch-Ls3",
+  optionLabelled: "hidden-option-labelled-Mt4",
+  optionColumn: "hidden-option-column-Nu5",
+  optionSkipped: "hidden-option-skipped-Ov6",
+  optionCanvas: "hidden-option-canvas-Pw7",
+  optionDetails: "hidden-option-details-Qx8",
+  optionListSkipped: "hidden-option-list-skipped-Ry9",
+} as const;
+
+/**
+ * Holders on the read-hidden page whose children Firefox does not render, each of which the
+ * page's script gives a text node (`direct`) and a display: contents span (`contents`).
+ */
+export const READ_UNRENDERED = [
+  "canvas",
+  "object-data",
+  "embed-data",
+  "select",
+  "optgroup",
+  "svg",
+  "svg-g",
+  "svg-a",
+  "wbr",
+  "col",
+  "colgroup",
+  "table-column",
+].map((id) => ({
+  id,
+  direct: `unrendered-${id}-direct-Zr5`,
+  contents: `unrendered-${id}-contents-Zr5`,
+}));
+
+/** Text the read-hidden page shows in holders like those, which read_page must keep. */
+export const READ_RENDERED = {
+  svgText: "rendered-svg-text-Na1",
+  svgLink: "rendered-svg-link-Ob2",
+  foreign: "rendered-foreign-Pc3",
+  objectFallback: "rendered-object-fallback-Qd4",
+  embedFallback: "rendered-embed-fallback-Re5",
+  wrappedOption: "rendered-wrapped-option-Sf6",
 } as const;
 
 /** Text the get_page_text pages hold in each region, to find where each region went. */
@@ -764,6 +815,10 @@ const READ_LANDMARKS_PAGE = `<!doctype html>
 </body></html>
 `;
 
+// A 10 by 10 SVG image, which an object or embed shows as its data.
+const SVG_DATA_URL =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10'%3E%3Crect width='10' height='10'/%3E%3C/svg%3E";
+
 // Text hidden in each way a page can hide it: display none, the hidden attribute, aria-hidden,
 // inert, visibility hidden, content-visibility hidden, video fallback, and in disclosures: a
 // closed one, one whose open attribute is in a namespace, one whose first summary is not HTML,
@@ -771,7 +826,18 @@ const READ_LANDMARKS_PAGE = `<!doctype html>
 // inside a heading's name and in a button's; and a hidden details in another namespace, which
 // has no content box, whose ::details-content rule asks for visible text. Two open disclosures
 // and one whose content box is visible inside a hidden details show their text. Each details is
-// on one line, with no whitespace inside it.
+// on one line, with no whitespace inside it. Then holders whose children Firefox does not
+// render (canvas fallback, an object and an embed showing their data, a drop-down select and its
+// optgroup, SVG outside its text elements, wbr, column boxes), which the script fills with text
+// and display: contents spans, as text a page hides there; a field in a canvas, legends and a
+// button with text in a canvas or an svg, a select the script adds text, a label and a heading
+// to, SVG text in defs, in a display: contents tspan, under a language test or in a switch, an
+// option whose label stands for its content, and options a list box does not render (in a
+// column-box optgroup, a content-visibility: hidden optgroup, a canvas and an open details with
+// a hidden content box that the script appends, a content-visibility: hidden list box). Each is
+// in a block of its own. Last, the same holders where Firefox shows what they hold: a canvas
+// whose aria-label names its button, SVG text and a link in it, a foreignObject, an object
+// without data, an embed without a source, and an option the script wraps in a div in its select.
 const READ_HIDDEN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readHidden}</title>
 <style>
@@ -782,6 +848,7 @@ fixture|summary { display: contents; }
 #details-content-visibility::details-content,
 #details-named::details-content { content-visibility: hidden; }
 #details-display::details-content { display: none; }
+#list-details::details-content { content-visibility: hidden; }
 #details-foreign-ns { visibility: hidden; }
 #details-revealed::details-content,
 #details-foreign-ns::details-content { visibility: visible; }
@@ -807,7 +874,69 @@ fixture|summary { display: contents; }
 <div style="content-visibility: hidden">${READ_HIDDEN.contentVisibility}</div>
 <video controls>${READ_HIDDEN.fallback}</video>
 <p>${READ_VISIBLE_MARKER}</p>
+<div><canvas width="1" height="1" data-unrendered="canvas"></canvas></div>
+<div><object data="${SVG_DATA_URL}" type="image/svg+xml" width="10" height="10" data-unrendered="object-data"></object></div>
+<div><embed src="${SVG_DATA_URL}" type="image/svg+xml" width="10" height="10" data-unrendered="embed-data"></div>
+<div><select aria-label="Unrendered pick" data-unrendered="select"><option>Unrendered choice</option></select></div>
+<div><select aria-label="Unrendered group pick"><optgroup label="Group" data-unrendered="optgroup"><option>Grouped choice</option></optgroup></select></div>
+<div><svg width="10" height="10" data-unrendered="svg"></svg></div>
+<div><svg width="10" height="10"><g data-unrendered="svg-g"></g></svg></div>
+<div><svg width="10" height="10"><a href="/a" data-unrendered="svg-a"></a></svg></div>
+<p>Word<wbr data-unrendered="wbr">break</p>
+<table><colgroup data-unrendered="colgroup"><col data-unrendered="col"></colgroup><tr><td>Column cell</td></tr></table>
+<div style="display: table"><div style="display: table-column" data-unrendered="table-column"></div><div style="display: table-cell">Styled column cell</div></div>
+<div><label for="canvas-field" style="display: none">${READ_HIDDEN.canvasLabel}</label><canvas width="1" height="1"><input id="canvas-field" value="${READ_HIDDEN.canvasValue}"></canvas></div>
+<fieldset><legend>Billing<canvas width="1" height="1">${READ_HIDDEN.legendCanvas}</canvas></legend><input aria-label="Billing field"></fieldset>
+<fieldset><legend>Card<svg width="0" height="0">${READ_HIDDEN.legendSvg}</svg></legend><input aria-label="Card field"></fieldset>
+<div><button>Delete<svg width="0" height="0">${READ_HIDDEN.buttonSvg}</svg></button></div>
+<div><select id="select-text" aria-label="Plan"><option>Free</option></select></div>
+<div><select id="select-appended" aria-label="Plan two"><option>Free two</option></select></div>
+<div><svg width="200" height="40"><defs><text>${READ_HIDDEN.svgDefs}</text></defs><text x="0" y="15"><tspan style="display: contents">${READ_HIDDEN.svgContentsTspan}</tspan></text></svg></div>
+<div><svg width="200" height="20"><text x="0" y="15" systemLanguage="zz">${READ_HIDDEN.svgLanguage}</text></svg></div>
+<div><svg width="200" height="20"><switch><text x="0" y="15">${READ_HIDDEN.svgSwitch}</text></switch></svg></div>
+<div><select aria-label="Labelled pick"><option label="Labelled free">${READ_HIDDEN.optionLabelled}</option></select></div>
+<div><select id="select-list" size="3" aria-label="List pick"><optgroup label="Column group" style="display: table-column-group"><option>${READ_HIDDEN.optionColumn}</option></optgroup><optgroup label="Skipped group" style="content-visibility: hidden"><option>${READ_HIDDEN.optionSkipped}</option></optgroup><option>List choice</option></select></div>
+<div><select size="2" aria-label="Skipped list pick" style="content-visibility: hidden"><option>${READ_HIDDEN.optionListSkipped}</option></select></div>
+<div><button><canvas aria-label="Chart" width="1" height="1"></canvas></button></div>
+<div><svg width="200" height="20"><text x="0" y="15">${READ_RENDERED.svgText}</text></svg></div>
+<div><svg width="200" height="20"><text x="0" y="15"><a href="/a">${READ_RENDERED.svgLink}</a></text></svg></div>
+<div><svg width="200" height="40"><foreignObject width="200" height="40"><p>${READ_RENDERED.foreign}</p></foreignObject></svg></div>
+<div><object><p>${READ_RENDERED.objectFallback}</p></object></div>
+<div><embed id="embed-fallback"></div>
+<div><select id="select-wrapper" aria-label="Wrapper pick"><option>Plain choice</option></select></div>
 <script>
+const unrendered = ${JSON.stringify(Object.fromEntries(READ_UNRENDERED.map(({ id, direct, contents }) => [id, [direct, contents]])))};
+for (const holder of document.querySelectorAll("[data-unrendered]")) {
+  const [direct, contents] = unrendered[holder.getAttribute("data-unrendered")];
+  const span = document.createElement("span");
+  span.style.display = "contents";
+  span.textContent = contents;
+  holder.append(" " + direct + " ", span);
+}
+document.getElementById("select-text").prepend("${READ_HIDDEN.selectText}");
+for (const [name, token] of [
+  ["label", "${READ_HIDDEN.selectLabel}"],
+  ["h2", "${READ_HIDDEN.selectHeading}"],
+]) {
+  const appended = document.createElement(name);
+  appended.style.display = "contents";
+  appended.textContent = token;
+  document.getElementById("select-appended").append(appended);
+}
+document.getElementById("embed-fallback").append("${READ_RENDERED.embedFallback}");
+const listCanvas = document.createElement("canvas");
+listCanvas.append(new Option("${READ_HIDDEN.optionCanvas}"));
+document.getElementById("select-list").append(listCanvas);
+const listDetails = document.createElement("details");
+listDetails.id = "list-details";
+listDetails.open = true;
+listDetails.append(new Option("${READ_HIDDEN.optionDetails}"));
+document.getElementById("select-list").append(listDetails);
+const wrapper = document.createElement("div");
+const wrapped = document.createElement("option");
+wrapped.textContent = "${READ_RENDERED.wrappedOption}";
+wrapper.append(wrapped);
+document.getElementById("select-wrapper").append(wrapper);
 document.getElementById("details-namespaced").setAttributeNS("urn:fixture", "open", "");
 const foreign = document.createElementNS("urn:fixture", "summary");
 foreign.textContent = "${READ_HIDDEN.foreignSummary}";
@@ -925,10 +1054,14 @@ const READ_REFS_PAGE = `<!doctype html>
 // text, each with the holder the test moves it into (hiding ones: display none, content-visibility
 // hidden, a details with a hidden content box, a closed details, display contents under display
 // none, a progress, a br, a hidden host's shadow root, a host with no slot, a slot showing
-// assigned nodes; showing ones: a plain div, an open details, a slot, a slot showing its
-// fallback), buttons and options named from their content, fields, fieldsets, a figure and a
-// table whose name sources or values the test changes and hides, ones whose legend, figcaption,
-// caption or label is hidden from the start, and custom elements with open shadow roots.
+// assigned nodes, a canvas, a div in a canvas, an object and an embed showing their data, a
+// drop-down select, an svg, an svg g, a wbr, a col, a display: table-column div; showing ones: a
+// plain div, an open details, a slot, a slot showing its fallback, an object without data, an
+// embed without a source, a foreignObject), buttons and options named from their content (one
+// button the test moves into a canvas, an SVG one into defs, an option into a div in its select
+// and one into an hr in its select), fields, fieldsets, a figure and a table whose name sources
+// or values the test changes and hides, ones whose legend, figcaption, caption or label is hidden
+// from the start, and custom elements with open shadow roots.
 const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readRefHidden}</title>
 <style>
@@ -949,6 +1082,22 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <div role="group" aria-label="Open details root" id="root-open-details">Open details root text</div>
 <div role="group" aria-label="Shown fallback root" id="root-shown-fallback">Shown fallback root text</div>
 <slot-host><div role="group" aria-label="Slotted root" id="root-slotted">Slotted root text</div></slot-host>
+<div role="group" aria-label="Canvas root" id="root-canvas">Canvas root text</div>
+<div role="group" aria-label="Deep canvas root" id="root-canvas-deep">Deep canvas root text</div>
+<div role="group" aria-label="Object data root" id="root-object-data">Object data root text</div>
+<div role="group" aria-label="Embed data root" id="root-embed-data">Embed data root text</div>
+<div role="group" aria-label="Select root" id="root-select">Select root text</div>
+<div role="group" aria-label="Svg root" id="root-svg">Svg root text</div>
+<div role="group" aria-label="Svg group root" id="root-svg-g">Svg group root text</div>
+<div role="group" aria-label="Word break root" id="root-wbr">Word break root text</div>
+<div role="group" aria-label="Column root" id="root-col">Column root text</div>
+<div role="group" aria-label="Table column root" id="root-table-column">Table column root text</div>
+<div role="group" aria-label="Object fallback root" id="root-object-fallback">Object fallback root text</div>
+<div role="group" aria-label="Embed fallback root" id="root-embed-fallback">Embed fallback root text</div>
+<div role="group" aria-label="Foreign object root" id="root-svg-foreign">Foreign object root text</div>
+<div role="group" aria-label="Boxed canvas root" id="root-canvas-boxed">Boxed canvas root text</div>
+<div role="group" aria-label="Boxed deep canvas root" id="root-canvas-deep-boxed">Boxed deep canvas root text</div>
+<div role="group" aria-label="Boxed object fallback root" id="root-object-fallback-boxed">Boxed object fallback root text</div>
 <div id="holder-display" style="display: none"></div>
 <div id="holder-cv" style="content-visibility: hidden"></div>
 <details id="holder-box" class="box-hidden" open><summary>Box holder</summary></details>
@@ -962,6 +1111,20 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <div id="holder-visible"></div>
 <details id="holder-open-details" open><summary>Open holder</summary></details>
 <empty-host id="holder-shown-fallback"></empty-host>
+<canvas id="holder-canvas" width="1" height="1"></canvas>
+<canvas width="1" height="1"><div id="holder-canvas-deep"></div></canvas>
+<object id="holder-object-data" data="${SVG_DATA_URL}" type="image/svg+xml" width="10" height="10"></object>
+<embed id="holder-embed-data" src="${SVG_DATA_URL}" type="image/svg+xml" width="10" height="10">
+<select id="holder-select" aria-label="Holder pick"><option>Holder choice</option></select>
+<svg id="holder-svg" width="10" height="10"></svg>
+<svg width="10" height="10"><g id="holder-svg-g"></g></svg>
+<p>Word<wbr id="holder-wbr">break</p>
+<table><colgroup><col id="holder-col"></colgroup><tr><td>Column holder cell</td></tr></table>
+<div style="display: table"><div id="holder-table-column" style="display: table-column"></div><div style="display: table-cell">Styled column holder cell</div></div>
+<object id="holder-object-fallback"></object>
+<embed id="holder-embed-fallback">
+<svg width="200" height="40"><foreignObject id="holder-svg-foreign" width="200" height="40"></foreignObject></svg>
+<svg width="10" height="10"><defs id="holder-defs"></defs></svg>
 <details id="name-closed" open><summary>Closed name</summary><button id="button-closed">Go closed</button></details>
 <details id="name-box" open><summary>Box name</summary><button id="button-box">Go box</button></details>
 <button id="button-display">Go display</button>
@@ -973,6 +1136,10 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <select id="select-own" aria-label="Own pick"><option>Seven</option><option id="option-own">Eight</option></select>
 <select id="select-group" aria-label="Group pick"><option>Ten</option><optgroup id="optgroup-display" label="Group"><option id="option-group">Nine</option></optgroup></select>
 <select id="select-control" aria-label="Control pick"><option>Three</option><option id="option-control">Four</option></select>
+<button id="button-canvas"><span id="button-canvas-label">Go canvas</span></button>
+<svg width="100" height="20"><g id="button-defs" role="button"><text id="button-defs-label" x="0" y="15">Go defs</text></g></svg>
+<select id="select-wrapped" aria-label="Wrapped pick"><option>Wrapped one</option><option id="option-wrapped">Wrapped two</option></select>
+<select id="select-rule" aria-label="Rule pick"><option>Rule one</option><option id="option-in-rule">Rule two</option></select>
 <fieldset id="fieldset-hidden"><legend id="legend-hidden">Hidden legend</legend><input aria-label="Hidden legend field"></fieldset>
 <figure id="figure-hidden"><p>Hidden figure body</p><figcaption id="figcaption-hidden">Hidden figcaption</figcaption></figure>
 <table id="table-hidden"><caption id="caption-hidden">Hidden caption</caption><tr><td>Hidden table cell</td></tr></table>

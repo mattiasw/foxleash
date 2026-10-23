@@ -7,7 +7,9 @@ import {
   READ_HIDDEN,
   READ_LARGE_ITEMS,
   READ_OPEN_DETAILS,
+  READ_RENDERED,
   READ_SECRETS,
+  READ_UNRENDERED,
   READ_VISIBLE_MARKER,
   startFixtureServer,
   TITLES,
@@ -273,6 +275,54 @@ describe("read_page in real Firefox", () => {
     assertLines(sub.tree, ['group "Visibility box" [*]', '  button "Visibility" [*]']);
   });
 
+  test("a full read leaves out what Firefox does not render in a canvas, object, embed, select, svg, wbr or column", async () => {
+    const tabId = await open("/read-hidden?fresh=1", TITLES.readHidden);
+    const { tree, texts } = await read(tabId);
+    const tokens = [
+      ...READ_UNRENDERED.flatMap(({ direct, contents }) => [direct, contents]),
+      READ_HIDDEN.canvasLabel,
+      READ_HIDDEN.canvasValue,
+      READ_HIDDEN.legendCanvas,
+      READ_HIDDEN.legendSvg,
+      READ_HIDDEN.buttonSvg,
+      READ_HIDDEN.selectText,
+      READ_HIDDEN.selectLabel,
+      READ_HIDDEN.selectHeading,
+      READ_HIDDEN.svgDefs,
+      READ_HIDDEN.svgContentsTspan,
+      READ_HIDDEN.svgLanguage,
+      READ_HIDDEN.svgSwitch,
+      READ_HIDDEN.optionLabelled,
+      READ_HIDDEN.optionColumn,
+      READ_HIDDEN.optionSkipped,
+      READ_HIDDEN.optionCanvas,
+      READ_HIDDEN.optionDetails,
+      READ_HIDDEN.optionListSkipped,
+    ];
+    // Lists every leaked token, where assertNoSecrets stops at the first.
+    assert.deepEqual(
+      tokens.filter((token) => texts.some((text) => text.includes(token))),
+      [],
+    );
+    assertLines(tree, [
+      'button "Chart" [*]',
+      'group "Billing" [*]',
+      'group "Card" [*]',
+      'button "Delete" [*]',
+      'combobox "Plan" [*] value="Free"',
+      '  option "Free" [*] selected',
+      'combobox "Labelled pick" [*] value="Labelled free"',
+      '  option "Labelled free" [*] selected',
+      `text "${READ_RENDERED.svgText}"`,
+      `text "${READ_RENDERED.foreign}"`,
+      `text "${READ_RENDERED.objectFallback}"`,
+      `text "${READ_RENDERED.embedFallback}"`,
+      `  option "${READ_RENDERED.wrappedOption}" [*]`,
+      '  option "List choice" [*]',
+    ]);
+    assert.ok(tree.includes(READ_RENDERED.svgLink), tree);
+  });
+
   test("open and closed shadow roots and their slotted text are read", async () => {
     const tabId = await open("/read-shadow", TITLES.readShadow);
     const { tree, texts } = await read(tabId);
@@ -447,8 +497,9 @@ describe("read_page in real Firefox", () => {
   test("a ref read leaves out what the page hid after the read", async () => {
     const tabId = await open("/read-ref-hidden", TITLES.readRefHidden);
     const { tree } = await read(tabId);
-    // Each root is set to display: contents, given an own and a display: contents child's text,
-    // and moved into its holder; the slotted root stays where it is.
+    // Each root but a boxed one is set to display: contents, given an own and a display: contents
+    // child's text, and moved into its holder (by default the one with its id); the slotted root
+    // stays where it is.
     const roots = [
       { id: "display", label: "Display root", shown: false },
       { id: "cv", label: "Content visibility root", shown: false },
@@ -464,13 +515,49 @@ describe("read_page in real Firefox", () => {
       { id: "open-details", label: "Open details root", shown: true },
       { id: "slotted", label: "Slotted root", shown: true },
       { id: "shown-fallback", label: "Shown fallback root", shown: true },
+      { id: "canvas", label: "Canvas root", shown: false },
+      // Its first holder with a box is a div that Firefox calls visible in the canvas.
+      { id: "canvas-deep", label: "Deep canvas root", shown: false },
+      { id: "object-data", label: "Object data root", shown: false },
+      { id: "embed-data", label: "Embed data root", shown: false },
+      { id: "select", label: "Select root", shown: false },
+      { id: "svg", label: "Svg root", shown: false },
+      { id: "svg-g", label: "Svg group root", shown: false },
+      { id: "wbr", label: "Word break root", shown: false },
+      { id: "col", label: "Column root", shown: false },
+      { id: "table-column", label: "Table column root", shown: false },
+      { id: "object-fallback", label: "Object fallback root", shown: true },
+      { id: "embed-fallback", label: "Embed fallback root", shown: true },
+      { id: "svg-foreign", label: "Foreign object root", shown: true },
+      {
+        id: "canvas-boxed",
+        label: "Boxed canvas root",
+        shown: false,
+        holder: "canvas",
+        boxed: true,
+      },
+      {
+        id: "canvas-deep-boxed",
+        label: "Boxed deep canvas root",
+        shown: false,
+        holder: "canvas-deep",
+        boxed: true,
+      },
+      {
+        id: "object-fallback-boxed",
+        label: "Boxed object fallback root",
+        shown: true,
+        holder: "object-fallback",
+        boxed: true,
+      },
     ].map((root) => ({
       ...root,
       ref: refOf(tree, `group "${root.label}"`),
       own: `ref-hidden-${root.id}-own-Ka7`,
       child: `ref-hidden-${root.id}-child-Lb8`,
     }));
-    // Each element named from its content gets new text, then the page hides it or not.
+    // Each element named from its content gets new text (in `inner` when given), then the page
+    // hides it or not.
     const named = [
       { id: "button-closed", line: '  button "Go closed"', role: "button", shown: false },
       { id: "button-box", line: '  button "Go box"', role: "button", shown: false },
@@ -482,33 +569,56 @@ describe("read_page in real Firefox", () => {
       { id: "option-group", line: '  option "Nine"', role: "option", shown: false },
       { id: "button-control", line: 'button "Go control"', role: "button", shown: true },
       { id: "option-control", line: '  option "Four"', role: "option", shown: true },
+      {
+        id: "button-canvas",
+        line: 'button "Go canvas"',
+        role: "button",
+        shown: false,
+        inner: "button-canvas-label",
+      },
+      {
+        id: "button-defs",
+        line: 'button "Go defs"',
+        role: "button",
+        shown: false,
+        inner: "button-defs-label",
+      },
+      // Firefox lists an option in a div in its select, not one in an hr.
+      { id: "option-wrapped", line: '  option "Wrapped two"', role: "option", shown: true },
+      { id: "option-in-rule", line: '  option "Rule two"', role: "option", shown: false },
     ].map((name) => ({
       ...name,
       ref: refOf(tree, name.line),
       token: `ref-hidden-name-${name.id}-Mc9`,
     }));
     const changes = {
-      roots: roots.map(({ id, own, child }) => ({ id, own, child })),
-      named: named.map(({ id, token }) => ({ id, token })),
+      roots: roots.map(({ id, holder, boxed, own, child }) => ({
+        id,
+        holder: holder ?? id,
+        boxed: boxed === true,
+        own,
+        child,
+      })),
+      named: named.map(({ id, inner, token }) => ({ id: inner ?? id, token })),
     };
     assert.equal(
       await firefox.evaluate(
         await contextOf(fixtures.url("/read-ref-hidden")),
         `(() => {
           const changes = ${JSON.stringify(changes)};
-          for (const { id, own, child } of changes.roots) {
+          for (const { id, holder: holderId, boxed, own, child } of changes.roots) {
             const root = document.getElementById("root-" + id);
-            root.style.display = "contents";
+            if (!boxed) root.style.display = "contents";
             root.textContent = own + " ";
             const span = document.createElement("span");
             span.style.display = "contents";
             span.textContent = child;
             root.append(span);
             if (id === "slotted") continue;
-            const holder = document.getElementById("holder-" + id);
-            if (id === "fallback" || id === "shown-fallback") {
+            const holder = document.getElementById("holder-" + holderId);
+            if (holderId === "fallback" || holderId === "shown-fallback") {
               holder.shadowRoot.querySelector("slot").append(root);
-            } else if (id === "shadow-top") {
+            } else if (holderId === "shadow-top") {
               holder.shadowRoot.append(root);
             } else {
               holder.append(root);
@@ -527,36 +637,47 @@ describe("read_page in real Firefox", () => {
           const contents = document.getElementById("button-contents");
           contents.style.display = "contents";
           document.getElementById("holder-button-contents").append(contents);
+          document.getElementById("holder-canvas").append(document.getElementById("button-canvas"));
+          document.getElementById("holder-defs").append(document.getElementById("button-defs"));
+          const wrapper = document.createElement("div");
+          document.getElementById("select-wrapped").append(wrapper);
+          wrapper.append(document.getElementById("option-wrapped"));
+          const rule = document.createElement("hr");
+          document.getElementById("select-rule").append(rule);
+          rule.append(document.getElementById("option-in-rule"));
           return "changed";
         })()`,
       ),
       "changed",
     );
 
+    // Every root and name that fails is listed, not only the first.
+    const rootFailures: string[] = [];
     for (const { label, shown, ref, own, child } of roots) {
       const sub = await read(tabId, { ref });
-      assert.equal(lines(sub.tree)[0], `group "${label}" [${ref}]`, sub.tree);
-      if (shown) {
-        for (const token of [own, child]) {
-          assert.ok(
-            lines(sub.tree).some((line) => line.startsWith('  text "') && line.includes(token)),
-            `no text line with ${token} in:\n${sub.tree}`,
-          );
-        }
-      } else {
-        assertNoSecrets(sub.texts, [own, child]);
+      const wrong: string[] = [];
+      if (lines(sub.tree)[0] !== `group "${label}" [${ref}]`) wrong.push("first line");
+      for (const token of [own, child]) {
+        const right = shown
+          ? lines(sub.tree).some((line) => line.startsWith('  text "') && line.includes(token))
+          : !sub.texts.some((text) => text.includes(token));
+        if (!right) wrong.push(shown ? `no text line with ${token}` : `${token} read`);
       }
+      if (wrong.length > 0) rootFailures.push(`${label}: ${wrong.join(", ")} in:\n${sub.tree}`);
     }
-    for (const { role, shown, ref, token } of named) {
+    assert.deepEqual(rootFailures, []);
+    const nameFailures: string[] = [];
+    for (const { id, role, shown, ref, token } of named) {
       const sub = await read(tabId, { ref });
       const first = lines(sub.tree)[0] ?? "";
-      if (shown) {
-        assert.equal(first, `${role} "${token}" [${ref}]`, sub.tree);
-      } else {
-        assert.ok(first.startsWith(`${role} `) && first.includes(`[${ref}]`), sub.tree);
-        assertNoSecrets(sub.texts, [token]);
-      }
+      const right = shown
+        ? first === `${role} "${token}" [${ref}]`
+        : first.startsWith(`${role} `) &&
+          first.includes(`[${ref}]`) &&
+          !sub.texts.some((text) => text.includes(token));
+      if (!right) nameFailures.push(`${id} in:\n${sub.tree}`);
     }
+    assert.deepEqual(nameFailures, []);
     const all = await read(tabId);
     assertNoSecrets(all.texts, [
       ...roots.filter(({ shown }) => !shown).flatMap(({ own, child }) => [own, child]),

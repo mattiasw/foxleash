@@ -209,94 +209,99 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
   // The scope whose rest was cut by depth; nothing inside it is read any more.
   let cutAt: Scope | undefined;
 
-  walkChildren(root, {
-    enter(element) {
-      if (cutAt !== undefined) return false;
-      if (skipped(element)) return false;
-      if (element.localName === "br") {
-        if (all) addText(" ");
-        return false;
-      }
-      const style = getComputedStyle(element);
-      const presence = presenceOf(element, style);
-      if (presence === "skip") return false;
-      const block = isBlock(style);
-      if (isFrame(element)) {
-        // Frames are noted, never read: the content script runs in the top frame only.
-        if (all && presence === "shown") {
-          flushRun();
-          if (cutAt !== undefined) return false;
-          const { childLevel, owner } = top();
-          place(childLevel, owner, () => frameLine(element, childLevel, page));
+  walkChildren(
+    root,
+    {
+      enter(element) {
+        if (cutAt !== undefined) return false;
+        if (skipped(element)) return false;
+        if (element.localName === "br") {
+          if (all) addText(" ");
+          return false;
         }
-        return false;
-      }
-      const role = presence === "shown" ? roleOf(element, page) : undefined;
-      const lined = role !== undefined && (all || isInteractive(element, role));
-      if (block || lined) flushRun();
-      if (cutAt !== undefined) return false;
-      const parent = top();
-      // What a details' content box holds passes on that box's state through display contents.
-      const parentBoxed =
-        parent.content !== undefined && inDetailsContent(parent.element, element)
-          ? parent.content.boxed
-          : parent.boxed;
-      const boxed =
-        style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
-      const textVisible = style.visibility === "visible" && boxed;
-      const scope: Scope = {
-        element,
-        lineLevel: undefined,
-        childLevel: parent.childLevel,
-        owner: parent.owner,
-        pending: undefined,
-        quiet: parent.quiet,
-        boxed,
-        textVisible,
-        block,
-        content: detailsContent(element, { boxed, visible: textVisible }),
-      };
-      if (lined) {
-        if (!flushPending()) return false;
-        const named = nameOf(element, role, page);
-        const level = top().childLevel;
-        const placed = place(level, top().owner, () =>
-          formatLine({
-            level,
-            role,
-            name: named.name,
-            ref: page.refs.refFor(element),
-            states: statesOf(element, role, focused, page),
-          }),
-        );
-        if (!placed) return false;
-        scope.lineLevel = level;
-        scope.childLevel = level + 1;
-        scope.owner = scope;
-        scope.quiet = scope.quiet || named.fromContent;
-      } else if (role !== undefined && LANDMARK_ROLES.has(role)) {
-        scope.pending = { role, name: nameOf(element, role, page).name };
-        pending.push(scope);
-      }
-      scopes.push(scope);
-      return true;
+        const style = getComputedStyle(element);
+        if (rendersNothing(element, style)) return false;
+        const presence = presenceOf(element, style);
+        if (presence === "skip") return false;
+        const block = isBlock(style);
+        if (isFrame(element)) {
+          // Frames are noted, never read: the content script runs in the top frame only.
+          if (all && presence === "shown") {
+            flushRun();
+            if (cutAt !== undefined) return false;
+            const { childLevel, owner } = top();
+            place(childLevel, owner, () => frameLine(element, childLevel, page));
+          }
+          return false;
+        }
+        const role = presence === "shown" ? roleOf(element, page) : undefined;
+        const lined = role !== undefined && (all || isInteractive(element, role));
+        if (block || lined) flushRun();
+        if (cutAt !== undefined) return false;
+        const parent = top();
+        // What a details' content box holds passes on that box's state through display contents.
+        const parentBoxed =
+          parent.content !== undefined && inDetailsContent(parent.element, element)
+            ? parent.content.boxed
+            : parent.boxed;
+        const boxed =
+          style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
+        const textVisible = style.visibility === "visible" && boxed;
+        const scope: Scope = {
+          element,
+          lineLevel: undefined,
+          childLevel: parent.childLevel,
+          owner: parent.owner,
+          pending: undefined,
+          quiet: parent.quiet,
+          boxed,
+          textVisible,
+          block,
+          content: detailsContent(element, { boxed, visible: textVisible }),
+        };
+        if (lined) {
+          if (!flushPending()) return false;
+          const named = nameOf(element, role, page);
+          const level = top().childLevel;
+          const placed = place(level, top().owner, () =>
+            formatLine({
+              level,
+              role,
+              name: named.name,
+              ref: page.refs.refFor(element),
+              states: statesOf(element, role, focused, page),
+            }),
+          );
+          if (!placed) return false;
+          scope.lineLevel = level;
+          scope.childLevel = level + 1;
+          scope.owner = scope;
+          scope.quiet = scope.quiet || named.fromContent;
+        } else if (role !== undefined && LANDMARK_ROLES.has(role)) {
+          scope.pending = { role, name: nameOf(element, role, page).name };
+          pending.push(scope);
+        }
+        scopes.push(scope);
+        return true;
+      },
+      leave(element) {
+        const scope = top();
+        if (scope.block || scope.lineLevel !== undefined) flushRun();
+        scopes.pop();
+        if (pending.at(-1) === scope) pending.pop();
+        if (cutAt?.element === element) cutAt = undefined;
+      },
+      text(value) {
+        const scope = top();
+        // Text directly in a details is laid out in its content box (it is never the summary).
+        const visible = scope.content?.visible ?? scope.textVisible;
+        if (!all || cutAt !== undefined || scope.quiet || !visible) return;
+        addText(value);
+      },
+      done: () => tree.full,
     },
-    leave(element) {
-      const scope = top();
-      if (scope.block || scope.lineLevel !== undefined) flushRun();
-      scopes.pop();
-      if (pending.at(-1) === scope) pending.pop();
-      if (cutAt?.element === element) cutAt = undefined;
-    },
-    text(value) {
-      const scope = top();
-      // Text directly in a details is laid out in its content box (it is never the summary).
-      const visible = scope.content?.visible ?? scope.textVisible;
-      if (!all || cutAt !== undefined || scope.quiet || !visible) return;
-      addText(value);
-    },
-    done: () => tree.full,
-  });
+    renderedChildrenOf,
+  );
   flushRun();
 
   function top(): Scope {
@@ -371,10 +376,17 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
   }
 }
 
-/** Walks the flat tree below `root` without recursion, so deep nesting cannot overflow. */
-export function walkChildren(root: Element, walker: Walker): void {
+/**
+ * Walks the flat tree below `root`, each element's children as `children` gives them, without
+ * recursion, so deep nesting cannot overflow.
+ */
+export function walkChildren(
+  root: Element,
+  walker: Walker,
+  children: (element: Element) => ArrayLike<Node> = childrenOf,
+): void {
   const steps: Step[] = [];
-  pushChildren(steps, root);
+  pushChildren(steps, root, children);
   while (!walker.done()) {
     const step = steps.pop();
     if (step === undefined) return;
@@ -384,13 +396,17 @@ export function walkChildren(root: Element, walker: Walker): void {
       walker.text(step.node.nodeValue ?? "");
     } else if (step.node instanceof Element && walker.enter(step.node)) {
       steps.push({ leave: step.node });
-      pushChildren(steps, step.node);
+      pushChildren(steps, step.node, children);
     }
   }
 }
 
-function pushChildren(steps: Step[], parent: Element): void {
-  const nodes = childrenOf(parent);
+function pushChildren(
+  steps: Step[],
+  parent: Element,
+  children: (element: Element) => ArrayLike<Node>,
+): void {
+  const nodes = children(parent);
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node = nodes[index];
     if (node !== undefined) steps.push({ node });
@@ -414,6 +430,62 @@ export function childrenOf(element: Element): ArrayLike<Node> {
     if (assigned.length > 0) return assigned;
   }
   return element.childNodes;
+}
+
+/** read_page's children of an element: those of `childrenOf` that Firefox renders. */
+function renderedChildrenOf(element: Element): ArrayLike<Node> {
+  // Firefox's drop-down lists the options wherever they sit in the select, and nothing else.
+  if (element instanceof HTMLSelectElement) return element.options;
+  const nodes = childrenOf(element);
+  if (element instanceof SVGElement) {
+    return Array.from(nodes).filter((node) => svgRendersChild(element, node));
+  }
+  return rendersChildren(element) ? nodes : [];
+}
+
+/** Whether Firefox renders the children of an element outside SVG. */
+function rendersChildren(element: Element): boolean {
+  // Firefox lays out canvas fallback, but never shows it.
+  if (element instanceof HTMLCanvasElement) return false;
+  // An object or embed that shows its data gives its children no box.
+  if (element instanceof HTMLObjectElement || element instanceof HTMLEmbedElement) {
+    return hasRects(element);
+  }
+  // Firefox's drop-down shows an option's label instead of its content.
+  if (element instanceof HTMLOptionElement) return (element.getAttribute("label") ?? "") === "";
+  return !(element instanceof HTMLElement && element.localName === "wbr");
+}
+
+function hasRects(holder: Element): boolean {
+  const range = holder.ownerDocument.createRange();
+  range.selectNodeContents(holder);
+  return range.getClientRects().length > 0;
+}
+
+/**
+ * Whether Firefox renders `node` in an SVG element: SVG elements in a container or text, text
+ * only in the text elements, and anything in a foreignObject. Any other SVG element draws no
+ * content as text, or draws it in a way the content script cannot tell (`switch`).
+ */
+function svgRendersChild(holder: SVGElement, node: Node): boolean {
+  if (holder instanceof SVGForeignObjectElement) return true;
+  const text = holder instanceof SVGTextContentElement;
+  if (
+    !(
+      text ||
+      holder instanceof SVGSVGElement ||
+      holder instanceof SVGGElement ||
+      holder instanceof SVGAElement
+    )
+  ) {
+    return false;
+  }
+  if (node instanceof Element) return node instanceof SVGElement;
+  return (
+    node.nodeType === Node.TEXT_NODE &&
+    (text ||
+      (holder instanceof SVGAElement && holder.parentElement instanceof SVGTextContentElement))
+  );
 }
 
 /** The focused element, followed into shadow roots. */
@@ -482,17 +554,63 @@ function parentOf(element: Element): Element | null {
 }
 
 /**
+ * Whether the element renders nothing, by its own style or attributes, though Firefox may still
+ * call it visible.
+ */
+function rendersNothing(element: Element, style: CSSStyleDeclaration): boolean {
+  // A column box never holds content.
+  if (style.display === "table-column" || style.display === "table-column-group") return true;
+  // In SVG, display contents shows nothing, and Firefox may skip an element for its conditional
+  // attributes while it stays visible.
+  return (
+    element instanceof SVGElement &&
+    (style.display === "contents" ||
+      element.hasAttribute("systemLanguage") ||
+      element.hasAttribute("requiredExtensions"))
+  );
+}
+
+/**
  * Whether an element that `skipped` let through has a line (`shown`), only children
  * (`noLine`), or is hidden with what it contains (`skip`).
  */
 function presenceOf(element: Element, style: CSSStyleDeclaration): Presence {
-  if (isOptionInSelect(element)) {
-    // Firefox may give the options of a closed drop-down no box.
-    if (element.hasAttribute("hidden") || style.display === "none") return "skip";
+  const select = isOptionInSelect(element) ? element.closest("select") : null;
+  if (select !== null) {
+    if (optionHidden(element, select)) return "skip";
   } else if (!element.checkVisibility()) {
     return style.display === "contents" ? "noLine" : "skip";
   }
   return style.visibility === "visible" ? "shown" : "noLine";
+}
+
+/**
+ * Whether an option or optgroup is hidden by itself, by an element between it and its select, or
+ * by the select's content-visibility. Firefox may give the options of a closed drop-down no box,
+ * so checkVisibility() cannot tell, and a list box lays out what is between, so each element
+ * there must render the next.
+ */
+function optionHidden(option: Element, select: Element): boolean {
+  let current: Element | null = option;
+  while (current !== null && current !== select) {
+    if (skipped(current) || current.hasAttribute("hidden")) return true;
+    const style = getComputedStyle(current);
+    if (style.display === "none" || rendersNothing(current, style)) return true;
+    // On the option itself it hides only the content, which the option's scope leaves out.
+    if (current !== option && style.contentVisibility === "hidden") return true;
+    const parent: Element | null = current.parentElement;
+    if (
+      parent !== null &&
+      parent !== select &&
+      (!rendersChildOf(parent, current) ||
+        (inDetailsContent(parent, current) &&
+          detailsContent(parent, { boxed: true, visible: true })?.boxed === false))
+    ) {
+      return true;
+    }
+    current = parent;
+  }
+  return getComputedStyle(select).contentVisibility === "hidden";
 }
 
 /** The state of the text directly inside `root`, judged by its flat-tree ancestors too. */
@@ -504,40 +622,66 @@ function rootTextState(root: Element, style: CSSStyleDeclaration): TextState {
 
 /** Whether the element's content is laid out in a box the user can see. */
 function laidOut(start: Element, startStyle: CSSStyleDeclaration): boolean {
+  if (rendersNothing(start, startStyle)) return false;
   let element = start;
   let style = startStyle;
-  const select = isOptionInSelect(element) ? element.closest("select") : null;
-  if (select !== null) {
-    // Firefox gives the options of a closed drop-down no box: judge them as presenceOf does.
-    for (
-      let current: Element | null = element;
-      current !== null && current !== select;
-      current = current.parentElement
-    ) {
-      if (current.hasAttribute("hidden") || getComputedStyle(current).display === "none") {
-        return false;
-      }
-    }
+  const select = listingSelect(start);
+  if (select !== undefined) {
+    if (optionHidden(start, select)) return false;
     element = select;
     style = getComputedStyle(select);
+    if (rendersNothing(select, style)) return false;
   }
-  if (style.display !== "contents") return element.checkVisibility();
-  // An element outside the flat tree (unslotted, or an unshown slot fallback) has no resolved
-  // style, so it never gets here as display contents: no step needs to look for one.
+  // The first ancestor with a box decides what checkVisibility() decides; above it only what
+  // Firefox renders of each holder's children does.
+  let shown = style.display === "contents" ? undefined : element.checkVisibility();
+  if (shown === false) return false;
   let child = element;
   for (let holder = flatParentOf(child); holder !== null; holder = flatParentOf(child)) {
-    if (holder.localName === "br" || CHILDLESS.has(holder.localName)) return false;
-    if (
-      inDetailsContent(holder, child) &&
-      (isClosedDetails(holder) ||
-        detailsContent(holder, { boxed: true, visible: true })?.boxed === false)
-    ) {
-      return false;
-    }
+    if (!rendersChildOf(holder, child)) return false;
     const holderStyle = getComputedStyle(holder);
-    if (holderStyle.contentVisibility === "hidden") return false;
-    if (holderStyle.display !== "contents") return holder.checkVisibility();
+    if (rendersNothing(holder, holderStyle)) return false;
+    if (shown === undefined) {
+      if (
+        inDetailsContent(holder, child) &&
+        (isClosedDetails(holder) ||
+          detailsContent(holder, { boxed: true, visible: true })?.boxed === false)
+      ) {
+        return false;
+      }
+      if (holderStyle.contentVisibility === "hidden") return false;
+      if (holderStyle.display !== "contents") {
+        shown = holder.checkVisibility();
+        if (!shown) return false;
+      }
+    }
     child = holder;
+  }
+  return shown === true;
+}
+
+/** The select that lists `element` among its options, if it is such an option. */
+function listingSelect(element: Element): HTMLSelectElement | undefined {
+  if (!(element instanceof HTMLOptionElement)) return undefined;
+  const select = element.closest("select");
+  return select instanceof HTMLSelectElement && Array.from(select.options).includes(element)
+    ? select
+    : undefined;
+}
+
+/** Whether `child` is among the children read_page walks in `holder`. */
+function rendersChildOf(holder: Element, child: Element): boolean {
+  if (holder.localName === "br") return false;
+  // The same answers as the lists below, without building a list per call.
+  if (holder instanceof SVGElement) {
+    return child.parentNode === holder && svgRendersChild(holder, child);
+  }
+  if (holder instanceof HTMLSlotElement && child.assignedSlot === holder) return true;
+  const nodes = renderedChildrenOf(holder);
+  // A node is always among its parent's childNodes, the same object on every call.
+  if (nodes === child.parentNode?.childNodes) return true;
+  for (let index = 0; index < nodes.length; index += 1) {
+    if (nodes[index] === child) return true;
   }
   return false;
 }
@@ -795,6 +939,9 @@ function ownName(element: Element, page: PageMemory, startState?: TextState): st
       element.getAttribute("placeholder"),
     );
   }
+  if (element instanceof HTMLOptionElement) {
+    return nonEmpty(element.getAttribute("label")?.trim() ?? "");
+  }
   switch (element.localName) {
     case "img":
     case "area":
@@ -867,6 +1014,8 @@ function collectText(start: Element, withHidden: boolean, startState?: TextState
     const boxed = startStyle.contentVisibility !== "hidden";
     state = { boxed, visible: startStyle.visibility === "visible" && boxed };
   }
+  // Nothing inside a start without a box is shown, though a boxed child may call itself visible.
+  if (!withHidden && !state.boxed) return "";
   const outer: TextScope = {
     element: start,
     block: false,
@@ -875,57 +1024,64 @@ function collectText(start: Element, withHidden: boolean, startState?: TextState
     content: detailsContent(start, state),
   };
   const scopes: TextScope[] = [];
-  walkChildren(start, {
-    enter(element) {
-      if (element.localName === "br") {
-        buffer.add(" ");
-        return false;
-      }
-      const image = element.localName === "img";
-      if (element.localName === "select" || (CHILDLESS.has(element.localName) && !image)) {
-        return false;
-      }
-      const style = getComputedStyle(element);
-      if (!withHidden && (skipped(element) || presenceOf(element, style) === "skip")) return false;
-      const parent = scopes.at(-1) ?? outer;
-      // As in walkTree: content-visibility is not inherited, but display contents passes it on.
-      const parentBoxed =
-        parent.content !== undefined && inDetailsContent(parent.element, element)
-          ? parent.content.boxed
-          : parent.boxed;
-      const boxed =
-        style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
-      const visible = style.visibility === "visible" && boxed;
-      const shown = withHidden || visible;
-      // As in accname, a descendant's own label or an image's alt stands for its content.
-      const alternative = shown ? alternativeOf(element) : "";
-      if (alternative !== "") {
-        buffer.add(` ${alternative} `);
-        return false;
-      }
-      if (image) return false;
-      const block = isBlock(style);
-      if (block) buffer.add(" ");
-      scopes.push({
-        element,
-        block,
-        boxed,
-        shown,
-        content: detailsContent(element, { boxed, visible }),
-      });
-      return true;
+  walkChildren(
+    start,
+    {
+      enter(element) {
+        if (element.localName === "br") {
+          buffer.add(" ");
+          return false;
+        }
+        const image = element.localName === "img";
+        if (element.localName === "select" || (CHILDLESS.has(element.localName) && !image)) {
+          return false;
+        }
+        const style = getComputedStyle(element);
+        if (rendersNothing(element, style)) return false;
+        if (!withHidden && (skipped(element) || presenceOf(element, style) === "skip")) {
+          return false;
+        }
+        const parent = scopes.at(-1) ?? outer;
+        // As in walkTree: content-visibility is not inherited, but display contents passes it on.
+        const parentBoxed =
+          parent.content !== undefined && inDetailsContent(parent.element, element)
+            ? parent.content.boxed
+            : parent.boxed;
+        const boxed =
+          style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
+        const visible = style.visibility === "visible" && boxed;
+        const shown = withHidden || visible;
+        // As in accname, a descendant's own label or an image's alt stands for its content.
+        const alternative = shown ? alternativeOf(element) : "";
+        if (alternative !== "") {
+          buffer.add(` ${alternative} `);
+          return false;
+        }
+        if (image) return false;
+        const block = isBlock(style);
+        if (block) buffer.add(" ");
+        scopes.push({
+          element,
+          block,
+          boxed,
+          shown,
+          content: detailsContent(element, { boxed, visible }),
+        });
+        return true;
+      },
+      leave() {
+        if (scopes.pop()?.block === true) buffer.add(" ");
+      },
+      text(value) {
+        const scope = scopes.at(-1) ?? outer;
+        if (scope.content === undefined ? scope.shown : withHidden || scope.content.visible) {
+          buffer.add(value);
+        }
+      },
+      done: () => buffer.full,
     },
-    leave() {
-      if (scopes.pop()?.block === true) buffer.add(" ");
-    },
-    text(value) {
-      const scope = scopes.at(-1) ?? outer;
-      if (scope.content === undefined ? scope.shown : withHidden || scope.content.visible) {
-        buffer.add(value);
-      }
-    },
-    done: () => buffer.full,
-  });
+    renderedChildrenOf,
+  );
   return buffer.text();
 }
 
