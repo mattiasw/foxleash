@@ -21,6 +21,11 @@ export const TITLES = {
   textHiddenBody: "Fixture text hidden body",
   textSlotted: "Fixture text slotted",
   textDetails: "Fixture text details",
+  textShadow: "Fixture text shadow",
+  textShadowMain: "Fixture text shadow main",
+  textShadowArticle: "Fixture text shadow article",
+  textShadowBlock: "Fixture text shadow block",
+  textShadowHidden: "Fixture text shadow hidden",
   shot: "Fixture shot",
   shotFields: "Fixture shot fields",
   shotPdfFrame: "Fixture shot PDF frame",
@@ -189,6 +194,41 @@ export const TEXT_TOKENS = {
   foreignSummary: "text-foreign-summary-Ag7",
   styledAnswer: "text-styled-answer-Bh8",
   openParagraph: "text-open-paragraph-Ek2",
+  shadowParagraph: "text-shadow-paragraph-Fm3",
+  shellNav: "text-shell-nav-Gn4",
+  shellHidden: "text-shell-hidden-Ho5",
+  shellMain: "text-shell-main-Ip6",
+  cardShadow: "text-card-shadow-Jq7",
+  cardSlotted: "text-card-slotted-Kr8",
+  shellAside: "text-shell-aside-Ls9",
+  shellFooter: "text-shell-footer-Mt0",
+  inlineLead: "text-inline-lead-Vc9",
+  iconShadow: "text-icon-shadow-Wd0",
+  innerNav: "text-inner-nav-Nu1",
+  innerMain: "text-inner-main-Ov2",
+  innerAfter: "text-inner-after-Pw3",
+  shortPost: "text-short-post-Qx4",
+  longPost: "text-long-post-Ry5",
+  blockHeading: "text-block-heading-Sz6",
+  slottedBlock: "text-slotted-block-Ta7",
+  blockSidebar: "text-block-sidebar-Ub8",
+  forwardShown: "text-forward-shown-Xe1",
+  forwardHidden: "text-forward-hidden-Yf2",
+  shadowSummary: "text-shadow-summary-Zg3",
+  shadowAnswer: "text-shadow-answer-Ah4",
+  slottedAnswer: "text-slotted-answer-Bi5",
+  unassigned: "text-unassigned-Cj6",
+  boxShadow: "text-box-shadow-Dk7",
+  preFirst: "text-pre-first-El8",
+  preSecond: "text-pre-second-Fn9",
+  preShadow: "text-pre-shadow-Go0",
+  lineFirst: "text-line-first-Hp1",
+  lineSecond: "text-line-second-Iq2",
+  canvasShadow: "text-canvas-shadow-Jr3",
+  canvasSlotted: "text-canvas-slotted-Ks4",
+  linkFirst: "text-link-first-Lt5",
+  linkSecond: "text-link-second-Mu6",
+  canvasInline: "text-canvas-inline-Nv7",
 } as const;
 
 export const READ_VISIBLE_MARKER = "visible-marker-Zi9";
@@ -280,6 +320,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, TEXT_SLOTTED_PAGE);
     } else if (path === "/text-details") {
       sendHtml(response, TEXT_DETAILS_PAGE);
+    } else if (path === "/text-shadow") {
+      sendHtml(response, TEXT_SHADOW_PAGE);
+    } else if (path === "/text-shadow-main") {
+      sendHtml(response, TEXT_SHADOW_MAIN_PAGE);
+    } else if (path === "/text-shadow-article") {
+      sendHtml(response, TEXT_SHADOW_ARTICLE_PAGE);
+    } else if (path === "/text-shadow-block") {
+      sendHtml(response, TEXT_SHADOW_BLOCK_PAGE);
+    } else if (path === "/text-shadow-hidden") {
+      sendHtml(response, TEXT_SHADOW_HIDDEN_PAGE);
     } else if (path === "/shot") {
       sendHtml(response, SHOT_PAGE);
     } else if (path === "/shot-fields") {
@@ -791,9 +841,10 @@ const LOREM =
   "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.";
 
 // A main element among a header, an aside with a filled form and a footer, then, directly in the
-// body, text that is shown (a text node, a display: contents wrapper) and text that is not:
-// hidden, the text of form fields, a closed disclosure's content and a shadow host's unslotted
-// text under display: contents, script, style and noscript source, and a frame.
+// body, text that is shown (a text node, a display: contents wrapper, the shadow-root paragraph
+// of a display: contents shadow host) and text that is not: hidden, the text of form fields, a
+// closed disclosure's content and that host's unslotted text, script, style and noscript source,
+// and a frame.
 const TEXT_MAIN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.textMain}</title></head>
 <body>
@@ -822,7 +873,7 @@ ${TEXT_TOKENS.bodyText}
 const unread = "${TEXT_TOKENS.script}";
 const shadow = document.getElementById("host").attachShadow({ mode: "open" });
 const paragraph = document.createElement("p");
-paragraph.textContent = "Shadow paragraph";
+paragraph.textContent = "${TEXT_TOKENS.shadowParagraph}";
 shadow.append(paragraph);
 </script>
 <style>/* ${TEXT_TOKENS.style} */</style>
@@ -910,6 +961,155 @@ document.getElementById("namespaced").setAttributeNS("urn:fixture", "open", "");
 const foreign = document.createElementNS("urn:fixture", "summary");
 foreign.textContent = "${TEXT_TOKENS.foreignSummary}";
 document.getElementById("foreign").prepend(foreign);
+</script>
+</body></html>
+`;
+
+// An app shell whose closed shadow root shows a header, a hidden paragraph and a footer around a
+// slot that the page's main element and aside are assigned to. Inside main, a sentence holds an
+// inline web component and a hidden line break, two links each hold a block, and a card shows
+// its shadow root's paragraph and its slotted text.
+const TEXT_SHADOW_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textShadow}</title></head>
+<body>
+<app-shell><main><h1>Shell main</h1><p>${TEXT_TOKENS.shellMain} ${LOREM}</p><p>${TEXT_TOKENS.inlineLead} <b>bold</b><br style="display: none"> <text-icon></text-icon>.</p><a href="/a"><div>${TEXT_TOKENS.linkFirst}</div></a><a href="/b"><div>${TEXT_TOKENS.linkSecond}</div></a><text-card>${TEXT_TOKENS.cardSlotted}</text-card></main><aside><p>${TEXT_TOKENS.shellAside}</p></aside></app-shell>
+<script>
+customElements.define("text-icon", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = '<span>${TEXT_TOKENS.iconShadow}</span>';
+  }
+});
+customElements.define("text-card", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = '<p>${TEXT_TOKENS.cardShadow}</p><slot></slot>';
+  }
+});
+customElements.define("app-shell", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML =
+      '<header><p>${TEXT_TOKENS.shellNav}</p></header><p style="display: none">${TEXT_TOKENS.shellHidden}</p>' +
+      '<div><slot></slot></div><footer><p>${TEXT_TOKENS.shellFooter}</p></footer>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// A main element after a nav inside a closed shadow root, and a paragraph after its host.
+const TEXT_SHADOW_MAIN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textShadowMain}</title></head>
+<body>
+<inner-main></inner-main>
+<p>${TEXT_TOKENS.innerAfter}</p>
+<script>
+customElements.define("inner-main", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML =
+      '<nav><p>${TEXT_TOKENS.innerNav}</p></nav><main><p>${TEXT_TOKENS.innerMain} ${LOREM}</p></main>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// No main element; a short article, then a long one inside a closed shadow root.
+const TEXT_SHADOW_ARTICLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textShadowArticle}</title></head>
+<body>
+<article><p>${TEXT_TOKENS.shortPost}</p></article>
+<post-view></post-view>
+<script>
+customElements.define("post-view", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML =
+      '<article><h2>Post</h2><p>${TEXT_TOKENS.longPost} ${LOREM}</p><p>${LOREM}</p></article>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// No landmarks: a sidebar of short links, and a host whose long paragraphs are slotted into its
+// shadow root under a heading of the shadow root's own.
+const TEXT_SHADOW_BLOCK_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textShadowBlock}</title></head>
+<body>
+<div><a href="/a">${TEXT_TOKENS.blockSidebar}</a> <a href="/b">Docs</a></div>
+<block-view><p>${TEXT_TOKENS.slottedBlock} ${LOREM}</p><p>${LOREM}</p></block-view>
+<script>
+customElements.define("block-view", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = '<h2>${TEXT_TOKENS.blockHeading}</h2><slot></slot>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// Shadow trees that hide text: a slot passed on to another slot and hidden there, an open
+// disclosure whose content box is hidden, a host whose light text no slot shows, and in the
+// shadow root of a canvas's fallback a main element holding text beside a filled slot, then an
+// inline element; then a pre and a pre-line paragraph, each holding a web component: both keep
+// their line breaks, the pre also its blank line and the indent an inline block starts with.
+const TEXT_SHADOW_HIDDEN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.textShadowHidden}</title></head>
+<body>
+<forward-outer><span slot="shown">${TEXT_TOKENS.forwardShown}</span>${TEXT_TOKENS.forwardHidden}</forward-outer>
+<details-box>${TEXT_TOKENS.slottedAnswer}</details-box>
+<plain-box>${TEXT_TOKENS.unassigned}</plain-box>
+<canvas width="10" height="10"><canvas-tag><b>${TEXT_TOKENS.canvasSlotted}</b></canvas-tag></canvas>
+<pre>${TEXT_TOKENS.preFirst}
+
+<span style="display: inline-block">  ${TEXT_TOKENS.preSecond}</span> <pre-tag></pre-tag></pre>
+<p style="white-space: pre-line">${TEXT_TOKENS.lineFirst}
+  ${TEXT_TOKENS.lineSecond} <pre-tag></pre-tag></p>
+<script>
+customElements.define("forward-inner", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML = "<slot></slot>";
+  }
+});
+customElements.define("forward-outer", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML =
+      '<forward-inner><slot name="shown"></slot><slot style="visibility: hidden"></slot></forward-inner>';
+  }
+});
+customElements.define("details-box", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML =
+      "<style>details::details-content { visibility: hidden; }</style>" +
+      '<details open><summary>${TEXT_TOKENS.shadowSummary}</summary>${TEXT_TOKENS.shadowAnswer}<slot></slot></details>';
+  }
+});
+customElements.define("plain-box", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = '<p>${TEXT_TOKENS.boxShadow}</p>';
+  }
+});
+customElements.define("canvas-tag", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML =
+      '<main><div>${TEXT_TOKENS.canvasShadow}<slot></slot></div></main><span>${TEXT_TOKENS.canvasInline}</span>';
+  }
+});
+customElements.define("pre-tag", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = '<span>${TEXT_TOKENS.preShadow}</span>';
+  }
+});
 </script>
 </body></html>
 `;

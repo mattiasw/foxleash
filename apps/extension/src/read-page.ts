@@ -30,7 +30,7 @@ export interface PageMemory {
   passwordFields: WeakSet<Element>;
 }
 
-interface Walker {
+export interface Walker {
   /** Called for each element; true walks its flattened children and calls `leave` after. */
   enter(element: Element): boolean;
   leave(element: Element): void;
@@ -63,7 +63,7 @@ interface Scope {
 }
 
 /** Text here has a box, and the user sees it. */
-interface TextState {
+export interface TextState {
   boxed: boolean;
   visible: boolean;
 }
@@ -368,10 +368,17 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
   }
 }
 
-/** Walks the flattened tree below `root` without recursion, so deep nesting cannot overflow. */
-function walkChildren(root: Element, walker: Walker): void {
+/**
+ * Walks the flattened tree below `root`, each element's children as `children` gives them, without
+ * recursion, so deep nesting cannot overflow.
+ */
+export function walkChildren(
+  root: Element,
+  walker: Walker,
+  children: (element: Element) => ArrayLike<Node> = childrenOf,
+): void {
   const steps: Step[] = [];
-  pushChildren(steps, root);
+  pushChildren(steps, root, children);
   while (!walker.done()) {
     const step = steps.pop();
     if (step === undefined) return;
@@ -381,15 +388,19 @@ function walkChildren(root: Element, walker: Walker): void {
       walker.text(step.node.nodeValue ?? "");
     } else if (step.node instanceof Element && walker.enter(step.node)) {
       steps.push({ leave: step.node });
-      pushChildren(steps, step.node);
+      pushChildren(steps, step.node, children);
     }
   }
 }
 
-function pushChildren(steps: Step[], parent: Element): void {
-  const children = childrenOf(parent);
-  for (let index = children.length - 1; index >= 0; index -= 1) {
-    const node = children[index];
+function pushChildren(
+  steps: Step[],
+  parent: Element,
+  children: (element: Element) => ArrayLike<Node>,
+): void {
+  const nodes = children(parent);
+  for (let index = nodes.length - 1; index >= 0; index -= 1) {
+    const node = nodes[index];
     if (node !== undefined) steps.push({ node });
   }
 }
@@ -434,7 +445,7 @@ function noteFields(page: PageMemory): void {
 }
 
 /** Every element of the document and of the shadow roots in it, closed ones included. */
-function* documentElements(): Generator<Element> {
+export function* documentElements(): Generator<Element> {
   const roots: ParentNode[] = [document];
   for (let root = roots.pop(); root !== undefined; root = roots.pop()) {
     for (const element of root.querySelectorAll("*")) {
@@ -541,7 +552,7 @@ function laidOut(start: Element, startStyle: CSSStyleDeclaration): boolean {
  * page can hide while the details is open. Undefined for any other element, a details in another
  * namespace included: it has no such box, but a page may still give that pseudo a style.
  */
-function detailsContent(element: Element, own: TextState): TextState | undefined {
+export function detailsContent(element: Element, own: TextState): TextState | undefined {
   if (!(element instanceof HTMLDetailsElement)) return undefined;
   // Before Firefox 143 there is no ::details-content, and no page can style that box.
   if (!CSS.supports("selector(::details-content)")) return own;
@@ -563,7 +574,7 @@ function isOptionInSelect(element: Element): boolean {
   );
 }
 
-function isBlock(style: CSSStyleDeclaration): boolean {
+export function isBlock(style: CSSStyleDeclaration): boolean {
   return !style.display.startsWith("inline") && style.display !== "contents";
 }
 

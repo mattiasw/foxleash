@@ -42,16 +42,6 @@ export function detailsSummaryOf(details: Element): Element | undefined {
   return undefined;
 }
 
-/**
- * Whether `child` is assigned to a slot of `holder`'s shadow tree: every child of an author
- * shadow host, and every child of a details but its summary, which goes to the details' content
- * box. That box is hidden with `content-visibility: hidden` while the details is closed, which
- * still gives client rects, and the page can hide it while open through `::details-content`.
- */
-export function slottedAway(holder: Element, child: Node): boolean {
-  return shadowRootOf(holder) !== null || inDetailsContent(holder, child);
-}
-
 /** The author shadow root of an element that may carry one, open or closed. */
 export function shadowRootOf(element: Element): ShadowRoot | null {
   if (!element.localName.includes("-") && !SHADOW_HOSTS.has(element.localName)) return null;

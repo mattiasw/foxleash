@@ -65,7 +65,7 @@ export interface FieldFacts {
 }
 
 // NEL is not \s, and some tools split lines on it.
-const WHITESPACE = /[\s\u0085]+/g;
+export const WHITESPACE = /[\s\u0085]+/g;
 const ASCII_WHITESPACE = /[\t\n\f\r ]+/;
 export const CREDENTIAL_TOKENS: readonly string[] = [
   "current-password",

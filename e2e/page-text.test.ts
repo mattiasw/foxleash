@@ -58,6 +58,7 @@ describe("get_page_text in real Firefox", () => {
       TEXT_TOKENS.footer,
       TEXT_TOKENS.bodyText,
       TEXT_TOKENS.contents,
+      TEXT_TOKENS.shadowParagraph,
     ]);
     assert.ok(text.rest.indexOf(TEXT_TOKENS.nav) < text.rest.indexOf(TEXT_TOKENS.footer));
     for (const part of [text.main, text.rest]) {
@@ -198,10 +199,100 @@ describe("get_page_text in real Firefox", () => {
     ]);
   });
 
-  test("slotted text is read and a shadow root's password value is not", async () => {
+  test("text in open and closed shadow roots is read and a shadow root's password value is not", async () => {
     const text = await pageText(await open("/read-shadow", TITLES.readShadow));
-    assertIn(text.main + text.rest, ["Slotted open text", "Slotted closed text"]);
-    assertNotIn(text.main + text.rest, [READ_SECRETS.shadow]);
+    const all = text.main + text.rest;
+    assertIn(all, [
+      "Slotted open text",
+      "Slotted closed text",
+      "Open button inside",
+      "Closed button inside",
+    ]);
+    // "Open button" alone is also part of "Open button inside".
+    assert.match(all, /Open button(?! inside)/);
+    assert.match(all, /Closed button(?! inside)/);
+    assertNotIn(all, [READ_SECRETS.shadow]);
+  });
+
+  test("an app shell's shadow tree is read around the main element slotted into it", async () => {
+    const tabId = await open("/text-shadow", TITLES.textShadow);
+    const text = await pageText(tabId);
+    const sentence = `${TEXT_TOKENS.inlineLead} bold ${TEXT_TOKENS.iconShadow}.`;
+    const mainTokens = [
+      TEXT_TOKENS.shellMain,
+      TEXT_TOKENS.inlineLead,
+      TEXT_TOKENS.iconShadow,
+      TEXT_TOKENS.linkFirst,
+      TEXT_TOKENS.linkSecond,
+      TEXT_TOKENS.cardShadow,
+      TEXT_TOKENS.cardSlotted,
+    ];
+    const restTokens = [TEXT_TOKENS.shellNav, TEXT_TOKENS.shellAside, TEXT_TOKENS.shellFooter];
+    assert.equal(text.source, "main");
+    assertIn(text.main, [
+      ...mainTokens,
+      sentence,
+      `${TEXT_TOKENS.linkFirst}\n${TEXT_TOKENS.linkSecond}`,
+    ]);
+    assertIn(text.rest, restTokens);
+    assert.ok(
+      text.rest.indexOf(TEXT_TOKENS.shellNav) < text.rest.indexOf(TEXT_TOKENS.shellAside) &&
+        text.rest.indexOf(TEXT_TOKENS.shellAside) < text.rest.indexOf(TEXT_TOKENS.shellFooter),
+      text.rest,
+    );
+    assertNotIn(text.rest, mainTokens);
+    assertNotIn(text.main, restTokens);
+    for (const part of [text.main, text.rest]) assertNotIn(part, [TEXT_TOKENS.shellHidden]);
+    await harness.ok(session, "wait_for", { tabId, text: sentence });
+  });
+
+  test("a main element inside a shadow root is the main content", async () => {
+    const text = await pageText(await open("/text-shadow-main", TITLES.textShadowMain));
+    assert.equal(text.source, "main");
+    assertIn(text.main, [TEXT_TOKENS.innerMain]);
+    assertNotIn(text.main, [TEXT_TOKENS.innerNav, TEXT_TOKENS.innerAfter]);
+    assertIn(text.rest, [TEXT_TOKENS.innerNav, TEXT_TOKENS.innerAfter]);
+    assertNotIn(text.rest, [TEXT_TOKENS.innerMain]);
+  });
+
+  test("an article inside a shadow root can be the longest", async () => {
+    const text = await pageText(await open("/text-shadow-article", TITLES.textShadowArticle));
+    assert.equal(text.source, "article");
+    assertIn(text.main, [TEXT_TOKENS.longPost]);
+    assertNotIn(text.main, [TEXT_TOKENS.shortPost]);
+    assertIn(text.rest, [TEXT_TOKENS.shortPost]);
+    assertNotIn(text.rest, [TEXT_TOKENS.longPost]);
+  });
+
+  test("paragraphs slotted into a shadow root make the largest block", async () => {
+    const text = await pageText(await open("/text-shadow-block", TITLES.textShadowBlock));
+    assert.equal(text.source, "largest_block");
+    assertIn(text.main, [TEXT_TOKENS.blockHeading, TEXT_TOKENS.slottedBlock]);
+    assertNotIn(text.main, [TEXT_TOKENS.blockSidebar]);
+    assertIn(text.rest, [TEXT_TOKENS.blockSidebar]);
+    assertNotIn(text.rest, [TEXT_TOKENS.blockHeading, TEXT_TOKENS.slottedBlock]);
+  });
+
+  test("text a shadow tree hides is left out, and pre and pre-line text keep their lines", async () => {
+    const text = await pageText(await open("/text-shadow-hidden", TITLES.textShadowHidden));
+    assert.equal(text.source, "body");
+    const all = text.main + text.rest;
+    assertIn(all, [
+      TEXT_TOKENS.forwardShown,
+      TEXT_TOKENS.shadowSummary,
+      TEXT_TOKENS.boxShadow,
+      `${TEXT_TOKENS.preFirst}\n\n  ${TEXT_TOKENS.preSecond} ${TEXT_TOKENS.preShadow}`,
+      `${TEXT_TOKENS.lineFirst}\n${TEXT_TOKENS.lineSecond} ${TEXT_TOKENS.preShadow}`,
+    ]);
+    assertNotIn(all, [
+      TEXT_TOKENS.forwardHidden,
+      TEXT_TOKENS.shadowAnswer,
+      TEXT_TOKENS.slottedAnswer,
+      TEXT_TOKENS.unassigned,
+      TEXT_TOKENS.canvasShadow,
+      TEXT_TOKENS.canvasSlotted,
+      TEXT_TOKENS.canvasInline,
+    ]);
   });
 
   test("main and rest together are cut to maxChars", async () => {
