@@ -44,6 +44,7 @@ apps/extension/src/site-access.ts
 apps/extension/src/site.ts
 apps/extension/src/uploads.ts
 apps/extension/src/wait-for-load.ts
+apps/extension/src/wait-for.ts
 apps/extension/tsconfig.json
 package-lock.json
 package.json

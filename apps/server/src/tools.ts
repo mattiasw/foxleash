@@ -6,6 +6,7 @@ import {
   type ConsoleLevel,
   DEFAULT_NETWORK_LIMIT,
   DEFAULT_PAGE_TEXT_CHARS,
+  DEFAULT_WAIT_FOR_MS,
   MAX_CONSOLE_MESSAGES,
   MAX_CONSOLE_TEXT,
   MAX_NETWORK_HEADER,
@@ -14,7 +15,12 @@ import {
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
   MAX_PAGE_TEXT_CHARS,
+  MAX_WAIT_FOR_MS,
+  MAX_WAIT_FOR_TEXT,
+  MAX_WINDOW_SIZE,
   type MethodName,
+  MIN_WAIT_FOR_MS,
+  MIN_WINDOW_SIZE,
   type Params,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_MAX_BYTES,
@@ -52,6 +58,12 @@ const REDACTED_TABS =
 const ASKS_FIRST =
   "On a site the user has not approved, Foxhand first asks the user in the tab and waits for the answer.";
 const BOTH_OR_NEITHER = "Give either url or action, not both and not neither.";
+const ONE_CONDITION = "Give exactly one of text, selector or navigation.";
+const DEFAULT_WAIT_SECONDS = DEFAULT_WAIT_FOR_MS / 1000;
+const MAX_WAIT_SECONDS = MAX_WAIT_FOR_MS / 1000;
+const WAIT_FOR = `Wait in a tab of this session's Foxhand tab group until something happens, then return the tab. Give exactly one of: text, to wait until the page shows that text (case-sensitive, in the text the page shows, which leaves out the values of form fields); selector, to wait until an element matching that CSS selector exists in the page (frames are not searched, and a selector that contains both "[" and "value", in any letter case or escaped, is refused, since it could test what a password field holds); or navigation true, to wait until the next navigation in the tab finishes, also one already in progress when the call starts and a change of address by the page's own scripts (history.pushState or replaceState, which some pages call without moving to another page), but not a jump to an anchor of the same page (#...). timeout is in seconds: ${DEFAULT_WAIT_SECONDS} unless given, at most ${MAX_WAIT_SECONDS}; when it passes first, the call fails. For text and selector the tab must show a site the user approved; wait_for never asks. ${REDACTED_TABS}`;
+const RESIZE_WINDOW =
+  "Resize the Firefox window that holds this session's Foxhand tab group, and return its new width and height in pixels as Firefox reports them, which can differ from the size asked for, for example on a smaller screen. This resizes the user's whole window, the user's own tabs in it included. A maximized, minimized or full-screen window first returns to its normal state.";
 const NESTED = "The result from Firefox is nested too deeply to return.";
 const TOO_LARGE = "The result from Firefox is too large to return.";
 const ERROR_TOO_LARGE = "The error message from Firefox is too large to return.";
@@ -212,6 +224,83 @@ export function registerTools(
       }
       return errorResult(BOTH_OR_NEITHER);
     },
+  );
+  server.registerTool(
+    "wait_for",
+    {
+      description: WAIT_FOR,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        text: z
+          .string()
+          .min(1)
+          .max(MAX_WAIT_FOR_TEXT)
+          .optional()
+          .describe("Text the page must show, case-sensitive"),
+        selector: z
+          .string()
+          .min(1)
+          .max(MAX_WAIT_FOR_TEXT)
+          .optional()
+          .describe("A CSS selector an element in the page must match"),
+        navigation: z
+          .boolean()
+          .optional()
+          .describe("true to wait for the next navigation in the tab to finish"),
+        timeout: z
+          .number()
+          .min(MIN_WAIT_FOR_MS / 1000)
+          .max(MAX_WAIT_SECONDS)
+          .optional()
+          .describe(
+            `Seconds to wait: ${DEFAULT_WAIT_SECONDS} unless given, at most ${MAX_WAIT_SECONDS}`,
+          ),
+      },
+    },
+    async ({ tabId, text, selector, navigation, timeout }) => {
+      const condition = waitCondition(text, selector, navigation);
+      if (condition === undefined) return errorResult(ONE_CONDITION);
+      const params: Params<"wait_for"> = { tabId, ...condition };
+      if (timeout !== undefined) params.timeoutMs = Math.round(timeout * 1000);
+      return run(bridge, "wait_for", params);
+    },
+  );
+  server.registerTool(
+    "tab_close",
+    {
+      description: `Close a tab of this session's Foxhand tab group and return the tabs left in the group. Foxhand refuses to close the last tab of a window, since that would close the window, and the tab where Foxhand is asking the user about a site. ${REDACTED_TABS}`,
+      inputSchema: { tabId: tabIdSchema() },
+    },
+    ({ tabId }) => run(bridge, "tab_close", { tabId }),
+  );
+  server.registerTool(
+    "tab_select",
+    {
+      description: `Make a tab of this session's Foxhand tab group the active tab of its window, and return it. The window is not brought to the front. ${REDACTED_TABS}`,
+      inputSchema: { tabId: tabIdSchema() },
+    },
+    ({ tabId }) => run(bridge, "tab_select", { tabId }),
+  );
+  server.registerTool(
+    "resize_window",
+    {
+      description: RESIZE_WINDOW,
+      inputSchema: {
+        width: z
+          .number()
+          .int()
+          .min(MIN_WINDOW_SIZE)
+          .max(MAX_WINDOW_SIZE)
+          .describe("The window's new outer width in pixels"),
+        height: z
+          .number()
+          .int()
+          .min(MIN_WINDOW_SIZE)
+          .max(MAX_WINDOW_SIZE)
+          .describe("The window's new outer height in pixels"),
+      },
+    },
+    ({ width, height }) => run(bridge, "resize_window", { width, height }),
   );
   server.registerTool(
     "read_page",
@@ -584,6 +673,20 @@ function patternMatches(regex: RegExp, texts: string[]): boolean[] | undefined {
     return undefined;
   }
   return matched;
+}
+
+/** wait_for's one condition, or undefined for none, more than one, or navigation false. */
+function waitCondition(
+  text: string | undefined,
+  selector: string | undefined,
+  navigation: boolean | undefined,
+): { text: string } | { selector: string } | { navigation: true } | undefined {
+  if ([text, selector, navigation].filter((given) => given !== undefined).length !== 1) {
+    return undefined;
+  }
+  if (text !== undefined) return { text };
+  if (selector !== undefined) return { selector };
+  return navigation === true ? { navigation: true } : undefined;
 }
 
 function tabIdSchema() {

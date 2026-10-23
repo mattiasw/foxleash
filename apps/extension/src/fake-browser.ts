@@ -1,6 +1,7 @@
 import type {
   BrowserApi,
   BrowserEvent,
+  BrowserWindow,
   CaptureOptions,
   CssInjection,
   FrameDetails,
@@ -40,7 +41,9 @@ export interface FakeBrowser {
   /** Every `tabs.update` call, in order. */
   tabUpdates: TabUpdate[];
   /** Every `windows.update` call, in order. */
-  windowUpdates: { windowId: number; drawAttention?: boolean }[];
+  windowUpdates: WindowUpdate[];
+  /** Each window's size, as `windows.update` set it; a window without an entry is 1280x800. */
+  windowSizes: Map<number, { width: number; height: number }>;
   /** Makes the next `storage.local.set` reject, once. */
   failNextSet(): void;
   /** Every `scripting.executeScript` call, in order, with only the keys it was given. */
@@ -76,6 +79,16 @@ export interface FakeBrowser {
    */
   emitCommitted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   committedListenerCount(): number;
+  /** Fires `webNavigation.onCompleted`. A load in a tab fires it for its top frame too. */
+  emitCompleted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
+  /** Fires `webNavigation.onHistoryStateUpdated`; `pushState` fires it for the top frame too. */
+  emitHistoryStateUpdated(
+    details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number },
+  ): void;
+  /** Listeners on `webNavigation.onCompleted` and `onHistoryStateUpdated` together. */
+  navigationListenerCount(): number;
+  /** Listeners on `tabs.onRemoved`. */
+  removedListenerCount(): number;
   /** Every `tabs.sendMessage` call, in order, with only the keys it was given. */
   tabMessages: TabMessage[];
   /**
@@ -183,6 +196,14 @@ export interface TabMessage {
 /** A content script's `runtime.onMessage` listener: a promise to reply, undefined not to. */
 export type ContentScript = (message: unknown) => Promise<unknown> | undefined;
 
+export interface WindowUpdate {
+  windowId: number;
+  drawAttention?: boolean;
+  state?: "normal";
+  width?: number;
+  height?: number;
+}
+
 export interface TabUpdate {
   tabId: number;
   url?: string;
@@ -234,6 +255,9 @@ export function createFakeBrowser(): FakeBrowser {
   let removeHold: Promise<void> | undefined;
   let removeFailure: { error: unknown } | undefined;
   const onCommitted = createEvent<(details: NavigationDetails) => void>();
+  // Not `onCompleted`: in this file that name is webRequest's.
+  const onNavigationCompleted = createEvent<(details: NavigationDetails) => void>();
+  const onHistoryStateUpdated = createEvent<(details: NavigationDetails) => void>();
   // The latest timeStamp a commit or a webRequest event carried.
   let latestTimeStamp = 0;
   const contentScripts = new Map<
@@ -350,7 +374,17 @@ export function createFakeBrowser(): FakeBrowser {
     windows: {
       update: async (windowId, updateInfo) => {
         fake.windowUpdates.push({ windowId, ...updateInfo });
+        const size = sizeOf(windowId);
+        fake.windowSizes.set(windowId, {
+          width: updateInfo.width ?? size.width,
+          height: updateInfo.height ?? size.height,
+        });
       },
+      get: async (windowId): Promise<BrowserWindow> => ({
+        id: windowId,
+        state: "normal",
+        ...sizeOf(windowId),
+      }),
     },
     tabGroups: {
       get: async (groupId) => ({ ...groupOf(groupId) }),
@@ -396,6 +430,8 @@ export function createFakeBrowser(): FakeBrowser {
         return (listed ?? [0]).map((frameId): FrameDetails => ({ frameId }));
       },
       onCommitted,
+      onCompleted: onNavigationCompleted,
+      onHistoryStateUpdated,
     },
     webRequest: {
       onBeforeRequest: createWebRequestEvent("onBeforeRequest"),
@@ -420,6 +456,7 @@ export function createFakeBrowser(): FakeBrowser {
     badgeTitle: new Map(),
     tabUpdates: [],
     windowUpdates: [],
+    windowSizes: new Map(),
     failNextSet: () => {
       failSet = true;
     },
@@ -458,11 +495,13 @@ export function createFakeBrowser(): FakeBrowser {
     failNextRemoveCSS: (error) => {
       removeFailure = { error };
     },
-    emitCommitted: ({ timeStamp = latestTimeStamp + 1, ...details }) => {
-      latestTimeStamp = Math.max(latestTimeStamp, timeStamp);
-      for (const listener of [...onCommitted.listeners]) listener({ ...details, timeStamp });
-    },
+    emitCommitted: (details) => emitNavigation(onCommitted, details),
     committedListenerCount: () => onCommitted.listeners.size,
+    emitCompleted: (details) => emitNavigation(onNavigationCompleted, details),
+    emitHistoryStateUpdated: (details) => emitNavigation(onHistoryStateUpdated, details),
+    navigationListenerCount: () =>
+      onNavigationCompleted.listeners.size + onHistoryStateUpdated.listeners.size,
+    removedListenerCount: () => onTabRemoved.listeners.size,
     tabMessages: [],
     setContentScript: (tabId, handler) => {
       dropContentScript(tabId);
@@ -516,6 +555,7 @@ export function createFakeBrowser(): FakeBrowser {
       tab.index += 1;
       tab.url = url;
       emit(tab, { url });
+      fake.emitHistoryStateUpdated({ tabId, frameId: 0, url });
     },
     connectPage: (name, sender) => {
       const port = createPort();
@@ -561,6 +601,17 @@ export function createFakeBrowser(): FakeBrowser {
     },
   };
   return fake;
+
+  function emitNavigation(
+    event: { listeners: Set<(details: NavigationDetails) => void> },
+    {
+      timeStamp = latestTimeStamp + 1,
+      ...details
+    }: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number },
+  ): void {
+    latestTimeStamp = Math.max(latestTimeStamp, timeStamp);
+    for (const listener of [...event.listeners]) listener({ ...details, timeStamp });
+  }
 
   function createWebRequestEvent<E extends WebRequestEventName>(
     event: E,
@@ -736,7 +787,12 @@ export function createFakeBrowser(): FakeBrowser {
       tab.status = "complete";
       tab.title = titleOf(url);
       emit(tab, { status: "complete" });
+      if (fake.tabs.has(tab.id)) fake.emitCompleted({ tabId: tab.id, frameId: 0, url });
     });
+  }
+
+  function sizeOf(windowId: number): { width: number; height: number } {
+    return fake.windowSizes.get(windowId) ?? { width: 1280, height: 800 };
   }
 
   function emit(tab: FakeTab, changeInfo: TabChangeInfo): void {

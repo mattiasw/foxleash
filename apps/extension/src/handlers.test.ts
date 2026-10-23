@@ -1423,6 +1423,471 @@ describe("probe_input", { timeout: 10000 }, () => {
   });
 });
 
+describe("tab_select", { timeout: 10000 }, () => {
+  it("makes a tab of the group the active one of its window, without focusing the window", async () => {
+    const { fake, call, open } = setup();
+    const first = await open("s1");
+    const second = await open("s1");
+    assert.equal(fake.tabs.get(second.id)?.active, true);
+    assert.deepEqual(await call("s1", "tab_select", { tabId: first.id }), {
+      tab: { ...first, active: true },
+    });
+    assert.equal(fake.tabs.get(first.id)?.active, true);
+    assert.equal(fake.tabs.get(second.id)?.active, false);
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("refuses a tab outside the group, another session's tab, a missing tab and a bad id", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const user = fake.openTab({ url: "https://user.example/" });
+    const other = await open("s2");
+    for (const tabId of [user.id, other.id]) {
+      await assert.rejects(call("s1", "tab_select", { tabId }), {
+        code: "tab_not_in_group",
+        message: `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
+      });
+    }
+    await assert.rejects(call("s1", "tab_select", { tabId: 99 }), {
+      code: "tab_not_found",
+      message: "Tab 99 does not exist.",
+    });
+    for (const tabId of [undefined, -1, 1.5, "1"]) {
+      await assert.rejects(call("s1", "tab_select", tabId === undefined ? {} : { tabId }), {
+        code: "invalid_params",
+        message: "tab_select needs a tab id that is a whole number of 0 or more.",
+      });
+    }
+    assert.equal(fake.tabs.get(user.id)?.active, false);
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+});
+
+describe("tab_close", { timeout: 10000 }, () => {
+  it("closes a tab of the group and returns the tabs left in it", async () => {
+    const { fake, call, open } = setup();
+    const first = await open("s1");
+    const second = await open("s1");
+    assert.deepEqual(await call("s1", "tab_close", { tabId: first.id }), { tabs: [second] });
+    assert.equal(fake.tabs.has(first.id), false);
+  });
+
+  it("refuses a tab outside the group, another session's tab and a bad id", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const user = fake.openTab({ url: "https://user.example/" });
+    const other = await open("s2");
+    for (const tabId of [user.id, other.id]) {
+      await rejectsWith(call("s1", "tab_close", { tabId }), "tab_not_in_group");
+      assert.equal(fake.tabs.has(tabId), true);
+    }
+    await assert.rejects(call("s1", "tab_close", { tabId: -1 }), {
+      code: "invalid_params",
+      message: "tab_close needs a tab id that is a whole number of 0 or more.",
+    });
+  });
+
+  it("refuses a tab that left the group before its close ran", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const tab = await open("s1");
+    const get = fake.browser.tabs.get;
+    let reads = 0;
+    fake.browser.tabs.get = async (tabId) => {
+      reads += 1;
+      // The user drags the tab out of the group after the handler first read it.
+      if (tabId === tab.id && reads === 2) fake.ungroup(tab.id);
+      return get(tabId);
+    };
+    await rejectsWith(call("s1", "tab_close", { tabId: tab.id }), "tab_not_in_group");
+    assert.equal(reads, 2);
+    assert.equal(fake.tabs.has(tab.id), true);
+  });
+
+  it("refuses the tab where the session's prompt asks the user", async () => {
+    const { fake, call, open, timeOut, promptOf } = setup();
+    await open("s1");
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    await timeOut("s1");
+    await first;
+    const { tabId } = await promptOf("s1");
+    await assert.rejects(call("s1", "tab_close", { tabId }), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`,
+    });
+    assert.equal(fake.tabs.has(tabId), true);
+  });
+
+  it("refuses the only tab of a window", async () => {
+    const { fake, call, open } = setup();
+    const tab = await open("s1");
+    await assert.rejects(call("s1", "tab_close", { tabId: tab.id }), {
+      code: "last_tab",
+      message: `Tab ${tab.id} is the last tab in its window, and closing it would close the window.`,
+    });
+    assert.equal(fake.tabs.has(tab.id), true);
+  });
+
+  it("closes only one of a window's two tabs closed at once", async () => {
+    const { fake, call, open } = setup();
+    const first = await open("s1");
+    const second = await open("s1");
+    const results = await Promise.allSettled([
+      call("s1", "tab_close", { tabId: first.id }),
+      call("s1", "tab_close", { tabId: second.id }),
+    ]);
+    assert.deepEqual(
+      results.map((result) => result.status),
+      ["fulfilled", "rejected"],
+    );
+    const refused = results[1];
+    assert.ok(refused?.status === "rejected" && refused.reason instanceof ToolError);
+    assert.equal(refused.reason.code, "last_tab");
+    assert.deepEqual([...fake.tabs.keys()], [second.id]);
+  });
+
+  it("returns no tabs after closing the group's last tab in a window with the user's tab", async () => {
+    const { fake, call, open } = setup();
+    const user = fake.openTab({ url: "https://user.example/" });
+    const tab = await open("s1");
+    assert.deepEqual(await call("s1", "tab_close", { tabId: tab.id }), { tabs: [] });
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+});
+
+describe("resize_window", { timeout: 10000 }, () => {
+  it("refuses a session with no group", async () => {
+    const { fake, call } = setup();
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+      code: "no_session_group",
+      message: "This session has no tab group yet; open a tab with tab_open first.",
+    });
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("refuses sizes that are not whole numbers from 100 to 10,000", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    for (const bad of [99, 10_001, 1.5, "800", undefined]) {
+      for (const size of [
+        { width: bad, height: 700 },
+        { width: 900, height: bad },
+      ]) {
+        const params = Object.fromEntries(
+          Object.entries(size).filter(([, value]) => value !== undefined),
+        );
+        await assert.rejects(call("s1", "resize_window", params), {
+          code: "invalid_params",
+          message: "resize_window needs width and height to be whole numbers from 100 to 10,000.",
+        });
+      }
+    }
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("sizes the group's window in its normal state and returns the size Firefox reports", async () => {
+    const { fake, call, open } = setup();
+    fake.currentWindowId = 3;
+    await open("s1");
+    assert.deepEqual(await call("s1", "resize_window", { width: 100, height: 10_000 }), {
+      width: 100,
+      height: 10_000,
+    });
+    assert.deepEqual(fake.windowUpdates, [
+      { windowId: 3, state: "normal", width: 100, height: 10_000 },
+    ]);
+    fake.browser.windows.get = async (windowId) => ({ id: windowId, width: 880, height: 650 });
+    assert.deepEqual(await call("s1", "resize_window", { width: 900, height: 700 }), {
+      width: 880,
+      height: 650,
+    });
+  });
+
+  it("fails with Firefox's error when it does not resize the window", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const refusal = new Error("Invalid window state");
+    fake.browser.windows.update = () => Promise.reject(refusal);
+    let asked = false;
+    fake.browser.windows.get = async (windowId) => {
+      asked = true;
+      return { id: windowId, width: 900, height: 700 };
+    };
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), refusal);
+    assert.equal(asked, false);
+  });
+
+  it("fails when Firefox reports no width or height", async () => {
+    for (const reported of [{ height: 700 }, { width: 900 }]) {
+      const { fake, call, open } = setup();
+      await open("s1");
+      fake.browser.windows.get = async (windowId) => ({ id: windowId, ...reported });
+      await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+        code: "resize_failed",
+        message: "Firefox did not report the window's new size.",
+      });
+    }
+  });
+});
+
+describe("wait_for", { timeout: 10000 }, () => {
+  it("refuses bad conditions and timeouts before asking the page", async () => {
+    const { call, open, pageCalls, fake } = setup();
+    const tab = await open("s1");
+    const listeners = fake.navigationListenerCount();
+    const cases: [Record<string, unknown>, string][] = [
+      [{}, "wait_for needs exactly one of text, selector or navigation."],
+      [
+        { text: "a", selector: "#b" },
+        "wait_for needs exactly one of text, selector or navigation.",
+      ],
+      [
+        { text: "a", navigation: true },
+        "wait_for needs exactly one of text, selector or navigation.",
+      ],
+      [
+        { selector: "#b", navigation: true },
+        "wait_for needs exactly one of text, selector or navigation.",
+      ],
+      [{ navigation: false }, "wait_for needs navigation to be true."],
+      [{ navigation: "true" }, "wait_for needs navigation to be true."],
+      [{ text: "" }, "wait_for needs text to be 1 to 1,000 characters."],
+      [{ text: "a".repeat(1001) }, "wait_for needs text to be 1 to 1,000 characters."],
+      [{ text: 1 }, "wait_for needs text to be 1 to 1,000 characters."],
+      [{ selector: "" }, "wait_for needs selector to be 1 to 1,000 characters."],
+      [{ selector: "a".repeat(1001) }, "wait_for needs selector to be 1 to 1,000 characters."],
+      [
+        { text: "a", timeoutMs: 99 },
+        "wait_for needs timeoutMs to be a whole number from 100 to 30,000.",
+      ],
+      [
+        { text: "a", timeoutMs: 30_001 },
+        "wait_for needs timeoutMs to be a whole number from 100 to 30,000.",
+      ],
+      [
+        { text: "a", timeoutMs: 1.5 },
+        "wait_for needs timeoutMs to be a whole number from 100 to 30,000.",
+      ],
+      [
+        { text: "a", timeoutMs: "1000" },
+        "wait_for needs timeoutMs to be a whole number from 100 to 30,000.",
+      ],
+      [
+        { navigation: true, timeoutMs: 99 },
+        "wait_for needs timeoutMs to be a whole number from 100 to 30,000.",
+      ],
+    ];
+    for (const [params, message] of cases) {
+      await assert.rejects(call("s1", "wait_for", { tabId: tab.id, ...params }), {
+        code: "invalid_params",
+        message,
+      });
+    }
+    await assert.rejects(call("s1", "wait_for", { tabId: -1, text: "a" }), {
+      code: "invalid_params",
+      message: "wait_for needs a tab id that is a whole number of 0 or more.",
+    });
+    assert.deepEqual(pageCalls, []);
+    assert.equal(fake.navigationListenerCount(), listeners);
+  });
+
+  it("refuses a selector that could test a value attribute, and asks about the rest", async () => {
+    const { call, open, pageCalls, replyWith } = setup();
+    const tab = await open("s1");
+    replyWith(async () => true);
+    const refused = [
+      "[value]",
+      "[VALUE]",
+      'input[type=password][value^="a"]',
+      "[v\\61 lue]",
+      "[v\\61\tlue]",
+      "[v\\61\nlue]",
+      "[v\\61\r\nlue]",
+      "[v\\61\flue]",
+      "[v\\000061lue]",
+      "[\\76 alue]",
+      "[va\\lue]",
+      "[val\\\nue]",
+      "[value\\]",
+      "[*|value]",
+      ":has([value])",
+      ".value[name=q]",
+    ];
+    for (const selector of refused) {
+      await assert.rejects(
+        call("s1", "wait_for", { tabId: tab.id, selector }),
+        {
+          code: "invalid_params",
+          message:
+            'wait_for does not take a selector that contains both "[" and "value", since it could test what a password field holds.',
+        },
+        JSON.stringify(selector),
+      );
+    }
+    assert.deepEqual(pageCalls, []);
+    const asked = [
+      'input[name="q"]',
+      "[v\\61l]",
+      "[data-val]",
+      "[\\0]",
+      "[\\110000]",
+      "[\\d800]",
+      ".total-value",
+      "#value",
+    ];
+    for (const selector of asked) {
+      await call("s1", "wait_for", { tabId: tab.id, selector });
+    }
+    assert.deepEqual(
+      pageCalls.map(({ type, params }) => [type, params]),
+      asked.map((selector) => ["wait_for", { selector }]),
+    );
+  });
+
+  it("returns the tab once the page shows the text, asking with the text only", async () => {
+    const { call, open, pageCalls, replyWith } = setup();
+    const tab = await open("s1");
+    replyWith(async () => true);
+    assert.deepEqual(await call("s1", "wait_for", { tabId: tab.id, text: "Saved", extra: 1 }), {
+      tab,
+    });
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: tab.id, type: "wait_for", params: { text: "Saved" } },
+    ]);
+  });
+
+  it("waits 10 seconds unless told otherwise, then fails", async () => {
+    const { call, open, replyWith, timers } = setup();
+    const tab = await open("s1");
+    replyWith(async () => false);
+    let settled = false;
+    const waiting = call("s1", "wait_for", { tabId: tab.id, text: "Saved" });
+    waiting.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flush();
+    timers.advance(9_999);
+    await flush();
+    assert.equal(settled, false);
+    timers.advance(1);
+    await assert.rejects(waiting, {
+      code: "wait_timeout",
+      message: `Tab ${tab.id} did not show that text within 10 seconds.`,
+    });
+    const short = call("s1", "wait_for", { tabId: tab.id, selector: "#done", timeoutMs: 1000 });
+    await flush();
+    timers.advance(1000);
+    await assert.rejects(short, {
+      code: "wait_timeout",
+      message: `Tab ${tab.id} did not show an element matching that selector within 1 second.`,
+    });
+    const shortest = call("s1", "wait_for", { tabId: tab.id, text: "a", timeoutMs: 100 });
+    await flush();
+    timers.advance(100);
+    await assert.rejects(shortest, {
+      code: "wait_timeout",
+      message: `Tab ${tab.id} did not show that text within 0.1 seconds.`,
+    });
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("passes the page's refusal on at once", async () => {
+    const { call, open, replyWith, pageCalls } = setup();
+    const tab = await open("s1");
+    const refusal = new ToolError("site_not_approved", "Not approved.");
+    replyWith(() => Promise.reject(refusal));
+    await assert.rejects(call("s1", "wait_for", { tabId: tab.id, text: "a" }), (error) => {
+      return error === refusal;
+    });
+    assert.equal(pageCalls.length, 1);
+  });
+
+  it("refuses the tab once it left the group before the page showed the text", async () => {
+    const { fake, call, open, replyWith, timers } = setup();
+    await open("s1");
+    const tab = await open("s1");
+    replyWith(async () => false);
+    const waiting = call("s1", "wait_for", { tabId: tab.id, text: "Saved" });
+    await flush();
+    fake.ungroup(tab.id);
+    replyWith(async () => true);
+    timers.advance(250);
+    await rejectsWith(waiting, "tab_not_in_group");
+  });
+
+  it("returns the tab after the next navigation, redacted on a site not approved", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    await flush();
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    assert.deepEqual(await waiting, {
+      tab: { ...tab, url: "https://a.example/next", title: "Title of https://a.example/next" },
+    });
+    const away = call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    await flush();
+    fake.navigateByUser(tab.id, "https://b.example/secret");
+    assert.deepEqual(await away, {
+      tab: { ...tab, url: "https://b.example", title: "" },
+    });
+    assert.equal(fake.navigationListenerCount(), 0);
+  });
+
+  it("returns the tab after the page changes its address with the History API", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 30_000 });
+    await flush();
+    fake.pushState(tab.id, "https://a.example/step-2");
+    assert.deepEqual(await waiting, { tab: { ...tab, url: "https://a.example/step-2" } });
+  });
+
+  it("fails a navigation wait when the tab closes or nothing happens in time", async () => {
+    const { fake, call, open, timers } = setup();
+    await open("s1");
+    const tab = await open("s1");
+    const timedOut = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(timedOut, {
+      code: "wait_timeout",
+      message: `Tab ${tab.id} did not finish a navigation within 2 seconds.`,
+    });
+    const closed = call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    await flush();
+    fake.removeTab(tab.id);
+    await assert.rejects(closed, {
+      code: "tab_not_found",
+      message: `Tab ${tab.id} does not exist.`,
+    });
+    assert.equal(fake.navigationListenerCount(), 0);
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("refuses a navigation wait on a tab outside the group, removing its listeners", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const user = fake.openTab({ url: "https://user.example/" });
+    const removed = fake.removedListenerCount();
+    await rejectsWith(
+      call("s1", "wait_for", { tabId: user.id, navigation: true }),
+      "tab_not_in_group",
+    );
+    assert.equal(fake.navigationListenerCount(), 0);
+    assert.equal(fake.removedListenerCount(), removed);
+  });
+});
+
 describe("read_page", { timeout: 10000 }, () => {
   it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
     const { call, pageCalls } = setup();

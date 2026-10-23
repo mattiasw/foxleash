@@ -296,11 +296,15 @@ describe("foxhand mcp", () => {
         "read_console",
         "read_network",
         "read_page",
+        "resize_window",
         "screenshot",
         "scroll",
+        "tab_close",
         "tab_open",
+        "tab_select",
         "tabs_list",
         "upload_file",
+        "wait_for",
       ]);
       child.stdin.end();
       assert.deepEqual(await exited, [0, null]);

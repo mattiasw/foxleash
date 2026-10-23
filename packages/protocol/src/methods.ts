@@ -132,6 +132,18 @@ export const MAX_NETWORK_HEADER = 1_000;
 /** The most headers kept in each direction of a request. */
 export const MAX_NETWORK_HEADERS = 100;
 
+/** wait_for's wait when the request gives none. */
+export const DEFAULT_WAIT_FOR_MS = 10_000;
+/** The shortest wait wait_for takes. */
+export const MIN_WAIT_FOR_MS = 100;
+/** The longest wait wait_for takes: below the host's 60 s request timeout, which shuts the host down when it fires. */
+export const MAX_WAIT_FOR_MS = 30_000;
+/** The longest text or selector wait_for takes. */
+export const MAX_WAIT_FOR_TEXT = 1_000;
+/** The smallest and largest width and height resize_window takes, in pixels. */
+export const MIN_WINDOW_SIZE = 100;
+export const MAX_WINDOW_SIZE = 10_000;
+
 /** The most bytes upload_file takes in one call, across all its files. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
@@ -145,6 +157,19 @@ export interface Methods {
       | { tabId: number; url: string; action?: never }
       | { tabId: number; action: NavigateAction; url?: never };
     result: { tab: TabInfo };
+  };
+  tab_close: { params: { tabId: number }; result: { tabs: TabInfo[] } };
+  tab_select: { params: { tabId: number }; result: { tab: TabInfo } };
+  wait_for: {
+    params:
+      | { tabId: number; text: string; selector?: never; navigation?: never; timeoutMs?: number }
+      | { tabId: number; selector: string; text?: never; navigation?: never; timeoutMs?: number }
+      | { tabId: number; navigation: true; text?: never; selector?: never; timeoutMs?: number };
+    result: { tab: TabInfo };
+  };
+  resize_window: {
+    params: { width: number; height: number };
+    result: { width: number; height: number };
   };
   read_page: {
     params: { tabId: number; filter?: "all" | "interactive"; depth?: number; ref?: string };
@@ -216,6 +241,10 @@ export const METHOD_NAMES = [
   "tabs_list",
   "tab_open",
   "navigate",
+  "tab_close",
+  "tab_select",
+  "wait_for",
+  "resize_window",
   "read_page",
   "get_page_text",
   "screenshot",

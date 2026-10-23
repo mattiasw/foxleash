@@ -34,6 +34,13 @@ export function readPageText(doc: Document, maxChars: number): PageText {
   );
 }
 
+/** The text the document's body shows, in document order: what wait_for matches text in. */
+export function renderedText(doc: Document): string {
+  const body = doc.body;
+  if (body === null) return "";
+  return hasBox(body) ? body.innerText : restText(body, undefined);
+}
+
 function findMain(body: HTMLElement): Found {
   for (const element of body.querySelectorAll("main")) {
     if (isShown(element)) return { source: "main", element };

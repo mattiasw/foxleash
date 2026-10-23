@@ -38,7 +38,14 @@ export const TITLES = {
   network: "Fixture network",
   networkDone: "Fixture network done",
   networkHop: "Fixture network hop",
+  waitLate: "Fixture wait late",
+  waitNavigate: "Fixture wait navigate",
 } as const;
+
+/** The text the wait-late page adds, in an element with the id late, after WAIT_LATE_MS. */
+export const WAIT_LATE_TEXT = "The late text has arrived";
+/** How long the wait pages wait after loading before they add their text or navigate. */
+export const WAIT_LATE_MS = 2000;
 
 /** What the console pages log, each in one message. */
 export const CONSOLE_TOKENS = {
@@ -225,6 +232,10 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendPage(response, TITLES.a);
     } else if (path === "/b") {
       sendPage(response, TITLES.b);
+    } else if (path === "/wait-late") {
+      sendHtml(response, WAIT_LATE_PAGE);
+    } else if (path === "/wait-navigate") {
+      sendHtml(response, WAIT_NAVIGATE_PAGE);
     } else if (path === "/slow") {
       const timer = setTimeout(() => {
         timers.delete(timer);
@@ -397,6 +408,35 @@ function sendHtml(
 // Both console pages log only when their Log button is clicked, so a test can wait until Foxhand
 // records the page first.
 const CONSOLE_LOG_BUTTON = `<button id="log" style="position: fixed; left: 10px; top: 10px; width: 120px; height: 40px; margin: 0">Log</button>`;
+
+const WAIT_LATE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.waitLate}</title></head>
+<body><h1>${TITLES.waitLate}</h1>
+<script>
+addEventListener("load", () => {
+  setTimeout(() => {
+    const late = document.createElement("p");
+    late.id = "late";
+    late.textContent = ${JSON.stringify(WAIT_LATE_TEXT)};
+    document.body.append(late);
+  }, ${WAIT_LATE_MS});
+});
+</script>
+</body></html>
+`;
+
+const WAIT_NAVIGATE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.waitNavigate}</title></head>
+<body><h1>${TITLES.waitNavigate}</h1>
+<script>
+addEventListener("load", () => {
+  setTimeout(() => {
+    location.href = "/a";
+  }, ${WAIT_LATE_MS});
+});
+</script>
+</body></html>
+`;
 
 // The timers keep the uncaught error and the rejection after the console calls, in that order.
 const CONSOLE_PAGE = `<!doctype html>

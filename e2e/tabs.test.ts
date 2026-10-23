@@ -22,6 +22,7 @@ describe("tabs in real Firefox", () => {
   let fixtures: FixtureServer;
   let session: Session;
   let tabId = -1;
+  let secondId = -1;
 
   before(
     async () => {
@@ -101,6 +102,55 @@ describe("tabs in real Firefox", () => {
     assert.deepEqual(
       tabs.map((tab) => [tab.id, tab.url]),
       [[tabId, fixtures.url("/counter")]],
+    );
+  });
+
+  test("tab_select makes a tab of the group the active one", async () => {
+    const second = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    assert.equal(second.active, true);
+    secondId = second.id;
+    const selected = tabOf(await harness.ok(session, "tab_select", { tabId }));
+    assert.equal(selected.id, tabId);
+    assert.equal(selected.active, true);
+    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.deepEqual(
+      tabs.map((tab) => [tab.id, tab.active]),
+      [
+        [tabId, true],
+        [secondId, false],
+      ],
+    );
+  });
+
+  test("resize_window resizes the group's window to the size asked for", async () => {
+    assert.deepEqual(await harness.ok(session, "resize_window", { width: 900, height: 700 }), {
+      width: 900,
+      height: 700,
+    });
+  });
+
+  test("tab_close closes a tab of the group and returns the rest", async () => {
+    const left = tabsOf(await harness.ok(session, "tab_close", { tabId: secondId }));
+    assert.deepEqual(
+      left.map((tab) => tab.id),
+      [tabId],
+    );
+    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.deepEqual(
+      tabs.map((tab) => tab.id),
+      [tabId],
+    );
+  });
+
+  test("tab_close refuses another session's tab", async () => {
+    const other = await harness.connect();
+    const otherTab = tabOf(await harness.ok(other, "tab_open", { url: fixtures.url("/b") }));
+    const text = await harness.refused(session, "tab_close", { tabId: otherTab.id });
+    assert.ok(text.includes("is not in this session's tab group"), text);
+    const tabs = tabsOf(await harness.ok(other, "tabs_list"));
+    assert.deepEqual(
+      tabs.map((tab) => tab.id),
+      [otherTab.id],
     );
   });
 });

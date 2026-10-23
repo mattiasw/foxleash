@@ -48,7 +48,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the thirteen tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the seventeen tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -60,11 +60,15 @@ describe("tools", () => {
       "read_console",
       "read_network",
       "read_page",
+      "resize_window",
       "screenshot",
       "scroll",
+      "tab_close",
       "tab_open",
+      "tab_select",
       "tabs_list",
       "upload_file",
+      "wait_for",
     ]);
     for (const tool of tools) {
       assert.ok(tool.description !== undefined && tool.description.length > 0, tool.name);
@@ -82,6 +86,7 @@ describe("tools", () => {
           "drag",
           "read_console",
           "read_network",
+          "resize_window",
         ].includes(tool.name),
         tool.name,
       );
@@ -835,6 +840,177 @@ describe("tools", () => {
     const { client } = await start(() => result);
     const output = await client.callTool({ name: "tabs_list", arguments: {} });
     assert.equal(unframed(output), '{\n  "__proto__": {\n    "x": 1\n  },\n  "tab": 1\n}');
+  });
+});
+
+describe("wait_for", () => {
+  const ONE_CONDITION = "Give exactly one of text, selector or navigation.";
+
+  it("describes the conditions, the timeout and the refused selectors", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "wait_for");
+    assert.deepEqual(tool?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), [
+      "tabId",
+      "text",
+      "selector",
+      "navigation",
+      "timeout",
+    ]);
+    for (const words of [
+      "case-sensitive",
+      "leaves out the values of form fields",
+      'a selector that contains both "[" and "value", in any letter case or escaped, is refused',
+      "history.pushState or replaceState",
+      "or navigation true, to wait until the next navigation in the tab finishes",
+      "10 unless given, at most 30",
+      "wait_for never asks",
+    ]) {
+      assert.ok(tool?.description?.includes(words), words);
+    }
+    assert.equal(tool?.description?.includes(ASKS_FIRST), false);
+    assert.deepEqual(
+      record(tool?.inputSchema.properties?.navigation).description,
+      "true to wait for the next navigation in the tab to finish",
+    );
+  });
+
+  it("sends a text, a selector or navigation", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ tab: 1 }));
+    for (const condition of [
+      { text: "Saved" },
+      { selector: "#done" },
+      { navigation: true },
+    ] as const) {
+      const output = await client.callTool({
+        name: "wait_for",
+        arguments: { tabId: 3, ...condition },
+      });
+      assert.equal(unframed(output), '{\n  "tab": 1\n}');
+    }
+    assert.deepEqual(calls, [
+      { method: "wait_for", params: { tabId: 3, text: "Saved" } },
+      { method: "wait_for", params: { tabId: 3, selector: "#done" } },
+      { method: "wait_for", params: { tabId: 3, navigation: true } },
+    ]);
+  });
+
+  it("sends the timeout in whole milliseconds, and none when not given", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ tab: 1 }));
+    for (const timeout of [2.5, 0.1234, 30]) {
+      await client.callTool({ name: "wait_for", arguments: { tabId: 3, text: "a", timeout } });
+    }
+    assert.deepEqual(
+      calls.map((call) => call.params),
+      [
+        { tabId: 3, text: "a", timeoutMs: 2500 },
+        { tabId: 3, text: "a", timeoutMs: 123 },
+        { tabId: 3, text: "a", timeoutMs: 30_000 },
+      ],
+    );
+  });
+
+  it("refuses none, more than one condition, or navigation false", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    for (const conditions of [
+      {},
+      { text: "a", selector: "#b" },
+      { text: "a", navigation: true },
+      { selector: "#b", navigation: true },
+      { navigation: false },
+      { text: "a", navigation: false },
+    ]) {
+      const output = await client.callTool({
+        name: "wait_for",
+        arguments: { tabId: 1, ...conditions },
+      });
+      assert.deepEqual(
+        output,
+        { content: [{ type: "text", text: ONE_CONDITION }], isError: true },
+        JSON.stringify(conditions),
+      );
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses a timeout or text out of range before calling Firefox", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    for (const extra of [
+      { text: "a", timeout: 0.05 },
+      { text: "a", timeout: 31 },
+      { text: "" },
+      { text: "a".repeat(1001) },
+      { selector: "" },
+      { selector: "a".repeat(1001) },
+    ]) {
+      const output = await client.callTool({ name: "wait_for", arguments: { tabId: 1, ...extra } });
+      assert.equal(output.isError, true, JSON.stringify(extra).slice(0, 40));
+      assert.match(text(output), /^MCP error -32602: Input validation error/);
+    }
+    assert.deepEqual(calls, []);
+    await client.callTool({
+      name: "wait_for",
+      arguments: { tabId: 1, text: "a".repeat(1000), timeout: 0.1 },
+    });
+    assert.deepEqual(calls, [
+      { method: "wait_for", params: { tabId: 1, text: "a".repeat(1000), timeoutMs: 100 } },
+    ]);
+  });
+});
+
+describe("tab_close, tab_select and resize_window", () => {
+  it("describe what they change and what they refuse", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const named = (name: string) => tools.find((tool) => tool.name === name);
+    assert.ok(
+      named("tab_close")?.description?.includes("refuses to close the last tab of a window"),
+    );
+    assert.ok(
+      named("tab_select")?.description?.includes("The window is not brought to the front."),
+    );
+    assert.ok(
+      named("resize_window")?.description?.includes(
+        "This resizes the user's whole window, the user's own tabs in it included.",
+      ),
+    );
+    assert.deepEqual(named("tab_close")?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(named("tab_select")?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(named("resize_window")?.inputSchema.required, ["width", "height"]);
+  });
+
+  it("send the tab id, and the size", LIMIT, async () => {
+    const { client, calls } = await start((method) =>
+      method === "resize_window" ? { width: 900, height: 700 } : { tabs: [] },
+    );
+    await client.callTool({ name: "tab_close", arguments: { tabId: 4 } });
+    await client.callTool({ name: "tab_select", arguments: { tabId: 5 } });
+    const resized = await client.callTool({
+      name: "resize_window",
+      arguments: { width: 900, height: 700 },
+    });
+    assert.equal(unframed(resized), pretty({ width: 900, height: 700 }));
+    assert.deepEqual(calls, [
+      { method: "tab_close", params: { tabId: 4 } },
+      { method: "tab_select", params: { tabId: 5 } },
+      { method: "resize_window", params: { width: 900, height: 700 } },
+    ]);
+  });
+
+  it("refuse a size out of range before calling Firefox", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    for (const size of [
+      { width: 99, height: 700 },
+      { width: 900, height: 10_001 },
+      { width: 900.5, height: 700 },
+    ]) {
+      const output = await client.callTool({ name: "resize_window", arguments: size });
+      assert.equal(output.isError, true, JSON.stringify(size));
+    }
+    assert.deepEqual(calls, []);
+    await client.callTool({ name: "resize_window", arguments: { width: 100, height: 10_000 } });
+    assert.deepEqual(calls, [{ method: "resize_window", params: { width: 100, height: 10_000 } }]);
   });
 });
 

@@ -1,8 +1,14 @@
 import {
   DEFAULT_NETWORK_LIMIT,
+  DEFAULT_WAIT_FOR_MS,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
+  MAX_WAIT_FOR_MS,
+  MAX_WAIT_FOR_TEXT,
+  MAX_WINDOW_SIZE,
   type MethodName,
+  MIN_WAIT_FOR_MS,
+  MIN_WINDOW_SIZE,
   type NavigateAction,
   type ProbeResult,
   type RequestMessage,
@@ -57,6 +63,7 @@ import {
   siteBlocked,
 } from "./site-access.ts";
 import type { Uploads } from "./uploads.ts";
+import { waitForNavigation, waitForPage } from "./wait-for.ts";
 import { waitForLoad } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
@@ -97,6 +104,8 @@ type Handlers = {
 
 type NavigationTarget = { kind: "url"; url: string } | { kind: "action"; action: NavigateAction };
 
+type WaitCondition = { text: string } | { selector: string } | { navigation: true };
+
 const NAVIGATE_ACTIONS: readonly unknown[] = [
   "back",
   "forward",
@@ -133,6 +142,10 @@ export function createHandlers<Handle>({
     tabs_list: tabsList,
     tab_open: tabOpen,
     navigate,
+    tab_close: tabClose,
+    tab_select: tabSelect,
+    wait_for: waitFor,
+    resize_window: resizeWindow,
     read_page: readPage,
     get_page_text: getPageText,
     screenshot,
@@ -201,13 +214,7 @@ export function createHandlers<Handle>({
   }
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "navigate needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "navigate");
     const target = navigationTarget(params);
     const tab = await existingTab(tabId);
     const group = await groups.groupOf(session);
@@ -257,15 +264,102 @@ export function createHandlers<Handle>({
     return { decision: await access.check(session, url), url };
   }
 
-  /** Reads the page in a tab through the content script, which runs only after the site gate. */
-  async function readPage(session: string, params: Params): Promise<Result<"read_page">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+  /**
+   * Closes a tab of the session's group, unless it is the last tab of its window or shows the
+   * session's open prompt, and returns the tabs left in the group.
+   */
+  async function tabClose(session: string, params: Params): Promise<Result<"tab_close">> {
+    const tabId = tabIdParam(params, "tab_close");
+    const { groupId } = await groupTab(session, tabId);
+    const closed = await groups.closeTab(tabId, (current) => {
+      if (current.groupId !== groupId) throw notInGroup(tabId);
+      keepPrompt(session, tabId);
+    });
+    if (!closed) {
       throw new ToolError(
-        "invalid_params",
-        "read_page needs a tab id that is a whole number of 0 or more.",
+        "last_tab",
+        `Tab ${tabId} is the last tab in its window, and closing it would close the window.`,
       );
     }
+    const { tabs } = await tabsList(session);
+    return { tabs: tabs.filter((listed) => listed.id !== tabId) };
+  }
+
+  /** Makes a tab of the session's group the active tab of its window, without focusing the window. */
+  async function tabSelect(session: string, params: Params): Promise<Result<"tab_select">> {
+    const tabId = tabIdParam(params, "tab_select");
+    await groupTab(session, tabId);
+    const updated = await browser.tabs.update(tabId, { active: true });
+    const view = await access.view(session);
+    return { tab: view.tabInfo(updated) };
+  }
+
+  /**
+   * Waits until the page in a tab of the session's group shows a text or has an element matching
+   * a selector, read through the content script after the site gate, or until a navigation in the
+   * tab finishes. The tab must still be in the group when the wait ends.
+   */
+  async function waitFor(session: string, params: Params): Promise<Result<"wait_for">> {
+    const tabId = tabIdParam(params, "wait_for");
+    const condition = waitCondition(params);
+    const timeoutMs = waitTimeoutMs(params);
+    if ("navigation" in condition) {
+      const outcome = await waitForNavigation({ browser, timers }, tabId, timeoutMs, () =>
+        groupTab(session, tabId),
+      );
+      if (outcome === "closed") throw tabNotFound(tabId);
+      if (outcome === "timeout") {
+        throw new ToolError(
+          "wait_timeout",
+          `Tab ${tabId} did not finish a navigation within ${secondsText(timeoutMs)}.`,
+        );
+      }
+    } else if (!(await waitForPage({ pages, timers }, session, tabId, condition, timeoutMs))) {
+      const what = "text" in condition ? "that text" : "an element matching that selector";
+      throw new ToolError(
+        "wait_timeout",
+        `Tab ${tabId} did not show ${what} within ${secondsText(timeoutMs)}.`,
+      );
+    }
+    const tab = await groupTab(session, tabId);
+    const view = await access.view(session);
+    return { tab: view.tabInfo(tab) };
+  }
+
+  /**
+   * Resizes the window that holds the session's group, out of a maximized, minimized or full-screen
+   * state first, and returns the size Firefox reports for it.
+   */
+  async function resizeWindow(session: string, params: Params): Promise<Result<"resize_window">> {
+    const width = windowSize(own(params, "width"));
+    const height = windowSize(own(params, "height"));
+    const group = await groups.groupOf(session);
+    if (group === undefined) {
+      throw new ToolError(
+        "no_session_group",
+        "This session has no tab group yet; open a tab with tab_open first.",
+      );
+    }
+    // A maximized or full-screen window ignores a size; the normal state combines with one.
+    await browser.windows.update(group.windowId, { state: "normal", width, height });
+    const resized = await browser.windows.get(group.windowId);
+    if (typeof resized.width !== "number" || typeof resized.height !== "number") {
+      throw new ToolError("resize_failed", "Firefox did not report the window's new size.");
+    }
+    return { width: resized.width, height: resized.height };
+  }
+
+  /** The tab, when it exists and is in the session's group. */
+  async function groupTab(session: string, tabId: number): Promise<Tab> {
+    const tab = await existingTab(tabId);
+    const group = await groups.groupOf(session);
+    if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    return tab;
+  }
+
+  /** Reads the page in a tab through the content script, which runs only after the site gate. */
+  async function readPage(session: string, params: Params): Promise<Result<"read_page">> {
+    const tabId = tabIdParam(params, "read_page");
     const options = readPageOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     const reply = await pages.request(session, tabId, "read_page", options);
@@ -287,13 +381,7 @@ export function createHandlers<Handle>({
 
   /** Reads a page's text through the content script, which runs only after the site gate. */
   async function getPageText(session: string, params: Params): Promise<Result<"get_page_text">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "get_page_text needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "get_page_text");
     const options = pageTextOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     const reply = await pages.request(session, tabId, "get_page_text", options);
@@ -313,13 +401,7 @@ export function createHandlers<Handle>({
    * whichever tab happens to be active.
    */
   async function screenshot(session: string, params: Params): Promise<Result<"screenshot">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "screenshot needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "screenshot");
     const ref = screenshotRef(params);
     const timeout = screenshotTimeout(tabId);
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
@@ -464,13 +546,7 @@ export function createHandlers<Handle>({
       throw new ToolError("invalid_params", "upload_file needs upload to be a string.");
     }
     const staged = uploads.take(session, upload) ?? new Uint8Array(0);
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "upload_file needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "upload_file");
     const ref = own(params, "ref");
     if (typeof ref !== "string") {
       throw new ToolError("invalid_params", "upload_file needs ref to be a string.");
@@ -512,13 +588,7 @@ export function createHandlers<Handle>({
     parse: (params: Params) => Params | string,
     check: (reply: unknown) => R | undefined,
   ): Promise<R> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        `${tool} needs a tab id that is a whole number of 0 or more.`,
-      );
-    }
+    const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     // The reply comes from the page's content process: own fields only, of exact types.
@@ -534,13 +604,7 @@ export function createHandlers<Handle>({
 
   /** Reads what the page in a tab wrote to its console, through the content script. */
   async function readConsole(session: string, params: Params): Promise<Result<"read_console">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "read_console needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "read_console");
     const live = recordings.liveRecording(session, tabId);
     const reply = await pages.request(session, tabId, "read_console", {});
     // The reply comes from the page's content process: own fields only, and the caps again.
@@ -560,13 +624,7 @@ export function createHandlers<Handle>({
 
   /** Reads the network requests Foxhand recorded for the page in a tab. */
   async function readNetwork(session: string, params: Params): Promise<Result<"read_network">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "read_network needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "read_network");
     const options = networkOptions(params);
     const site = await allowedPageSite({ browser, groups, access }, session, tabId);
     return network.read(session, tabId, site, options);
@@ -603,13 +661,7 @@ export function createHandlers<Handle>({
    * site must already be allowed, through tab_open or navigate and the user's click.
    */
   async function probeInput(session: string, params: Params): Promise<Result<"probe_input">> {
-    const tabId = own(params, "tabId");
-    if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
-      throw new ToolError(
-        "invalid_params",
-        "probe_input needs a tab id that is a whole number of 0 or more.",
-      );
-    }
+    const tabId = tabIdParam(params, "probe_input");
     const site = await allowedPageSite({ browser, groups, access }, session, tabId);
     const frames = await injectProbe(tabId, site);
     const top = frames.find((frame) => frame.frameId === 0);
@@ -683,8 +735,10 @@ export function createHandlers<Handle>({
   }
 
   /**
-   * Refuses a load over the session's open prompt, which a parallel request may have shown in
-   * the tab meanwhile. Called right before the load starts, with no await in between.
+   * Refuses a load over the session's open prompt, or closing its tab, which would dismiss the
+   * user's question and count against the session's prompts; a parallel request may have shown
+   * the prompt in the tab meanwhile. Called right before the load or the removal starts, with no
+   * await in between.
    */
   function keepPrompt(session: string, tabId: number): void {
     const shown = access.openPrompt(session);
@@ -767,6 +821,118 @@ function tabOpenUrl(params: Params): string | undefined {
   }
   if (url === "about:blank") return undefined;
   return webUrl(url, "Foxhand opens only http and https URLs, or about:blank.");
+}
+
+function tabIdParam(params: Params, method: string): number {
+  const tabId = own(params, "tabId");
+  if (typeof tabId !== "number" || !Number.isSafeInteger(tabId) || tabId < 0) {
+    throw new ToolError(
+      "invalid_params",
+      `${method} needs a tab id that is a whole number of 0 or more.`,
+    );
+  }
+  return tabId;
+}
+
+/** wait_for's one condition: a text, a selector the page may be asked about, or navigation. */
+function waitCondition(params: Params): WaitCondition {
+  const text = own(params, "text");
+  const selector = own(params, "selector");
+  const navigation = own(params, "navigation");
+  if ([text, selector, navigation].filter((given) => given !== undefined).length !== 1) {
+    throw new ToolError(
+      "invalid_params",
+      "wait_for needs exactly one of text, selector or navigation.",
+    );
+  }
+  if (text !== undefined) return { text: waitText(text, "text") };
+  if (selector !== undefined) {
+    const checked = waitText(selector, "selector");
+    if (testsValue(checked)) {
+      throw new ToolError(
+        "invalid_params",
+        'wait_for does not take a selector that contains both "[" and "value", since it could test what a password field holds.',
+      );
+    }
+    return { selector: checked };
+  }
+  if (navigation !== true) {
+    throw new ToolError("invalid_params", "wait_for needs navigation to be true.");
+  }
+  return { navigation: true };
+}
+
+function waitText(value: unknown, name: "text" | "selector"): string {
+  if (typeof value !== "string" || value.length < 1 || value.length > MAX_WAIT_FOR_TEXT) {
+    throw new ToolError(
+      "invalid_params",
+      `wait_for needs ${name} to be 1 to ${MAX_WAIT_FOR_TEXT.toLocaleString("en-US")} characters.`,
+    );
+  }
+  return value;
+}
+
+// ADR 0010: wait_for answers no field values. A selector on the value attribute would, asked
+// again and again ([value^="a"], [value^="b"], ...), read a password the page mirrors into it.
+function testsValue(selector: string): boolean {
+  if (!selector.includes("[")) return false;
+  const decoded = selector
+    .replace(CSS_ESCAPE, decodeEscape)
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  return decoded.includes("value");
+}
+
+/**
+ * A CSS escape (CSS Syntax 3, "consume an escaped code point"): 1 to 6 hex digits and at most
+ * one whitespace after them, a newline, which the escape removes, any other character, or a
+ * backslash at the end.
+ */
+const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|\r\n|[\n\r\f]|([\s\S])|$)/g;
+
+function decodeEscape(_escape: string, hex: string | undefined, char: string | undefined): string {
+  if (hex !== undefined) {
+    const code = Number.parseInt(hex, 16);
+    // CSS also turns 0 and surrogates into U+FFFD; no letter of "value" can come from either.
+    return code > 0x10ffff ? "\uFFFD" : String.fromCodePoint(code);
+  }
+  return char ?? "";
+}
+
+function waitTimeoutMs(params: Params): number {
+  const timeoutMs = own(params, "timeoutMs");
+  if (timeoutMs === undefined) return DEFAULT_WAIT_FOR_MS;
+  if (
+    typeof timeoutMs !== "number" ||
+    !Number.isSafeInteger(timeoutMs) ||
+    timeoutMs < MIN_WAIT_FOR_MS ||
+    timeoutMs > MAX_WAIT_FOR_MS
+  ) {
+    throw new ToolError(
+      "invalid_params",
+      `wait_for needs timeoutMs to be a whole number from ${MIN_WAIT_FOR_MS} to ${MAX_WAIT_FOR_MS.toLocaleString("en-US")}.`,
+    );
+  }
+  return timeoutMs;
+}
+
+/** "1 second", or "N seconds" with N in seconds, such as 0.1 or 10. */
+function secondsText(ms: number): string {
+  return ms === 1000 ? "1 second" : `${ms / 1000} seconds`;
+}
+
+function windowSize(value: unknown): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < MIN_WINDOW_SIZE ||
+    value > MAX_WINDOW_SIZE
+  ) {
+    throw new ToolError(
+      "invalid_params",
+      `resize_window needs width and height to be whole numbers from ${MIN_WINDOW_SIZE} to ${MAX_WINDOW_SIZE.toLocaleString("en-US")}.`,
+    );
+  }
+  return value;
 }
 
 /** upload_file's file list, read own field by own field. */

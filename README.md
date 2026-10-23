@@ -90,6 +90,11 @@ on tabs in that group, including tabs you move into it. When the agent session e
 closes its group if the group holds only blank tabs, so pages you may still be reading stay
 open.
 
+The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
+never closes the last tab of a window. `resize_window` resizes the whole window that holds the
+agent's group, your own tabs in it included, and first returns a maximized, minimized or
+full-screen window to its normal state.
+
 The Foxhand button in the toolbar shows ON on the tabs an agent session can use; clicking it
 opens Foxhand's settings.
 
@@ -172,6 +177,14 @@ from `read_page`. A file field gets the files as if you had picked them; any oth
 them dropped on it, which works only where the page takes dropped files. Foxhand reads files
 only from the upload folders (see Security below), never files or folders whose names start
 with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
+works only on a tab showing a site you approved, and never asks.
+
+The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
+selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
+asks for up to 30. Text is matched in the text the page shows, without the values of form
+fields. A selector that contains both `[` and `value` is refused, since it could test what a
+password field holds. A page that changes its address with its own scripts
+(`history.pushState` or `replaceState`) counts as a navigation. Waiting for text or a selector
 works only on a tab showing a site you approved, and never asks.
 
 ## Security

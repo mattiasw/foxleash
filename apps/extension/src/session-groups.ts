@@ -9,6 +9,14 @@ export interface SessionGroups {
   /** Closes the session's group when it holds only blank tabs; otherwise leaves it. */
   endSession(session: string): Promise<void>;
   /**
+   * Removes the tab unless it is the last tab of its window, one close at a time across
+   * sessions together with endSession's. The tab and its window are read when its turn comes.
+   * `check` gets the tab as read then and runs right before the removal, with no await in
+   * between, and may throw to refuse it. Resolves false, removing nothing, for a window's last
+   * tab.
+   */
+  closeTab(tabId: number, check: (tab: Tab) => void): Promise<boolean>;
+  /**
    * True when the group is one this created for a session and has not forgotten; false for
    * undefined and -1.
    */
@@ -32,7 +40,7 @@ export function createSessionGroups(
   // keeping their window open, and close it between them.
   let closing: Promise<unknown> = Promise.resolve();
 
-  return { groupOf, ensureGroup, endSession, isSessionGroup, sessionOf };
+  return { groupOf, ensureGroup, endSession, closeTab, isSessionGroup, sessionOf };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
     const id = groups.get(session);
@@ -55,6 +63,23 @@ export function createSessionGroups(
       closing = close;
       return close;
     });
+  }
+
+  function closeTab(tabId: number, check: (tab: Tab) => void): Promise<boolean> {
+    const close = closing
+      .catch(() => undefined)
+      .then(async () => {
+        // Read again here: the user may have moved the tab while it waited its turn.
+        const tab = await browser.tabs.get(tabId);
+        const windowTabs = await browser.tabs.query({ windowId: tab.windowId });
+        // Removing a window's last tab closes the window, and closing the last window quits Firefox.
+        if (!windowTabs.some((other) => other.id !== tabId)) return false;
+        check(tab);
+        await browser.tabs.remove([tabId]);
+        return true;
+      });
+    closing = close;
+    return close;
   }
 
   function isSessionGroup(groupId: number | undefined): boolean {

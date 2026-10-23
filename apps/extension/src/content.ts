@@ -4,9 +4,9 @@ import { elementRect } from "./element-rect.ts";
 import { createElementRefs } from "./element-refs.ts";
 import { clickOptions, dragOptions, hoverOptions, scrollOptions } from "./page-actions.ts";
 import * as actions from "./page-actions-dom.ts";
-import { handlePageMessage, PageError, type PageHandlers } from "./page-messages.ts";
-import { pageTextOptions } from "./page-text.ts";
-import { readPageText } from "./page-text-dom.ts";
+import { handlePageMessage, ownField, PageError, type PageHandlers } from "./page-messages.ts";
+import { pageTextOptions, tidyText } from "./page-text.ts";
+import { readPageText, renderedText } from "./page-text-dom.ts";
 import { uploadFile } from "./page-upload.ts";
 import { passwordFieldsRevealed, readPage } from "./read-page.ts";
 import { siteOf } from "./site.ts";
@@ -43,6 +43,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     scroll: (params) => actions.scroll(parsed(scrollOptions(params)), { refs, pointer }),
     drag: (params) => actions.drag(parsed(dragOptions(params)), { refs, pointer }),
     read_console: () => readConsoleRecords(window),
+    wait_for: (params) => conditionMet(params),
   };
   browser.runtime.onMessage.addListener((message) =>
     handlePageMessage(message, { site: siteOf(location.href), handlers }),
@@ -55,4 +56,20 @@ if (!Object.hasOwn(globalThis, STARTED)) {
 function parsed<T>(options: T | string): T {
   if (typeof options === "string") throw new PageError("invalid_params", options);
   return options;
+}
+
+/** Whether the page shows the text, or has an element matching the selector, wait_for asks for. */
+function conditionMet(params: Record<string, unknown>): boolean {
+  const text = ownField(params, "text");
+  if (typeof text === "string") return tidyText(renderedText(document)).includes(text);
+  const selector = ownField(params, "selector");
+  if (typeof selector !== "string") {
+    throw new PageError("invalid_params", "wait_for needs a text or a selector.");
+  }
+  try {
+    return document.querySelector(selector) !== null;
+  } catch {
+    // querySelector throws only for a selector that does not parse.
+    throw new PageError("invalid_params", "The selector is not valid CSS.");
+  }
 }

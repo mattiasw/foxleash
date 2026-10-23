@@ -58,7 +58,11 @@ export interface BrowserApi {
     onDetached: BrowserEvent<(tabId: number) => void>;
   };
   windows: {
-    update(windowId: number, updateInfo: { drawAttention?: boolean }): Promise<unknown>;
+    update(
+      windowId: number,
+      updateInfo: { drawAttention?: boolean; state?: "normal"; width?: number; height?: number },
+    ): Promise<unknown>;
+    get(windowId: number): Promise<BrowserWindow>;
   };
   tabGroups: {
     get(groupId: number): Promise<TabGroup>;
@@ -95,6 +99,10 @@ export interface BrowserApi {
     getAllFrames(details: { tabId: number }): Promise<FrameDetails[] | null>;
     /** A frame of a tab, the top one included, committed to a new document. */
     onCommitted: BrowserEvent<(details: NavigationDetails) => void>;
+    /** A frame of a tab finished loading its document. */
+    onCompleted: BrowserEvent<(details: NavigationDetails) => void>;
+    /** A frame's page changed its address with the History API, without a load. */
+    onHistoryStateUpdated: BrowserEvent<(details: NavigationDetails) => void>;
   };
   /** Non-blocking listeners only: Foxhand watches requests and never blocks or changes one. */
   webRequest: {
@@ -256,6 +264,14 @@ export interface Tab {
   status?: string;
   /** -1 when the tab is in no group. */
   groupId?: number;
+}
+
+/** Firefox's `windows.Window`, as far as the extension reads it. */
+export interface BrowserWindow {
+  id?: number;
+  width?: number;
+  height?: number;
+  state?: string;
 }
 
 export interface TabGroup {

@@ -67,3 +67,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   status, timing and headers, filtered by URL text), with the Cookie, Set-Cookie,
   Authorization and Proxy-Authorization values hidden and no bodies, only from pages that
   loaded on sites you approved.
+- Your agent can wait for text, an element or a navigation in a page (`wait_for`), switch
+  between and close the tabs in its Foxhand tab group (`tab_select`, `tab_close`), and resize
+  the window that holds the group (`resize_window`).

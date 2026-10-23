@@ -74,6 +74,10 @@ describe("parseMessage accepts", () => {
         "tabs_list",
         "tab_open",
         "navigate",
+        "tab_close",
+        "tab_select",
+        "wait_for",
+        "resize_window",
         "read_page",
         "get_page_text",
         "screenshot",
@@ -271,6 +275,19 @@ describe("parseMessage accepts", () => {
       { tabId: 1, url: "https://example.com/", action: "back" },
     ];
     assert.equal(params.length, 3);
+  });
+
+  it("wait_for params with exactly one condition, navigation only true (compile-time)", () => {
+    const params: Params<"wait_for">[] = [
+      { tabId: 1, text: "Saved" },
+      { tabId: 1, selector: "#done", timeoutMs: 100 },
+      { tabId: 1, navigation: true },
+      // @ts-expect-error wait_for takes one condition
+      { tabId: 1, text: "Saved", selector: "#done" },
+      // @ts-expect-error navigation is only ever true
+      { tabId: 1, navigation: false },
+    ];
+    assert.equal(params.length, 5);
   });
 
   it("the probe's check names and outcomes, all of them (compile-time)", () => {
