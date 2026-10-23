@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
+  AUTOFILL_LOGIN,
   type FixtureServer,
   READ_HIDDEN,
   READ_LARGE_ITEMS,
@@ -35,6 +36,8 @@ const SNAPSHOT = `JSON.stringify({
   scroll: [window.scrollX, window.scrollY],
 })`;
 
+const AUTOFILLED = 'document.getElementById("login-name").matches(":autofill")';
+
 interface Read {
   tree: string;
   texts: string[];
@@ -50,6 +53,8 @@ describe("read_page in real Firefox", () => {
   let refsTab = -1;
   let keepRef = "";
   let removedRef = "";
+  let autofillTab = -1;
+  let autofillContext = "";
 
   before(
     async () => {
@@ -529,6 +534,51 @@ describe("read_page in real Firefox", () => {
       ...roots.filter(({ shown }) => !shown).flatMap(({ own, child }) => [own, child]),
       ...named.filter(({ shown }) => !shown).map(({ token }) => token),
     ]);
+  });
+
+  test("a field Firefox autofilled from a saved login reads as protected", async () => {
+    await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);
+    try {
+      // tab_open makes the tab active: login autofill waits for a visible document.
+      autofillTab = await open("/autofill", TITLES.autofill);
+      autofillContext = await contextOf(fixtures.url("/autofill"));
+      await pollUntil(
+        async () =>
+          (await firefox.evaluate(autofillContext, AUTOFILLED)) === true ? true : undefined,
+        PAGE_TIMEOUT_MS,
+        "Firefox to fill the saved login",
+      );
+    } finally {
+      await firefox.removeLogins();
+    }
+    const { tree, texts } = await read(autofillTab);
+    assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
+    assertLines(tree, [
+      'textbox "Login name" [*] protected filled',
+      'textbox "Password" [*] protected filled',
+      'textbox "Plain name" [*] value="MMMM WWWW"',
+    ]);
+  });
+
+  test("type refuses a field Firefox autofilled, and it stays protected", async () => {
+    const ref = refOf((await read(autofillTab)).tree, 'textbox "Login name"');
+    const text = await harness.refused(session, "type", { tabId: autofillTab, ref, text: "x" });
+    assert.ok(text.includes(`Firefox filled in element ${ref}`), text);
+    assert.equal(await firefox.evaluate(autofillContext, AUTOFILLED), true);
+    assert.equal(
+      await firefox.evaluate(autofillContext, 'document.getElementById("login-name").value'),
+      AUTOFILL_LOGIN.username,
+    );
+    const { tree, texts } = await read(autofillTab);
+    assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
+    assertLines(tree, ['textbox "Login name" [*] protected filled']);
+  });
+
+  test("a reload brings back no autofilled value", async () => {
+    await harness.ok(session, "navigate", { tabId: autofillTab, action: "reload" });
+    const { tree, texts } = await read(autofillTab);
+    assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
+    assertLines(tree, ['textbox "Login name" [*]']);
   });
 
   // Last: the blocklist then covers the fixture server for the rest of the file.

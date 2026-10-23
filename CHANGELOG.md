@@ -43,14 +43,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can read a page's structure with the `read_page` tool: its elements with their
   roles, names and states, its visible text, and a reference to each element, with file
   fields marked so your agent can find them for `upload_file` even without a label. The
-  values of password fields, and of one-time code and card number fields that the page marks
-  as such for autofill, are never read out, only whether they are filled.
+  values of password fields, of one-time code and card number fields that the page marks as
+  such for autofill, and of text fields that Firefox filled in from your saved logins,
+  addresses or cards, until you edit them, are never read out, only whether they are filled.
 - Your agent can read a page's text with the `get_page_text` tool: the main content first,
   then the rest of the page, on sites you approved.
 - Your agent can take a PNG screenshot with the `screenshot` tool: of what a tab shows, also
   in the background, or of one element, on sites you approved, with the text of password
-  fields, and of one-time code and card number fields that the page marks as such for
-  autofill, hidden. With `saveTo` it also saves the screenshot as a new file in its working
+  fields, of one-time code and card number fields that the page marks as such for autofill,
+  and of text fields that Firefox filled in from your saved logins, addresses or cards, until
+  you edit them, hidden. With `saveTo` it also saves the screenshot as a new file in its working
   folder, never over an existing file.
 - Your agent can upload files from your computer with the `upload_file` tool, into a page's
   file field or dropped on the page, on sites you approved. It reads only from the upload
@@ -75,7 +77,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `press_key`, which submits forms with Enter, moves focus with Tab, closes popovers and
   dialogs with Escape and picks options in a list with the arrow keys, on sites you approved.
   Enter on a link or in a form that leads to another site or out of the browser is refused, as
-  clicks are.
+  clicks are. `type` refuses a field that Firefox filled in from your saved logins, addresses
+  or cards, until you edit it.
 - Your agent can save the file at a link into your Firefox download folder with the `download`
   tool, under a plain file name it chooses and never over an existing file, also where Firefox
   would open the file in another application. The link, and the address the file comes from

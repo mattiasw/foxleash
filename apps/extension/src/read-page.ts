@@ -1008,5 +1008,6 @@ function isProtected(field: HTMLInputElement | HTMLTextAreaElement, page: PageMe
     type: field.type,
     autocomplete: field.getAttribute("autocomplete"),
     wasPassword: page.passwordFields.has(field),
+    autofilled: field.matches(":autofill"),
   });
 }

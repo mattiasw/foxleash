@@ -762,9 +762,11 @@ export function createHandlers<Handle>({
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
     keepPrompt(session, tabId);
+    // A normal reload restores field values without Firefox's autofill mark; this one restores none
+    // (ADR 0021).
     const loaded = await waitForLoad(browser, timers, tabId, url, () =>
       target.kind === "action" && !onPrompt && tab.url === url
-        ? browser.tabs.reload(tabId)
+        ? browser.tabs.reload(tabId, { bypassCache: true })
         : browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
     );
     const after = await access.view(session);
@@ -798,7 +800,7 @@ export function createHandlers<Handle>({
       case "forward":
         return browser.tabs.goForward(tabId);
       case "reload":
-        return browser.tabs.reload(tabId);
+        return browser.tabs.reload(tabId, { bypassCache: true });
     }
   }
 }

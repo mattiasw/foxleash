@@ -32,13 +32,15 @@ const MASK_DECLARATIONS: readonly string[] = [
   "transition: none !important",
 ];
 const MASK_BODY = `{ ${MASK_DECLARATIONS.join("; ")}; }`;
-/** read_page's protected fields (ADR 0010), but for the ones it remembers as password fields. */
+/** read_page's protected fields (ADR 0010, 0021), but for the ones it remembers as password fields. */
 const FIELD_SELECTORS: readonly string[] = [
   'input[type="password" i]',
   ...CREDENTIAL_TOKENS.flatMap((token) => [
     `input[*|autocomplete~="${token}" i]`,
     `textarea[*|autocomplete~="${token}" i]`,
   ]),
+  "input:autofill",
+  "textarea:autofill",
 ];
 
 /**

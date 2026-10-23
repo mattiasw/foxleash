@@ -42,6 +42,13 @@ const POLL_MS = 100;
 // The WebDriver web element identifier, the key of an element reference.
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 
+// An empty form action origin matches any form on the origin.
+const SAVE_LOGIN = `const [origin, username, password] = arguments;
+const login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsILoginInfo);
+login.init(origin, "", null, username, password, "", "");
+return Services.logins.addLoginAsync(login).then(() => null);`;
+const REMOVE_LOGINS = "return Services.logins.removeAllUserFacingLoginsAsync().then(() => null);";
+
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
 
@@ -78,6 +85,10 @@ export interface Firefox {
    */
   activate(context: string): Promise<void>;
   closeContext(context: string): Promise<void>;
+  /** Saves a login for `origin` that Firefox fills into any form on it. */
+  saveLogin(origin: string, username: string, password: string): Promise<void>;
+  /** Removes every saved login. */
+  removeLogins(): Promise<void>;
   /** Resolves with the first tab that matches, polling until `timeoutMs`. */
   waitForContext(
     predicate: (context: BrowsingContext) => boolean,
@@ -221,6 +232,17 @@ export async function launchFirefox({
     await input.send("WebDriver:SwitchToWindow", { handle: context });
   }
 
+  // Runs `script` with Firefox's privileges, awaiting a promise it returns. Back to content after,
+  // which click's commands need.
+  async function chrome(script: string, args: unknown[]): Promise<void> {
+    await input.send("Marionette:SetContext", { value: "chrome" });
+    try {
+      await input.send("WebDriver:ExecuteScript", { script, args });
+    } finally {
+      await input.send("Marionette:SetContext", { value: "content" });
+    }
+  }
+
   let closing: Promise<void> | undefined;
   return {
     async installExtension(path) {
@@ -304,6 +326,16 @@ export async function launchFirefox({
     async closeContext(context) {
       await session.send("browsingContext.close", { context });
     },
+    saveLogin(origin, username, password) {
+      return withDeadline(
+        chrome(SAVE_LOGIN, [origin, username, password]),
+        HELPER_TIMEOUT_MS,
+        `saveLogin ${origin}`,
+      );
+    },
+    removeLogins() {
+      return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
+    },
     waitForContext(predicate, timeoutMs) {
       return pollUntil(
         async () => {
@@ -366,6 +398,21 @@ function buildUserJs(downloadDir: string): string {
       "browser.download.dir",
       downloadDir,
       "Downloads go into the test's temp home, never the developer's folder.",
+    ],
+    [
+      "signon.autofillForms",
+      true,
+      "Fill saved logins into login forms on load; Firefox's remote agent sets its recommended false unless the profile sets it.",
+    ],
+    [
+      "signon.rememberSignons",
+      true,
+      "Login autofill does nothing unless saving logins is on; the remote agent's recommended value is false.",
+    ],
+    [
+      "signon.autofillForms.http",
+      true,
+      "The fixture server is plain http on 127.0.0.1, and Firefox fills saved logins into http pages only with this; its default is false.",
     ],
   ];
   return prefs

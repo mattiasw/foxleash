@@ -37,7 +37,7 @@ export interface BrowserApi {
     ): Promise<Tab>;
     goBack(tabId: number): Promise<void>;
     goForward(tabId: number): Promise<void>;
-    reload(tabId: number): Promise<void>;
+    reload(tabId: number, reloadProperties?: { bypassCache?: boolean }): Promise<void>;
     remove(tabIds: number[]): Promise<void>;
     /** Rejects when no content script listens in the frame, or its page unloads before replying. */
     sendMessage(tabId: number, message: unknown, options?: { frameId?: number }): Promise<unknown>;

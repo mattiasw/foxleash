@@ -314,7 +314,7 @@ describe("navigate", { timeout: 10000 }, () => {
     });
   });
 
-  it("goes back, forward and reloads", async () => {
+  it("goes back, forward and reloads", async (t) => {
     const { fake, navigate, open, grant } = setup();
     await grant("https://a.example");
     await grant("https://b.example");
@@ -331,12 +331,14 @@ describe("navigate", { timeout: 10000 }, () => {
     const fakeTab = fake.tabs.get(tab.id);
     assert.ok(fakeTab);
     fakeTab.title = "Before reload";
+    const reload = t.mock.method(fake.browser.tabs, "reload");
     const reloaded = await navigate("s1", { tabId: tab.id, action: "reload" });
     assert.deepEqual(reloaded, {
       ...tab,
       url: "https://b.example/",
       title: "Title of https://b.example/",
     });
+    assert.deepEqual(reload.mock.calls[0]?.arguments, [tab.id, { bypassCache: true }]);
   });
 
   it("returns the tab after the grace when going back has nowhere to go", async () => {
@@ -741,6 +743,7 @@ describe("blocklist", { timeout: 10000 }, () => {
     const get = t.mock.method(fake.browser.storage.local, "get");
     assert.equal((await navigate("s1", { tabId: tab.id, action: "reload" })).url, "about:blank");
     assert.equal(reload.mock.callCount(), 1);
+    assert.deepEqual(reload.mock.calls[0]?.arguments, [tab.id, { bypassCache: true }]);
     assert.equal(get.mock.callCount(), 1);
   });
 
@@ -1137,6 +1140,10 @@ describe("approval", { timeout: 10000 }, () => {
       assert.ok("tab" in result);
       assert.equal(result.tab.url, "https://a.example/page");
       assert.equal(reload.mock.callCount(), moved ? 0 : 1);
+      assert.deepEqual(
+        reload.mock.calls.map((made) => made.arguments),
+        moved ? [] : [[other.id, { bypassCache: true }]],
+      );
       assert.equal(loadsOf(fake, "https://a.example/page"), moved ? 1 : 0);
       reload.mock.restore();
     }

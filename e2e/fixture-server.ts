@@ -51,6 +51,7 @@ export const TITLES = {
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
   downloadLogin: "Fixture download login",
+  autofill: "Fixture autofill",
 } as const;
 
 /** The text the wait-late page adds, in an element with the id late, after WAIT_LATE_MS. */
@@ -113,6 +114,14 @@ export const SHOT_FIELD_COLOURS = {
   data: [112, 48, 160],
   selection: [255, 120, 0],
 } as const;
+
+/** The text colours of the autofill page: the login name field's fill colour, and a plain field's. */
+export const AUTOFILL_COLOURS = {
+  filled: [0, 96, 144],
+  plain: [144, 64, 0],
+} as const;
+/** The login the autofill tests save for the fixture server, which Firefox fills into its page. */
+export const AUTOFILL_LOGIN = { username: "WMWM MWMW", password: "pw-autofill-Jd5XqR" } as const;
 
 /** Field values the read form holds that read_page must never return. */
 export const READ_SECRETS = {
@@ -364,6 +373,10 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/shot.pdf") {
       response.writeHead(200, { "Content-Type": "application/pdf", "Cache-Control": "no-store" });
       response.end(minimalPdf());
+    } else if (path === "/autofill") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      // Storable, unlike sendHtml's pages: a reload from the cache would restore the fields.
+      response.end(AUTOFILL_PAGE);
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/act") {
@@ -1316,6 +1329,27 @@ function shotFieldsFrame(plain: readonly number[]): string {
 function rgb(colour: readonly number[]): string {
   return `rgb(${colour.join(", ")})`;
 }
+
+// A login form Firefox fills with a saved login on load. Firefox forces `color` on an autofilled
+// field, not its fill colour. The plain field outside the form is the control.
+const AUTOFILL_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.autofill}</title>
+<style>${SHOT_FIELD_STYLE}
+#login-name { -webkit-text-fill-color: ${rgb(AUTOFILL_COLOURS.filled)}; }
+#plain-name { color: ${rgb(AUTOFILL_COLOURS.plain)}; }
+</style></head>
+<body>
+<form action="/autofill-done" method="post">
+<label for="login-name">Login name</label>
+<input id="login-name" type="text">
+<label for="password">Password</label>
+<input id="password" type="password">
+<button type="submit">Sign in</button>
+</form>
+<label for="plain-name">Plain name</label>
+<input id="plain-name" type="text" value="MMMM WWWW">
+</body></html>
+`;
 
 // A frame Firefox keeps add-ons out of: its PDF viewer.
 const SHOT_PDF_FRAME_PAGE = `<!doctype html>

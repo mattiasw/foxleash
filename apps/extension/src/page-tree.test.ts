@@ -416,7 +416,13 @@ describe("isCredentialAutocomplete", () => {
 });
 
 describe("isProtectedField", () => {
-  const field = { localName: "input", type: "text", autocomplete: null, wasPassword: false };
+  const field = {
+    localName: "input",
+    type: "text",
+    autocomplete: null,
+    wasPassword: false,
+    autofilled: false,
+  };
 
   it("protects password inputs, also once they turned into text", () => {
     assert.equal(isProtectedField({ ...field, type: "password" }), true);
@@ -432,7 +438,16 @@ describe("isProtectedField", () => {
         type: "textarea",
         autocomplete: "cc-number",
         wasPassword: false,
+        autofilled: false,
       }),
+      true,
+    );
+  });
+
+  it("protects inputs and textareas that Firefox autofilled", () => {
+    assert.equal(isProtectedField({ ...field, autofilled: true }), true);
+    assert.equal(
+      isProtectedField({ ...field, localName: "textarea", type: "textarea", autofilled: true }),
       true,
     );
   });
@@ -446,6 +461,7 @@ describe("isProtectedField", () => {
         type: "select-one",
         autocomplete: "cc-number",
         wasPassword: true,
+        autofilled: true,
       }),
       false,
     );
@@ -455,6 +471,7 @@ describe("isProtectedField", () => {
         type: "password",
         autocomplete: null,
         wasPassword: true,
+        autofilled: false,
       }),
       false,
     );

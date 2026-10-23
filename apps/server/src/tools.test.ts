@@ -99,6 +99,11 @@ describe("tools", () => {
     }
     const navigate = tools.find((tool) => tool.name === "navigate");
     assert.deepEqual(navigate?.inputSchema.required, ["tabId"]);
+    assert.ok(
+      navigate?.description?.includes(
+        "A reload loads the page again without the browser's cache, and its form fields lose what was typed into them.",
+      ),
+    );
     const tabOpen = tools.find((tool) => tool.name === "tab_open");
     assert.equal(tabOpen?.inputSchema.required, undefined);
     for (const tool of [tabOpen, navigate]) {
@@ -112,6 +117,7 @@ describe("tools", () => {
     for (const words of [
       "protected, never their value",
       "marks as such for autofill",
+      "fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them",
       "stays protected only if read_page read it while it was a password field",
       "marked file field",
       "50,000 characters",
@@ -411,6 +417,7 @@ describe("tools", () => {
           "sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document)",
           "exec_command, native_setter or beforeinput_dom",
           "the call fails with no_effect",
+          "A field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it.",
           "Other frames are not entered.",
           "At most 50,000 characters.",
           "The tab must show a site the user approved; type never asks.",

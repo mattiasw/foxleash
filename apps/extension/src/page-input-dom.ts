@@ -107,6 +107,12 @@ function typeTarget(element: Element, ref: string): TypeTarget {
         `Element ${ref} is a disabled or read-only field, so type cannot change it.`,
       );
     }
+    if (element.matches(":autofill")) {
+      throw new PageError(
+        "not_editable",
+        `Firefox filled in element ${ref} from the user's saved logins, addresses or cards, so type cannot change it until the user edits it.`,
+      );
+    }
     return { field: element, readable: true };
   }
   if (element instanceof view.HTMLElement && element.isContentEditable) {

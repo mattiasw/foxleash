@@ -62,6 +62,8 @@ export interface FieldFacts {
   autocomplete: string | null;
   /** The field was a password field when read_page saw it before in this document. */
   wasPassword: boolean;
+  /** The field matches `:autofill`: Firefox filled it and it was not edited since. */
+  autofilled: boolean;
 }
 
 // NEL is not \s, and some tools split lines on it.
@@ -354,10 +356,12 @@ export function isProtectedField({
   type,
   autocomplete,
   wasPassword,
+  autofilled,
 }: FieldFacts): boolean {
   if (localName === "input" && (type === "password" || wasPassword)) return true;
   return (
-    (localName === "input" || localName === "textarea") && isCredentialAutocomplete(autocomplete)
+    (localName === "input" || localName === "textarea") &&
+    (autofilled || isCredentialAutocomplete(autocomplete))
   );
 }
 

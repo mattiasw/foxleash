@@ -5,8 +5,10 @@ import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { inflateSync } from "node:zlib";
 import { SCREENSHOT_NOTE } from "../apps/server/src/tools.ts";
-import { type Firefox, pollUntil } from "./firefox.ts";
+import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
+  AUTOFILL_COLOURS,
+  AUTOFILL_LOGIN,
   type FixtureServer,
   SHOT_BOX,
   SHOT_COLOURS,
@@ -331,6 +333,39 @@ describe("screenshot in real Firefox", () => {
       result.text,
     );
     assert.deepEqual(result.images, [], result.text);
+  });
+
+  test("a screenshot hides the text of a field Firefox autofilled", async () => {
+    let tabId = -1;
+    let context = "";
+    await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);
+    try {
+      // tab_open makes the tab active: login autofill waits for a visible document.
+      tabId = await open(session, "/autofill", TITLES.autofill);
+      context = await contextOf(fixtures.url("/autofill"));
+      await pollUntil(
+        async () =>
+          (await firefox.evaluate(
+            context,
+            'document.getElementById("login-name").matches(":autofill")',
+          )) === true
+            ? true
+            : undefined,
+        PAGE_TIMEOUT_MS,
+        "Firefox to fill the saved login",
+      );
+    } finally {
+      await firefox.removeLogins();
+    }
+    // Firefox draws the autofilled text in the page's fill colour without Foxhand.
+    assertDrawn(
+      decodePng(await firefox.captureViewport(context)),
+      AUTOFILL_COLOURS.filled,
+      "autofilled",
+    );
+    const png = await shotOf({ tabId });
+    assertNone(png, AUTOFILL_COLOURS.filled, "autofilled");
+    assertDrawn(png, AUTOFILL_COLOURS.plain, "plain");
   });
 
   async function shotOf(args: Record<string, unknown>): Promise<Png> {

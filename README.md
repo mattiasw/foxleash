@@ -162,8 +162,9 @@ sends no key events: it inserts the text the way the browser inserts typed text,
 changes nothing and the page did not receive it, once more by setting the field's value the way
 a page's own scripts do. When
 an editor cannot be read back, such as the body of a Google Docs document, the result says the
-text was sent but not confirmed. `type` works only on a tab showing a site you approved, and
-never asks.
+text was sent but not confirmed. `type` refuses a field that Firefox filled in from your saved
+logins, addresses or cards, until you edit it. It works only on a tab showing a site you
+approved, and never asks.
 
 The agent presses a key with `press_key`, such as `Enter`, `Tab`, `Shift+Tab`, `Escape`,
 `ArrowDown` or `Control+a`, on an element from `read_page` or on the focused element. Foxhand
@@ -182,10 +183,11 @@ in the folder `foxhand mcp` was started in, normally the agent's working folder:
 be inside that folder, end in `.png` and be in a folder that exists, with no folder or file
 name starting with a dot, and an existing file is never replaced. Saved files are readable
 only by you (mode 0600). A screenshot larger than about 6 MB is too large to return; the agent
-can then take one of a single element or save it. Screenshots hide the text of password fields
-and of one-time code and card number fields that the page marks as such for autofill (see
-Security). When a frame of the page loads while the screenshot is taken, Foxhand refuses it and
-the agent can try again. A page Foxhand cannot get into, such as a PDF shown in Firefox's
+can then take one of a single element or save it. Screenshots hide the text of password fields,
+of one-time code and card number fields that the page marks as such for autofill, and of text
+fields that Firefox filled in from your saved logins, addresses or cards, until you edit them
+(see Security). When a frame of the page loads while the screenshot is taken, Foxhand refuses
+it and the agent can try again. A page Foxhand cannot get into, such as a PDF shown in Firefox's
 viewer, cannot be captured, and neither can a page with such a PDF in a frame or with a frame
 that never finishes loading. A frame showing Firefox's error page for a page that could not be
 loaded or does not allow being shown in a frame does not stop a screenshot, but one showing a
@@ -255,20 +257,24 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   upload takes at most 10 MB.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
-- Text results never return the values of password fields, or of one-time code and card
-  number fields that the page marks as such for autofill, only whether they are filled:
+- Text results never return the values of password fields, of one-time code and card number
+  fields that the page marks as such for autofill, or of text fields that Firefox filled in from
+  your saved logins, addresses or cards, until you edit them, only whether they are filled:
   Firefox fills saved passwords into login pages when they load, and a page you approved
   could otherwise hand yours to the agent. In `read_page`, a password field that the page
   turns into another kind of field stays protected only if `read_page` read it while it was
   still a password field, and a text field that the page puts in its place shows its value.
-  Screenshots hide the text of these fields, also in frames from other sites, with a style
-  sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a frame does not
-  take it, such as another add-on's frame (a password manager's menu); a frame showing
-  Firefox's error page for a page that could not be loaded or does not allow being shown in a
-  frame is the exception. When the page turns a
+  A text field Firefox filled in shows its value again once Firefox no longer highlights it
+  as filled in: after you edit it, after the page's own scripts report a change to it or
+  reload the page, and possibly after the agent goes back or forward to the page or Firefox
+  restores the tab. Screenshots hide the text of these fields, also in frames from other
+  sites, with a style sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a
+  frame does not take it, such as another add-on's frame (a password manager's menu); a frame
+  showing Firefox's error page for a page that could not be loaded or does not allow being
+  shown in a frame is the exception. When the page turns a
   password field the agent read into another kind of field, a screenshot hides the text of
   every input element in the page, input buttons included, outside its frames. A field
-  marked neither way still shows its value.
+  that is none of these still shows its value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
 - Downloads save only a file served by a site you approved, after any redirects: Foxhand
