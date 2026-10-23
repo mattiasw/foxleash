@@ -379,10 +379,29 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     await evaluate(page, "window.scrollTo(0, 0)");
 
     const far = refOf(page.tree, 'button "Far"');
+    // A centre target on a half pixel makes Firefox move the page at the next paint unless the
+    // tool holds it.
+    assert.equal(
+      await evaluate(
+        page,
+        '(() => { const far = document.getElementById("far"); const view = document.documentElement.clientHeight; const height = 23 + (view % 2); far.style.height = height + "px"; far.style.top = 2670.5 + (view - height) / 2 + "px"; const box = far.getBoundingClientRect(); return box.top + box.height / 2 - view / 2; })()',
+      ),
+      2670.5,
+    );
     const inView = record(await harness.ok(session, "scroll", { tabId: page.tabId, ref: far }));
     assert.equal(inView.ref, far);
     assert.equal(inView.moved, true);
-    assert.equal(inView.scrollTop, await evaluate(page, "window.scrollY"));
+    await firefox.evaluate(
+      page.context,
+      "new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(null))))",
+    );
+    assert.deepEqual(
+      await evaluate(
+        page,
+        "({ scrollY: window.scrollY, exact: -document.documentElement.getBoundingClientRect().top, visual: window.visualViewport.pageTop })",
+      ),
+      { scrollY: inView.scrollTop, exact: inView.scrollTop, visual: inView.scrollTop },
+    );
     assert.equal(
       await evaluate(
         page,

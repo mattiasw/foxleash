@@ -214,10 +214,27 @@ function scrollToCentre(element: Element): () => void {
   const page = { left: window.scrollX, top: window.scrollY };
   // Instant, so scroll-behavior: smooth cannot leave the element mid-scroll.
   element.scrollIntoView({ block: "center", inline: "center", behavior: "instant" });
+  if (window.scrollX !== page.left || window.scrollY !== page.top) holdPagePosition();
   return () => {
     for (const { box, left, top } of boxes) box.scrollTo({ left, top, behavior: "instant" });
     window.scrollTo({ ...page, behavior: "instant" });
   };
+}
+
+/**
+ * Keeps the page at the position it reads now. Firefox would otherwise move it at the next paint
+ * to the unrounded scrollIntoView position, which can be a pixel away; a scroll away and back
+ * stops that.
+ */
+function holdPagePosition(): void {
+  const left = window.scrollX;
+  const top = window.scrollY;
+  window.scrollTo({
+    left: left > 0 ? left - 1 : left + 1,
+    top: top > 0 ? top - 1 : top + 1,
+    behavior: "instant",
+  });
+  window.scrollTo({ left, top, behavior: "instant" });
 }
 
 /** The element's visible centre and the element hit there, which must be it or inside it. */
