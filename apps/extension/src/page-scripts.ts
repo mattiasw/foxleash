@@ -1,3 +1,4 @@
+import type { MethodName } from "@foxhand/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { allowedPageSite, ToolError } from "./handlers.ts";
 import {
@@ -19,6 +20,19 @@ export const PAGE_INJECTION_MS = 20_000;
 export const PAGE_REPLY_MS = 10_000;
 
 const MAX_ERROR_MESSAGE = 500;
+
+/**
+ * Request types that, repeated, do something twice that the agent may not be able to undo (text
+ * typed, a form submitted). A late reply does not mean the request did not run: the page thread
+ * may have been slow to answer.
+ */
+const ACTING_REQUEST_TYPES: readonly string[] = [
+  "click",
+  "drag",
+  "type",
+  "press_key",
+  "upload_file",
+] satisfies readonly MethodName[];
 
 export interface PageScriptsDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting">;
@@ -76,10 +90,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       PAGE_REPLY_MS,
       // The document went away, or the reply could not be cloned.
       pageChanged(tabId),
-      new ToolError(
-        "page_timeout",
-        `The page in tab ${tabId} did not answer Foxhand within ${PAGE_REPLY_MS / 1000} seconds; try again.`,
-      ),
+      replyTimeout(tabId, type),
     );
     // Nothing from the page reaches the agent once the user has withdrawn access.
     await checkAgain(session, tabId, site);
@@ -174,6 +185,16 @@ function costOf(value: unknown, key: string | undefined): number {
     return keyLength + Math.max(1, value.length);
   }
   return keyLength + 1;
+}
+
+function replyTimeout(tabId: number, type: string): ToolError {
+  const silence = `The page in tab ${tabId} did not answer Foxhand within ${PAGE_REPLY_MS / 1000} seconds`;
+  return new ToolError(
+    "page_timeout",
+    ACTING_REQUEST_TYPES.includes(type)
+      ? `${silence}, but ${type} may already have run; read the page before you repeat it.`
+      : `${silence}; try again.`,
+  );
 }
 
 function pageUnreachable(tabId: number): ToolError {

@@ -405,6 +405,46 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.equal(timers.pending(), timersBefore);
   });
 
+  for (const type of ["click", "drag", "type", "press_key", "upload_file"]) {
+    it(`says ${type} may already have run when the page does not answer`, async () => {
+      const { fake, pages, open, grant, timers } = setup();
+      await grant(SITE);
+      const tab = await open("s1", `${SITE}/`);
+      const timersBefore = timers.pending();
+      fake.setContentScript(tab.id, () => new Promise(() => {}));
+      const { request, settled } = track(pages.request("s1", tab.id, type, {}));
+      await flush();
+      assert.equal(fake.tabMessages.length, 1);
+      timers.advance(PAGE_REPLY_MS - 1);
+      await flush();
+      assert.equal(settled(), false);
+      timers.advance(1);
+      await assert.rejects(request, {
+        code: "page_timeout",
+        message: `The page in tab ${tab.id} did not answer Foxhand within 10 seconds, but ${type} may already have run; read the page before you repeat it.`,
+      });
+      assert.equal(timers.pending(), timersBefore);
+    });
+  }
+
+  for (const type of ["hover", "scroll", "read_page", "wait_for"]) {
+    it(`tells ${type} to try again when the page does not answer`, async () => {
+      const { fake, pages, open, grant, timers } = setup();
+      await grant(SITE);
+      const tab = await open("s1", `${SITE}/`);
+      const timersBefore = timers.pending();
+      fake.setContentScript(tab.id, () => new Promise(() => {}));
+      const { request } = track(pages.request("s1", tab.id, type, {}));
+      await flush();
+      timers.advance(PAGE_REPLY_MS);
+      await assert.rejects(request, {
+        code: "page_timeout",
+        message: `The page in tab ${tab.id} did not answer Foxhand within 10 seconds; try again.`,
+      });
+      assert.equal(timers.pending(), timersBefore);
+    });
+  }
+
   it("bounds both waits below the host's 60 s request timeout, as probe_input does", () => {
     assert.equal(PAGE_INJECTION_MS, 20_000);
     assert.equal(PAGE_REPLY_MS, 10_000);
