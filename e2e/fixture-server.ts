@@ -143,6 +143,12 @@ export const READ_HIDDEN = {
   detailsOwnName: "hidden-details-own-name-Rk2",
   detailsContentVisibility: "hidden-details-content-visibility-Kd5",
   foreignDetails: "hidden-foreign-details-Wq8",
+  forwardVisibility: "hidden-forward-visibility-Bt3",
+  forwardContentVisibility: "hidden-forward-cv-Cu4",
+  forwardDisplay: "hidden-forward-display-Dv5",
+  forwardName: "hidden-forward-name-Ew6",
+  forwardFallback: "hidden-forward-fallback-Fx7",
+  forwardReceiverFallback: "hidden-forward-receiver-fallback-Gy8",
 } as const;
 
 /** Text the get_page_text pages hold in each region, to find where each region went. */
@@ -703,11 +709,17 @@ document.currentScript.before(foreignDetails);
 // Two custom elements, one with an open and one with a closed shadow root, each holding a
 // button, a group with a button in it, and a slot for the element's own text. The closed
 // root's first button has the focus, and the closed root also holds a filled password field.
+// Then two components that pass their light content through slots into a nested component's
+// slot, hiding some of it on the passing slot: as text, and inside a button. A third passes on
+// only an empty slot, so the nested slot's own fallback is not shown.
 const READ_SHADOW_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readShadow}</title></head>
 <body>
 <open-widget>Slotted open text</open-widget>
 <closed-widget>Slotted closed text</closed-widget>
+<p><relay-outer><span slot="shown">Forwarded text</span>${READ_HIDDEN.forwardVisibility}<span slot="boxed" style="display: contents">${READ_HIDDEN.forwardContentVisibility}</span><span slot="gone" style="display: contents">${READ_HIDDEN.forwardDisplay}</span></relay-outer></p>
+<p><relay-outer button><span slot="shown">Forwarded button</span>${READ_HIDDEN.forwardName}</relay-outer></p>
+<p><relay-empty></relay-empty></p>
 <script>
 for (const [name, mode, label] of [
   ["open-widget", "open", "Open button"],
@@ -738,6 +750,33 @@ for (const [name, mode, label] of [
     }
   });
 }
+customElements.define("relay-inner", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML =
+      "<slot>${READ_HIDDEN.forwardReceiverFallback}</slot>";
+  }
+});
+customElements.define("relay-outer", class extends HTMLElement {
+  constructor() {
+    super();
+    const relay =
+      '<relay-inner><slot name="shown"></slot><slot style="visibility: hidden"></slot>' +
+      '<slot name="boxed" style="display: block; content-visibility: hidden"></slot>' +
+      '<slot name="gone" style="display: none"></slot>' +
+      '<slot name="unfilled" style="visibility: hidden">${READ_HIDDEN.forwardFallback}</slot>' +
+      "</relay-inner>";
+    this.attachShadow({ mode: "closed" }).innerHTML = this.hasAttribute("button")
+      ? "<button>" + relay + "</button>"
+      : relay;
+  }
+});
+customElements.define("relay-empty", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML = "<relay-inner><slot></slot></relay-inner>";
+  }
+});
 window.closedButton.focus();
 </script>
 </body></html>

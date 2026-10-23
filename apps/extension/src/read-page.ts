@@ -31,7 +31,7 @@ export interface PageMemory {
 }
 
 export interface Walker {
-  /** Called for each element; true walks its flattened children and calls `leave` after. */
+  /** Called for each element; true walks its flat-tree children and calls `leave` after. */
   enter(element: Element): boolean;
   leave(element: Element): void;
   /** Text directly inside the innermost element the walk is in, or the root: a slot for slotted text. */
@@ -368,17 +368,10 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
   }
 }
 
-/**
- * Walks the flattened tree below `root`, each element's children as `children` gives them, without
- * recursion, so deep nesting cannot overflow.
- */
-export function walkChildren(
-  root: Element,
-  walker: Walker,
-  children: (element: Element) => ArrayLike<Node> = childrenOf,
-): void {
+/** Walks the flat tree below `root` without recursion, so deep nesting cannot overflow. */
+export function walkChildren(root: Element, walker: Walker): void {
   const steps: Step[] = [];
-  pushChildren(steps, root, children);
+  pushChildren(steps, root);
   while (!walker.done()) {
     const step = steps.pop();
     if (step === undefined) return;
@@ -388,24 +381,23 @@ export function walkChildren(
       walker.text(step.node.nodeValue ?? "");
     } else if (step.node instanceof Element && walker.enter(step.node)) {
       steps.push({ leave: step.node });
-      pushChildren(steps, step.node, children);
+      pushChildren(steps, step.node);
     }
   }
 }
 
-function pushChildren(
-  steps: Step[],
-  parent: Element,
-  children: (element: Element) => ArrayLike<Node>,
-): void {
-  const nodes = children(parent);
+function pushChildren(steps: Step[], parent: Element): void {
+  const nodes = childrenOf(parent);
   for (let index = nodes.length - 1; index >= 0; index -= 1) {
     const node = nodes[index];
     if (node !== undefined) steps.push({ node });
   }
 }
 
-/** An element's children in the flattened tree, as far as the user can see them. */
+/**
+ * An element's children in the flat tree, as far as the user can see them. A slot assigned to
+ * another slot is a step of its own, so its style decides whether what it passes on is shown.
+ */
 export function childrenOf(element: Element): ArrayLike<Node> {
   if (CHILDLESS.has(element.localName)) return [];
   if (isClosedDetails(element)) {
@@ -415,7 +407,7 @@ export function childrenOf(element: Element): ArrayLike<Node> {
   const shadow = shadowRootOf(element);
   if (shadow !== null) return shadow.childNodes;
   if (element instanceof HTMLSlotElement) {
-    const assigned = element.assignedNodes({ flatten: true });
+    const assigned = element.assignedNodes();
     if (assigned.length > 0) return assigned;
   }
   return element.childNodes;

@@ -157,38 +157,24 @@ function walkFlatTree(body: HTMLElement): Candidates {
   const elements: Element[] = [];
   const outerArticles = new Map<Element, Element>();
   const articles: Element[] = [];
-  walkChildren(
-    body,
-    {
-      enter(element) {
-        elements.push(element);
-        const isArticle = element.localName === "article";
-        const outer = articles.at(-1);
-        if (isArticle && outer !== undefined) outerArticles.set(element, outer);
-        // Firefox lays out a canvas's fallback content, which the user never sees.
-        if (element.localName === "canvas") return false;
-        if (isArticle) articles.push(element);
-        return true;
-      },
-      leave(element) {
-        if (element.localName === "article") articles.pop();
-      },
-      text() {},
-      done: () => false,
+  walkChildren(body, {
+    enter(element) {
+      elements.push(element);
+      const isArticle = element.localName === "article";
+      const outer = articles.at(-1);
+      if (isArticle && outer !== undefined) outerArticles.set(element, outer);
+      // Firefox lays out a canvas's fallback content, which the user never sees.
+      if (element.localName === "canvas") return false;
+      if (isArticle) articles.push(element);
+      return true;
     },
-    flatChildrenOf,
-  );
+    leave(element) {
+      if (element.localName === "article") articles.pop();
+    },
+    text() {},
+    done: () => false,
+  });
   return { elements, outerArticle: (article) => outerArticles.get(article) };
-}
-
-/**
- * An element's flat-tree children. Unlike `childrenOf`, a slot assigned to another slot is a step
- * of its own, so its style decides whether the text it passes on is shown.
- */
-function flatChildrenOf(element: Element): ArrayLike<Node> {
-  if (!(element instanceof HTMLSlotElement)) return childrenOf(element);
-  const assigned = element.assignedNodes();
-  return assigned.length > 0 ? assigned : element.childNodes;
 }
 
 function findMain(
@@ -466,7 +452,7 @@ function pushChildSteps(
   judgeDetails: boolean,
 ): void {
   const contentShown = judgeDetails && detailsContentShown(element);
-  const children = flatChildrenOf(element);
+  const children = childrenOf(element);
   for (let index = children.length - 1; index >= 0; index -= 1) {
     const node = children[index];
     if (node === undefined) continue;

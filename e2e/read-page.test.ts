@@ -280,6 +280,24 @@ describe("read_page in real Firefox", () => {
     );
   });
 
+  test("text a slot hides as it passes it on to another slot is left out", async () => {
+    const tabId = await open("/read-shadow", TITLES.readShadow);
+    const hidden = [
+      READ_HIDDEN.forwardVisibility,
+      READ_HIDDEN.forwardContentVisibility,
+      READ_HIDDEN.forwardDisplay,
+      READ_HIDDEN.forwardName,
+      READ_HIDDEN.forwardFallback,
+      READ_HIDDEN.forwardReceiverFallback,
+    ];
+    const { tree, texts } = await read(tabId);
+    assertNoSecrets(texts, hidden);
+    assertLines(tree, ['text "Forwarded text"', 'button "Forwarded button" [*]']);
+    const interactive = await read(tabId, { filter: "interactive" });
+    assertNoSecrets(interactive.texts, hidden);
+    assertLines(interactive.tree, ['button "Forwarded button" [*]']);
+  });
+
   test("a frame is noted, never read", async () => {
     const tabId = await open("/read-frame", TITLES.readFrame);
     const { tree, texts } = await read(tabId);
