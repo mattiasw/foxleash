@@ -271,6 +271,42 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     assert.equal(await evaluate(based, "location.href"), based.url);
   });
 
+  test("a link and a form button that lead out of the browser are refused, script links are not", async () => {
+    const links = await open("/act-links", TITLES.actLinks);
+    for (const line of ['link "Mail link"', 'button "Mail send"']) {
+      const ref = refOf(links.tree, line);
+      const text = await harness.refused(session, "click", { tabId: links.tabId, ref });
+      assert.ok(
+        text.includes(
+          `Element ${ref} leads to an address outside the site (mailto:), which Foxhand does not open by clicking or with navigate.`,
+        ),
+        `${line}: ${text}`,
+      );
+    }
+    // Refused before the pointer moved.
+    assert.equal(await evaluate(links, "window.events"), 0);
+    assert.equal(await evaluate(links, "window.clicks"), 0);
+    assert.equal(await evaluate(links, "location.href"), links.url);
+
+    await harness.ok(session, "click", {
+      tabId: links.tabId,
+      ref: refOf(links.tree, 'link "Script link"'),
+    });
+    // Firefox runs a javascript: URL after the click returns.
+    await pollUntil(
+      async () => ((await evaluate(links, "window.jsClicks")) === 1 ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      "the script link to run",
+    );
+    assert.equal(await evaluate(links, "window.clicks"), 1);
+    assert.equal(await evaluate(links, "location.href"), links.url);
+    // A blob URL the page made has the page's origin, so it opens.
+    await harness.ok(session, "click", {
+      tabId: links.tabId,
+      ref: refOf(links.tree, 'link "Blob link"'),
+    });
+  });
+
   test("the cross-site check sees closed slots, SVG animation and listeners' rewrites", async () => {
     const links = await open("/act-links", TITLES.actLinks);
     // A span slotted into a link in a closed shadow root, an SVG link whose only href is a SMIL

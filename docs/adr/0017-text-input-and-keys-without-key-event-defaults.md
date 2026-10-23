@@ -1,6 +1,6 @@
 # 0017: type inserts text without key events, and press_key performs key defaults itself
 
-**Status:** Accepted, 2026-10-23.
+**Status:** Accepted, 2026-10-23. Its rule that only http and https destinations are checked is superseded by [0018](0018-click-and-enter-refuse-destinations-outside-the-web.md), 2026-10-23.
 
 ## Context
 

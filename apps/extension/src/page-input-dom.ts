@@ -1,7 +1,7 @@
 import type { KeyAction, Result } from "@foxhand/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import { flatParentOf } from "./flat-tree.ts";
-import { crossSiteDestination, formDestination } from "./page-actions.ts";
+import { crossSiteDestination, formDestination, leavesSiteText } from "./page-actions.ts";
 import { crossSiteOf, tookFocus, viewOf } from "./page-actions-dom.ts";
 import {
   blocksImplicitSubmission,
@@ -533,7 +533,7 @@ function refuseCrossSite(
   if (site === undefined) return;
   throw new PageError(
     "cross_site_navigation",
-    `Enter on element ${refs.refFor(target)} leads to a page on ${site}, which Foxhand does not open with press_key; call navigate with that address, and Foxhand asks the user first if the site is not approved.`,
+    `Enter on element ${refs.refFor(target)} ${leavesSiteText(site, "with press_key")}`,
   );
 }
 

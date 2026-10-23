@@ -12,6 +12,7 @@ import {
   fullyInside,
   type HoverOptions,
   hoverTransitions,
+  leavesSiteText,
   type Point,
   type PointTarget,
   type ScrollByOptions,
@@ -290,7 +291,7 @@ function refuseCrossSite(target: Located): void {
   if (site !== undefined) {
     throw new PageError(
       "cross_site_navigation",
-      `Element ${target.ref} leads to a page on ${site}, which Foxhand does not open by clicking; call navigate with that address, and Foxhand asks the user first if the site is not approved.`,
+      `Element ${target.ref} ${leavesSiteText(site, "by clicking")}`,
     );
   }
 }

@@ -11,6 +11,7 @@ import {
   fullyInside,
   hoverOptions,
   hoverTransitions,
+  leavesSiteText,
   pointResultOf,
   scrollDelta,
   scrollOptions,
@@ -468,17 +469,48 @@ describe("crossSiteDestination", () => {
     }
   });
 
-  it("lets a click go ahead to what is not a web page, or does not parse", () => {
+  it("lets a click go ahead to script, or to what does not parse", () => {
     for (const destination of [
       "javascript:alert(1)",
-      "mailto:someone@example.org",
-      "data:text/html,hello",
-      "tel:+15550100",
-      "ftp://example.org/file",
+      "JAVASCRIPT:x",
+      " java\tscript:x",
+      "java\nscript:x",
       "https://exa mple.org/",
       "http://[::1/",
     ]) {
       assert.equal(crossSiteDestination(destination, PAGE, PAGE), undefined, destination);
+    }
+  });
+
+  it("refuses a destination outside the web, naming only its scheme", () => {
+    const cases: [string, string][] = [
+      ["mailto:someone@example.org?body=secret", "mailto:"],
+      ["tel:+15550100", "tel:"],
+      ["data:text/html,hello", "data:"],
+      ["ftp://example.org/file", "ftp:"],
+      ["about:blank", "about:"],
+      ["web+foo:x", "web+foo:"],
+      ["ws://example.com/", "ws:"],
+      ["file:///etc/passwd", "file:"],
+      ["\tMAILTO:x?body=s", "mailto:"],
+    ];
+    for (const [destination, scheme] of cases) {
+      assert.equal(crossSiteDestination(destination, PAGE, PAGE), scheme, destination);
+    }
+  });
+
+  it("lets a blob of the page's site go ahead and refuses any other", () => {
+    for (const destination of ["blob:https://example.com/uuid", "blob:https://EXAMPLE.com./uuid"]) {
+      assert.equal(crossSiteDestination(destination, PAGE, PAGE), undefined, destination);
+    }
+    for (const destination of [
+      "blob:https://example.org/uuid",
+      "blob:https://example.com@evil.example/uuid",
+      "blob:http://example.com/uuid",
+      "blob:null/uuid",
+      "blob:file:///x",
+    ]) {
+      assert.equal(crossSiteDestination(destination, PAGE, PAGE), "blob:", destination);
     }
   });
 
@@ -516,6 +548,30 @@ describe("crossSiteDestination", () => {
   it("refuses every web destination when the page has no site", () => {
     assert.equal(crossSiteDestination("http://./x", "http://./", "http://./"), "http://.");
     assert.equal(crossSiteDestination("/x", "about:blank", "about:blank"), undefined);
+    assert.equal(crossSiteDestination("#top", "about:blank", "about:blank"), "about:");
+    assert.equal(crossSiteDestination("blob:http://./x", "http://./", "http://./"), "blob:");
+  });
+});
+
+describe("leavesSiteText", () => {
+  it("tells the agent to navigate to a page on another site", () => {
+    const tail =
+      "which Foxhand does not open by clicking; call navigate with that address, and Foxhand asks the user first if the site is not approved.";
+    assert.equal(
+      leavesSiteText("https://example.org", "by clicking"),
+      `leads to a page on https://example.org, ${tail}`,
+    );
+    assert.equal(
+      leavesSiteText("an unknown site", "by clicking"),
+      `leads to a page on an unknown site, ${tail}`,
+    );
+  });
+
+  it("names only the scheme of an address outside the web", () => {
+    assert.equal(
+      leavesSiteText("mailto:", "with press_key"),
+      "leads to an address outside the site (mailto:), which Foxhand does not open with press_key or with navigate.",
+    );
   });
 });
 

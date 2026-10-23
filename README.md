@@ -152,9 +152,9 @@ an element into view. `drag` sends HTML drag-and-drop events when the element is
 and otherwise moves the pointer to the end in steps. The events are simulated, so CSS `:hover`
 styles do not apply and pages that ignore simulated input do not react. Foxhand refuses an
 element that another one covers, naming the covering element, and does not act inside frames.
-It refuses clicks on links and form buttons that lead to another site: the agent opens such a
-page with `navigate`, which asks you first. These tools work only on a tab showing a site you
-approved, and never ask.
+It refuses clicks on links and form buttons that lead to another site or out of the browser,
+such as to an email address: the agent opens a page on another site with `navigate`, which asks
+you first. These tools work only on a tab showing a site you approved, and never ask.
 
 The agent types text with `type`, into a text field or an editable area from `read_page`.
 Foxhand focuses the element, adds the text after what it already holds, and reads it back. It
@@ -171,8 +171,8 @@ sends the key's events and then does what the browser would do, unless the page 
 key: Enter submits the form or clicks the button or link, Tab and Shift+Tab move focus,
 Escape closes an open popover or dialog, and the arrow keys choose an option in a list. Other
 keys reach only the page's own key handlers and do not insert or delete text. Enter on a link
-or in a form that leads to another site is refused, as clicks are. `press_key` works only on a
-tab showing a site you approved, and never asks.
+or in a form that leads to another site or out of the browser is refused, as clicks are.
+`press_key` works only on a tab showing a site you approved, and never asks.
 
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an
@@ -215,12 +215,13 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser, and asks before it
   opens a page there. The approval can only come from your click, not from the agent. It
-  refuses clicks on links and form buttons that lead to another site, and Enter pressed on
-  such a link or in such a form; the agent opens such a page with `navigate`, which asks
-  first. Two ways still reach a site you have not approved
-  without asking: going back or forward in a tab's history, and a page on an approved site
-  that redirects or, with its own scripts, sends the tab to another site, for example after a
-  click. The agent then sees only that site's address.
+  refuses clicks on links and form buttons that lead to another site or out of the browser,
+  such as to an email address, and Enter pressed on such a link or in such a form; the agent
+  opens a page on another site with `navigate`, which asks first. Two ways still reach a site
+  you have not approved without asking: going back or forward in a tab's history, and a page
+  on an approved site that redirects or, with its own scripts, sends the tab to another site,
+  for example after a click. The agent then sees only that site's address. A page's own
+  scripts can also open an email address.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title, and a local file only as `file:`. The sites you allowed always are listed
   in the extension's settings page in the add-ons manager, each with a Revoke button.

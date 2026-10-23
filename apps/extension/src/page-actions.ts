@@ -197,9 +197,11 @@ export function dragResultOf(value: unknown): Result<"drag"> | undefined {
 }
 
 /**
- * The site a click would open a page on, when it is not the page's own: `destination` resolved
- * against `base`. Undefined when the click may go ahead: an unparseable destination, one that is
- * not http or https, or one on the page's site. A base that does not parse is refused.
+ * Where a click would take the page when that leaves the page's site: `destination` resolved
+ * against `base`. Returns the other site, its origin when it has no site, the scheme of a
+ * destination outside the web (never the whole address, which can carry data), or
+ * "an unknown site" when the base does not parse. Undefined when the click may go ahead: an
+ * unparseable destination, a `javascript:` one, or an http, https or blob one on the page's site.
  */
 export function crossSiteDestination(
   destination: string,
@@ -209,11 +211,29 @@ export function crossSiteDestination(
   const baseUrl = URL.parse(base);
   if (baseUrl === null) return "an unknown site";
   const url = URL.parse(destination, baseUrl);
-  if (url === null || (url.protocol !== "http:" && url.protocol !== "https:")) return undefined;
-  const site = siteOf(url.href);
+  if (url === null || url.protocol === "javascript:") return undefined;
   const pageSite = siteOf(pageUrl);
+  if (url.protocol === "blob:") {
+    // A blob URL's origin is that of the URL in its path when http, https or file, else "null".
+    const blobSite = siteOf(url.origin);
+    return blobSite !== undefined && blobSite === pageSite ? undefined : url.protocol;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") return url.protocol;
+  const site = siteOf(url.href);
   if (site !== undefined && site === pageSite) return undefined;
   return site ?? url.origin;
+}
+
+/**
+ * What a cross_site_navigation refusal says after its subject, for a value from
+ * crossSiteDestination: a site, or the scheme of an address outside the web. `by` is how the
+ * tool would have opened it.
+ */
+export function leavesSiteText(site: string, by: string): string {
+  // A scheme always ends in ":"; a site, an origin and "an unknown site" never do.
+  return site.endsWith(":")
+    ? `leads to an address outside the site (${site}), which Foxhand does not open ${by} or with navigate.`
+    : `leads to a page on ${site}, which Foxhand does not open ${by}; call navigate with that address, and Foxhand asks the user first if the site is not approved.`;
 }
 
 /**

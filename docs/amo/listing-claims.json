@@ -153,7 +153,7 @@
       ]
     },
     {
-      "listing": "it refuses clicks on links and form buttons that lead to another site",
+      "listing": "it refuses clicks on links and form buttons that lead to another site or out of the browser",
       "evidence": [
         {
           "file": "apps/extension/src/page-actions.ts",

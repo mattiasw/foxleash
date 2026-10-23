@@ -289,15 +289,20 @@ describe("type and press_key in real Firefox", () => {
 
   test("Enter that leads to another site is refused after the page's key listeners", async () => {
     const forms = await open("/input-forms", TITLES.inputForms);
+    const web = `leads to a page on ${other}, which Foxhand does not open with press_key; call navigate with that address`;
+    const mail =
+      "leads to an address outside the site (mailto:), which Foxhand does not open with press_key or with navigate.";
     // A form posting there, one whose only field is named action, a default button with a
-    // formaction there, a link there, and a same-site form whose keydown listener points its
-    // action there.
-    for (const [line, id] of [
-      ['textbox "Away"', "away-field"],
-      ['textbox "Away named"', "away-named-field"],
-      ['textbox "Away by button"', "away-button-field"],
-      ['link "Away link"', "away-link"],
-      ['textbox "Rewritten"', "rewritten-field"],
+    // formaction there, a link there, a same-site form whose keydown listener points its
+    // action there, and a one-field form and a link that lead to an email address.
+    for (const [line, id, expected] of [
+      ['textbox "Away"', "away-field", web],
+      ['textbox "Away named"', "away-named-field", web],
+      ['textbox "Away by button"', "away-button-field", web],
+      ['link "Away link"', "away-link", web],
+      ['textbox "Rewritten"', "rewritten-field", web],
+      ['textbox "Mail"', "mail-field", mail],
+      ['link "Mail link"', "mail-link", mail],
     ] as const) {
       await evaluate(forms, "window.keys.length = 0");
       const ref = refOf(forms.tree, line);
@@ -306,12 +311,7 @@ describe("type and press_key in real Firefox", () => {
         key: "Enter",
         ref,
       });
-      assert.ok(
-        text.includes(
-          `Enter on element ${ref} leads to a page on ${other}, which Foxhand does not open with press_key; call navigate with that address`,
-        ),
-        `${line}: ${text}`,
-      );
+      assert.ok(text.includes(`Enter on element ${ref} ${expected}`), `${line}: ${text}`);
       assert.deepEqual(
         await evaluate(forms, "window.keys"),
         [`keydown:${id}:Enter`, `keypress:${id}:Enter`, `keyup:${id}:Enter`],

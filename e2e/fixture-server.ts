@@ -1408,11 +1408,16 @@ body { margin: 0; font: 14px sans-serif; }
 <form action="/a" method="get"><button class="at" style="left: 150px; top: 160px" type="submit" formaction="${other}">Send elsewhere</button></form>
 <form id="cross" action="${other}" method="get"></form>
 <a id="namespaced" class="at" style="left: 430px; top: 10px">Namespaced</a>
+<a id="mail" class="at" style="left: 10px; top: 210px" href="mailto:someone@example.org?body=x">Mail link</a>
+<form method="post" enctype="text/plain" action="mailto:someone@example.org"><input name="body" value="x" type="hidden"><button id="mail-send" class="at" style="left: 150px; top: 210px" type="submit">Mail send</button></form>
+<a id="script" class="at" style="left: 290px; top: 210px" href="javascript:void(window.jsClicks = (window.jsClicks || 0) + 1)">Script link</a>
+<a id="blob" class="at" style="left: 430px; top: 210px">Blob link</a>
 <a class="at" style="left: 10px; top: 2000px" href="${other}">Far other</a>
 <input type="image" form="cross" alt="Image send" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E" class="at" style="left: 290px; top: 160px">
 <script>
 window.clicks = 0;
 window.events = 0;
+document.getElementById("blob").href = URL.createObjectURL(new Blob(["x"], { type: "text/plain" }));
 // A same-site href in another namespace first, which getAttribute("href") would answer with.
 const namespaced = document.getElementById("namespaced");
 namespaced.setAttributeNS("urn:x", "href", "/a");
@@ -1605,12 +1610,14 @@ function inputFormsPage(port: number): string {
 <form id="shadowed" class="stay" action="/a"><input aria-label="Shadowed" name="requestSubmit"><input type="hidden" name="noValidate" value="1"><input type="hidden" name="baseURI" value="2"><input type="hidden" name="elements" value="3"><input type="hidden" name="getRootNode" value="4"><button id="shadowed-send" type="submit">Shadowed send</button></form>
 <form id="away" action="${other}"><input id="away-field" aria-label="Away" name="q"></form>
 <form id="away-named" action="${other}"><input id="away-named-field" aria-label="Away named" name="action"></form>
+<form id="mail" method="post" enctype="text/plain" action="mailto:someone@example.org"><input id="mail-field" aria-label="Mail" name="body"></form>
 <form id="shadowed-alone" class="stay" action="/a"><input aria-label="Shadowed alone" name="requestSubmit"></form>
 <form id="away-button" class="stay" action="/a"><input id="away-button-field" aria-label="Away by button" name="q"><button id="away-send" type="submit" formaction="${other}">Away send</button></form>
 <form id="rewritten" action="/a"><input id="rewritten-field" aria-label="Rewritten" name="q"></form>
 <form id="navigating" action="/b"><input aria-label="Navigating" name="q"></form>
 <button id="plain-button" type="button">Plain button</button>
 <a id="away-link" href="${other}">Away link</a>
+<a id="mail-link" href="mailto:someone@example.org">Mail link</a>
 <svg width="120" height="30"><a id="svg-link" href="/a" tabindex="0"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
 <div id="shadow-host"></div>
 <script>

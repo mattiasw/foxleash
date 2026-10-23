@@ -58,8 +58,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dotfiles or files named like keys, and at most 10 MB per upload.
 - Your agent can click, hover, scroll and drag in a page with the `click`, `hover`, `scroll`
   and `drag` tools, on an element from `read_page` or at a point, on sites you approved.
-  Clicks on links and form buttons that lead to another site are refused; your agent opens
-  such a page with `navigate`, which asks you first.
+  Clicks on links and form buttons that lead to another site, or out of the browser such as to
+  an email address, are refused; your agent opens a page on another site with `navigate`,
+  which asks you first.
 - Your agent can read a page's console messages, uncaught errors and unhandled promise
   rejections with the `read_console` tool, filtered by level and pattern, only from pages
   that loaded on sites you approved.
@@ -73,4 +74,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can type into text fields and editable areas with `type`, and press keys with
   `press_key`, which submits forms with Enter, moves focus with Tab, closes popovers and
   dialogs with Escape and picks options in a list with the arrow keys, on sites you approved.
-  Enter on a link or in a form that leads to another site is refused, as clicks are.
+  Enter on a link or in a form that leads to another site or out of the browser is refused, as
+  clicks are.
