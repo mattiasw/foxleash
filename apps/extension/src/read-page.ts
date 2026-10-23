@@ -134,7 +134,8 @@ export function readPage(
     return tree.result();
   }
   const role = roleOf(element, page) ?? "generic";
-  const { name } = nameOf(element, role, page, rootTextState(element, getComputedStyle(element)));
+  const rootState = rootTextState(element, getComputedStyle(element));
+  const { name } = nameOf(element, role, page, rootState);
   const focused = focusedElement();
   tree.add(
     formatLine({
@@ -142,10 +143,13 @@ export function readPage(
       role,
       name,
       ref: page.refs.refFor(element),
-      states: statesOf(element, role, focused, page),
+      states: statesOf(element, role, focused, page, rootState),
     }),
   );
-  if (!withinHidden(element)) walkTree(element, role, { options, page, tree, focused });
+  // Nothing below a root without a box is shown, but an option in a select would get a line.
+  if (!withinHidden(element) && rootState.boxed) {
+    walkTree(element, role, { options, page, tree, focused });
+  }
   return tree.result();
 }
 
@@ -735,7 +739,8 @@ export function isEditingHost(element: Element): boolean {
 
 /**
  * The element's accessible name, a subset of accname, and whether it came from the element's
- * own text, read in `startState` when given. Never a form control's value.
+ * own text, read in `startState` when given; that state also decides which labels name a
+ * field. Never a form control's value.
  */
 function nameOf(
   element: Element,
@@ -747,7 +752,7 @@ function nameOf(
   if (labelledBy !== "") return { name: labelledBy, fromContent: false };
   const label = element.getAttribute("aria-label")?.trim() ?? "";
   if (label !== "") return { name: label, fromContent: false };
-  const own = ownName(element, page);
+  const own = ownName(element, page, startState);
   if (own !== undefined) return { name: own, fromContent: false };
   if (NAME_FROM_CONTENT_ROLES.has(role)) {
     const content = collectText(element, false, startState);
@@ -772,10 +777,10 @@ function labelledByText(element: Element): string {
 }
 
 /** The name an element gets from its own markup, or undefined to go on with the content. */
-function ownName(element: Element, page: PageMemory): string | undefined {
+function ownName(element: Element, page: PageMemory, startState?: TextState): string | undefined {
   if (element instanceof HTMLInputElement) {
     return first(
-      labelsText(element.labels),
+      labelsText(element.labels, startState),
       ...(element.type === "image" ? [element.getAttribute("alt")] : []),
       // A label, not user data, unless the page made a credential field a button.
       ...(BUTTON_INPUTS.has(element.type) && !isProtected(element, page) ? [element.value] : []),
@@ -785,7 +790,7 @@ function ownName(element: Element, page: PageMemory): string | undefined {
   }
   if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
     return first(
-      labelsText(element.labels),
+      labelsText(element.labels, startState),
       element.getAttribute("title"),
       element.getAttribute("placeholder"),
     );
@@ -800,7 +805,13 @@ function ownName(element: Element, page: PageMemory): string | undefined {
       return childText(element, "figcaption");
     case "table":
       return element instanceof HTMLTableElement && element.caption !== null
-        ? nonEmpty(collectText(element.caption, false))
+        ? nonEmpty(
+            collectText(
+              element.caption,
+              false,
+              rootTextState(element.caption, getComputedStyle(element.caption)),
+            ),
+          )
         : undefined;
     default:
       return undefined;
@@ -812,16 +823,28 @@ function first(...values: (string | null)[]): string {
   return values.map((value) => value?.trim() ?? "").find((value) => value !== "") ?? "";
 }
 
-function labelsText(labels: NodeListOf<HTMLLabelElement> | null): string {
+/**
+ * A label hidden on purpose names a field the user sees, as `aria-label` does; a field the user
+ * cannot see (`fieldState` not visible) keeps only the labels the user sees.
+ */
+function labelsText(labels: NodeListOf<HTMLLabelElement> | null, fieldState?: TextState): string {
   if (labels === null) return "";
   const buffer = createTextBuffer();
-  for (const label of labels) buffer.add(` ${collectText(label, false)} `);
+  for (const label of labels) {
+    const state =
+      fieldState === undefined || fieldState.visible
+        ? undefined
+        : rootTextState(label, getComputedStyle(label));
+    buffer.add(` ${collectText(label, false, state)} `);
+  }
   return buffer.text();
 }
 
 function childText(element: Element, localName: string): string | undefined {
   for (const child of element.children) {
-    if (child.localName === localName) return nonEmpty(collectText(child, false));
+    if (child.localName === localName) {
+      return nonEmpty(collectText(child, false, rootTextState(child, getComputedStyle(child))));
+    }
   }
   return undefined;
 }
@@ -919,6 +942,7 @@ function statesOf(
   role: string,
   focused: Element | null,
   page: PageMemory,
+  state?: TextState,
 ): LineStates {
   const states: LineStates = {};
   if (element instanceof HTMLInputElement && element.type === "file") states.file = true;
@@ -943,7 +967,7 @@ function statesOf(
   if (invalid !== undefined && invalid !== "" && invalid !== "false") states.invalid = true;
   if (element === focused) states.focused = true;
   if (role === "heading") states.level = headingLevel(element);
-  const field = fieldOf(element, role, page);
+  const field = fieldOf(element, role, page, state);
   if (field !== undefined) states.field = field;
   if (role === "link" && element instanceof HTMLAnchorElement && element.hasAttribute("href")) {
     states.href = element.href;
@@ -987,16 +1011,26 @@ function headingLevel(element: Element): number {
   return heading === null ? 2 : Number(heading[1]);
 }
 
-/** The value a field shows, or that it is protected; undefined for anything else. */
-function fieldOf(element: Element, role: string, page: PageMemory): LineStates["field"] {
+/**
+ * The value a field shows, or that it is protected; undefined for anything else, and no value
+ * when `state` says the user cannot see the field.
+ */
+function fieldOf(
+  element: Element,
+  role: string,
+  page: PageMemory,
+  state?: TextState,
+): LineStates["field"] {
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     if (isProtected(element, page)) return { protected: true, filled: element.value !== "" };
+    if (state !== undefined && !state.visible) return undefined;
     if (element instanceof HTMLTextAreaElement || VALUE_ROLES.has(role)) {
       return { value: element.value };
     }
     return undefined;
   }
   if (element instanceof HTMLSelectElement) {
+    if (state !== undefined && !state.visible) return undefined;
     return { value: Array.from(element.selectedOptions, (option) => option.label).join(", ") };
   }
   return undefined;

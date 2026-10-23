@@ -169,6 +169,10 @@ export const READ_HIDDEN = {
   forwardName: "hidden-forward-name-Ew6",
   forwardFallback: "hidden-forward-fallback-Fx7",
   forwardReceiverFallback: "hidden-forward-receiver-fallback-Gy8",
+  legendDisplay: "hidden-legend-display-Nd1",
+  legendAttribute: "hidden-legend-attribute-Oe2",
+  figcaptionDisplay: "hidden-figcaption-display-Pf3",
+  captionAttribute: "hidden-caption-attribute-Qg4",
 } as const;
 
 /** Text the get_page_text pages hold in each region, to find where each region went. */
@@ -922,8 +926,9 @@ const READ_REFS_PAGE = `<!doctype html>
 // hidden, a details with a hidden content box, a closed details, display contents under display
 // none, a progress, a br, a hidden host's shadow root, a host with no slot, a slot showing
 // assigned nodes; showing ones: a plain div, an open details, a slot, a slot showing its
-// fallback), buttons and options named from their content, and custom elements with open
-// shadow roots.
+// fallback), buttons and options named from their content, fields, fieldsets, a figure and a
+// table whose name sources or values the test changes and hides, ones whose legend, figcaption,
+// caption or label is hidden from the start, and custom elements with open shadow roots.
 const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readRefHidden}</title>
 <style>
@@ -968,6 +973,26 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <select id="select-own" aria-label="Own pick"><option>Seven</option><option id="option-own">Eight</option></select>
 <select id="select-group" aria-label="Group pick"><option>Ten</option><optgroup id="optgroup-display" label="Group"><option id="option-group">Nine</option></optgroup></select>
 <select id="select-control" aria-label="Control pick"><option>Three</option><option id="option-control">Four</option></select>
+<fieldset id="fieldset-hidden"><legend id="legend-hidden">Hidden legend</legend><input aria-label="Hidden legend field"></fieldset>
+<figure id="figure-hidden"><p>Hidden figure body</p><figcaption id="figcaption-hidden">Hidden figcaption</figcaption></figure>
+<table id="table-hidden"><caption id="caption-hidden">Hidden caption</caption><tr><td>Hidden table cell</td></tr></table>
+<details id="details-legend" open><summary>Legend holder</summary><fieldset><legend id="legend-closed">Closed legend</legend></fieldset></details>
+<label id="label-wrapping">Wrapped name <input id="input-wrapped"></label>
+<label id="label-both" for="textarea-both">Both name</label><textarea id="textarea-both"></textarea>
+<label id="label-invisible" for="input-invisible">Invisible name</label><input id="input-invisible">
+<label id="label-kept" for="input-kept">Kept name</label><input id="input-kept">
+<input id="input-value-hidden" aria-label="Hidden value" value="Start">
+<input id="input-value-invisible" aria-label="Invisible value" value="Start">
+<textarea id="textarea-value-hidden" aria-label="Hidden area">Start</textarea>
+<select id="select-value-hidden" aria-label="Hidden value pick"><option id="option-value-hidden">Eleven</option><option>Twelve</option></select>
+<input id="input-password-hidden" type="password" aria-label="Hidden password field">
+<input id="input-value-shown" aria-label="Shown value" value="Start">
+<fieldset id="fieldset-shown"><legend id="legend-shown">Shown legend</legend><input aria-label="Shown legend field"></fieldset>
+<fieldset><legend style="display: none">${READ_HIDDEN.legendDisplay}</legend><input aria-label="Static legend field"></fieldset>
+<fieldset><legend hidden>${READ_HIDDEN.legendAttribute}</legend><input aria-label="Static legend attribute field"></fieldset>
+<figure><p>Static figure body</p><figcaption style="display: none">${READ_HIDDEN.figcaptionDisplay}</figcaption></figure>
+<table><caption hidden>${READ_HIDDEN.captionAttribute}</caption><tr><td>Static table cell</td></tr></table>
+<label for="input-hidden-label" style="display: none">Hidden label name</label><input id="input-hidden-label">
 <script>
 for (const [name, html] of [
   ["slot-host", "<div><slot></slot></div>"],

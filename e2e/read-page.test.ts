@@ -564,6 +564,191 @@ describe("read_page in real Firefox", () => {
     ]);
   });
 
+  test("a full read leaves out a legend, figcaption or caption the page hides", async () => {
+    const tabId = await open("/read-ref-hidden?fresh=1", TITLES.readRefHidden);
+    const { tree, texts } = await read(tabId);
+    const tokens = [
+      READ_HIDDEN.legendDisplay,
+      READ_HIDDEN.legendAttribute,
+      READ_HIDDEN.figcaptionDisplay,
+      READ_HIDDEN.captionAttribute,
+    ];
+    // Lists every leaked token, where assertNoSecrets stops at the first.
+    assert.deepEqual(
+      tokens.filter((token) => texts.some((text) => text.includes(token))),
+      [],
+    );
+    assertLines(tree, ['textbox "Hidden label name" [*]']);
+  });
+
+  test("a ref read's first line leaves out a name or value the page hid after the read", async () => {
+    const tabId = await open("/read-ref-hidden?fresh=2", TITLES.readRefHidden);
+    const { tree } = await read(tabId);
+    // Each change runs with `token` set to the case's token. `secret`: the user cannot see it.
+    const cases = [
+      {
+        id: "legend-Pa1",
+        line: 'group "Hidden legend"',
+        change: `document.getElementById("legend-hidden").textContent = token;
+          document.getElementById("fieldset-hidden").style.display = "none";`,
+        first: (ref: string) => `group [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "figcaption-Qb2",
+        line: 'figure "Hidden figcaption"',
+        change: `document.getElementById("figcaption-hidden").textContent = token;
+          document.getElementById("figure-hidden").style.display = "none";`,
+        first: (ref: string) => `figure [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "caption-Rc3",
+        line: 'table "Hidden caption"',
+        change: `document.getElementById("caption-hidden").textContent = token;
+          document.getElementById("table-hidden").style.display = "none";`,
+        first: (ref: string) => `table [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "closed-legend-Sd4",
+        line: '  group "Closed legend"',
+        change: `document.getElementById("legend-closed").textContent = token;
+          document.getElementById("details-legend").open = false;`,
+        first: (ref: string) => `group [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "wrapped-Te5",
+        line: 'textbox "Wrapped name"',
+        change: `const label = document.getElementById("label-wrapping");
+          label.firstChild.nodeValue = token + " ";
+          label.style.display = "none";`,
+        first: (ref: string) => `textbox [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "both-Uf6",
+        line: 'textbox "Both name"',
+        change: `document.getElementById("label-both").textContent = token;
+          document.getElementById("label-both").style.display = "none";
+          document.getElementById("textarea-both").style.display = "none";`,
+        first: (ref: string) => `textbox [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "invisible-Vg7",
+        line: 'textbox "Invisible name"',
+        change: `document.getElementById("label-invisible").textContent = token;
+          document.getElementById("label-invisible").style.display = "none";
+          document.getElementById("input-invisible").style.visibility = "hidden";`,
+        first: (ref: string) => `textbox [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "kept-Wh8",
+        line: 'textbox "Kept name"',
+        change: `document.getElementById("label-kept").textContent = token;
+          document.getElementById("input-kept").style.display = "none";`,
+        first: (ref: string, token: string) => `textbox "${token}" [${ref}]`,
+        secret: false,
+      },
+      {
+        id: "value-Xi9",
+        line: 'textbox "Hidden value"',
+        change: `document.getElementById("input-value-hidden").value = token;
+          document.getElementById("input-value-hidden").style.display = "none";`,
+        first: (ref: string) => `textbox "Hidden value" [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "invisible-value-Yj1",
+        line: 'textbox "Invisible value"',
+        change: `document.getElementById("input-value-invisible").value = token;
+          document.getElementById("input-value-invisible").style.visibility = "hidden";`,
+        first: (ref: string) => `textbox "Invisible value" [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "area-Zk2",
+        line: 'textbox "Hidden area"',
+        change: `document.getElementById("textarea-value-hidden").value = token;
+          document.getElementById("textarea-value-hidden").style.display = "none";`,
+        first: (ref: string) => `textbox "Hidden area" [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "select-Al3",
+        line: 'combobox "Hidden value pick"',
+        change: `document.getElementById("option-value-hidden").textContent = token;
+          document.getElementById("select-value-hidden").style.display = "none";`,
+        first: (ref: string) => `combobox "Hidden value pick" [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "password-Bm4",
+        line: 'textbox "Hidden password field"',
+        change: `document.getElementById("input-password-hidden").value = token;
+          document.getElementById("input-password-hidden").style.display = "none";`,
+        first: (ref: string) => `textbox "Hidden password field" [${ref}] protected filled`,
+        secret: true,
+      },
+      {
+        id: "shown-value-Cn5",
+        line: 'textbox "Shown value"',
+        change: `document.getElementById("input-value-shown").value = token;`,
+        first: (ref: string, token: string) => `textbox "Shown value" [${ref}] value="${token}"`,
+        secret: false,
+      },
+      {
+        id: "shown-legend-Do6",
+        line: 'group "Shown legend"',
+        change: `document.getElementById("legend-shown").textContent = token;`,
+        first: (ref: string, token: string) => `group "${token}" [${ref}]`,
+        secret: false,
+      },
+      {
+        id: "hidden-label-Ep7",
+        line: 'textbox "Hidden label name"',
+        change: "",
+        first: (ref: string) => `textbox "Hidden label name" [${ref}]`,
+        secret: false,
+      },
+    ].map((entry) => ({
+      ...entry,
+      ref: refOf(tree, entry.line),
+      token: `ref-hidden-${entry.id}`,
+    }));
+    const script = cases
+      .map(({ token, change }) => `{ const token = ${JSON.stringify(token)}; ${change} }`)
+      .join("\n");
+    assert.equal(
+      await firefox.evaluate(
+        await contextOf(fixtures.url("/read-ref-hidden?fresh=2")),
+        `(() => {
+          ${script}
+          return "changed";
+        })()`,
+      ),
+      "changed",
+    );
+
+    const reads: { entry: (typeof cases)[number]; sub: Read }[] = [];
+    for (const entry of cases) reads.push({ entry, sub: await read(tabId, { ref: entry.ref }) });
+    assert.deepEqual(
+      reads.map(({ sub }) => lines(sub.tree)[0]),
+      cases.map(({ first, ref, token }) => first(ref, token)),
+    );
+    for (const { entry, sub } of reads) {
+      if (entry.secret) assertNoSecrets(sub.texts, [entry.token]);
+    }
+    const all = await read(tabId);
+    assertNoSecrets(
+      all.texts,
+      cases.filter(({ secret }) => secret).map(({ token }) => token),
+    );
+  });
+
   test("a field Firefox autofilled from a saved login reads as protected", async () => {
     await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);
     try {
