@@ -87,6 +87,8 @@ describe("parseMessage accepts", () => {
         "hover",
         "scroll",
         "drag",
+        "type",
+        "press_key",
         "read_console",
         "read_network",
         "probe_input",
@@ -102,6 +104,28 @@ describe("parseMessage accepts", () => {
         params: { tabId: 2 },
       } as const,
     })),
+    {
+      name: "a type request with its params",
+      input: { ...request, method: "type", params: { tabId: 2, ref: "0a1b2c3d-1", text: "hi" } },
+      expected: {
+        type: "request",
+        id: "r1",
+        session: "s1",
+        method: "type",
+        params: { tabId: 2, ref: "0a1b2c3d-1", text: "hi" },
+      },
+    },
+    {
+      name: "a press_key request with its params",
+      input: { ...request, method: "press_key", params: { tabId: 2, key: "Shift+Tab" } },
+      expected: {
+        type: "request",
+        id: "r1",
+        session: "s1",
+        method: "press_key",
+        params: { tabId: 2, key: "Shift+Tab" },
+      },
+    },
     {
       name: "an upload_chunk request with its params",
       input: {

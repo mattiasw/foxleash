@@ -299,7 +299,7 @@ function refuseCrossSite(target: Located): void {
  * The other site a click on `hit` would open a page on: through a link or submit button around
  * it, or through the control of a label around it, which the click is forwarded to once.
  */
-function crossSiteOf(hit: Element): string | undefined {
+export function crossSiteOf(hit: Element): string | undefined {
   for (const element of chainOf(hit)) {
     const site = crossSiteFrom(element);
     if (site !== undefined) return site;
@@ -500,7 +500,7 @@ function clickFocuses(element: HTMLElement | SVGElement): boolean {
  * Whether focusing the element moved focus, or found it there already. Not `:focus`: a shadow
  * host matches it whenever focus is anywhere in its shadow tree, focusable or not.
  */
-function tookFocus(element: Element, before: Element | null): boolean {
+export function tookFocus(element: Element, before: Element | null): boolean {
   const now = focusedElement();
   return now !== before || now === element;
 }
@@ -712,6 +712,6 @@ function sendDrag(target: Element, type: string, point: Point, transfer: DataTra
 }
 
 /** The page window's constructors, so events are made in the page's realm. */
-function viewOf(element: Element): Window & typeof globalThis {
+export function viewOf(element: Element): Window & typeof globalThis {
   return element.ownerDocument.defaultView ?? window;
 }

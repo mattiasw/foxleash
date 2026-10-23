@@ -236,6 +236,8 @@ describe("the page constants", () => {
       "no_element_at_point",
       "in_frame",
       "cross_site_navigation",
+      "not_editable",
+      "no_effect",
     ]);
     assert.equal(PAGE_REQUEST_KIND, "foxhand-page");
     assert.equal(MAX_PAGE_REPLY_CHARS, 2_000_000);

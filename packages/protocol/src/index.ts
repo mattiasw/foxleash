@@ -28,6 +28,7 @@ export type {
   ConsoleLevel,
   ConsoleMessage,
   DragMode,
+  KeyAction,
   MethodName,
   Methods,
   NavigateAction,
@@ -44,6 +45,8 @@ export type {
   Result,
   ScrollDirection,
   TabInfo,
+  TypeMethod,
+  TypeOutcome,
 } from "./methods.ts";
 export {
   CONSOLE_KINDS,
@@ -59,6 +62,7 @@ export {
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
   MAX_PAGE_TEXT_CHARS,
+  MAX_TYPE_CHARS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_FOR_TEXT,
   MAX_WINDOW_SIZE,

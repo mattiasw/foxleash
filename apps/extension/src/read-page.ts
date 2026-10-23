@@ -395,7 +395,7 @@ function pushChildren(steps: Step[], parent: Element): void {
 }
 
 /** An element's children in the flattened tree, as far as the user can see them. */
-function childrenOf(element: Element): ArrayLike<Node> {
+export function childrenOf(element: Element): ArrayLike<Node> {
   if (CHILDLESS.has(element.localName)) return [];
   if (isClosedDetails(element)) {
     const summary = detailsSummaryOf(element);

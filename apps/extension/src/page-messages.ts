@@ -30,6 +30,8 @@ export const PAGE_ERROR_CODES: readonly string[] = [
   "no_element_at_point",
   "in_frame",
   "cross_site_navigation",
+  "not_editable",
+  "no_effect",
 ];
 
 /** The background's cap on the length of a reply as JSON. */

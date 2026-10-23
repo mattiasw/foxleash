@@ -144,6 +144,25 @@ export const MAX_WAIT_FOR_TEXT = 1_000;
 export const MIN_WINDOW_SIZE = 100;
 export const MAX_WINDOW_SIZE = 10_000;
 
+/** type's longest text, in UTF-16 units. */
+export const MAX_TYPE_CHARS = 50_000;
+
+/** typed: the text was read back; sent_unconfirmed: inserted into an editor that cannot be read. */
+export type TypeOutcome = "typed" | "sent_unconfirmed";
+
+/** How type got the text in. */
+export type TypeMethod = "exec_command" | "native_setter" | "beforeinput_dom";
+
+/** The default action press_key performed after the key's events. */
+export type KeyAction =
+  | "none"
+  | "submitted"
+  | "clicked"
+  | "focus_moved"
+  | "selected_option"
+  | "closed_dialog"
+  | "hid_popover";
+
 /** The most bytes upload_file takes in one call, across all its files. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
@@ -214,6 +233,15 @@ export interface Methods {
     params: { tabId: number } & Target & DragEnd;
     result: { ref: string; targetRef: string; mode: DragMode; dropped: boolean };
   };
+  type: {
+    params: { tabId: number; ref: string; text: string };
+    result: { outcome: TypeOutcome; method: TypeMethod };
+  };
+  /** `prevented` is true when the page cancelled keydown or keypress. */
+  press_key: {
+    params: { tabId: number; key: string; ref?: string };
+    result: { action: KeyAction; prevented: boolean };
+  };
   /** `recording` is false when Foxhand has not recorded the page since it loaded. */
   read_console: {
     params: { tabId: number };
@@ -254,6 +282,8 @@ export const METHOD_NAMES = [
   "hover",
   "scroll",
   "drag",
+  "type",
+  "press_key",
   "read_console",
   "read_network",
   "probe_input",

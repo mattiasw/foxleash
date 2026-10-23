@@ -38,6 +38,7 @@ import {
   scrollOptions,
   scrollResultOf,
 } from "./page-actions.ts";
+import { pressKeyOptions, pressKeyResultOf, typeOptions, typeResultOf } from "./page-input.ts";
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
@@ -156,6 +157,9 @@ export function createHandlers<Handle>({
     scroll: (session, params) =>
       pageAction(session, params, "scroll", scrollOptions, scrollResultOf),
     drag: (session, params) => pageAction(session, params, "drag", dragOptions, dragResultOf),
+    type: (session, params) => pageAction(session, params, "type", typeOptions, typeResultOf),
+    press_key: (session, params) =>
+      pageAction(session, params, "press_key", pressKeyOptions, pressKeyResultOf),
     read_console: readConsole,
     read_network: readNetwork,
     probe_input: probeInput,
@@ -584,7 +588,7 @@ export function createHandlers<Handle>({
   async function pageAction<R>(
     session: string,
     params: Params,
-    tool: "click" | "hover" | "scroll" | "drag",
+    tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key",
     parse: (params: Params) => Params | string,
     check: (reply: unknown) => R | undefined,
   ): Promise<R> {

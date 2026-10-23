@@ -48,7 +48,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the seventeen tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the nineteen tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -57,6 +57,7 @@ describe("tools", () => {
       "get_page_text",
       "hover",
       "navigate",
+      "press_key",
       "read_console",
       "read_network",
       "read_page",
@@ -67,6 +68,7 @@ describe("tools", () => {
       "tab_open",
       "tab_select",
       "tabs_list",
+      "type",
       "upload_file",
       "wait_for",
     ]);
@@ -84,6 +86,8 @@ describe("tools", () => {
           "hover",
           "scroll",
           "drag",
+          "type",
+          "press_key",
           "read_console",
           "read_network",
           "resize_window",
@@ -375,6 +379,139 @@ describe("tools", () => {
     });
     assert.equal(output.isError, undefined);
     assert.equal(unframed(output), pretty(result));
+  });
+
+  it("describes type and press_key with their schemas", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const schemas: Record<string, { required: string[]; properties: string[]; words: string[] }> = {
+      type: {
+        required: ["tabId", "ref", "text"],
+        properties: ["tabId", "ref", "text"],
+        words: [
+          "adds the text after what it already holds, and reads it back",
+          "No key events are sent",
+          "sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document)",
+          "exec_command, native_setter or beforeinput_dom",
+          "the call fails with no_effect",
+          "Other frames are not entered.",
+          "At most 50,000 characters.",
+          "The tab must show a site the user approved; type never asks.",
+        ],
+      },
+      press_key: {
+        required: ["tabId", "key"],
+        properties: ["tabId", "key", "ref"],
+        words: [
+          "Enter, Tab, Escape, Space, Backspace, Delete, Insert, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12",
+          "Shift, Control (or Ctrl), Alt and Meta joined with +",
+          "keydown, keypress for Enter and characters (not with Control or Meta), and keyup",
+          "Enter in a field submits its form as the browser does",
+          "Tab and Shift+Tab move focus",
+          "Escape closes the open popover or modal dialog",
+          "ArrowUp and ArrowDown choose the previous or next option in a select",
+          "Enter on a link or in a form that leads to another site is refused: open such a page with navigate.",
+          "insert or delete no text, so use type for text",
+          "Frames are not entered.",
+          "none, submitted, clicked, focus_moved, selected_option, closed_dialog or hid_popover",
+          "prevented, true when the page cancelled the key",
+          "The tab must show a site the user approved; press_key never asks.",
+        ],
+      },
+    };
+    for (const [name, { required, properties, words }] of Object.entries(schemas)) {
+      const tool = tools.find((listed) => listed.name === name);
+      assert.deepEqual(tool?.inputSchema.required, required, name);
+      assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), properties, name);
+      assert.equal(tool?.description?.includes(ASKS_FIRST), false, name);
+      for (const phrase of words) {
+        assert.ok(tool?.description?.includes(phrase), `${name}: ${phrase}`);
+      }
+    }
+  });
+
+  it("passes type and press_key only the arguments given", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const longest = "a".repeat(50_000);
+    const cases: [string, Record<string, unknown>][] = [
+      ["type", { tabId: 1, ref: "0a1b2c3d-4", text: "hello" }],
+      ["type", { tabId: 0, ref: "0a1b2c3d-4", text: longest }],
+      ["press_key", { tabId: 2, key: "Enter" }],
+      ["press_key", { tabId: 2, key: "Shift+Tab", ref: "0a1b2c3d-4" }],
+    ];
+    for (const [name, args] of cases) {
+      const output = await client.callTool({ name, arguments: args });
+      assert.equal(output.isError, undefined, name);
+    }
+    assert.deepEqual(
+      calls,
+      cases.map(([method, params]) => ({ method, params })),
+    );
+    assert.deepEqual(
+      calls.map((call) => Object.keys(record(call.params))),
+      cases.map(([, params]) => Object.keys(params)),
+    );
+  });
+
+  it("refuses type and press_key arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await start(() => ({}));
+    const cases: [string, Record<string, unknown>, string][] = [
+      [
+        "type",
+        { tabId: 1, ref: "a", text: "a".repeat(50_001) },
+        "Too big: expected string to have <=50000 characters at text",
+      ],
+      [
+        "type",
+        { tabId: 1, ref: "a", text: "" },
+        "Too small: expected string to have >=1 characters at text",
+      ],
+      [
+        "type",
+        { tabId: 1, text: "a" },
+        "Invalid input: expected string, received undefined at ref",
+      ],
+      ["type", { tabId: -1, ref: "a", text: "a" }, "Too small: expected number to be >=0 at tabId"],
+      ["press_key", { tabId: 1 }, "Invalid input: expected string, received undefined at key"],
+      [
+        "press_key",
+        { tabId: 1, key: "a", ref: 4 },
+        "Invalid input: expected string, received number at ref",
+      ],
+    ];
+    for (const [name, args, reason] of cases) {
+      const output = await client.callTool({ name, arguments: args });
+      assert.deepEqual(
+        output,
+        {
+          content: [
+            {
+              type: "text",
+              text: `MCP error -32602: Input validation error: Invalid arguments for tool ${name}: ${reason}`,
+            },
+          ],
+          isError: true,
+        },
+        `${name} ${JSON.stringify(args)}`,
+      );
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("returns type and press_key results as JSON in one untrusted frame", LIMIT, async () => {
+    for (const [name, args, result] of [
+      [
+        "type",
+        { tabId: 1, ref: "0a1b2c3d-4", text: "x" },
+        { outcome: "typed", method: "exec_command" },
+      ],
+      ["press_key", { tabId: 1, key: "Enter" }, { action: "submitted", prevented: false }],
+    ] as const) {
+      const { client } = await start(() => result);
+      const output = await client.callTool({ name, arguments: args });
+      assert.equal(output.isError, undefined, name);
+      assert.equal(unframed(output), pretty(result), name);
+    }
   });
 
   it("passes get_page_text only the arguments given", LIMIT, async () => {

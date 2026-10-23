@@ -70,3 +70,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can wait for text, an element or a navigation in a page (`wait_for`), switch
   between and close the tabs in its Foxhand tab group (`tab_select`, `tab_close`), and resize
   the window that holds the group (`resize_window`).
+- Your agent can type into text fields and editable areas with `type`, and press keys with
+  `press_key`, which submits forms with Enter, moves focus with Tab, closes popovers and
+  dialogs with Escape and picks options in a list with the arrow keys, on sites you approved.
+  Enter on a link or in a form that leads to another site is refused, as clicks are.

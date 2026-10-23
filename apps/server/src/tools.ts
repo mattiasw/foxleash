@@ -15,6 +15,7 @@ import {
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
   MAX_PAGE_TEXT_CHARS,
+  MAX_TYPE_CHARS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_FOR_TEXT,
   MAX_WINDOW_SIZE,
@@ -94,6 +95,10 @@ const CLICK = `Click in the page in a tab of this session's Foxhand tab group as
 const HOVER = `Move the pointer onto an element or point in the page in a tab of this session's Foxhand tab group: the element the pointer was over gets pointerout, pointerleave, mouseout and mouseleave, the new one pointerover, pointerenter, mouseover and mouseenter, then pointermove and mousemove. ${POINTING} ${ACTING_LIMITS} CSS :hover styles do not apply, so a menu that only CSS :hover opens stays closed. The result gives the ref of the element under the pointer and the point used. The tab must show a site the user approved; hover never asks.`;
 const SCROLL = `Scroll in the page in a tab of this session's Foxhand tab group. With ref and no direction, scroll that element into view. With direction, send a wheel event at the element given by ref, at x and y in CSS pixels of the tab's viewport, or at the centre of the viewport when neither is given, then scroll what that wheel would scroll, an inner scrolling box or the page, by amount CSS pixels: by default 80% of its height or width. A page that cancels the wheel event is not scrolled. An element given by ref is scrolled into view first. ${ACTING_LIMITS} The result gives the ref of the box that scrolled (none when the page itself scrolled), its scrollLeft and scrollTop (the page's when scrolling an element into view), and moved, false when nothing moved. The tab must show a site the user approved; scroll never asks.`;
 const DRAG = `Drag from one element or point to another in the page in a tab of this session's Foxhand tab group. Give the start as ref or x and y, and the end as targetRef or targetX and targetY: element references from read_page, or CSS pixels of the tab's viewport, as in a screenshot of it. With targetRef, the start is scrolled into view first; with targetX and targetY it is not, since that would move the end, so the start must be in view. The end must be visible and not covered. Foxhand presses at the start (pointerdown, mousedown). When the element there is draggable, it sends HTML drag-and-drop events with a shared dataTransfer: dragstart, pointercancel, drag, dragenter and dragover, then drop if the end accepts it, else dragleave, then dragend. Otherwise, or when the page cancels dragstart, it moves the pointer to the end in 5 steps and releases it there (pointerup, mouseup). ${ACTING_LIMITS} The result gives the refs of the start and end elements, mode (html5 or pointer) and dropped: in html5 mode, whether the end accepted the drop. The tab must show a site the user approved; drag never asks.`;
+const MAX_TYPE = MAX_TYPE_CHARS.toLocaleString("en-US");
+const TYPE = `Type text into a field or editable area in the page in a tab of this session's Foxhand tab group: Foxhand focuses the element, adds the text after what it already holds, and reads it back. Give ref, an element reference from read_page, of a text field (a text, search, email, url, tel, password or number input, or a textarea), of an element the page lets the user edit, or of a frame on the page's own site that holds an editor's input. No key events are sent: Foxhand inserts the text as the browser inserts typed text (execCommand insertText), and only when that leaves the element unchanged without the page receiving it, once more by setting the field's value as a framework's own edit does, or by inserting it into the editable area. The result gives outcome, typed when the text was read back or sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document), and method, how the text went in: exec_command, native_setter or beforeinput_dom. When the text did not appear, the call fails with no_effect: the page may accept only real typing, or took the text without showing it in the element, so read the page before typing it again. Typing a newline does not submit a form; use press_key Enter for that. Other frames are not entered. At most ${MAX_TYPE} characters. The tab must show a site the user approved; type never asks.`;
+const PRESS_KEY =
+  "Press a key in the page in a tab of this session's Foxhand tab group, on the element given by ref, focused first, or else on the focused element. key is a named key (Enter, Tab, Escape, Space, Backspace, Delete, Insert, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12) or a single character, after any of the modifiers Shift, Control (or Ctrl), Alt and Meta joined with +, such as Control+a, Shift+Tab or Control++ for the + key. A character is sent as written, so write A for a capital A. Foxhand sends keydown, keypress for Enter and characters (not with Control or Meta), and keyup. Unless the page cancels the key, Foxhand then performs the key's default action itself: Enter in a field submits its form as the browser does, or clicks the button, link or summary it is on; Tab and Shift+Tab move focus to the next or previous element in tab order; Escape closes the open popover or modal dialog; ArrowUp and ArrowDown choose the previous or next option in a select. Enter on a link or in a form that leads to another site is refused: open such a page with navigate. Other keys reach only the page's own key handlers and insert or delete no text, so use type for text. The events are synthetic (isTrusted is false). Frames are not entered. The result gives action, the default action performed (none, submitted, clicked, focus_moved, selected_option, closed_dialog or hid_popover; none also when the form's own validation stops it), and prevented, true when the page cancelled the key. The tab must show a site the user approved; press_key never asks.";
 const CLICK_TARGET = "click needs either ref or both x and y, not both and not neither.";
 const HOVER_TARGET = "hover needs either ref or both x and y, not both and not neither.";
 const DOUBLE_RIGHT = "click takes doubleClick only with the left button.";
@@ -562,6 +567,48 @@ export function registerTools(
           : { tabId, ...start, targetX: end.x, targetY: end.y };
       return run(bridge, "drag", params);
     },
+  );
+  server.registerTool(
+    "type",
+    {
+      description: TYPE,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        ref: z
+          .string()
+          .describe(
+            "An element reference from an earlier read_page of the same page: the field or editable area to type into",
+          ),
+        text: z
+          .string()
+          .min(1)
+          .max(MAX_TYPE_CHARS)
+          .describe(`The text to add after what the element holds, at most ${MAX_TYPE} characters`),
+      },
+    },
+    ({ tabId, ref, text }) => run(bridge, "type", { tabId, ref, text }),
+  );
+  server.registerTool(
+    "press_key",
+    {
+      description: PRESS_KEY,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        key: z
+          .string()
+          .describe(
+            "A named key such as Enter, Tab or ArrowDown, or one character, after any modifiers joined with +, such as Control+a or Shift+Tab",
+          ),
+        ref: z
+          .string()
+          .optional()
+          .describe(
+            "An element reference from an earlier read_page of the same page: the element to focus and press the key on; without it, the focused element",
+          ),
+      },
+    },
+    ({ tabId, key, ref }) =>
+      run(bridge, "press_key", ref === undefined ? { tabId, key } : { tabId, key, ref }),
   );
   server.registerTool(
     "read_console",

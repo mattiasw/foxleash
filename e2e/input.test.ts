@@ -1,0 +1,522 @@
+import assert from "node:assert/strict";
+import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
+import {
+  createHarness,
+  EXTENSION_DIST,
+  type Harness,
+  type Session,
+  tabOf,
+  tabsOf,
+  untrustedContent,
+} from "./harness.ts";
+
+const REF = "([0-9a-f]{8}-[1-9][0-9]*)";
+// Long enough for a submission or click Firefox itself would queue to have happened.
+const SETTLE_MS = 300;
+
+interface Page {
+  url: string;
+  tabId: number;
+  context: string;
+  tree: string;
+}
+
+// One Firefox for the file: the tests run in order, several on the same page.
+describe("type and press_key in real Firefox", () => {
+  let harness: Harness;
+  let fixtures: FixtureServer;
+  let firefox: Firefox;
+  let session: Session;
+  let other = "";
+  let input: Page;
+  let opened = 0;
+
+  before(
+    async () => {
+      harness = createHarness();
+      harness.install();
+      fixtures = await startFixtureServer();
+      other = `http://localhost:${fixtures.port}`;
+      firefox = await harness.startFirefox(EXTENSION_DIST);
+      await harness.seedSettings({
+        [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
+      });
+      session = await harness.connect();
+      await harness.waitUntilReady(session);
+      input = await open("/input", TITLES.input);
+    },
+    { timeout: 120_000 },
+  );
+
+  after(
+    async () => {
+      try {
+        await harness?.close();
+      } finally {
+        await fixtures?.close();
+      }
+    },
+    { timeout: 60_000 },
+  );
+
+  test("type adds the text after what a field, a textarea and an editable area hold", async () => {
+    assert.deepEqual(await type(input, 'textbox "Plain"', " world"), typed("exec_command"));
+    assert.equal(await evaluate(input, 'document.getElementById("plain").value'), "Hello world");
+    assert.deepEqual(await type(input, 'textbox "Area"', "\nmore"), typed("exec_command"));
+    assert.equal(await evaluate(input, 'document.getElementById("area").value'), "Line\nmore");
+    assert.deepEqual(await type(input, 'textbox "Editable"', "!"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("editable").textContent'),
+      "Start!",
+    );
+  });
+
+  test("type into a paragraph of an editable area puts the text at that paragraph's end", async () => {
+    const result = await type(input, 'group "First paragraph"', "+");
+    assert.equal(result.outcome, "typed");
+    assert.equal(await evaluate(input, 'document.getElementById("first").textContent'), "One+");
+    assert.equal(await evaluate(input, 'document.getElementById("second").textContent'), "Two");
+  });
+
+  test("type into a field in a shadow root", async () => {
+    assert.equal((await type(input, 'textbox "Shadow field"', "!")).outcome, "typed");
+    assert.equal(await evaluate(input, "window.shadowField.value"), "In!");
+  });
+
+  test("type into an email field that holds text adds the text after it", async () => {
+    // An email field has no caret to put at the end, so execCommand is not used.
+    assert.deepEqual(await type(input, 'textbox "Email"', "d"), typed("native_setter"));
+    assert.equal(await evaluate(input, 'document.getElementById("email").value'), "a@b.cd");
+  });
+
+  test("type changes nothing in a number field given letters, or in a full field", async () => {
+    const number = refOf(input.tree, 'spinbutton "Number"');
+    const text = await harness.refused(session, "type", {
+      tabId: input.tabId,
+      ref: number,
+      text: "x",
+    });
+    assert.ok(text.includes(`The text did not appear in element ${number};`), text);
+    assert.equal(await evaluate(input, 'document.getElementById("number").value'), "12");
+    const full = refOf(input.tree, 'textbox "Full"');
+    const fullText = await harness.refused(session, "type", {
+      tabId: input.tabId,
+      ref: full,
+      text: "d",
+    });
+    assert.ok(fullText.includes(`The text did not appear in element ${full};`), fullText);
+    assert.equal(await evaluate(input, 'document.getElementById("full").value'), "abc");
+  });
+
+  test("type inserts once into a field whose maxlength cuts the text", async () => {
+    assert.equal((await type(input, 'textbox "Short"', "cdefgh")).outcome, "typed");
+    assert.equal(await evaluate(input, 'document.getElementById("short").value'), "abcde");
+  });
+
+  test("type into a React-style controlled input updates the component's state", async () => {
+    assert.equal((await type(input, 'textbox "React"', "abc")).outcome, "typed");
+    assert.equal(await evaluate(input, 'document.getElementById("react").value'), "abc");
+    assert.equal(await evaluate(input, "window.reactState.react"), "abc");
+    // A component that never takes the change sets the value back every time.
+    const frozen = refOf(input.tree, 'textbox "React frozen"');
+    const text = await harness.refused(session, "type", {
+      tabId: input.tabId,
+      ref: frozen,
+      text: "x",
+    });
+    assert.ok(text.includes(`The text did not appear in element ${frozen};`), text);
+    assert.equal(await evaluate(input, 'document.getElementById("react-frozen").value'), "Fixed");
+  });
+
+  test("type falls back when the browser's input reaches nothing and is undone", async () => {
+    assert.deepEqual(await type(input, 'textbox "Untrusting"', "!"), typed("native_setter"));
+    assert.equal(await evaluate(input, 'document.getElementById("untrusting").value'), "Keep!");
+    assert.deepEqual(
+      await type(input, 'textbox "Untrusting editable"', "!"),
+      typed("beforeinput_dom"),
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("untrusting-editable").textContent'),
+      "Keep!",
+    );
+  });
+
+  test("type gives a field that takes the text and clears itself the text once", async () => {
+    const consumer = refOf(input.tree, 'textbox "Consumer"');
+    const text = await harness.refused(session, "type", {
+      tabId: input.tabId,
+      ref: consumer,
+      text: "abc",
+    });
+    assert.ok(
+      text.includes(`The text did not appear in element ${consumer}; the page received it`),
+      text,
+    );
+    assert.deepEqual(await evaluate(input, "window.consumed"), ["abc"]);
+  });
+
+  test("type refuses a disabled or read-only field and an element that is not editable", async () => {
+    for (const line of ['textbox "Disabled"', 'textbox "Read only"']) {
+      const ref = refOf(input.tree, line);
+      const text = await harness.refused(session, "type", { tabId: input.tabId, ref, text: "x" });
+      assert.ok(text.includes(`Element ${ref} is a disabled or read-only field`), text);
+    }
+    const block = refOf(input.tree, 'group "Plain block"');
+    const text = await harness.refused(session, "type", {
+      tabId: input.tabId,
+      ref: block,
+      text: "x",
+    });
+    assert.ok(
+      text.includes(
+        `type needs a text field or an editable area, and element ${block} is neither.`,
+      ),
+      text,
+    );
+    assert.equal(await evaluate(input, 'document.getElementById("disabled").value'), "Off");
+    assert.equal(await evaluate(input, 'document.getElementById("readonly").value'), "Fixed");
+  });
+
+  test("a newline typed into a field of a form on another site submits nothing", async () => {
+    assert.equal((await type(input, 'textbox "Away field"', "x\n")).outcome, "typed");
+    await sleep(SETTLE_MS);
+    assert.equal(await evaluate(input, "window.submits"), 0);
+    assert.equal(await evaluate(input, "location.href"), input.url);
+  });
+
+  test("type into an editor's input frame on the page's site is sent but unconfirmed", async () => {
+    const frames = await open("/input-frames", TITLES.inputFrames);
+    assert.deepEqual(await type(frames, 'iframe "Docs input"', "abc"), {
+      outcome: "sent_unconfirmed",
+      method: "exec_command",
+    });
+    assert.deepEqual(await evaluate(frames, "window.received"), ["abc"]);
+    assert.equal((await type(frames, 'iframe "Design input"', "def")).outcome, "sent_unconfirmed");
+    assert.deepEqual(await evaluate(frames, "window.received"), ["abc", "def"]);
+    const sandboxed = refOf(frames.tree, 'iframe "Sandboxed"');
+    const text = await harness.refused(session, "type", {
+      tabId: frames.tabId,
+      ref: sandboxed,
+      text: "x",
+    });
+    assert.ok(text.includes(`and element ${sandboxed} is neither.`), text);
+  });
+
+  test("type into a tab that is not the active one", async () => {
+    const background = await open("/input", TITLES.input);
+    await open("/input-frames", TITLES.inputFrames);
+    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.equal(tabs.find(({ id }) => id === background.tabId)?.active, false);
+    assert.equal((await type(background, 'textbox "Plain"', "!")).outcome, "typed");
+    assert.equal(await evaluate(background, 'document.getElementById("plain").value'), "Hello!");
+  });
+
+  test("Enter in a field submits its form once, through the default button", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Name"'), submitted());
+    await sleep(SETTLE_MS);
+    assert.deepEqual(await evaluate(forms, "window.submits"), ["with-button:send"]);
+    // As in Firefox, the default button is clicked, so the page's click listeners see it.
+    assert.deepEqual(await evaluate(forms, "window.clicks"), ["send"]);
+  });
+
+  test("Enter submits a form with one blocking field and no button, not one with two", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Only"'), submitted());
+    assert.deepEqual(await press(forms, "Enter", 'textbox "First of two"'), {
+      action: "none",
+      prevented: false,
+    });
+    assert.deepEqual(await evaluate(forms, "window.submits"), ["one-field:"]);
+  });
+
+  test("Enter on a field a keyboard cannot reach submits nothing", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Disabled field"'), {
+      action: "none",
+      prevented: false,
+    });
+    await sleep(SETTLE_MS);
+    assert.deepEqual(await evaluate(forms, "window.submits"), []);
+  });
+
+  test("Enter that the page cancels does nothing and sends no keypress", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Prevented"'), {
+      action: "none",
+      prevented: true,
+    });
+    assert.deepEqual(await evaluate(forms, "window.keys"), [
+      "keydown:prevented-field:Enter",
+      "keyup:prevented-field:Enter",
+    ]);
+    assert.deepEqual(await evaluate(forms, "window.submits"), []);
+  });
+
+  test("Enter in a form its validation stops reports none and submits nothing", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Required"'), {
+      action: "none",
+      prevented: false,
+    });
+    assert.deepEqual(await evaluate(forms, "window.submits"), []);
+  });
+
+  test("Enter submits through an image button, and in a form whose controls shadow its own properties", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Image first"'), submitted());
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Shadowed"'), submitted());
+    // No default button: the form itself is submitted, through its prototype.
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Shadowed alone"'), submitted());
+    assert.deepEqual(await evaluate(forms, "window.submits"), [
+      "image-only:image-send",
+      "shadowed:shadowed-send",
+      "shadowed-alone:",
+    ]);
+  });
+
+  test("Enter on a button clicks it", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'button "Plain button"'), {
+      action: "clicked",
+      prevented: false,
+    });
+    assert.deepEqual(await evaluate(forms, "window.clicks"), ["plain-button"]);
+  });
+
+  test("Enter that leads to another site is refused after the page's key listeners", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    // A form posting there, one whose only field is named action, a default button with a
+    // formaction there, a link there, and a same-site form whose keydown listener points its
+    // action there.
+    for (const [line, id] of [
+      ['textbox "Away"', "away-field"],
+      ['textbox "Away named"', "away-named-field"],
+      ['textbox "Away by button"', "away-button-field"],
+      ['link "Away link"', "away-link"],
+      ['textbox "Rewritten"', "rewritten-field"],
+    ] as const) {
+      await evaluate(forms, "window.keys.length = 0");
+      const ref = refOf(forms.tree, line);
+      const text = await harness.refused(session, "press_key", {
+        tabId: forms.tabId,
+        key: "Enter",
+        ref,
+      });
+      assert.ok(
+        text.includes(
+          `Enter on element ${ref} leads to a page on ${other}, which Foxhand does not open with press_key; call navigate with that address`,
+        ),
+        `${line}: ${text}`,
+      );
+      assert.deepEqual(
+        await evaluate(forms, "window.keys"),
+        [`keydown:${id}:Enter`, `keypress:${id}:Enter`, `keyup:${id}:Enter`],
+        line,
+      );
+    }
+    await sleep(SETTLE_MS);
+    assert.deepEqual(await evaluate(forms, "window.submits"), []);
+    assert.deepEqual(await evaluate(forms, "window.clicks"), []);
+    assert.equal(await evaluate(forms, "location.href"), forms.url);
+  });
+
+  test("Enter on an SVG link does nothing but still sends keyup", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    await evaluate(forms, 'document.getElementById("svg-link").focus()');
+    assert.deepEqual(await harness.ok(session, "press_key", { tabId: forms.tabId, key: "Enter" }), {
+      action: "none",
+      prevented: false,
+    });
+    const keys = await evaluate(forms, "window.keys");
+    assert.ok(Array.isArray(keys) && keys.includes("keyup:svg-link:Enter"), JSON.stringify(keys));
+    assert.equal(await evaluate(forms, "location.href"), forms.url);
+  });
+
+  test("Enter without a ref goes to the field focused in a shadow root", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.equal((await type(forms, 'textbox "Shadow name"', "n")).outcome, "typed");
+    assert.deepEqual(
+      await harness.ok(session, "press_key", { tabId: forms.tabId, key: "Enter" }),
+      submitted(),
+    );
+    assert.deepEqual(await evaluate(forms, "window.submits"), ["shadow-form:"]);
+  });
+
+  test("Enter in a form that navigates replies first, then the tab loads the target", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    assert.deepEqual(await press(forms, "Enter", 'textbox "Navigating"'), submitted());
+    await pollUntil(
+      async () => {
+        const listed = tabsOf(await harness.ok(session, "tabs_list")).find(
+          ({ id }) => id === forms.tabId,
+        );
+        if (listed?.title === TITLES.b) return listed;
+        throw new Error(`tab ${forms.tabId} is listed as ${JSON.stringify(listed)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${forms.tabId} to show ${TITLES.b}`,
+    );
+  });
+
+  test("Tab and Shift+Tab follow the tab order", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, "document.activeElement.blur()");
+    for (const id of ["one", "two", "zero-a", "green", "zero-b"]) {
+      assert.deepEqual(await tab(keys, "Tab"), focusMoved(), id);
+      assert.equal(await evaluate(keys, "window.focusedId()"), id);
+    }
+    for (const id of ["green", "zero-a", "two", "one"]) {
+      assert.deepEqual(await tab(keys, "Shift+Tab"), focusMoved(), id);
+      assert.equal(await evaluate(keys, "window.focusedId()"), id);
+    }
+    assert.deepEqual(await tab(keys, "Shift+Tab"), { action: "none", prevented: false });
+    assert.equal(await evaluate(keys, "window.focusedId()"), "one");
+  });
+
+  test("Tab goes into a focused container, through shadow roots and slots, to an editing host", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, 'document.getElementById("container").focus()');
+    for (const id of ["inner", "open-inner", "closed-inner", "slot-a", "slot-light", "slot-b"]) {
+      assert.deepEqual(await tab(keys, "Tab"), focusMoved(), id);
+      assert.equal(await evaluate(keys, "window.focusedId()"), id);
+    }
+    await evaluate(keys, "window.keys.length = 0");
+    assert.deepEqual(await tab(keys, "Tab"), focusMoved());
+    assert.equal(await evaluate(keys, "window.focusedId()"), "editable");
+    // The key is released where focus went.
+    assert.deepEqual(await evaluate(keys, "window.keys"), [
+      "keydown:slot-host:Tab",
+      "keyup:editable:Tab",
+    ]);
+  });
+
+  test("the arrow keys choose the next enabled option in a select", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    assert.deepEqual(await press(keys, "ArrowDown", 'combobox "Fruit"'), {
+      action: "selected_option",
+      prevented: false,
+    });
+    assert.equal(await evaluate(keys, 'document.getElementById("fruit").value'), "Date");
+    assert.deepEqual(await evaluate(keys, "window.changes"), ["input:Date", "change:Date"]);
+    assert.deepEqual(await press(keys, "ArrowDown", 'combobox "Fruit"'), {
+      action: "none",
+      prevented: false,
+    });
+    assert.deepEqual(await press(keys, "ArrowUp", 'combobox "Fruit"'), {
+      action: "selected_option",
+      prevented: false,
+    });
+    assert.equal(await evaluate(keys, 'document.getElementById("fruit").value'), "Apple");
+  });
+
+  test("the arrow keys change no select that a modal dialog blocks", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, 'document.getElementById("dialog").showModal()');
+    assert.deepEqual(await press(keys, "ArrowDown", 'combobox "Fruit"'), {
+      action: "none",
+      prevented: false,
+    });
+    assert.equal(await evaluate(keys, 'document.getElementById("fruit").value'), "Apple");
+    assert.deepEqual(await evaluate(keys, "window.changes"), []);
+  });
+
+  test("Escape hides an open popover, then closes a modal dialog", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, 'document.getElementById("pop").showPopover()');
+    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+      action: "hid_popover",
+      prevented: false,
+    });
+    assert.equal(
+      await evaluate(keys, 'document.getElementById("pop").matches(":popover-open")'),
+      false,
+    );
+    await evaluate(keys, 'document.getElementById("dialog").showModal()');
+    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+      action: "closed_dialog",
+      prevented: false,
+    });
+    assert.equal(await evaluate(keys, 'document.getElementById("dialog").open'), false);
+  });
+
+  test("Escape leaves open a modal dialog that no close request may close", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, 'document.getElementById("fixed-dialog").showModal()');
+    // Firefox's own Escape honours closedby where Firefox knows the attribute.
+    const honoured = (await evaluate(keys, '"closedBy" in HTMLDialogElement.prototype')) === true;
+    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+      action: honoured ? "none" : "closed_dialog",
+      prevented: false,
+    });
+    assert.equal(await evaluate(keys, 'document.getElementById("fixed-dialog").open'), honoured);
+  });
+
+  test("a key with no default action reaches the page's listener with its modifiers", async () => {
+    const keys = await open("/input-keys", TITLES.inputKeys);
+    await evaluate(keys, "window.keys.length = 0");
+    assert.deepEqual(
+      await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Control+k" }),
+      { action: "none", prevented: false },
+    );
+    assert.deepEqual(await evaluate(keys, "window.keys"), ["keydown::k:ctrl", "keyup::k:ctrl"]);
+  });
+
+  async function open(path: string, title: string): Promise<Page> {
+    opened += 1;
+    const url = fixtures.url(`${path}?tab=${opened}`);
+    const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+    assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
+    const found = (await firefox.contexts()).find((context) => context.url === url);
+    assert.ok(found !== undefined, `no tab shows ${url}`);
+    const read = await harness.call(session, "read_page", { tabId: tab.id });
+    assert.equal(read.isError, false, read.text);
+    return { url, tabId: tab.id, context: found.context, tree: untrustedContent(read.text) ?? "" };
+  }
+
+  async function type(page: Page, line: string, text: string): Promise<Record<string, unknown>> {
+    const ref = refOf(page.tree, line);
+    return record(await harness.ok(session, "type", { tabId: page.tabId, ref, text }));
+  }
+
+  async function press(page: Page, key: string, line: string): Promise<unknown> {
+    const ref = refOf(page.tree, line);
+    return harness.ok(session, "press_key", { tabId: page.tabId, key, ref });
+  }
+
+  async function tab(page: Page, key: string): Promise<unknown> {
+    return harness.ok(session, "press_key", { tabId: page.tabId, key });
+  }
+
+  /** The page's value of a JavaScript expression, through JSON. */
+  async function evaluate(page: Page, expression: string): Promise<unknown> {
+    const json = await firefox.evaluate(page.context, `JSON.stringify(${expression}) ?? "null"`);
+    return JSON.parse(String(json));
+  }
+});
+
+function typed(method: string): { outcome: string; method: string } {
+  return { outcome: "typed", method };
+}
+
+function submitted(): { action: string; prevented: boolean } {
+  return { action: "submitted", prevented: false };
+}
+
+function focusMoved(): { action: string; prevented: boolean } {
+  return { action: "focus_moved", prevented: false };
+}
+
+function refOf(tree: string, line: string): string {
+  const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];
+  assert.ok(ref !== undefined, `no ref for ${line} in:\n${tree}`);
+  return ref;
+}
+
+function record(value: unknown): Record<string, unknown> {
+  assert.ok(typeof value === "object" && value !== null && !Array.isArray(value));
+  return Object.fromEntries(Object.entries(value));
+}

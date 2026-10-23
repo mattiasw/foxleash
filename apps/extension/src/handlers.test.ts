@@ -2321,11 +2321,11 @@ describe("read_network", { timeout: 10000 }, () => {
   });
 });
 
-describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
+describe("the tools that act in the page", { timeout: 10000 }, () => {
   const REF = "0a1b2c3d-4";
   const TARGET_REF = "0a1b2c3d-9";
   const tools: {
-    method: "click" | "hover" | "scroll" | "drag";
+    method: "click" | "hover" | "scroll" | "drag" | "type" | "press_key";
     params: Record<string, unknown>;
     options: Record<string, unknown>;
     bad: [Record<string, unknown>, string];
@@ -2377,6 +2377,30 @@ describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
       reply: { ref: REF, targetRef: TARGET_REF, mode: "html5", dropped: false },
       badReplies: [{ ref: REF, targetRef: TARGET_REF, mode: "native", dropped: true }],
     },
+    {
+      method: "type",
+      params: { ref: REF, text: "hello", extra: true },
+      options: { ref: REF, text: "hello" },
+      bad: [{ ref: REF, text: "" }, "type needs text to be a string of 1 to 50000 characters."],
+      reply: { outcome: "typed", method: "native_setter" },
+      badReplies: [
+        { outcome: "typed", method: "key_events" },
+        { outcome: "failed", method: "exec_command" },
+        Object.create({ outcome: "typed", method: "exec_command" }),
+      ],
+    },
+    {
+      method: "press_key",
+      params: { key: "Shift+Tab", ref: REF },
+      options: { key: "Shift+Tab", ref: REF },
+      bad: [{ key: 13 }, "press_key needs key to be a string."],
+      reply: { action: "focus_moved", prevented: false },
+      badReplies: [
+        { action: "navigated", prevented: false },
+        { action: "none", prevented: "no" },
+        { action: "none" },
+      ],
+    },
   ];
 
   it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
@@ -2427,6 +2451,23 @@ describe("click, hover, scroll and drag", { timeout: 10000 }, () => {
         });
       }
     }
+  });
+
+  it("sends press_key without a ref when none is given, and refuses a key it cannot read", async () => {
+    const { call, pageCalls, replyWith } = setup();
+    replyWith(async () => ({ action: "submitted", prevented: false }));
+    assert.deepEqual(await call("s1", "press_key", { tabId: 4, key: "enter" }), {
+      action: "submitted",
+      prevented: false,
+    });
+    await assert.rejects(call("s1", "press_key", { tabId: 4, key: "Shift+Shift+a" }), {
+      code: "invalid_params",
+      message:
+        "press_key takes only Shift, Control (or Ctrl), Alt and Meta before the key, each at most once and joined with +, such as Control+Shift+a.",
+    });
+    assert.deepEqual(pageCalls, [
+      { session: "s1", tabId: 4, type: "press_key", params: { key: "enter" } },
+    ]);
   });
 
   it("passes the page's refusal through unchanged", async () => {

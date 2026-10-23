@@ -156,6 +156,24 @@ It refuses clicks on links and form buttons that lead to another site: the agent
 page with `navigate`, which asks you first. These tools work only on a tab showing a site you
 approved, and never ask.
 
+The agent types text with `type`, into a text field or an editable area from `read_page`.
+Foxhand focuses the element, adds the text after what it already holds, and reads it back. It
+sends no key events: it inserts the text the way the browser inserts typed text, and when that
+changes nothing and the page did not receive it, once more by setting the field's value the way
+a page's own scripts do. When
+an editor cannot be read back, such as the body of a Google Docs document, the result says the
+text was sent but not confirmed. `type` works only on a tab showing a site you approved, and
+never asks.
+
+The agent presses a key with `press_key`, such as `Enter`, `Tab`, `Shift+Tab`, `Escape`,
+`ArrowDown` or `Control+a`, on an element from `read_page` or on the focused element. Foxhand
+sends the key's events and then does what the browser would do, unless the page cancels the
+key: Enter submits the form or clicks the button or link, Tab and Shift+Tab move focus,
+Escape closes an open popover or dialog, and the arrow keys choose an option in a list. Other
+keys reach only the page's own key handlers and do not insert or delete text. Enter on a link
+or in a form that leads to another site is refused, as clicks are. `press_key` works only on a
+tab showing a site you approved, and never asks.
+
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an
 element screenshot Foxhand scrolls the page to bring the element into view, then captures its
@@ -197,8 +215,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser, and asks before it
   opens a page there. The approval can only come from your click, not from the agent. It
-  refuses clicks on links and form buttons that lead to another site; the agent opens such
-  a page with `navigate`, which asks first. Two ways still reach a site you have not approved
+  refuses clicks on links and form buttons that lead to another site, and Enter pressed on
+  such a link or in such a form; the agent opens such a page with `navigate`, which asks
+  first. Two ways still reach a site you have not approved
   without asking: going back or forward in a tab's history, and a page on an approved site
   that redirects or, with its own scripts, sends the tab to another site, for example after a
   click. The agent then sees only that site's address.

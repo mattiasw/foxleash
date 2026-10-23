@@ -27,6 +27,8 @@ apps/extension/src/options.html
 apps/extension/src/options.ts
 apps/extension/src/page-actions-dom.ts
 apps/extension/src/page-actions.ts
+apps/extension/src/page-input-dom.ts
+apps/extension/src/page-input.ts
 apps/extension/src/page-messages.ts
 apps/extension/src/page-scripts.ts
 apps/extension/src/page-text-dom.ts

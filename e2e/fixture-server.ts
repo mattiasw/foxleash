@@ -33,6 +33,10 @@ export const TITLES = {
   actDrag: "Fixture act drag",
   actBase: "Fixture act base",
   actEmbed: "Fixture act embed",
+  input: "Fixture input",
+  inputFrames: "Fixture input frames",
+  inputForms: "Fixture input forms",
+  inputKeys: "Fixture input keys",
   console: "Fixture console",
   consoleCsp: "Fixture console CSP",
   network: "Fixture network",
@@ -308,6 +312,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, actBasePage(request.socket.localPort ?? 0));
     } else if (path === "/act-embed") {
       sendHtml(response, ACT_EMBED_PAGE);
+    } else if (path === "/input") {
+      // The other site is the same server under localhost.
+      sendHtml(response, inputPage(request.socket.localPort ?? 0));
+    } else if (path === "/input-frames") {
+      sendHtml(response, INPUT_FRAMES_PAGE);
+    } else if (path === "/input-forms") {
+      // The other site is the same server under localhost.
+      sendHtml(response, inputFormsPage(request.socket.localPort ?? 0));
+    } else if (path === "/input-keys") {
+      sendHtml(response, INPUT_KEYS_PAGE);
     } else if (path === "/act-redirect") {
       // To the act page on another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/act` });
@@ -1257,6 +1271,226 @@ const ACT_EMBED_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.actEmbed}</title></head>
 <body style="margin: 0"><div style="height: 4000px">Embed page</div>
 <iframe title="Embed" src="/a" style="position: fixed; left: 25%; top: 25%; width: 50%; height: 50%; border: 0"></iframe>
+</body></html>
+`;
+
+/**
+ * Fields for type: plain ones, ones in a shadow root and a contenteditable, React-style
+ * controlled inputs, fields whose scripts undo trusted input, and a field of a form that posts
+ * to another site.
+ */
+function inputPage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.input}</title></head>
+<body>
+<input id="plain" aria-label="Plain" value="Hello">
+<textarea id="area" aria-label="Area">Line</textarea>
+<div id="editable" contenteditable="true" aria-label="Editable">Start</div>
+<div id="paragraphs" contenteditable="true" aria-label="Paragraphs"><p id="first" role="group" aria-label="First paragraph">One</p><p id="second">Two</p></div>
+<div id="shadow-host"></div>
+<input id="email" type="email" aria-label="Email" value="a@b.c">
+<input id="number" type="number" aria-label="Number" value="12">
+<input id="full" aria-label="Full" maxlength="3" value="abc">
+<input id="short" aria-label="Short" maxlength="5" value="ab">
+<input id="react" aria-label="React" value="">
+<input id="react-frozen" aria-label="React frozen" value="Fixed">
+<input id="untrusting" aria-label="Untrusting" value="Keep">
+<div id="untrusting-editable" contenteditable="true" aria-label="Untrusting editable">Keep</div>
+<input id="consumer" aria-label="Consumer" value="">
+<input id="disabled" aria-label="Disabled" value="Off" disabled>
+<input id="readonly" aria-label="Read only" value="Fixed" readonly>
+<div id="block" role="group" aria-label="Plain block">Text</div>
+<form id="away" action="http://localhost:${port}/a" method="get"><input id="away-field" aria-label="Away field" name="q"></form>
+<script>
+window.submits = 0;
+document.addEventListener("submit", () => { window.submits += 1; }, true);
+const shadow = document.getElementById("shadow-host").attachShadow({ mode: "open" });
+shadow.innerHTML = '<input id="shadow-field" aria-label="Shadow field" value="In">';
+window.shadowField = shadow.getElementById("shadow-field");
+// React's value tracking: an own value property whose setter records the value; an input event
+// is a change only when the value differs from the recorded one, and the value is set back to the
+// component's state afterwards.
+window.reactState = {};
+function controlled(input, accepts) {
+  const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  let tracked = native.get.call(input);
+  let state = tracked;
+  window.reactState[input.id] = state;
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get() { return native.get.call(this); },
+    set(value) { tracked = String(value); native.set.call(this, value); },
+  });
+  input.addEventListener("input", () => {
+    const now = native.get.call(input);
+    if (now !== tracked) {
+      tracked = now;
+      if (accepts) state = now;
+      window.reactState[input.id] = state;
+    }
+    input.value = state;
+  });
+}
+controlled(document.getElementById("react"), true);
+controlled(document.getElementById("react-frozen"), false);
+// A page that stops the browser's own input event before anything sees it, and undoes it.
+const untrusting = document.getElementById("untrusting");
+const untrustingEditable = document.getElementById("untrusting-editable");
+window.addEventListener("input", (event) => {
+  if (!event.isTrusted) return;
+  if (event.target === untrusting) {
+    event.stopImmediatePropagation();
+    untrusting.value = "Keep";
+  } else if (event.target === untrustingEditable) {
+    event.stopImmediatePropagation();
+    untrustingEditable.textContent = "Keep";
+  }
+}, true);
+// A field that takes what is typed into it and clears itself, as a hidden editor input does.
+window.consumed = [];
+const consumer = document.getElementById("consumer");
+consumer.addEventListener("input", () => {
+  window.consumed.push(consumer.value);
+  consumer.value = "";
+});
+</script>
+</body></html>
+`;
+}
+
+// Editor input frames on the page's own site, as Google Docs has: one with an editable body and
+// one in designMode, whose scripts take what is inserted and clear it; and a sandboxed frame.
+const INPUT_FRAMES_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.inputFrames}</title></head>
+<body>
+<iframe id="docs" class="docs-texteventtarget-iframe" title="Docs input"></iframe>
+<iframe id="design" class="docs-texteventtarget-iframe" title="Design input"></iframe>
+<iframe id="sandboxed" sandbox title="Sandboxed" srcdoc="<body contenteditable='true'>x</body>"></iframe>
+<script>
+window.received = [];
+const docs = document.getElementById("docs").contentDocument;
+docs.open();
+docs.write('<!doctype html><body contenteditable="true"></body>');
+docs.close();
+const design = document.getElementById("design").contentDocument;
+design.designMode = "on";
+for (const frame of [docs, design]) {
+  frame.addEventListener("input", () => {
+    window.received.push(frame.body.textContent);
+    frame.body.textContent = "";
+  });
+}
+</script>
+</body></html>
+`;
+
+/**
+ * Forms for press_key Enter. Every form but the navigating one is kept from submitting by its
+ * submit listener, which records the form and its submitter. Key events are recorded at the
+ * document.
+ */
+function inputFormsPage(port: number): string {
+  const other = `http://localhost:${port}/a`;
+  const image = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg'/%3E`;
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.inputForms}</title></head>
+<body>
+<form id="with-button" class="stay" action="/a"><input aria-label="Name" name="name"><input aria-label="Second" name="second"><button id="send" type="submit">Send</button></form>
+<form id="one-field" class="stay" action="/a"><input aria-label="Only" name="only"><input type="checkbox" aria-label="Remember" name="remember"></form>
+<form id="two-fields" class="stay" action="/a"><input aria-label="First of two" name="a"><input aria-label="Second of two" name="b"></form>
+<form id="disabled-field" class="stay" action="/a"><input aria-label="Disabled field" name="d" disabled></form>
+<form id="prevented" class="stay" action="/a"><input id="prevented-field" aria-label="Prevented" name="p"></form>
+<form id="required" class="stay" action="/a"><input aria-label="Required" name="r" required><button id="required-send" type="submit">Go</button></form>
+<form id="image-only" class="stay" action="/a"><input aria-label="Image first" name="a"><input aria-label="Image second" name="b"><input id="image-send" type="image" alt="Image send" src="${image}"></form>
+<form id="shadowed" class="stay" action="/a"><input aria-label="Shadowed" name="requestSubmit"><input type="hidden" name="noValidate" value="1"><input type="hidden" name="baseURI" value="2"><input type="hidden" name="elements" value="3"><input type="hidden" name="getRootNode" value="4"><button id="shadowed-send" type="submit">Shadowed send</button></form>
+<form id="away" action="${other}"><input id="away-field" aria-label="Away" name="q"></form>
+<form id="away-named" action="${other}"><input id="away-named-field" aria-label="Away named" name="action"></form>
+<form id="shadowed-alone" class="stay" action="/a"><input aria-label="Shadowed alone" name="requestSubmit"></form>
+<form id="away-button" class="stay" action="/a"><input id="away-button-field" aria-label="Away by button" name="q"><button id="away-send" type="submit" formaction="${other}">Away send</button></form>
+<form id="rewritten" action="/a"><input id="rewritten-field" aria-label="Rewritten" name="q"></form>
+<form id="navigating" action="/b"><input aria-label="Navigating" name="q"></form>
+<button id="plain-button" type="button">Plain button</button>
+<a id="away-link" href="${other}">Away link</a>
+<svg width="120" height="30"><a id="svg-link" href="/a" tabindex="0"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
+<div id="shadow-host"></div>
+<script>
+window.submits = [];
+window.keys = [];
+window.clicks = [];
+function recordSubmit(event) {
+  window.submits.push(event.target.id + ":" + (event.submitter ? event.submitter.id : ""));
+  if (event.target.classList.contains("stay")) event.preventDefault();
+}
+const shadow = document.getElementById("shadow-host").attachShadow({ mode: "open" });
+shadow.innerHTML = '<form id="shadow-form" class="stay" action="/a"><input aria-label="Shadow name" name="n"></form>';
+for (const form of [...document.querySelectorAll("form"), shadow.getElementById("shadow-form")]) {
+  form.addEventListener("submit", recordSubmit);
+}
+for (const type of ["keydown", "keypress", "keyup"]) {
+  document.addEventListener(type, (event) => {
+    window.keys.push(type + ":" + event.target.id + ":" + event.key);
+  }, true);
+}
+document.addEventListener("click", (event) => { window.clicks.push(event.target.id); }, true);
+document.getElementById("prevented-field").addEventListener("keydown", (event) => event.preventDefault());
+document.getElementById("rewritten-field").addEventListener("keydown", () => {
+  document.getElementById("rewritten").action = ${JSON.stringify(other)};
+});
+</script>
+</body></html>
+`;
+}
+
+// Tab order with positive, zero and negative tab indexes, a disabled button, a hidden input and a
+// radio group; a focusable container; open, closed and slotting shadow roots; an editing host;
+// a popover, a modal dialog, a select and a page key listener.
+const INPUT_KEYS_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.inputKeys}</title></head>
+<body>
+<button id="zero-a">Zero A</button>
+<input id="two" tabindex="2" aria-label="Two">
+<button id="negative" tabindex="-1">Negative</button>
+<input id="one" tabindex="1" aria-label="One">
+<button id="disabled" disabled>Disabled</button>
+<input id="hidden" type="hidden" value="h">
+<input type="radio" name="colour" id="red" aria-label="Red">
+<input type="radio" name="colour" id="green" aria-label="Green" checked>
+<input type="radio" name="colour" id="blue" aria-label="Blue">
+<button id="zero-b">Zero B</button>
+<main id="container" tabindex="-1"><button id="inner">Inner</button></main>
+<div id="open-host"></div>
+<div id="closed-host"></div>
+<div id="slot-host"><button id="slot-light">Light</button></div>
+<div id="editable" contenteditable="true">Edit</div>
+<select id="fruit" aria-label="Fruit"><option>Apple</option><option disabled>Banana</option><optgroup label="More" disabled><option>Cherry</option></optgroup><option>Date</option></select>
+<div id="pop" popover>Popover</div>
+<dialog id="dialog"><button id="in-dialog">In dialog</button></dialog>
+<dialog id="fixed-dialog" closedby="none"><button id="in-fixed-dialog">In fixed dialog</button></dialog>
+<script>
+window.keys = [];
+window.changes = [];
+for (const type of ["keydown", "keyup"]) {
+  document.addEventListener(type, (event) => {
+    window.keys.push(type + ":" + event.target.id + ":" + event.key + (event.ctrlKey ? ":ctrl" : ""));
+  }, true);
+}
+document.getElementById("fruit").addEventListener("input", (event) => window.changes.push("input:" + event.target.value));
+document.getElementById("fruit").addEventListener("change", (event) => window.changes.push("change:" + event.target.value));
+window.openRoot = document.getElementById("open-host").attachShadow({ mode: "open" });
+window.openRoot.innerHTML = '<button id="open-inner">Open inner</button>';
+window.closedRoot = document.getElementById("closed-host").attachShadow({ mode: "closed" });
+window.closedRoot.innerHTML = '<button id="closed-inner">Closed inner</button>';
+window.slotRoot = document.getElementById("slot-host").attachShadow({ mode: "open" });
+window.slotRoot.innerHTML = '<button id="slot-a">A</button><slot></slot><button id="slot-b">B</button>';
+/** The id of the focused element, followed into the shadow roots of this page. */
+window.focusedId = () => {
+  let focused = document.activeElement;
+  for (const root of [window.openRoot, window.closedRoot, window.slotRoot]) {
+    if (root.host === focused && root.activeElement !== null) focused = root.activeElement;
+  }
+  return focused === null ? null : focused.id || focused.localName;
+};
+</script>
 </body></html>
 `;
 

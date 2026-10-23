@@ -162,6 +162,10 @@
         {
           "file": "apps/extension/src/page-actions-dom.ts",
           "contains": "\"cross_site_navigation\""
+        },
+        {
+          "file": "apps/extension/src/page-input-dom.ts",
+          "contains": "\"cross_site_navigation\""
         }
       ]
     }

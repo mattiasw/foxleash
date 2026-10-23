@@ -537,6 +537,8 @@ describe("parsePageReply", () => {
       "no_element_at_point",
       "in_frame",
       "cross_site_navigation",
+      "not_editable",
+      "no_effect",
     ]) {
       assert.throws(
         () => parsePageReply({ ok: false, site: SITE, code, message: "Plain words." }, SITE, 7),
