@@ -1134,6 +1134,48 @@ describe("check-test-integrity.sh", () => {
       false,
     ],
     [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding a URL",
+      `test /${m("* see https://x *", "/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("* see https://x *", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in a block comment, after a string holding a comment's start",
+      `x("/${m("*")}"); test /${m("* see *", "/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `x("/${m("*")}"); test /${m("* see *", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in two block comments",
+      `test /${m("* a */ /", "* b */")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("* a */ /", "* b */")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding a URL, after a match-pattern string",
+      `x("*://*/${m("*")}"); test /${m("* see https://x *", "/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `x("*://*/${m("*")}"); test /${m("* see https://x *", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding a URL, after a string holding an escaped quote",
+      `x("a\\"b"); test /${m("* see https://x *", "/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `x("a\\"b"); test /${m("* see https://x *", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding a paren",
+      `test /${m("* x) *", "/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("* x) *", "/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding //, then a line comment",
+      `test /${m("* a//b *", "/")} // c\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("* a//b *", "/")} // c\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
       "a skip edited in below a receiver line and a blank context line under diff.suppressBlankEmpty",
       "test\n\nx();\n",
       `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
