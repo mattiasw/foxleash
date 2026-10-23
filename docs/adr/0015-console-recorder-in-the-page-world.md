@@ -81,7 +81,17 @@ and back, or blocklists and unblocks it). Records from such a gap must never rea
 
 ## Consequences
 
-- Messages a page logs before the injection lands are missed.
+- Messages a page logs before the injection lands are missed. The injection waits for the
+  commit to reach the background, then for the gate's two reads (the tab, then the stored
+  settings), then for the injection itself. Measured in Firefox 156.0.1 on a small page served
+  from 127.0.0.1, over 10 loads: the page fired `load` 22 to 91 ms after its navigation
+  started, and the recorder started 37 to 151 ms after the navigation started (median 90.5 ms),
+  after `load` every time: a median 25.5 ms after `DOMContentLoaded` (16 to 90 ms) and 23 ms
+  after `load` (15 to 88 ms). An injection with no read before it, made as the commit reaches
+  the background, started 38 to 84 ms after the navigation started (median 63.5 ms), also after
+  this page's `load` every time: a median 17 ms after `DOMContentLoaded` (3 to 24 ms) and 15.5
+  ms after `load` (2 to 23 ms). A page that finishes loading within that time loads unrecorded:
+  what it logs while it loads, in its `load` event included, is missed.
 - After any interruption of access, or for a page that loaded before the user approved its
   site, `read_console` says it is not recording until the page is loaded again.
 - The page can see, forge, clear or block its own records and the read events, and can tell

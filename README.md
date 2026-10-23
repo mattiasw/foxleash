@@ -118,16 +118,19 @@ unless the agent asks for more (at most 200,000), and the agent is told when it 
 
 The agent reads what a page wrote to its console with `read_console`: its `console.log`,
 `info`, `warn`, `error` and `debug` calls, uncaught errors and unhandled promise rejections,
-oldest first, each with its level, kind, text and time. Foxhand starts recording a page early
-in its load, in a tab of the agent's group on a site you approved, so anything the page logs
-before then is missed; frames are not recorded. Loading a new page in the tab starts with no
-messages. Foxhand keeps the newest 300 messages of a page, each cut to 1,000 characters, and
-counts the older ones it let go. The agent can ask for messages of a minimum level, those whose
-text matches a regular expression, and at most a number of the newest ones (100 unless it asks
-for up to 300). When the page loaded before you approved the site, or since it loaded you
-withdrew the approval or the tab left the agent's group, the result says it is not recording,
-with no messages, until the page is loaded again. `read_console` works only on a tab showing a
-site you approved, and never asks.
+oldest first, each with its level, kind, text and time. Foxhand starts recording a page shortly
+after it starts loading, in a tab of the agent's group on a site you approved, so anything the
+page logs before then is missed. A page that loads quickly, such as a small page served from
+your own computer, can finish loading first, so what it logs while it loads, in its `load`
+event included, can be missed; what it logs once recording has started is recorded. Frames are
+not recorded. Loading a new page in the tab starts with no messages. Foxhand keeps the newest
+300 messages of a page, each cut to 1,000 characters, and counts the older ones it let go. The
+agent can ask for messages of a minimum level, those whose text matches a regular expression,
+and at most a number of the newest ones (100 unless it asks for up to 300). When the page
+loaded before you approved the site, or since it loaded you withdrew the approval or the tab
+left the agent's group, the result says it is not recording, with no messages, until the page
+is loaded again. `read_console` works only on a tab showing a site you approved, and never
+asks.
 
 The agent reads a page's network requests with `read_network`: each request's URL, method,
 resource type, start time, duration, status, redirect target, error and whether it came from

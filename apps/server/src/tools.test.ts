@@ -1218,6 +1218,7 @@ describe("read_console", () => {
     for (const words of [
       "uncaught errors and unhandled promise rejections, oldest first",
       "Only the tab's top page is recorded, not its frames.",
+      "can finish loading first",
       "recording false means Foxhand has not recorded the page since it loaded",
       "Foxhand keeps the newest 300 messages of a page, each cut to 1,000 characters",
       "the newest limit (100 unless given, at most 300) are returned",

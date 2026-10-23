@@ -138,6 +138,27 @@ describe("read_console in real Firefox", () => {
     assert.equal(messageWith(read.messages, CONSOLE_TOKENS.csp).level, "log");
   });
 
+  test("records what a page logs while it loads", async () => {
+    const tokens = [CONSOLE_TOKENS.loadParse, CONSOLE_TOKENS.loadReady, CONSOLE_TOKENS.loadDone];
+    const tab = await open("/console-load", TITLES.consoleLoad);
+    const read = await readUntil(tab, tokens);
+    assert.equal(read.recording, true);
+    const found = tokens.map((token) => messageWith(read.messages, token));
+    assert.deepEqual(
+      found.map(({ level, kind }) => [level, kind]),
+      [
+        ["log", "console"],
+        ["log", "console"],
+        ["log", "console"],
+      ],
+    );
+    const indexes = found.map((message) => read.messages.indexOf(message));
+    assert.deepEqual(
+      indexes,
+      [...indexes].sort((a, b) => a - b),
+    );
+  });
+
   test("a new page in the tab starts with no messages", async () => {
     const tab = await open("/console", TITLES.console);
     await logWhenRecorded(tab);

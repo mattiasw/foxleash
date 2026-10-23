@@ -45,6 +45,7 @@ export const TITLES = {
   inputKeys: "Fixture input keys",
   console: "Fixture console",
   consoleCsp: "Fixture console CSP",
+  consoleLoad: "Fixture console load",
   network: "Fixture network",
   networkDone: "Fixture network done",
   networkHop: "Fixture network hop",
@@ -69,6 +70,9 @@ export const CONSOLE_TOKENS = {
   uncaught: "console-uncaught-As9",
   rejection: "console-rejection-Df1",
   csp: "console-csp-Gh2",
+  loadParse: "console-load-parse-Jk3",
+  loadReady: "console-load-ready-Lz4",
+  loadDone: "console-load-done-Xc5",
 } as const;
 
 /** The only nonce the console CSP page's policy lets scripts run with. */
@@ -88,7 +92,7 @@ export const DOWNLOAD_SECRET = "download-secret-Zx8Wm2";
 /** The name of the cookie /api/fetch sets. */
 export const NETWORK_COOKIE = "fixture_session";
 
-/** The middle of the Log button on both console pages, in CSS pixels. */
+/** The middle of the Log button on the console pages that have one, in CSS pixels. */
 export const CONSOLE_LOG_POINT = { x: 70, y: 30 } as const;
 
 /** The data the act-drag page's draggable source puts in its dataTransfer. */
@@ -270,6 +274,7 @@ export const PROBE_SECRET = "fixture-secret-7Q2xZ9kL";
 
 // Must stay above the extension's LOAD_GRACE_MS (1000 ms, apps/extension/src/wait-for-load.ts):
 // the held response is what makes the navigate test fail when the load wait returns early.
+// It also keeps the console load page loading long after the console recorder starts.
 const SLOW_HOLD_MS = 1500;
 
 const COUNTER_PREFIX = "Counter ";
@@ -421,6 +426,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, CONSOLE_CSP_PAGE, {
         "Content-Security-Policy": `script-src 'nonce-${CONSOLE_CSP_NONCE}'`,
       });
+    } else if (path === "/console-load") {
+      sendHtml(response, CONSOLE_LOAD_PAGE);
+    } else if (path === "/console-load-hold.js") {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        sendHtml(response, "", { "Content-Type": "text/javascript; charset=utf-8" });
+      }, SLOW_HOLD_MS);
+      timers.add(timer);
     } else if (path === "/network") {
       // The frame from another site is the same server under localhost.
       sendHtml(response, networkPage(request.socket.localPort ?? 0));
@@ -555,8 +568,8 @@ function sendHtml(
   response.end(html);
 }
 
-// Both console pages log only when their Log button is clicked, so a test can wait until Foxhand
-// records the page first.
+// The console pages with a Log button log only when it is clicked, so a test can wait until
+// Foxhand records the page first.
 const CONSOLE_LOG_BUTTON = `<button id="log" style="position: fixed; left: 10px; top: 10px; width: 120px; height: 40px; margin: 0">Log</button>`;
 
 const WAIT_LATE_PAGE = `<!doctype html>
@@ -618,6 +631,19 @@ const CONSOLE_CSP_PAGE = `<!doctype html>
 ${CONSOLE_LOG_BUTTON}
 <script nonce="${CONSOLE_CSP_NONCE}">
 document.getElementById("log").addEventListener("click", () => console.log("${CONSOLE_TOKENS.csp}"));
+</script>
+</body></html>
+`;
+
+// The held script keeps the page loading well past the recorder's start.
+const CONSOLE_LOAD_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.consoleLoad}</title></head>
+<body><h1>${TITLES.consoleLoad}</h1>
+<script src="/console-load-hold.js"></script>
+<script>
+console.log("${CONSOLE_TOKENS.loadParse}");
+document.addEventListener("DOMContentLoaded", () => console.log("${CONSOLE_TOKENS.loadReady}"));
+window.addEventListener("load", () => console.log("${CONSOLE_TOKENS.loadDone}"));
 </script>
 </body></html>
 `;
