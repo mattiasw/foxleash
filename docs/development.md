@@ -76,6 +76,14 @@ get. `firefox.allowPopups(origin)` allows pop-ups for a site, as a user's pop-up
 does, `firefox.resetPopups(origin)` removes that exception again, and
 `firefox.blockedPopups(url)` reads how many pop-ups Firefox blocked in a tab.
 
+The profile also turns on Firefox's credit card autofill
+(`extensions.formautofill.creditCards.enabled`), which the remote agent would otherwise switch
+off. `firefox.fillCreditCard(context, numberSelector, card)` clicks the card number field, so
+Firefox identifies the card form, then has Firefox's form autofill fill the card as a pick from
+that field's pop-up does. It stores no card: Firefox encrypts a stored card's number with the OS key store
+(on Linux the Secret Service over D-Bus), which the test Firefox would reach only as the
+developer's own keyring.
+
 A test that answers a page's beforeunload prompt itself starts Firefox with
 `harness.startFirefox(EXTENSION_DIST, { holdBeforeUnloadPrompts: true })`. That asks WebDriver
 to leave those prompts open (`unhandledPromptBehavior: { beforeUnload: "ignore" }`) instead of

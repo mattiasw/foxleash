@@ -7,8 +7,10 @@ import { inflateSync } from "node:zlib";
 import { SCREENSHOT_NOTE } from "../apps/server/src/tools.ts";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
+  AUTOFILL_CARD,
   AUTOFILL_COLOURS,
   AUTOFILL_LOGIN,
+  CARD_AUTOFILL_COLOURS,
   type FixtureServer,
   SHOT_BOX,
   SHOT_COLOURS,
@@ -387,6 +389,32 @@ describe("screenshot in real Firefox", () => {
     const png = await shotOf({ tabId });
     assertNone(png, AUTOFILL_COLOURS.filled, "autofilled");
     assertDrawn(png, AUTOFILL_COLOURS.plain, "plain");
+  });
+
+  test("a screenshot hides a card number Firefox autofilled into a field with no autocomplete token", async () => {
+    const tabId = await open(session, "/card-autofill", TITLES.cardAutofill);
+    const context = await contextOf(fixtures.url("/card-autofill"));
+    await firefox.fillCreditCard(context, "#card-number", AUTOFILL_CARD);
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(
+          context,
+          'document.getElementById("card-number").matches(":autofill")',
+        )) === true
+          ? true
+          : undefined,
+      PAGE_TIMEOUT_MS,
+      "Firefox to fill the card",
+    );
+    // Firefox draws the autofilled number in the page's fill colour without Foxhand.
+    assertDrawn(
+      decodePng(await firefox.captureViewport(context)),
+      CARD_AUTOFILL_COLOURS.filled,
+      "autofilled card number",
+    );
+    const png = await shotOf({ tabId });
+    assertNone(png, CARD_AUTOFILL_COLOURS.filled, "autofilled card number");
+    assertDrawn(png, CARD_AUTOFILL_COLOURS.plain, "plain");
   });
 
   async function shotOf(args: Record<string, unknown>): Promise<Png> {

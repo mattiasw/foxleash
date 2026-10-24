@@ -56,6 +56,7 @@ export const TITLES = {
   downloadLogin: "Fixture download login",
   autofill: "Fixture autofill",
   autofillFramed: "Fixture autofill framed",
+  cardAutofill: "Fixture card autofill",
   beforeUnload: "Fixture before unload",
 } as const;
 
@@ -130,6 +131,15 @@ export const AUTOFILL_COLOURS = {
 } as const;
 /** The login the autofill tests save for the fixture server, which Firefox fills into its page. */
 export const AUTOFILL_LOGIN = { username: "WMWM MWMW", password: "pw-autofill-Jd5XqR" } as const;
+/** The text colours of the card autofill page: the card number field's fill colour, and a plain field's. */
+export const CARD_AUTOFILL_COLOURS = { filled: [0, 112, 64], plain: [128, 0, 96] } as const;
+/** The card the card autofill tests have Firefox fill into its page, digits only as Firefox fills it. */
+export const AUTOFILL_CARD = {
+  name: "Ada Lovelace",
+  number: "4111111111111111",
+  expiryMonth: 12,
+  expiryYear: 2040,
+} as const;
 
 /** What the fill-form page's password field holds when it loads. */
 export const FILL_PASSWORD = "pw-fill-old-Ka3";
@@ -475,6 +485,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       // The frame from another site is the same server under localhost.
       response.end(autofillFramedPage(request.socket.localPort ?? 0));
+    } else if (path === "/card-autofill") {
+      sendHtml(response, CARD_AUTOFILL_PAGE);
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/act") {
@@ -1690,6 +1702,30 @@ function autofillFramedPage(port: number): string {
 <body><iframe title="Login frame" src="http://localhost:${port}/autofill?frame"></iframe></body></html>
 `;
 }
+
+// A card form Firefox's form autofill identifies from its labels: no field has an autocomplete
+// token. Firefox forces `color` on an autofilled field, so the card number's colour is a
+// `-webkit-text-fill-color`. The plain field outside the form is the control.
+const CARD_AUTOFILL_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.cardAutofill}</title>
+<style>${SHOT_FIELD_STYLE}
+#card-number { -webkit-text-fill-color: ${rgb(CARD_AUTOFILL_COLOURS.filled)}; }
+#plain-name { color: ${rgb(CARD_AUTOFILL_COLOURS.plain)}; }
+</style></head>
+<body>
+<form action="/a" method="post">
+<label for="card-name">Name on card</label>
+<input id="card-name" type="text">
+<label for="card-number">Card number</label>
+<input id="card-number" type="text">
+<label for="card-expiry">Expiry</label>
+<input id="card-expiry" type="text" placeholder="MM/YY">
+<button type="submit">Pay</button>
+</form>
+<label for="plain-name">Plain name</label>
+<input id="plain-name" type="text" value="MMMM WWWW">
+</body></html>
+`;
 
 // A frame Firefox keeps add-ons out of: its PDF viewer.
 const SHOT_PDF_FRAME_PAGE = `<!doctype html>

@@ -40,6 +40,8 @@ export const PAGE_TIMEOUT_MS = 15_000;
 const HELPER_TIMEOUT_MS = 20_000;
 // How long discardTab waits for the session store to hold the tab's page, below HELPER_TIMEOUT_MS.
 const SESSION_STORE_TIMEOUT_MS = 10_000;
+// How long fillCreditCard waits for Firefox to identify the card form, below HELPER_TIMEOUT_MS.
+const IDENTIFY_TIMEOUT_MS = 10_000;
 const POLL_MS = 100;
 // The WebDriver web element identifier, the key of an element reference.
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
@@ -50,6 +52,38 @@ const login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsI
 login.init(origin, "", null, username, password, "", "");
 return Services.logins.addLoginAsync(login).then(() => null);`;
 const REMOVE_LOGINS = "return Services.logins.removeAllUserFacingLoginsAsync().then(() => null);";
+// Fills a card through the tab's form autofill actor with autofillFields, which is what a pick
+// from Firefox's card pop-up calls. A stored card's number is encrypted with the OS key store:
+// none on a machine without a keyring, the developer's own one otherwise. The profile has a stored
+// card's fields, the number unencrypted.
+const FILL_CREDIT_CARD = `const [url, card, timeoutMs] = arguments;
+const { setTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
+const { CreditCardRecord } = ChromeUtils.importESModule(
+  "resource://gre/modules/shared/CreditCardRecord.sys.mjs",
+);
+const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
+if (tab === undefined) throw new Error("no tab shows " + url);
+const actor = tab.linkedBrowser.browsingContext.currentWindowGlobal.getActor("FormAutofill");
+const deadline = Date.now() + timeoutMs;
+async function numberField() {
+  for (;;) {
+    const field = [...actor.sectionsByRootId.values()]
+      .flat()
+      .flatMap((section) => section.fieldDetails)
+      .find((detail) => detail.fieldName === "cc-number");
+    if (field !== undefined) return field;
+    if (Date.now() >= deadline) throw new Error("Firefox identified no card number field in " + url);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+  }
+}
+const profile = {
+  "cc-name": card.name,
+  "cc-number": card.number,
+  "cc-exp-month": card.expiryMonth,
+  "cc-exp-year": card.expiryYear,
+};
+CreditCardRecord.computeFields(profile);
+return numberField().then((field) => actor.autofillFields(field.elementId, profile)).then(() => null);`;
 // The permission a user's pop-up exception for a site stores.
 const ALLOW_POPUPS = `const [origin] = arguments;
 const principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(origin);
@@ -145,6 +179,14 @@ export interface BrowsingContext {
   url: string;
 }
 
+/** A credit card, as Firefox's form autofill stores one. */
+export interface CreditCard {
+  name: string;
+  number: string;
+  expiryMonth: number;
+  expiryYear: number;
+}
+
 export interface Firefox {
   /** Installs the unpacked extension in `path` as a temporary add-on and returns its id. */
   installExtension(path: string): Promise<string>;
@@ -180,6 +222,13 @@ export interface Firefox {
   saveLogin(origin: string, username: string, password: string): Promise<void>;
   /** Removes every saved login. */
   removeLogins(): Promise<void>;
+  /**
+   * Fills `card` into the card form of the tab's page as Firefox's form autofill does when the
+   * user picks a saved card from the card number field's pop-up. It first focuses that field,
+   * `numberSelector`, with a trusted click, which makes Firefox identify the form's fields.
+   * Firefox stores no card.
+   */
+  fillCreditCard(context: string, numberSelector: string, card: CreditCard): Promise<void>;
   /** Allows pop-ups for `origin`, as a user's pop-up exception for a site does. */
   allowPopups(origin: string): Promise<void>;
   /** Removes the pop-up exception for `origin`, so Firefox's pop-up blocker applies again. */
@@ -369,6 +418,24 @@ export async function launchFirefox({
     await input.send("WebDriver:SwitchToWindow", { handle: context });
   }
 
+  async function clickElement(context: string, cssSelector: string): Promise<void> {
+    await switchTo(context);
+    let found: unknown;
+    try {
+      found = await input.send("WebDriver:FindElement", {
+        using: "css selector",
+        value: cssSelector,
+      });
+    } catch (error: unknown) {
+      throw new Error(`cannot find ${cssSelector}: ${messageOf(error)}`, { cause: error });
+    }
+    const element = isRecord(found) && isRecord(found.value) ? found.value[ELEMENT_KEY] : "";
+    if (typeof element !== "string" || element === "") {
+      throw new Error(`WebDriver:FindElement returned ${JSON.stringify(found)}`);
+    }
+    await input.send("WebDriver:ElementClick", { id: element });
+  }
+
   // Runs `script` with Firefox's privileges, awaiting a promise it returns.
   async function chrome(script: string, args: unknown[]): Promise<void> {
     await chromeResponse(script, args);
@@ -457,23 +524,7 @@ export async function launchFirefox({
     },
     click(context, cssSelector) {
       return withDeadline(
-        (async () => {
-          await switchTo(context);
-          let found: unknown;
-          try {
-            found = await input.send("WebDriver:FindElement", {
-              using: "css selector",
-              value: cssSelector,
-            });
-          } catch (error: unknown) {
-            throw new Error(`cannot find ${cssSelector}: ${messageOf(error)}`, { cause: error });
-          }
-          const element = isRecord(found) && isRecord(found.value) ? found.value[ELEMENT_KEY] : "";
-          if (typeof element !== "string" || element === "") {
-            throw new Error(`WebDriver:FindElement returned ${JSON.stringify(found)}`);
-          }
-          await input.send("WebDriver:ElementClick", { id: element });
-        })(),
+        clickElement(context, cssSelector),
         HELPER_TIMEOUT_MS,
         `click ${context} ${cssSelector}`,
       );
@@ -521,6 +572,18 @@ export async function launchFirefox({
     },
     removeLogins() {
       return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
+    },
+    fillCreditCard(context, numberSelector, card) {
+      return withDeadline(
+        (async () => {
+          const url = (await contexts()).find((candidate) => candidate.context === context)?.url;
+          if (url === undefined) throw new Error(`no tab ${context}`);
+          await clickElement(context, numberSelector);
+          await chrome(FILL_CREDIT_CARD, [url, card, IDENTIFY_TIMEOUT_MS]);
+        })(),
+        HELPER_TIMEOUT_MS,
+        `fillCreditCard ${context} ${numberSelector}`,
+      );
     },
     allowPopups(origin) {
       return withDeadline(
@@ -669,6 +732,11 @@ function buildUserJs(downloadDir: string, holdBeforeUnloadPrompts: boolean): str
       "signon.autofillForms.http",
       true,
       "The fixture server is plain http on 127.0.0.1, and Firefox fills saved logins into http pages only with this; its default is false.",
+    ],
+    [
+      "extensions.formautofill.creditCards.enabled",
+      true,
+      "Fill credit cards into card forms, as Firefox does for users; Firefox's remote agent sets its recommended false unless the profile sets it.",
     ],
   ];
   if (holdBeforeUnloadPrompts) {

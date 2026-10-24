@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
+  AUTOFILL_CARD,
   AUTOFILL_LOGIN,
   type FixtureServer,
   READ_HIDDEN,
@@ -39,6 +40,8 @@ const SNAPSHOT = `JSON.stringify({
 })`;
 
 const AUTOFILLED = 'document.getElementById("login-name").matches(":autofill")';
+const CARD_AUTOFILLED = 'document.getElementById("card-number").matches(":autofill")';
+const SPACED_CARD_NUMBER = "4111 1111 1111 1111";
 const FRAME_STATE =
   "JSON.stringify({ href: location.href, readyState: document.readyState, timeOrigin: performance.timeOrigin })";
 
@@ -979,6 +982,33 @@ describe("read_page in real Firefox", () => {
     assertNoSecrets(
       all.texts,
       cases.filter(({ secret }) => secret).map(({ token }) => token),
+    );
+  });
+
+  test("a card number Firefox autofilled into a field with no autocomplete token reads as protected", async () => {
+    const tabId = await open("/card-autofill", TITLES.cardAutofill);
+    const context = await contextOf(fixtures.url("/card-autofill"));
+    await firefox.fillCreditCard(context, "#card-number", AUTOFILL_CARD);
+    await pollUntil(
+      async () => ((await firefox.evaluate(context, CARD_AUTOFILLED)) === true ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      "Firefox to fill the card",
+    );
+    const { tree, texts } = await read(tabId);
+    assertNoSecrets(texts, [AUTOFILL_CARD.number, SPACED_CARD_NUMBER, AUTOFILL_CARD.name]);
+    // Without refs, whose random hex ids could hold a digit group by chance.
+    assertNoSecrets([withoutRefs(tree)], ["4111", "1111"]);
+    assertLines(tree, [
+      'textbox "Name on card" [*] protected filled',
+      'textbox "Card number" [*] focused protected filled',
+      'textbox "Expiry" [*] protected filled',
+      'textbox "Plain name" [*] value="MMMM WWWW"',
+    ]);
+    // get_page_text leaves out every field's value, autofilled or not.
+    const pageText = JSON.stringify(await harness.ok(session, "get_page_text", { tabId }));
+    assertNoSecrets(
+      [pageText],
+      [AUTOFILL_CARD.number, SPACED_CARD_NUMBER, "4111", "1111", AUTOFILL_CARD.name],
     );
   });
 
