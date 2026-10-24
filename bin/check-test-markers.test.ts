@@ -804,7 +804,7 @@ runCases(
 );
 
 runCases(
-  "rule 11: expectFailure imported from node:test",
+  "rule 11: markers imported from node:test or destructured from a test function",
   [
     ["an import", m("import { expect", 'Failure } from "node:test";\n'), ["import"]],
     [
@@ -843,12 +843,87 @@ runCases(
     ["no value", m("let expect", "Failure;\n"), []],
     ["a call of another function", m("const { expect", 'Failure } = load("node:test");\n'), []],
     ["a require of nothing", m("const { expect", "Failure } = require();\n"), []],
+    ...(["skip", "only", "todo"] as const).flatMap((name): Case[] => [
+      [`${name}: an import`, m("import { ", name, ' } from "node:test";\n'), ["import"]],
+      [
+        `${name}: a renamed import beside others`,
+        m("import test, { describe, ", name, ' as x } from "node:test";\n'),
+        ["import"],
+      ],
+      [
+        `${name}: a string import name`,
+        m('import { "', name, '" as x } from "node:test";\n'),
+        ["import"],
+      ],
+      [`${name}: a require`, m("const { ", name, ' } = require("node:test");\n'), ["import"]],
+      [
+        `${name}: a renamed require`,
+        m("const { ", name, ': x } = require("node:test");\n'),
+        ["import"],
+      ],
+      [
+        `${name}: an await import`,
+        m("const { ", name, ' } = await import("node:test");\n'),
+        ["import"],
+      ],
+    ]),
+    ["skip destructured from test", m("const { s", "kip } = test;\n"), ["destructure"]],
+    ["only renamed from describe", m("const { o", "nly: o } = describe;\n"), ["destructure"]],
+    ["todo destructured from it", m("const { t", "odo } = it;\n"), ["destructure"]],
+    ["fails destructured from test", m("const { f", "ails } = test;\n"), ["destructure"]],
+    [
+      "skip destructured from test.describe",
+      m("const { s", "kip } = test.describe;\n"),
+      ["destructure"],
+    ],
+    ["fixme destructured from test", m("const { f", "ixme } = test;\n"), ["destructure"]],
+    ["a computed literal key", m('const { ["s', 'kip"]: s } = test;\n'), ["destructure"]],
+    [
+      "an exported destructure of a LINK call",
+      m("export const { f", "ailing } = test.extend({});\n"),
+      ["destructure"],
+    ],
+    ["a ROOT read off a name", m("const { s", "kip } = nt.test;\n"), ["destructure"]],
+    [
+      "a modifier as the last step",
+      m("const { s", "kip } = describe.sequential;\n"),
+      ["destructure"],
+    ],
+    ["a computed key that is no literal", m("const { s", "kip } = test[kind];\n"), ["destructure"]],
+    ["skip from a local module", m("import { s", 'kip } from "./helpers";\n'), []],
+    ["skip from the npm package", m("import { s", 'kip } from "test";\n'), []],
+    ["a type import of skip", m("import type { s", 'kip } from "node:test";\n'), []],
+    ["a type specifier of skip", m("import { type s", 'kip } from "node:test";\n'), []],
+    [
+      "test imported under a marker's name",
+      m("import { test as s", 'kip } from "node:test";\n'),
+      [],
+    ],
+    ["skip destructured from query", m("const { s", "kip } = query;\n"), []],
+    ["skip destructured from helpers", m("const { s", "kip } = helpers;\n"), []],
+    ["a name no rule refuses", "const { each } = test;\n", []],
+    ["data read off context", m("const { s", "kip, take } = context.args;\n"), []],
+    ["data read off it", m("const { s", "kip } = it.params;\n"), []],
+    ["a local helper", m("function s", "kip(n) {\n  return n;\n}\ns", "kip(10);\n"), []],
+    ["pagination", m("const page = { s", "kip: 10 };\n"), []],
+    ["a planned test", m("test.", 'todo("planned");\n'), []],
   ],
   (source) => rules(source),
 );
 
 describe("which markers are new", () => {
   const LEGACY = m("test.", 'skip("t", () => {\n  a();\n});\n');
+
+  test("an import already in base stays allowed when the line after it changes", () => {
+    const imported = (call: string) => m("import { s", 'kip } from "node:test";\n', call);
+    assert.deepEqual(rules(imported("run(1);\n"), "a.test.ts", imported("run();\n")), []);
+  });
+
+  test("a name added to an import line already in base is new", () => {
+    const base = m("import { s", 'kip, test } from "node:test";\n');
+    const head = m("import { s", "kip, test, t", 'odo } from "node:test";\n');
+    assert.deepEqual(rules(head, "a.test.ts", base), ["import"]);
+  });
 
   test("a marker in a file the diff adds is new", () => {
     assert.deepEqual(rules(LEGACY), ["skip"]);

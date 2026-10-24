@@ -137,10 +137,22 @@
 //      test's expected status to skipped and fail inverts its verdict (measured, Playwright
 //      1.64.0). `type: "issue"`, the reporter's plural `annotations:` and a reducer action
 //      `{ type: "skip" }` stay allowed.
-//  11. node:test's `expectFailure` imported by name from `node:test` (an import, renamed or not,
-//      that is not `import type`; or `const { expectFailure } = require("node:test")` /
-//      `await import("node:test")`): under another name its call is no bare `expectFailure(`
-//      (rule 2), so the import itself is refused. Only the `node:` spelling names the builtin.
+//  11. A marker's name bound from node:test: `only`, `fixme`, `expectFailure`, `skip`, `fail`,
+//      `fails`, `failing` or `todo` imported by name from `node:test` (an import, renamed or not,
+//      that is not `import type`; or `const { skip } = require("node:test")` /
+//      `await import("node:test")`). node:test exports `expectFailure`, `skip`, `only` and `todo`
+//      as functions (measured, node 24.18: an imported `skip("t", fn)` or `todo("t", fn)` whose
+//      body throws exits 0), and a call of such a binding, under its own name or another, is no
+//      member call rules 1 to 5 see (nor, renamed, a bare `expectFailure(`, rule 2), so the binding
+//      itself is refused, `todo` too: a planned test is `test.todo("name")` (rule 5). Only the
+//      `node:` spelling names the builtin. Likewise a destructure (`const`, `let` or `var`,
+//      renamed or not) of those names from a test function: a ROOTED chain whose last step is a
+//      ROOT, a test modifier (rule 2's list), a computed key that is no literal or a LINK call
+//      (`const { skip } = test`, `const { only: o } = describe`, `const { skip } = test.describe`,
+//      `= nt.test`, `= test[kind]`, `= test.extend({})`). A destructure of anything else is data
+//      (`const { skip } = query`, `const { skip, take } = context.args`); a ROOT read off a name
+//      counts (`const { skip } = req.context` is refused: the strict side), and so does a
+//      destructure whose call rule 3 would allow in a Playwright spec (`skip(isCI, "r")`).
 //
 // A PLAYWRIGHT SPEC is a file whose head imports `@playwright/test` itself at the top level: an
 // import that is not type-only and binds at least one value, or a `require("@playwright/test")`.
@@ -189,13 +201,22 @@
 // goes on.
 //
 // Accepted residuals: a marker reached through an alias (`const s = test.skip; s("x", fn)`,
-// `const focus = test.only`), a condition that is always true but that the folder cannot see
-// (`test.skip(isCI === isCI, r)`), a skipped test whose body is passed by name
-// (`test.skip(title, body)`, which reads like `test.skip(cond, REASON)`), Playwright's fixture
-// under a name other than `testInfo`, an options object on a call this check does not take for a
-// test call (`test.concurrent(`, `test.sequential(`), and an option value that is no constant
-// but never false (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`). AGENTS.md forbids
-// them all the same.
+// `const focus = test.only`), a test function or node:test's module under a name that is no ROOT
+// (`import * as nt from "node:test"; nt.skip(`, `import tst from "node:test"; tst.skip(`,
+// `import { test as t } from "node:test"; const { skip } = t`,
+// `const { skip } = require("node:test").test`), a destructure that is no variable declaration
+// (a parameter `({ skip }) =>`, an assignment `({ skip } = test)`) or is nested
+// (`const { test: { skip } } = require("node:test")`), a test function's member this check does
+// not list (`const { only } = test.describe.serial`), a marker re-exported through a local
+// module (`export { skip } from "node:test"` in a helper the test imports), node:test loaded
+// other than by `import`, `require(` or `import(` (`process.getBuiltinModule("node:test")`,
+// `module.require(`, `createRequire(import.meta.url)("node:test")`), a condition that is
+// always true but that the folder cannot see (`test.skip(isCI === isCI, r)`), a skipped test
+// whose body is passed by name (`test.skip(title, body)`, which reads like
+// `test.skip(cond, REASON)`), Playwright's fixture under a name other than `testInfo`, an options
+// object on a call this check does not take for a test call (`test.concurrent(`,
+// `test.sequential(`), and an option value that is no constant but never false
+// (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`). AGENTS.md forbids them all the same.
 //
 // The check never runs the code it reads: the folder walks literal nodes only, git runs with an
 // argument array (blob ids, never a shell string), and every error fails closed.
@@ -234,6 +255,7 @@ const PREFIXED = new Set([
 const TEST_CALLS = new Set(["test", "it", "describe", "suite", "context", "specify"]);
 const ANY_RECEIVER = new Set(["only", "fixme", "expectFailure"]);
 const ROOTED_SKIPS = new Set(["skip", "fail", "fails", "failing"]);
+const BINDING_MARKERS = new Set([...ANY_RECEIVER, ...ROOTED_SKIPS, "todo"]);
 // The members a test function is chained or invoked through: Jest's, Vitest's and node:test's
 // modifiers (`.each`, `.for`, `.only`, `.skip`, `.failing`, ...) and Function.prototype's `call`,
 // `apply` and `bind`, which call the function itself. Rule 2 accepts only these between a bare
@@ -279,7 +301,7 @@ export interface Marker {
   /** The 1-based line of the marker itself. */
   line: number;
   /** Which rule refused it (focus, prefixed, skip, bare, todo, skipIf, runIf, testInfo, option,
-   * data, annotation, import). */
+   * data, annotation, import, destructure). */
   rule: string;
   /** The unit's lines as written, shortened past 6 lines (see the header). */
   lines: string[];
@@ -1063,22 +1085,33 @@ function judgeImport(node: ImportDeclaration, found: Found[]): void {
     if (specifier.type !== "ImportSpecifier") continue;
     if (specifier.importKind === "type" || specifier.importKind === "typeof") continue;
     const { imported } = specifier;
-    if ((imported.type === "Identifier" ? imported.name : imported.value) === "expectFailure") {
-      found.push({ anchor: specifier, rule: "import", name: "expectFailure" });
-    }
+    const name = imported.type === "Identifier" ? imported.name : imported.value;
+    if (BINDING_MARKERS.has(name)) found.push({ anchor: specifier, rule: "import", name });
   }
 }
 
-/** Rule 11 on a variable declarator: a destructure of require or import of node:test. */
+/** Rule 11 on a variable declarator: a destructure of node:test's require or import, or of a test
+ * function. */
 function judgeRequire(node: VariableDeclarator, found: Found[]): void {
-  if (node.id.type !== "ObjectPattern" || node.init == null || !loads(node.init, "node:test")) {
-    return;
-  }
+  if (node.id.type !== "ObjectPattern" || node.init == null) return;
+  const imported = loads(node.init, "node:test");
+  if (!imported && !isTestFunction(node.init)) return;
+  const rule = imported ? "import" : "destructure";
   for (const property of node.id.properties) {
-    if (keyName(property) === "expectFailure") {
-      found.push({ anchor: property, rule: "import", name: "expectFailure" });
-    }
+    const name = keyName(property) ?? "";
+    if (BINDING_MARKERS.has(name)) found.push({ anchor: property, rule, name });
   }
+}
+
+/** Rule 11: whether a destructured value is a test function: a ROOTED chain whose last step is a
+ * ROOT, a test modifier, a computed key that is no literal or a LINK call, not data read off one
+ * (`context.args`). */
+function isTestFunction(value: Node): boolean {
+  const node = unwrapAll(value);
+  if (!isRooted(node)) return false;
+  if (!isMember(node)) return true;
+  const name = memberName(node);
+  return name === null || ROOTS.has(name) || MODIFIERS.has(name);
 }
 
 // TypeScript's decorators as `experimentalDecorators` writes them, parameter decorators included

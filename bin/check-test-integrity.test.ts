@@ -3786,6 +3786,22 @@ describe("check-test-integrity.sh on node:test files and Playwright specs", () =
       `${m("const { expect", 'Failure } = await import("node:test");')}\nexpectFailure("t", () => {\n  work();\n});\n`,
     ],
     [
+      "skip imported by name from node:test and called with a throwing body",
+      `${m("import { s", 'kip } from "node:test";')}\nskip("t", () => {\n  throw new Error("x");\n});\n`,
+    ],
+    [
+      "todo imported from node:test under another name and called with a body",
+      `${m("import { t", 'odo as later } from "node:test";')}\nlater("t", () => {\n  work();\n});\n`,
+    ],
+    [
+      "only required by name from node:test",
+      `${m("const { o", 'nly } = require("node:test");')}\nonly("t", () => {\n  work();\n});\n`,
+    ],
+    [
+      "skip destructured from test",
+      `${m("const { s", "kip } = test;")}\nskip("t", () => {\n  work();\n});\n`,
+    ],
+    [
       "an expected-failure reason Biome puts on the line below its key",
       `test("parses the header", {\n  ${m("expect", "Failure:")}\n    "known bug in the upstream parser until 2.0 ships, see https://github.com/acme/parser/issues/1234",\n}, () => {\n  work();\n});\n`,
     ],
