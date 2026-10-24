@@ -28,24 +28,25 @@ removed after Firefox filled the page so that no new fill could hide the result,
   `tabs.reload` without `bypassCache`; the page's own `location.reload()` restores it.
 - A tab unloaded with `gBrowser.discardBrowser` and selected again with `tab_select`: the
   session store puts the username back unmarked about a second after the load, and read_page
-  shows it. This was seen in every run where the tab, selected again, showed the page. It was
-  measured by hand only, not by an end-to-end test (see below).
+  shows it. This was seen in every run where the tab, selected again, showed the page. An
+  end-to-end test checks it (see below).
 - The page's own `history.back()` restores the value unmarked, as `navigate` back does.
 - A history step that moves only a frame loads that frame again from the cache, with no
   `main_frame` request, and restores the frame's username unmarked.
-- `navigate` reload on an unloaded tab leaves it on `about:blank`; `navigate` with its URL loads
-  it fresh; `navigate` back on a tab unloaded on the next page loads that page again. None
-  shows a restored value.
+- `navigate` reload on an unloaded tab leaves it on `about:blank` (`navigate` now loads the page
+  instead, see Consequences); `navigate` with its URL loads it fresh; `navigate` back on a tab
+  unloaded on the next page loads that page again. None shows a restored value.
 
 The end-to-end tests in `e2e/read-page.test.ts` keep checking going back and forward, a page
 that changes its address with `history.replaceState` as going back loads it again, the three
 and four page cases, the page kept in memory, the POST page, the tab's own URL and the frame
 from another site. The three page and kept in memory tests accept either of Firefox's choices,
-keeping the page in memory or loading it again, and check the outcome that goes with it. No
-end-to-end test checks the unloaded tab: in the full test file, the session store's history for
-a tab Foxhand opened usually ended on an `about:blank` entry after the page, so the tab,
-selected again, showed `about:blank` instead of the page. Session restore after a restart is
-out of the harness's reach.
+keeping the page in memory or loading it again, and check the outcome that goes with it. The
+end-to-end tests also check the unloaded tab, since `tab_open` loads the page only after
+Firefox's own `about:blank` load in the new tab has committed. Before that, in the full test
+file, the session store's history for a tab Foxhand opened usually ended on an `about:blank`
+entry after the page, and the tab, selected again, showed `about:blank`. Session restore after
+a restart is out of the harness's reach.
 
 ## Decision
 
@@ -124,8 +125,8 @@ out of the harness's reach.
 - Accepted, measured: a page a form sent with POST, which a reload would send again; a page on
   a site the user approves only after the step; a step that moves only a frame, whose value
   screenshots then draw (read_page does not read frames); the page's own history steps, as 0021
-  accepted its own reload; a tab Firefox or the user unloaded, loaded again (measured by hand,
-  with no end-to-end test, see Context).
+  accepted its own reload; a tab Firefox or the user unloaded, loaded again (checked by an
+  end-to-end test, see Context).
 - Accepted, unverified: a page holding a frame a form sent with POST, for the same reason as a
   POST page; a page that delays its unloading past the one-second grace escapes the watch, the
   same exposure as the page calling `history.back()`; a parallel tool call can read the page
@@ -145,7 +146,7 @@ out of the harness's reach.
   restores nothing but drops what was typed into it; session restore after a restart, which
   uses the same session-store form data as an unloaded tab and so presumably restores the value
   unmarked; card and address autofill, which need the user's pick in Firefox's popup.
-- `navigate` on an unloaded tab shows no restored value (see Context); that its reload leaves
-  the tab on `about:blank` is a separate defect.
+- `navigate` on an unloaded tab shows no restored value (see Context); its reload loads the
+  page again, as `navigate` with its URL does.
 - Revisit when Firefox marks restored values as autofilled, or on a report of a value read after
   one of the accepted cases.

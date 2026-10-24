@@ -86,6 +86,11 @@ export interface FakeBrowser {
    */
   emitCommitted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   committedListenerCount(): number;
+  /**
+   * Whether `tabs.create` fires `webNavigation.onCommitted` for the created tab's top frame and
+   * URL, as Firefox's own load of it does; true by default. `openTab` never fires it.
+   */
+  commitOnCreate: boolean;
   /** Fires `webNavigation.onCompleted`. A load in a tab fires it for its top frame too. */
   emitCompleted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   /** Fires `webNavigation.onHistoryStateUpdated`; `pushState` fires it for the top frame too. */
@@ -356,8 +361,18 @@ export function createFakeBrowser(): FakeBrowser {
           .filter((tab) => windowId === undefined || tab.windowId === windowId)
           .map(snapshot),
       get: async (tabId) => snapshot(tabOf(tabId)),
-      create: async ({ url, active, windowId }) =>
-        snapshot(fake.openTab({ url, active, windowId: windowId ?? fake.currentWindowId })),
+      create: async ({ url, active, windowId }) => {
+        const tab = fake.openTab({ url, active, windowId: windowId ?? fake.currentWindowId });
+        // Firefox loads the URL a tab is created on and reports that commit. Here it reaches
+        // listeners before the caller's await of create resumes: a listener added after misses it.
+        if (fake.commitOnCreate) {
+          queueMicrotask(() => {
+            if (fake.tabs.has(tab.id))
+              fake.emitCommitted({ tabId: tab.id, frameId: 0, url: tab.url });
+          });
+        }
+        return snapshot(tab);
+      },
       update: async (tabId, properties) => {
         const tab = tabOf(tabId);
         fake.tabUpdates.push({ tabId, ...properties });
@@ -583,6 +598,7 @@ export function createFakeBrowser(): FakeBrowser {
     },
     emitCommitted: (details) => emitNavigation(onCommitted, details),
     committedListenerCount: () => onCommitted.listeners.size,
+    commitOnCreate: true,
     emitCompleted: (details) => emitNavigation(onNavigationCompleted, details),
     emitHistoryStateUpdated: (details) => emitNavigation(onHistoryStateUpdated, details),
     navigationListenerCount: () =>

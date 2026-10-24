@@ -2,7 +2,13 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Tab } from "./browser-api.ts";
 import { createFakeBrowser, createFakeTimers, type FakeBrowser, flush } from "./fake-browser.ts";
-import { LOAD_GRACE_MS, LOAD_TIMEOUT_MS, waitForLoad } from "./wait-for-load.ts";
+import {
+  BLANK_COMMIT_TIMEOUT_MS,
+  LOAD_GRACE_MS,
+  LOAD_TIMEOUT_MS,
+  waitForLoad,
+  watchBlankCommits,
+} from "./wait-for-load.ts";
 
 describe("waitForLoad", { timeout: 10000 }, () => {
   it("waits about 1 s for a load to start and up to 30 s for it to finish", () => {
@@ -401,6 +407,103 @@ describe("waitForLoad", { timeout: 10000 }, () => {
   });
 });
 
+describe("watchBlankCommits", { timeout: 10000 }, () => {
+  it("waits up to 1 s for a new tab's about:blank commit", () => {
+    assert.equal(BLANK_COMMIT_TIMEOUT_MS, 1000);
+  });
+
+  it("resolves at once for the tab's about:blank commit that came before the call", async () => {
+    const { fake, timers, tab } = setup();
+    const blank = watchBlankCommits(fake.browser, timers);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    const settled = settledFlag(blank.committed(tab.id));
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+  });
+
+  it("does not resolve for another tab's about:blank commit that came before the call", async () => {
+    const { fake, timers, tab } = setup();
+    const other = fake.openTab();
+    const blank = watchBlankCommits(fake.browser, timers);
+    fake.emitCommitted({ tabId: other.id, frameId: 0, url: "about:blank" });
+    const settled = settledFlag(blank.committed(tab.id));
+    await flush();
+    assert.equal(settled(), false);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+  });
+
+  it("waits for the tab's top frame to commit about:blank and ignores other commits", async () => {
+    const { fake, timers, tab } = setup();
+    const other = fake.openTab();
+    const blank = watchBlankCommits(fake.browser, timers);
+    const settled = settledFlag(blank.committed(tab.id));
+    await flush();
+    assert.equal(settled(), false);
+    fake.emitCommitted({ tabId: other.id, frameId: 0, url: "about:blank" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 1, url: "about:blank" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://a.example/" });
+    await flush();
+    assert.equal(settled(), false);
+    assert.equal(timers.pending(), 1);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+  });
+
+  it("resolves after BLANK_COMMIT_TIMEOUT_MS when the tab never commits about:blank", async () => {
+    const { fake, timers, tab } = setup();
+    const blank = watchBlankCommits(fake.browser, timers);
+    const settled = settledFlag(blank.committed(tab.id));
+    timers.advance(BLANK_COMMIT_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(settled(), false);
+    timers.advance(1);
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+  });
+
+  it("resolves after the timeout it is given when the tab never commits about:blank", async () => {
+    const { fake, timers, tab } = setup();
+    const blank = watchBlankCommits(fake.browser, timers);
+    const settled = settledFlag(blank.committed(tab.id, 200));
+    timers.advance(199);
+    await flush();
+    assert.equal(settled(), false);
+    timers.advance(1);
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+  });
+
+  it("stops listening on stop and settles a wait still pending", async () => {
+    const { fake, timers, tab } = setup();
+    const before = fake.committedListenerCount();
+    const blank = watchBlankCommits(fake.browser, timers);
+    assert.equal(fake.committedListenerCount(), before + 1);
+    const settled = settledFlag(blank.committed(tab.id));
+    await flush();
+    assert.equal(settled(), false);
+    blank.stop();
+    await flush();
+    assert.equal(settled(), true);
+    assert.equal(fake.committedListenerCount(), before);
+    assert.equal(timers.pending(), 0);
+    blank.stop();
+    assert.equal(fake.committedListenerCount(), before);
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -426,4 +529,15 @@ function track(promise: Promise<Tab>): { done(): boolean; tab(): Tab | undefined
     },
   );
   return { done: () => done, tab: () => result };
+}
+
+function settledFlag(promise: Promise<void>): () => boolean {
+  let settled = false;
+  promise.then(
+    () => {
+      settled = true;
+    },
+    () => {},
+  );
+  return () => settled;
 }

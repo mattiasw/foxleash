@@ -69,7 +69,7 @@ import {
 } from "./site-access.ts";
 import type { Uploads } from "./uploads.ts";
 import { waitForNavigation, waitForPage } from "./wait-for.ts";
-import { waitForLoad } from "./wait-for-load.ts";
+import { waitForLoad, watchBlankCommits } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
 export class ToolError extends Error {
@@ -233,13 +233,22 @@ export function createHandlers<Handle>({
       return { tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }) };
     }
     const group = await groups.groupOf(session);
-    // Opened blank and grouped first, so the page never loads outside the session's group.
-    const tab = await browser.tabs.create(
-      group === undefined
-        ? { url: "about:blank", active: true }
-        : { url: "about:blank", active: true, windowId: group.windowId },
-    );
-    await groups.ensureGroup(session, tab);
+    const blank = url === undefined ? undefined : watchBlankCommits(browser, timers);
+    let tab: Tab;
+    try {
+      // Opened blank and grouped first, so the page never loads outside the session's group.
+      tab = await browser.tabs.create(
+        group === undefined
+          ? { url: "about:blank", active: true }
+          : { url: "about:blank", active: true, windowId: group.windowId },
+      );
+      await groups.ensureGroup(session, tab);
+      // A load started before Firefox's own about:blank load in the tab commits can end up with
+      // that commit after its page in the tab's history.
+      await blank?.committed(tab.id);
+    } finally {
+      blank?.stop();
+    }
     if (url === undefined) {
       const current = await browser.tabs.get(tab.id);
       const view = await access.view(session);

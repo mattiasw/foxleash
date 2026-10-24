@@ -97,3 +97,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   would open the file in another application. The link, and the address the file comes from
   after any redirects, must be on sites you approved; the request carries your cookies for the
   site, and files are limited to 100 MiB.
+
+### Fixed
+
+- Tabs your agent opens on a page no longer come back blank when Firefox unloads them to save
+  memory and you select them again.

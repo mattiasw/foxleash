@@ -1065,6 +1065,21 @@ describe("read_page in real Firefox", () => {
     );
   });
 
+  test("a tab Firefox unloaded brings its autofilled value back unmarked when it loads again", async () => {
+    // Accepted in ADR 0025: Firefox's session store puts the value back without the mark.
+    const url = fixtures.url("/autofill?unloaded");
+    const tabId = await filledTab("/autofill?unloaded");
+    // Firefox does not unload the selected tab.
+    await open("/a?unloaded", TITLES.a);
+    await firefox.discardTab(url);
+    await harness.ok(session, "tab_select", { tabId });
+    const context = await waitForValue(url);
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+    assertLines((await read(tabId)).tree, [
+      `textbox "Login name" [*] value="${AUTOFILL_LOGIN.username}"`,
+    ]);
+  });
+
   // Last: the blocklist then covers the fixture server for the rest of the file.
   test("a tab on a blocked site is refused", async () => {
     await harness.seedSettings({ blocklist: ["127.0.0.1", "localhost"] });
