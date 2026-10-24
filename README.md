@@ -187,6 +187,16 @@ keys reach only the page's own key handlers and do not insert or delete text. En
 or in a form that leads to another site or out of the browser is refused, as clicks are.
 `press_key` works only on a tab showing a site you approved, and never asks.
 
+The agent runs several tool calls in one call with `batch`, up to 20, one after the other in
+order, with arguments it already has: a step cannot use what an earlier step returns. It stops
+at the first step that fails, a `fill_form` with a field that was not filled included, and says
+which steps did not run. Each step is checked exactly as when its tool is called on its own: a
+step that reads or acts in a page on a site you have not approved fails, and a `tab_open` or
+`navigate` step asks you first. An MCP client that asks you before each tool call asks once for
+the whole batch, and a rule in your client that denies or asks for one tool does not cover that
+tool inside `batch`: deny or ask for `batch` too to keep it. Foxhand's own checks apply to
+every step.
+
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an
 element screenshot Foxhand scrolls the page to bring the element into view, then captures its

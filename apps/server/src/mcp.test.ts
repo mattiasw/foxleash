@@ -289,6 +289,7 @@ describe("foxhand mcp", () => {
       const tools = field(list.result, "tools");
       assert.ok(Array.isArray(tools));
       assert.deepEqual(tools.map((tool) => field(tool, "name")).sort(), [
+        "batch",
         "click",
         "download",
         "drag",

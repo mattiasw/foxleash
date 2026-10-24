@@ -13,6 +13,7 @@ import { createMcpServer } from "./mcp.ts";
 import {
   prettyJsonLength,
   SCREENSHOT_NOTE,
+  someFieldFailed,
   type ToolBridge,
   UNTRUSTED_FRAME,
   type UploadContext,
@@ -48,10 +49,11 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the twenty-one tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the twenty-two tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+      "batch",
       "click",
       "download",
       "drag",
@@ -95,6 +97,7 @@ describe("tools", () => {
           "read_network",
           "resize_window",
           "download",
+          "batch",
         ].includes(tool.name),
         tool.name,
       );
@@ -2498,6 +2501,358 @@ describe("upload_file", () => {
     return { ...harness, logs };
   }
 });
+
+describe("batch", () => {
+  const REF = "0a1b2c3d-4";
+  const CLICKED = { ref: REF, x: 10, y: 20 };
+  const TYPED = { outcome: "typed", method: "exec_command" };
+  const TREE = { tree: 'textbox "Field" [0a1b2c3d-4] value "hi"', truncated: false };
+  const NOT_APPROVED = "Foxhand is not allowed on https://a.example.";
+  const PREFIX = "MCP error -32602: Input validation error: Invalid arguments for tool batch: ";
+
+  it("describes batch with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const batch = tools.find((tool) => tool.name === "batch");
+    assert.ok(batch !== undefined);
+    for (const words of [
+      ASKS_FIRST,
+      "up to 20 steps",
+      "stopping at the first step that fails",
+      "A fill_form step fails when any of its fields was not filled.",
+      "checked exactly as when its tool is called on its own",
+      "a step cannot use what an earlier step returns",
+      "read the page before trying again",
+    ]) {
+      assert.ok(batch.description?.includes(words), words);
+    }
+    assert.deepEqual(batch.inputSchema.required, ["steps"]);
+    const steps = record(record(batch.inputSchema.properties).steps);
+    assert.equal(steps.minItems, 1);
+    assert.equal(steps.maxItems, 20);
+    assert.equal(steps.description, "The tool calls to run, in order, at most 20");
+    const step = record(steps.items);
+    assert.deepEqual(step.required, ["tool"]);
+    const tool = record(record(step.properties).tool);
+    assert.ok(Array.isArray(tool.enum));
+    assert.deepEqual(
+      [...tool.enum].sort(),
+      tools
+        .map((listed) => listed.name)
+        .filter((name) => name !== "batch")
+        .sort(),
+    );
+    assert.equal(tool.enum.length, 21);
+  });
+
+  it("runs each step as its tool does and returns every result in order", LIMIT, async () => {
+    const { client, calls } = await start(
+      answers({ click: CLICKED, type: TYPED, read_page: TREE }),
+    );
+    const output = await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          { tool: "click", args: { tabId: 3, ref: REF } },
+          { tool: "type", args: { tabId: 3, ref: REF, text: "hi" } },
+          { tool: "read_page", args: { tabId: 3 } },
+        ],
+      },
+    });
+    assert.equal(output.isError, undefined);
+    assert.deepEqual(calls, [
+      { method: "click", params: { tabId: 3, ref: REF } },
+      { method: "type", params: { tabId: 3, ref: REF, text: "hi" } },
+      { method: "read_page", params: { tabId: 3 } },
+    ]);
+    const content = texts(output);
+    assert.equal(content.length, 6);
+    assert.equal(content[0], "Step 1 of 3, click: ok");
+    assert.equal(framedIn(content[1]), pretty(CLICKED));
+    assert.equal(content[2], "Step 2 of 3, type: ok");
+    assert.equal(framedIn(content[3]), pretty(TYPED));
+    assert.equal(content[4], "Step 3 of 3, read_page: ok");
+    assert.equal(framedIn(content[5]), TREE.tree);
+  });
+
+  it("runs a tabs_list step, which takes no arguments", LIMIT, async () => {
+    const tabs = { tabs: [] };
+    const { client, calls } = await start(() => tabs);
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: [{ tool: "tabs_list" }, { tool: "tabs_list", args: { extra: 1 } }] },
+    });
+    assert.equal(output.isError, undefined);
+    assert.deepEqual(calls, [
+      { method: "tabs_list", params: {} },
+      { method: "tabs_list", params: {} },
+    ]);
+    const content = texts(output);
+    assert.equal(content[0], "Step 1 of 2, tabs_list: ok");
+    assert.equal(framedIn(content[1]), pretty(tabs));
+    assert.equal(content[2], "Step 2 of 2, tabs_list: ok");
+  });
+
+  it("stops at a step Firefox refuses and returns the refusal framed", LIMIT, async () => {
+    const { client, calls } = await start((method) => {
+      if (method === "type") throw new HostError("site_not_approved", NOT_APPROVED);
+      return method === "click" ? CLICKED : TREE;
+    });
+    const output = await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          { tool: "click", args: { tabId: 3, ref: REF } },
+          { tool: "type", args: { tabId: 4, ref: REF, text: "hi" } },
+          { tool: "read_page", args: { tabId: 3 } },
+        ],
+      },
+    });
+    assert.equal(output.isError, true);
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["click", "type"],
+    );
+    const content = texts(output);
+    assert.equal(content.length, 5);
+    assert.equal(content[0], "Step 1 of 3, click: ok");
+    assert.equal(content[2], "Step 2 of 3, type: failed");
+    assert.equal(framedIn(content[3]), NOT_APPROVED);
+    assert.equal(content[4], "Step 3 (read_page) was not run because step 2 failed.");
+  });
+
+  it("stops after a fill_form step with a field that was not filled", LIMIT, async () => {
+    const filled = {
+      fields: [
+        { ref: "0a1b2c3d-1", ok: true, outcome: "typed" },
+        { ref: "0a1b2c3d-2", ok: false, code: "no_effect", message: "The page cleared it." },
+      ],
+    };
+    const { client, calls } = await start(answers({ fill_form: filled, press_key: {} }));
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: fillThenEnter() },
+    });
+    assert.equal(output.isError, true);
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["fill_form"],
+    );
+    const content = texts(output);
+    assert.equal(content.length, 3);
+    assert.equal(content[0], "Step 1 of 2, fill_form: failed");
+    assert.equal(framedIn(content[1]), pretty(filled));
+    assert.equal(content[2], "Step 2 (press_key) was not run because step 1 failed.");
+  });
+
+  it("goes on after a fill_form step that filled every field", LIMIT, async () => {
+    const filled = {
+      fields: [
+        { ref: "0a1b2c3d-1", ok: true, outcome: "typed" },
+        { ref: "0a1b2c3d-2", ok: true, outcome: "unchanged" },
+      ],
+    };
+    const pressed = { action: "submitted", prevented: false };
+    const { client, calls } = await start(answers({ fill_form: filled, press_key: pressed }));
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: fillThenEnter() },
+    });
+    assert.equal(output.isError, undefined);
+    assert.deepEqual(
+      calls.map((call) => call.method),
+      ["fill_form", "press_key"],
+    );
+    const content = texts(output);
+    assert.equal(content[0], "Step 1 of 2, fill_form: ok");
+    assert.equal(framedIn(content[1]), pretty(filled));
+    assert.equal(content[2], "Step 2 of 2, press_key: ok");
+    assert.equal(framedIn(content[3]), pretty(pressed));
+  });
+
+  it("stops after a fill_form step whose result it cannot read", LIMIT, async () => {
+    const unreadable: unknown[] = [
+      null,
+      5,
+      {},
+      { fields: "all" },
+      { fields: [1] },
+      { fields: [null] },
+      { fields: [{ ref: "0a1b2c3d-1" }] },
+      { fields: [{ ref: "0a1b2c3d-1", ok: "true" }] },
+    ];
+    for (const result of unreadable) {
+      const { client, calls } = await start(answers({ fill_form: result, press_key: {} }));
+      const output = await client.callTool({
+        name: "batch",
+        arguments: { steps: fillThenEnter() },
+      });
+      assert.equal(output.isError, true, JSON.stringify(result));
+      assert.deepEqual(
+        calls.map((call) => call.method),
+        ["fill_form"],
+        JSON.stringify(result),
+      );
+    }
+  });
+
+  it("counts a fill_form result it cannot read as failed", () => {
+    const framed = (json: string) => ({
+      content: [{ type: "text" as const, text: untrusted(json) }],
+    });
+    assert.equal(someFieldFailed(framed(pretty({ fields: [{ ok: true }] }))), false);
+    assert.equal(someFieldFailed(framed("{")), true);
+    assert.equal(
+      someFieldFailed({ content: [{ type: "text", text: pretty({ fields: [] }) }] }),
+      true,
+    );
+    assert.equal(
+      someFieldFailed({ content: [{ type: "image", data: "", mimeType: "image/png" }] }),
+      true,
+    );
+    assert.equal(someFieldFailed({ content: [] }), true);
+  });
+
+  it("stops at a step its tool refuses before calling Firefox", LIMIT, async () => {
+    const { client, calls } = await start(() => TREE);
+    const output = await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          { tool: "navigate", args: { tabId: 3, url: "https://a.example/", action: "reload" } },
+          { tool: "read_page", args: { tabId: 3 } },
+        ],
+      },
+    });
+    assert.deepEqual(output, {
+      content: [
+        { type: "text", text: "Step 1 of 2, navigate: failed" },
+        { type: "text", text: BOTH_OR_NEITHER },
+        { type: "text", text: "Step 2 (read_page) was not run because step 1 failed." },
+      ],
+      isError: true,
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  it("stops at a step whose args its tool's schema refuses", LIMIT, async () => {
+    const { client, calls } = await start(() => TREE);
+    const output = await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          { tool: "click", args: { tabId: "x", ref: REF } },
+          { tool: "read_page", args: { tabId: 3 } },
+        ],
+      },
+    });
+    assert.deepEqual(output, {
+      content: [
+        { type: "text", text: "Step 1 of 2, click: failed" },
+        {
+          type: "text",
+          text: "Invalid arguments for click: Invalid input: expected number, received string at tabId",
+        },
+        { type: "text", text: "Step 2 (read_page) was not run because step 1 failed." },
+      ],
+      isError: true,
+    });
+    assert.deepEqual(calls, []);
+  });
+
+  it("refuses batch as a step, and no steps or more than twenty", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ tabs: [] }));
+    const cases: Record<string, unknown>[] = [
+      { steps: [{ tool: "batch", args: { steps: [{ tool: "tabs_list" }] } }] },
+      { steps: [{ tool: "nothing" }] },
+      { steps: [] },
+      { steps: Array.from({ length: 21 }, () => ({ tool: "tabs_list" })) },
+    ];
+    for (const args of cases) {
+      const output = await client.callTool({ name: "batch", arguments: args });
+      assert.equal(output.isError, true);
+      assert.ok(text(output).startsWith(PREFIX), text(output));
+    }
+    assert.deepEqual(calls, []);
+    const twenty = await client.callTool({
+      name: "batch",
+      arguments: { steps: Array.from({ length: 20 }, () => ({ tool: "tabs_list" })) },
+    });
+    assert.equal(twenty.isError, undefined);
+    assert.equal(calls.length, 20);
+  });
+
+  it("leaves out a part of a step's result that does not fit in 8 MiB", LIMIT, async () => {
+    const tree = { tree: "a".repeat(5 * 1024 * 1024), truncated: false };
+    const { client, calls } = await start(() => tree);
+    const output = await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          { tool: "read_page", args: { tabId: 3 } },
+          { tool: "read_page", args: { tabId: 4 } },
+        ],
+      },
+    });
+    assert.equal(output.isError, undefined);
+    assert.equal(calls.length, 2);
+    const content = texts(output);
+    assert.equal(content.length, 4);
+    assert.equal(content[0], "Step 1 of 2, read_page: ok");
+    assert.equal(framedIn(content[1]), tree.tree);
+    assert.equal(content[2], "Step 2 of 2, read_page: ok");
+    assert.equal(
+      content[3],
+      "Part of the result of step 2 is left out: it is too large to return in a batch. The step ran.",
+    );
+    assert.ok(Buffer.byteLength(JSON.stringify(output.content)) <= MAX_RESULT_BYTES);
+  });
+
+  function fillThenEnter(): Record<string, unknown>[] {
+    return [
+      {
+        tool: "fill_form",
+        args: {
+          tabId: 3,
+          fields: [
+            { ref: "0a1b2c3d-1", value: "a" },
+            { ref: "0a1b2c3d-2", value: "b" },
+          ],
+        },
+      },
+      { tool: "press_key", args: { tabId: 3, key: "Enter", ref: "0a1b2c3d-2" } },
+    ];
+  }
+});
+
+/** A fake bridge that answers each method with its own result. */
+function answers(results: Partial<Record<MethodName, unknown>>): Answer {
+  return (method) => results[method];
+}
+
+/** Every item's text, after checking that each item is text. */
+function texts(output: unknown): string[] {
+  const content = record(output).content;
+  assert.ok(Array.isArray(content));
+  return content.map((each: unknown) => {
+    const item = record(each);
+    assert.equal(item.type, "text");
+    assert.equal(typeof item.text, "string");
+    return String(item.text);
+  });
+}
+
+/** The text inside one whole untrusted frame. */
+function framedIn(framed: string | undefined): string {
+  const match = UNTRUSTED_FRAME.exec(framed ?? "");
+  assert.ok(match !== null, `not one untrusted frame:\n${String(framed).slice(0, 500)}`);
+  const [, id = "", inner = ""] = match;
+  assert.equal(
+    framed,
+    untrusted(inner, () => id),
+  );
+  return inner;
+}
 
 async function start(
   answer: Answer,

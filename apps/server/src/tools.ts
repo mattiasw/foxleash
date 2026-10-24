@@ -31,9 +31,15 @@ import {
   UPLOAD_CHUNK_BYTES,
   UPLOAD_MAX_BYTES,
 } from "@foxhand/protocol";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
+import type {
+  CallToolResult,
+  ServerNotification,
+  ServerRequest,
+} from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
+import { type BatchTool, MAX_BATCH_STEPS, runBatch } from "./batch.ts";
 import { BridgeError, HostError } from "./bridge.ts";
 import type { Log } from "./log.ts";
 import { type SaveResult, savePathProblem, savePng } from "./save-file.ts";
@@ -108,6 +114,7 @@ const PRESS_KEY =
   "Press a key in the page in a tab of this session's Foxhand tab group, on the element given by ref, focused first, or else on the focused element. key is a named key (Enter, Tab, Escape, Space, Backspace, Delete, Insert, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12) or a single character, after any of the modifiers Shift, Control (or Ctrl), Alt and Meta joined with +, such as Control+a, Shift+Tab or Control++ for the + key. A character is sent as written, so write A for a capital A. Foxhand sends keydown, keypress for Enter and characters (not with Control or Meta), and keyup. Unless the page cancels the key, Foxhand then performs the key's default action itself: Enter in a field submits its form as the browser does, or clicks the button, link or summary it is on; Tab and Shift+Tab move focus to the next or previous element in tab order; Escape closes the open popover or modal dialog; ArrowUp and ArrowDown choose the previous or next option in a select. Enter on a link or in a form that leads to another site is refused: open such a page with navigate. Other keys reach only the page's own key handlers and insert or delete no text, so use type for text. The events are synthetic (isTrusted is false). Frames are not entered. The result gives action, the default action performed (none, submitted, clicked, focus_moved, selected_option, closed_dialog or hid_popover; none also when the form's own validation stops it), and prevented, true when the page cancelled the key. The tab must show a site the user approved; press_key never asks.";
 const MAX_FILL = MAX_FILL_CHARS.toLocaleString("en-US");
 const FILL_FORM = `Fill several form fields in the page in a tab of this session's Foxhand tab group in one call, in the order given. Give each field as ref, an element reference from read_page, and value: for a text field (a text, search, email, url, tel, password or number input, or a textarea), the text that replaces what it holds, where an empty string clears it; for a select, the value or label of the option to choose (value first), or a list of them for a select that takes several, which becomes its whole selection; for a checkbox, true or false; for a radio button, true. No key events are sent: Foxhand puts text in as the browser inserts typed text (execCommand insertText), and only when the page gets no input event from that, by setting the field's value as a framework's own edit does. Each text field then loses focus and gets a change event, as when the user moves on; a field whose page changes or clears it then, such as a box that suggests options, is reported as no_effect. A select gets input and change events when its selection changes. Foxhand clicks a checkbox or radio button whose state differs from the one given. A value the browser would change as the field stores it, such as letters in a number field or text longer than its maxlength, is refused. fill_form never submits the form: use press_key Enter with a field's ref, or click the submit button. The result lists the fields in the order given, each with its ref, ok, and either outcome (typed, selected, clicked or unchanged) or code and message; one field that fails does not stop the others. No value is returned, password fields included. A text field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. No field is started after ${FILL_START_LIMIT_MS / 1000} seconds and each text field takes at least a tenth of a second, so the fields left get not_attempted and can be filled in another call. Other frames are not entered. At most ${MAX_FILL_FIELDS} fields and ${MAX_FILL} characters across all values. The tab must show a site the user approved; fill_form never asks.`;
+const BATCH = `Run several Foxhand tool calls in one call: up to ${MAX_BATCH_STEPS} steps, one after the other in the order given, stopping at the first step that fails; the steps after it are not run. A fill_form step fails when any of its fields was not filled. Give each step as tool, the name of another Foxhand tool (not batch), and args, the arguments that tool takes on its own. The args are fixed when batch is called, so a step cannot use what an earlier step returns: use tab ids and element references you already have. The result gives, for each step that ran, a line with its number, its tool and ok or failed, followed by that step's own result as its tool returns it, and after a failure a line naming the steps that were not run. A part of a step's result that would make the whole result too large to return is left out with a note, and the next steps still run; call a tool that reads on its own to get its whole result. When the batch call fails without a result, for example because the client stopped waiting, earlier steps may have run: read the page before trying again. Each step is checked exactly as when its tool is called on its own: a step that reads or acts in the page of a tab on a site the user has not approved fails, and a tab_open or navigate step asks first, as those tools do. ${ASKS_FIRST}`;
 const CLICK_TARGET = "click needs either ref or both x and y, not both and not neither.";
 const HOVER_TARGET = "hover needs either ref or both x and y, not both and not neither.";
 const DOUBLE_RIGHT = "click takes doubleClick only with the left button.";
@@ -195,14 +202,18 @@ export function registerTools(
   upload: UploadContext,
   saveFolder: string | undefined = startingFolder(),
 ): void {
-  server.registerTool(
+  const tools = new Map<
+    string,
+    BatchTool<RequestHandlerExtra<ServerRequest, ServerNotification>>
+  >();
+  registerWithoutArgs(
     "tabs_list",
     {
       description: `List the tabs in this session's Foxhand tab group, with their ids, URLs, titles and which one is active. ${REDACTED_TABS}`,
     },
     () => run(bridge, "tabs_list", {}),
   );
-  server.registerTool(
+  register(
     "tab_open",
     {
       description: `Open a new tab in this session's Foxhand tab group, optionally at a URL, and return it. ${ASKS_FIRST} ${REDACTED_TABS}`,
@@ -212,7 +223,7 @@ export function registerTools(
     },
     ({ url }) => run(bridge, "tab_open", url === undefined ? {} : { url }),
   );
-  server.registerTool(
+  register(
     "navigate",
     {
       description: `Load a URL in a tab of this session's Foxhand tab group, or go back, forward or reload it, and return the tab. Give either url or action. A reload loads the page again without the browser's cache, and its form fields lose what was typed into them. ${ASKS_FIRST} ${REDACTED_TABS}`,
@@ -239,7 +250,7 @@ export function registerTools(
       return errorResult(BOTH_OR_NEITHER);
     },
   );
-  server.registerTool(
+  register(
     "wait_for",
     {
       description: WAIT_FOR,
@@ -279,7 +290,7 @@ export function registerTools(
       return run(bridge, "wait_for", params);
     },
   );
-  server.registerTool(
+  register(
     "tab_close",
     {
       description: `Close a tab of this session's Foxhand tab group and return the tabs left in the group. Foxhand refuses to close the last tab of a window, since that would close the window, and the tab where Foxhand is asking the user about a site. ${REDACTED_TABS}`,
@@ -287,7 +298,7 @@ export function registerTools(
     },
     ({ tabId }) => run(bridge, "tab_close", { tabId }),
   );
-  server.registerTool(
+  register(
     "tab_select",
     {
       description: `Make a tab of this session's Foxhand tab group the active tab of its window, and return it. The window is not brought to the front. ${REDACTED_TABS}`,
@@ -295,7 +306,7 @@ export function registerTools(
     },
     ({ tabId }) => run(bridge, "tab_select", { tabId }),
   );
-  server.registerTool(
+  register(
     "resize_window",
     {
       description: RESIZE_WINDOW,
@@ -316,7 +327,7 @@ export function registerTools(
     },
     ({ width, height }) => run(bridge, "resize_window", { width, height }),
   );
-  server.registerTool(
+  register(
     "read_page",
     {
       description: READ_PAGE,
@@ -355,7 +366,7 @@ export function registerTools(
       return called.ok ? treeResult(called.result) : called.error;
     },
   );
-  server.registerTool(
+  register(
     "get_page_text",
     {
       description: GET_PAGE_TEXT,
@@ -379,7 +390,7 @@ export function registerTools(
     ({ tabId, maxChars }) =>
       run(bridge, "get_page_text", maxChars === undefined ? { tabId } : { tabId, maxChars }),
   );
-  server.registerTool(
+  register(
     "screenshot",
     {
       description: SCREENSHOT,
@@ -420,7 +431,7 @@ export function registerTools(
       return screenshotResult(png.data, saved);
     },
   );
-  server.registerTool(
+  register(
     "upload_file",
     {
       description: UPLOAD_FILE,
@@ -466,7 +477,7 @@ export function registerTools(
       return sendUpload(bridge, upload.log, { tabId, ref }, files);
     },
   );
-  server.registerTool(
+  register(
     "download",
     {
       description: DOWNLOAD,
@@ -481,7 +492,7 @@ export function registerTools(
     },
     ({ url, filename }) => run(bridge, "download", { url, filename }),
   );
-  server.registerTool(
+  register(
     "click",
     {
       description: CLICK,
@@ -508,7 +519,7 @@ export function registerTools(
       return run(bridge, "click", params);
     },
   );
-  server.registerTool(
+  register(
     "hover",
     {
       description: HOVER,
@@ -520,7 +531,7 @@ export function registerTools(
       return run(bridge, "hover", { tabId, ...target });
     },
   );
-  server.registerTool(
+  register(
     "scroll",
     {
       description: SCROLL,
@@ -555,7 +566,7 @@ export function registerTools(
       return run(bridge, "scroll", params);
     },
   );
-  server.registerTool(
+  register(
     "drag",
     {
       description: DRAG,
@@ -592,7 +603,7 @@ export function registerTools(
       return run(bridge, "drag", params);
     },
   );
-  server.registerTool(
+  register(
     "type",
     {
       description: TYPE,
@@ -612,7 +623,7 @@ export function registerTools(
     },
     ({ tabId, ref, text }) => run(bridge, "type", { tabId, ref, text }),
   );
-  server.registerTool(
+  register(
     "press_key",
     {
       description: PRESS_KEY,
@@ -634,7 +645,7 @@ export function registerTools(
     ({ tabId, key, ref }) =>
       run(bridge, "press_key", ref === undefined ? { tabId, key } : { tabId, key, ref }),
   );
-  server.registerTool(
+  register(
     "fill_form",
     {
       description: FILL_FORM,
@@ -669,8 +680,9 @@ export function registerTools(
     },
     ({ tabId, fields }) =>
       run(bridge, "fill_form", { tabId, fields: fields.map(({ ref, value }) => ({ ref, value })) }),
+    someFieldFailed,
   );
-  server.registerTool(
+  register(
     "read_console",
     {
       description: READ_CONSOLE,
@@ -729,7 +741,7 @@ export function registerTools(
       });
     },
   );
-  server.registerTool(
+  register(
     "read_network",
     {
       description: READ_NETWORK,
@@ -761,6 +773,82 @@ export function registerTools(
       if (!parsed.success) return errorResult(UNREADABLE_NETWORK);
       return networkResult(parsed.data);
     },
+  );
+  server.registerTool(
+    "batch",
+    {
+      description: BATCH,
+      inputSchema: {
+        steps: z
+          .array(
+            z.object({
+              tool: z.enum([...tools.keys()]).describe("The name of the Foxhand tool to call"),
+              args: z
+                .record(z.string(), z.unknown())
+                .optional()
+                .describe("The arguments the tool takes when called on its own; omit for none"),
+            }),
+          )
+          .min(1)
+          .max(MAX_BATCH_STEPS)
+          .describe(`The tool calls to run, in order, at most ${MAX_BATCH_STEPS}`),
+      },
+    },
+    ({ steps }, extra) => runBatch(steps, tools, extra, MAX_RESULT_BYTES),
+  );
+
+  function registerWithoutArgs(
+    name: string,
+    config: { description: string },
+    callback: ToolCallback,
+  ): void {
+    server.registerTool(name, config, callback);
+    // The SDK calls a tool without a schema with extra alone.
+    tools.set(name, { shape: {}, callback: (_args, extra) => callback(extra) });
+  }
+
+  function register<Shape extends z.ZodRawShape>(
+    name: string,
+    config: { description: string; inputSchema: Shape },
+    callback: ToolCallback<Shape>,
+    failed?: (result: CallToolResult) => boolean,
+  ): void {
+    server.registerTool(name, config, callback);
+    tools.set(
+      name,
+      failed === undefined
+        ? { shape: config.inputSchema, callback }
+        : { shape: config.inputSchema, callback, failed },
+    );
+  }
+}
+
+/**
+ * Whether fill_form's result has a field that was not filled; also when the result cannot be
+ * read, so that a batch stops rather than acts on a form in an unknown state.
+ */
+export function someFieldFailed(result: CallToolResult): boolean {
+  const first = result.content[0];
+  const framed = first?.type === "text" ? UNTRUSTED_FRAME.exec(first.text)?.[2] : undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(framed ?? "");
+  } catch {
+    // Left undefined, which counts as failed below.
+  }
+  if (typeof parsed !== "object" || parsed === null) return true;
+  const fields: unknown = Object.hasOwn(parsed, "fields")
+    ? Reflect.get(parsed, "fields")
+    : undefined;
+  return !Array.isArray(fields) || !fields.every(isFilled);
+}
+
+function isFilled(field: unknown): boolean {
+  return (
+    typeof field === "object" &&
+    field !== null &&
+    Object.hasOwn(field, "ok") &&
+    Reflect.get(field, "ok") === true
   );
 }
 

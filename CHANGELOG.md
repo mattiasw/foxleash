@@ -84,6 +84,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Your agent can fill in several form fields in one call with `fill_form`: text fields,
   selects, checkboxes and radio buttons, with a result for each field. It never submits the
   form.
+- Your agent can run several tool calls in one call with `batch`, up to 20, in order: it
+  stops at the first step that fails and returns each step's result, and every step is
+  checked as when its tool is called on its own. A rule in your MCP client that denies or asks
+  for one tool does not cover that tool inside `batch`: set it for `batch` too.
 - Your agent can save the file at a link into your Firefox download folder with the `download`
   tool, under a plain file name it chooses and never over an existing file, also where Firefox
   would open the file in another application. The link, and the address the file comes from
