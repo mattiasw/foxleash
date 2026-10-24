@@ -163,6 +163,12 @@ export const HISTORY_REQUEST_TIMEOUT_MS = 1000;
  * `navigate` answers below the host's 60 s request timeout.
  */
 export const HISTORY_RELOAD_TIMEOUT_MS = 20_000;
+/**
+ * Bounds loading the page in place of an about:blank that its reload landed on, so that with the
+ * reload's own wait (LOAD_GRACE_MS and LOAD_TIMEOUT_MS), `navigate` answers below the host's 60 s
+ * request timeout.
+ */
+export const BLANK_RELOAD_TIMEOUT_MS = 20_000;
 
 export function createHandlers<Handle>({
   browser,
@@ -283,13 +289,16 @@ export function createHandlers<Handle>({
     const history =
       target.kind === "action" && target.action !== "reload" ? watchHistoryLoad(tabId) : undefined;
     try {
-      const loaded = await waitForLoad(
-        browser,
-        timers,
-        tabId,
-        target.kind === "url" ? target.url : undefined,
-        () => startNavigation(tabId, target),
-      );
+      const loaded =
+        isReload(target) && gated !== undefined
+          ? await reloadPage(session, tabId, gated.url)
+          : await waitForLoad(
+              browser,
+              timers,
+              tabId,
+              target.kind === "url" ? target.url : undefined,
+              () => startNavigation(tabId, target),
+            );
       const shown =
         history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
       const view = await access.view(session);
@@ -924,15 +933,54 @@ export function createHandlers<Handle>({
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
     keepPrompt(session, tabId);
-    // A normal reload restores field values without Firefox's autofill mark; this one restores none
-    // (ADR 0021).
-    const loaded = await waitForLoad(browser, timers, tabId, url, () =>
+    const loaded =
       target.kind === "action" && !onPrompt && tab.url === url
-        ? browser.tabs.reload(tabId, { bypassCache: true })
-        : browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
-    );
+        ? await reloadPage(session, tabId, url)
+        : await waitForLoad(browser, timers, tabId, url, () =>
+            browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
+          );
     const after = await access.view(session);
     return after.tabInfo(loaded);
+  }
+
+  /**
+   * Reloads the web page `url` without the cache: a normal reload restores field values without
+   * Firefox's autofill mark; this one restores none (ADR 0021). In a tab opened blank, Firefox can
+   * keep an about:blank history entry after the page and reload that instead. Then the page is
+   * loaded in its place, only while the tab still shows that blank, in the session's group, off
+   * its prompt, on a site the session may act on: a new load, which restores no field value
+   * either, but may come from the cache.
+   */
+  async function reloadPage(session: string, tabId: number, url: string): Promise<Tab> {
+    // No URL to wait for: the reload loads whichever entry Firefox reloads.
+    const reloaded = await waitForLoad(browser, timers, tabId, undefined, () =>
+      browser.tabs.reload(tabId, { bypassCache: true }),
+    );
+    // A reload cut off by its timeout gets no second wait.
+    if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;
+    const group = await groups.groupOf(session);
+    const view = await access.view(session);
+    const tab = await existingTab(tabId);
+    // No await from here to the load. Firefox changes a tab's url only when a load commits, so a
+    // load started meanwhile still shows about:blank, but not complete.
+    if (
+      tab.url !== "about:blank" ||
+      tab.status !== "complete" ||
+      group === undefined ||
+      tab.groupId !== group.id ||
+      access.openPrompt(session)?.tabId === tabId ||
+      !view.allowed(url)
+    ) {
+      return tab;
+    }
+    return waitForLoad(
+      browser,
+      timers,
+      tabId,
+      url,
+      () => browser.tabs.update(tabId, { url, loadReplace: true }),
+      BLANK_RELOAD_TIMEOUT_MS,
+    );
   }
 
   /**

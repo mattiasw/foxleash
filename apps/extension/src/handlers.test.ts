@@ -16,10 +16,12 @@ import {
   FAKE_EXTENSION_ID,
   type FakeBrowser,
   type FakePort,
+  type FakeTab,
   flush,
   ONE_PIXEL_PNG,
 } from "./fake-browser.ts";
 import {
+  BLANK_RELOAD_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
   createHandlers,
   HISTORY_RELOAD_TIMEOUT_MS,
@@ -336,6 +338,7 @@ describe("navigate", { timeout: 10000 }, () => {
     assert.ok(fakeTab);
     fakeTab.title = "Before reload";
     const reload = t.mock.method(fake.browser.tabs, "reload");
+    const updates = fake.tabUpdates.length;
     const reloaded = await navigate("s1", { tabId: tab.id, action: "reload" });
     assert.deepEqual(reloaded, {
       ...tab,
@@ -343,6 +346,7 @@ describe("navigate", { timeout: 10000 }, () => {
       title: "Title of https://b.example/",
     });
     assert.deepEqual(reload.mock.calls[0]?.arguments, [tab.id, { bypassCache: true }]);
+    assert.equal(fake.tabUpdates.length, updates);
   });
 
   it("returns the tab after the grace when going back has nowhere to go", async () => {
@@ -746,8 +750,10 @@ describe("blocklist", { timeout: 10000 }, () => {
     const tab = await open("s1");
     const reload = t.mock.method(fake.browser.tabs, "reload");
     const get = t.mock.method(fake.browser.storage.local, "get");
+    const updates = fake.tabUpdates.length;
     assert.equal((await navigate("s1", { tabId: tab.id, action: "reload" })).url, "about:blank");
     assert.equal(reload.mock.callCount(), 1);
+    assert.equal(fake.tabUpdates.length, updates);
     assert.deepEqual(reload.mock.calls[0]?.arguments, [tab.id, { bypassCache: true }]);
     assert.equal(get.mock.callCount(), 1);
   });
@@ -1507,6 +1513,138 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
   });
 });
 
+describe("navigate reload that Firefox lands on about:blank", { timeout: 10000 }, () => {
+  it("loads the page in place of the blank entry and returns the tab on the page", async () => {
+    const { fake, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    const history = [...(fake.tabs.get(tab.id)?.history ?? [])];
+    const reloads = reloadToBlank(fake);
+    const updates = fake.tabUpdates.length;
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, action: "reload" }), tab);
+    assert.deepEqual(reloads, [[tab.id, { bypassCache: true }]]);
+    assert.deepEqual(fake.tabUpdates.slice(updates), [
+      { tabId: tab.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    assert.deepEqual(fake.tabs.get(tab.id)?.history, history);
+  });
+
+  it("loads nothing in place of the blank when the tab may no longer get the page", async () => {
+    const cases: [string, (context: ReturnType<typeof setup>, tab: FakeTab) => void][] = [
+      ["approval withdrawn", ({ sessions }) => sessions.set("s1", state([]))],
+      [
+        "site blocked",
+        ({ fake }) => {
+          void fake.browser.storage.local.set({ blocklist: ["a.example"] });
+        },
+      ],
+      ["moved to another group", (_context, tab) => Object.assign(tab, { groupId: 999 })],
+      [
+        "moved out of its emptied group",
+        ({ fake }, tab) => {
+          fake.groups.delete(tab.groupId);
+          tab.groupId = -1;
+        },
+      ],
+      [
+        "moved on to another page",
+        (_context, tab) => Object.assign(tab, { url: "https://a.example/other" }),
+      ],
+      // A load started meanwhile, not yet committed.
+      ["loading again", (_context, tab) => Object.assign(tab, { status: "loading" })],
+    ];
+    for (const [label, change] of cases) {
+      const context = setup();
+      const { fake, navigate, open, sessions } = context;
+      sessions.set("s1", state(["https://a.example"]));
+      const tab = await open("s1", "https://a.example/page");
+      const fakeTab = fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      const reloads = reloadToBlank(fake, () => change(context, fakeTab));
+      const updates = fake.tabUpdates.length;
+      const url = label === "moved on to another page" ? "https://a.example/other" : "about:blank";
+      await navigate("s1", { tabId: tab.id, action: "reload" });
+      assert.deepEqual(reloads, [[tab.id, { bypassCache: true }]], label);
+      assert.deepEqual(fake.tabUpdates.slice(updates), [], label);
+      assert.equal(fakeTab.url, url, label);
+    }
+  });
+
+  it("loads nothing in place of the blank once the session's prompt is in the tab", async (t) => {
+    const { fake, access, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    let landed = false;
+    const openPrompt = access.openPrompt;
+    t.mock.method(access, "openPrompt", (session: string) =>
+      landed ? { tabId: tab.id, site: "https://c.example" } : openPrompt(session),
+    );
+    reloadToBlank(fake, () => {
+      landed = true;
+    });
+    const updates = fake.tabUpdates.length;
+    await navigate("s1", { tabId: tab.id, action: "reload" });
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(fake.tabs.get(tab.id)?.url, "about:blank");
+  });
+
+  it("loads nothing in place of the blank when the reload's wait timed out first", async () => {
+    const { fake, timers, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    let reloads = 0;
+    // The reload never completes.
+    fake.browser.tabs.reload = async (tabId) => {
+      reloads += 1;
+      fakeTab.url = "about:blank";
+      fake.emitStatus(tabId, "loading");
+    };
+    const updates = fake.tabUpdates.length;
+    const reloaded = navigate("s1", { tabId: tab.id, action: "reload" });
+    for (let turn = 0; turn < 50 && reloads === 0; turn += 1) await flush();
+    assert.equal(reloads, 1);
+    timers.advance(LOAD_TIMEOUT_MS);
+    // It completes on about:blank just after the wait gave up.
+    fakeTab.status = "complete";
+    await reloaded;
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(fakeTab.url, "about:blank");
+  });
+
+  it("returns the tab as it is when the page's load in place of the blank does not complete", async () => {
+    const { fake, timers, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    reloadToBlank(fake);
+    const updates: unknown[] = [];
+    const get = fake.browser.tabs.get;
+    // The load never completes, nor commits.
+    fake.browser.tabs.update = async (tabId, properties) => {
+      updates.push({ tabId, ...properties });
+      fake.emitStatus(tabId, "loading");
+      return get(tabId);
+    };
+    let done = false;
+    const reloaded = navigate("s1", { tabId: tab.id, action: "reload" }).finally(() => {
+      done = true;
+    });
+    for (let turn = 0; turn < 50 && updates.length === 0; turn += 1) await flush();
+    assert.deepEqual(updates, [
+      { tabId: tab.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    timers.advance(BLANK_RELOAD_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(1);
+    for (let turn = 0; turn < 50 && !done; turn += 1) await flush();
+    assert.equal(done, true);
+    assert.equal(fake.tabs.get(tab.id)?.status, "loading");
+    await reloaded;
+  });
+});
+
 describe("approval", { timeout: 10000 }, () => {
   it("loads nothing before the answer, then replaces the prompt with the page", async () => {
     const { fake, call, page } = setup();
@@ -1826,6 +1964,39 @@ describe("approval", { timeout: 10000 }, () => {
       assert.equal(loadsOf(fake, "https://a.example/page"), moved ? 1 : 0);
       reload.mock.restore();
     }
+  });
+
+  it("loads the page after the answer in place of an about:blank its reload landed on", async () => {
+    const { fake, call, open, timeOut } = setup();
+    const other = await open("s1");
+    const otherTab = fake.tabs.get(other.id);
+    assert.ok(otherTab);
+    otherTab.url = "https://a.example/page";
+    otherTab.history = ["https://a.example/page"];
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    const reloads = reloadToBlank(fake);
+    const updates = fake.tabUpdates.length;
+    const reloaded = call("s1", "navigate", { tabId: other.id, action: "reload" });
+    await flush();
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await reloaded;
+    assert.ok("tab" in result);
+    // The prompt's tab is the active one.
+    assert.deepEqual(result.tab, {
+      id: other.id,
+      url: "https://a.example/page",
+      title: "Title of https://a.example/page",
+      active: false,
+    });
+    assert.deepEqual(reloads, [[other.id, { bypassCache: true }]]);
+    assert.deepEqual(fake.tabUpdates.slice(updates), [
+      { tabId: other.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    assert.deepEqual(otherTab.history, ["https://a.example/page"]);
   });
 
   it("refuses to load after the answer when the tab left the session's group, keeping the answer", async () => {
@@ -4728,6 +4899,28 @@ function reportBlankLoadBefore(fake: FakeBrowser, url: string): void {
     }
     return update(tabId, properties);
   };
+}
+
+/**
+ * Makes a reload load about:blank, as when Firefox reloads an about:blank entry it kept after the
+ * page, and calls `landed` once that load has completed. Returns the reloads made.
+ */
+function reloadToBlank(fake: FakeBrowser, landed: () => void = () => {}): unknown[][] {
+  const reloads: unknown[][] = [];
+  fake.browser.tabs.reload = async (tabId, properties) => {
+    reloads.push([tabId, properties]);
+    const tab = fake.tabs.get(tabId);
+    assert.ok(tab);
+    tab.url = "about:blank";
+    tab.history[tab.index] = "about:blank";
+    fake.emitStatus(tabId, "loading");
+    queueMicrotask(() => {
+      tab.title = "New Tab";
+      fake.emitStatus(tabId, "complete");
+      landed();
+    });
+  };
+  return reloads;
 }
 
 function loadsOf(fake: { tabUpdates: { url?: string }[] }, url: string): number {
