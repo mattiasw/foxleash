@@ -153,6 +153,24 @@ export type TypeOutcome = "typed" | "sent_unconfirmed";
 /** How type got the text in. */
 export type TypeMethod = "exec_command" | "native_setter" | "beforeinput_dom";
 
+/** fill_form's most fields in one call. */
+export const MAX_FILL_FIELDS = 50;
+/** fill_form's most characters across all values; each string counts at least one. */
+export const MAX_FILL_CHARS = 100_000;
+/** fill_form starts no field after this long, so its reply comes well inside the page reply timeout. */
+export const FILL_START_LIMIT_MS = 4_000;
+
+/** Text for a text field, the option or options of a select, a checkbox's or radio's state. */
+export type FillValue = string | string[] | boolean;
+
+/** typed: text went in; selected / clicked: a select or checkbox changed; unchanged: it already was so. */
+export type FillOutcome = "typed" | "selected" | "clicked" | "unchanged";
+
+/** One field's result, keyed by its ref; never carries a value. */
+export type FillResult =
+  | { ref: string; ok: true; outcome: FillOutcome }
+  | { ref: string; ok: false; code: string; message: string };
+
 /** The default action press_key performed after the key's events. */
 export type KeyAction =
   | "none"
@@ -244,6 +262,10 @@ export interface Methods {
     params: { tabId: number; key: string; ref?: string };
     result: { action: KeyAction; prevented: boolean };
   };
+  fill_form: {
+    params: { tabId: number; fields: { ref: string; value: FillValue }[] };
+    result: { fields: FillResult[] };
+  };
   /** `recording` is false when Foxhand has not recorded the page since it loaded. */
   read_console: {
     params: { tabId: number };
@@ -288,6 +310,7 @@ export const METHOD_NAMES = [
   "drag",
   "type",
   "press_key",
+  "fill_form",
   "read_console",
   "read_network",
   "download",
@@ -299,3 +322,17 @@ type AssertTrue<T extends true> = T;
 type _AllMethodsListed = AssertTrue<
   [Exclude<MethodName, (typeof METHOD_NAMES)[number]>] extends [never] ? true : false
 >;
+
+/** What a fill_form request counts against MAX_FILL_CHARS: each string's length, at least one. */
+export function fillChars(fields: readonly { value: FillValue }[]): number {
+  let total = 0;
+  for (const { value } of fields) {
+    if (typeof value === "string") total += stringChars(value);
+    else if (Array.isArray(value)) for (const entry of value) total += stringChars(entry);
+  }
+  return total;
+}
+
+function stringChars(text: string): number {
+  return Math.max(1, text.length);
+}

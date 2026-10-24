@@ -89,6 +89,7 @@ describe("parseMessage accepts", () => {
         "drag",
         "type",
         "press_key",
+        "fill_form",
         "read_console",
         "read_network",
         "download",

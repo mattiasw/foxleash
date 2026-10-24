@@ -4,6 +4,8 @@ import { elementRect } from "./element-rect.ts";
 import { createElementRefs } from "./element-refs.ts";
 import { clickOptions, dragOptions, hoverOptions, scrollOptions } from "./page-actions.ts";
 import * as actions from "./page-actions-dom.ts";
+import { fillFormOptions } from "./page-fill.ts";
+import { fillForm } from "./page-fill-dom.ts";
 import { pressKeyOptions, typeOptions } from "./page-input.ts";
 import * as input from "./page-input-dom.ts";
 import { handlePageMessage, ownField, PageError, type PageHandlers } from "./page-messages.ts";
@@ -46,6 +48,11 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     drag: (params) => actions.drag(parsed(dragOptions(params)), { refs, pointer }),
     type: (params) => input.typeText(parsed(typeOptions(params)), { refs }),
     press_key: (params) => input.pressKey(parsed(pressKeyOptions(params)), { refs }),
+    fill_form: (params) =>
+      fillForm(parsed(fillFormOptions(params)), {
+        refs,
+        notePasswordFields: () => notePasswordFields({ passwordFields }),
+      }),
     read_console: () => readConsoleRecords(window),
     wait_for: (params) => conditionMet(params),
   };

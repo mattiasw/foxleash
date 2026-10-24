@@ -169,6 +169,15 @@ text was sent but not confirmed. `type` refuses a field that Firefox filled in f
 logins, addresses or cards, until you edit it. It works only on a tab showing a site you
 approved, and never asks.
 
+The agent fills several form fields in one call with `fill_form`, each given by its reference
+from `read_page`: text fields, selects, checkboxes and radio buttons. The text replaces what a
+field holds and goes in as with `type`; a select takes the value or label of an option, and a
+checkbox or radio button is clicked when its state differs. The result says for each field
+whether it was filled or why not, and never contains a field's value. `fill_form` never
+submits the form, and refuses a text field that Firefox filled in from your saved logins,
+addresses or cards, as `type` does. It works only on a tab showing a site you approved, and
+never asks.
+
 The agent presses a key with `press_key`, such as `Enter`, `Tab`, `Shift+Tab`, `Escape`,
 `ArrowDown` or `Control+a`, on an element from `read_page` or on the focused element. Foxhand
 sends the key's events and then does what the browser would do, unless the page cancels the

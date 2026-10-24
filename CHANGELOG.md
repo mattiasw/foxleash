@@ -81,6 +81,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Enter on a link or in a form that leads to another site or out of the browser is refused, as
   clicks are. `type` refuses a field that Firefox filled in from your saved logins, addresses
   or cards, until you edit it.
+- Your agent can fill in several form fields in one call with `fill_form`: text fields,
+  selects, checkboxes and radio buttons, with a result for each field. It never submits the
+  form.
 - Your agent can save the file at a link into your Firefox download folder with the `download`
   tool, under a plain file name it chooses and never over an existing file, also where Firefox
   would open the file in another application. The link, and the address the file comes from

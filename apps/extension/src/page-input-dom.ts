@@ -29,7 +29,7 @@ export interface InputPage {
   refs: ElementRefs<Element>;
 }
 
-type Field = HTMLInputElement | HTMLTextAreaElement;
+export type Field = HTMLInputElement | HTMLTextAreaElement;
 
 /** Where type puts the text: a field, or an editable element and the editing host around it. */
 type TypeTarget =
@@ -42,7 +42,7 @@ interface TabEntry {
 }
 
 // About how long a page's framework takes to re-render or undo an insertion.
-const SETTLE_MS = 100;
+export const SETTLE_MS = 100;
 // No fallback starts after this, so nothing is inserted after the page reply could time out.
 const FALLBACK_BEFORE_MS = 5_000;
 const EDITABLE = '[contenteditable]:not([contenteditable="false"])';
@@ -101,18 +101,7 @@ function typeTarget(element: Element, ref: string): TypeTarget {
     (element instanceof view.HTMLInputElement && isTypeableInput(element.type)) ||
     element instanceof view.HTMLTextAreaElement
   ) {
-    if (element.matches(":disabled") || element.readOnly) {
-      throw new PageError(
-        "not_editable",
-        `Element ${ref} is a disabled or read-only field, so type cannot change it.`,
-      );
-    }
-    if (element.matches(":autofill")) {
-      throw new PageError(
-        "not_editable",
-        `Firefox filled in element ${ref} from the user's saved logins, addresses or cards, so type cannot change it until the user edits it.`,
-      );
-    }
+    refuseLockedField(element, ref, "type");
     return { field: element, readable: true };
   }
   if (element instanceof view.HTMLElement && element.isContentEditable) {
@@ -129,6 +118,22 @@ function typeTarget(element: Element, ref: string): TypeTarget {
     }
   }
   throw notEditable(ref);
+}
+
+/** Refuses a field that is disabled, read-only, or filled in by Firefox from the user's data. */
+export function refuseLockedField(field: Field, ref: string, tool: "type" | "fill_form"): void {
+  if (field.matches(":disabled") || field.readOnly) {
+    throw new PageError(
+      "not_editable",
+      `Element ${ref} is a disabled or read-only field, so ${tool} cannot change it.`,
+    );
+  }
+  if (field.matches(":autofill")) {
+    throw new PageError(
+      "not_editable",
+      `Firefox filled in element ${ref} from the user's saved logins, addresses or cards, so ${tool} cannot change it until the user edits it.`,
+    );
+  }
 }
 
 /**
@@ -170,23 +175,28 @@ function notEditable(ref: string): PageError {
   );
 }
 
-/**
- * Focuses the field or the editing host. Checked against the active element of the element's
- * own root: a document's is a shadow host when focus is inside its shadow tree.
- */
+/** Focuses the field or the editing host. */
 function focusTarget(target: TypeTarget, ref: string): void {
   const element = target.field ?? target.host;
   element.focus();
-  const view = viewOf(element);
-  const root = element.getRootNode();
-  const active =
-    root instanceof view.Document || root instanceof view.ShadowRoot ? root.activeElement : null;
-  if (active !== element) {
+  if (!isFocused(element)) {
     throw new PageError(
       "not_editable",
       `Foxhand could not focus element ${ref}, so type cannot type into it.`,
     );
   }
+}
+
+/**
+ * Whether the element has focus. Checked against the active element of the element's own root:
+ * a document's is a shadow host when focus is inside its shadow tree.
+ */
+export function isFocused(element: Element): boolean {
+  const view = viewOf(element);
+  const root = element.getRootNode();
+  const active =
+    root instanceof view.Document || root instanceof view.ShadowRoot ? root.activeElement : null;
+  return active === element;
 }
 
 /** Puts the caret at the end, and whether it could: some inputs, such as email, have none. */
@@ -250,7 +260,7 @@ async function execInsert(
 }
 
 /** execCommand insertText, and whether Firefox says it ran. */
-function execCommand(doc: Document, text: string): boolean {
+export function execCommand(doc: Document, text: string): boolean {
   try {
     return doc.execCommand("insertText", false, text);
   } catch {
@@ -258,7 +268,7 @@ function execCommand(doc: Document, text: string): boolean {
   }
 }
 
-function wait(ms: number): Promise<void> {
+export function wait(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
@@ -273,7 +283,7 @@ function late(started: number): boolean {
   return performance.now() - started > FALLBACK_BEFORE_MS;
 }
 
-function noEffect(ref: string): PageError {
+export function noEffect(ref: string): PageError {
   return new PageError(
     "no_effect",
     `The text did not appear in element ${ref}; the page may accept only real typing.`,
@@ -308,7 +318,7 @@ function setFieldText(field: Field, text: string, ref: string): void {
 }
 
 /** Sets the value with the prototype setter of the field's own window, past any own `value`. */
-function setValue(field: Field, value: string): void {
+export function setValue(field: Field, value: string): void {
   const view = viewOf(field);
   const proto =
     field instanceof view.HTMLTextAreaElement

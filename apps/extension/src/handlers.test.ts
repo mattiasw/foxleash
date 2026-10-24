@@ -2332,7 +2332,7 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
   const REF = "0a1b2c3d-4";
   const TARGET_REF = "0a1b2c3d-9";
   const tools: {
-    method: "click" | "hover" | "scroll" | "drag" | "type" | "press_key";
+    method: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form";
     params: Record<string, unknown>;
     options: Record<string, unknown>;
     bad: [Record<string, unknown>, string];
@@ -2406,6 +2406,18 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
         { action: "navigated", prevented: false },
         { action: "none", prevented: "no" },
         { action: "none" },
+      ],
+    },
+    {
+      method: "fill_form",
+      params: { fields: [{ ref: REF, value: "hello", extra: true }], extra: true },
+      options: { fields: [{ ref: REF, value: "hello" }] },
+      bad: [{ fields: [] }, "fill_form needs fields to be a list of 1 to 50 fields."],
+      reply: { fields: [{ ref: REF, ok: true, outcome: "typed" }] },
+      badReplies: [
+        { fields: [{ ref: TARGET_REF, ok: true, outcome: "typed" }] },
+        { fields: [] },
+        { fields: [{ ref: REF, ok: false, code: "page_changed", message: "Gone." }] },
       ],
     },
   ];

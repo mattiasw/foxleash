@@ -3,6 +3,7 @@ import type { BrowserApi, Timers } from "./browser-api.ts";
 import { allowedPageSite, ToolError } from "./handlers.ts";
 import {
   capText,
+  MAX_ERROR_MESSAGE,
   MAX_PAGE_REPLY_CHARS,
   ownField,
   PAGE_ERROR_CODES,
@@ -19,8 +20,6 @@ export const CONTENT_SCRIPT = "content.js";
 export const PAGE_INJECTION_MS = 20_000;
 export const PAGE_REPLY_MS = 10_000;
 
-const MAX_ERROR_MESSAGE = 500;
-
 /**
  * Request types that, repeated, do something twice that the agent may not be able to undo (text
  * typed, a form submitted). A late reply does not mean the request did not run: the page thread
@@ -31,6 +30,7 @@ const ACTING_REQUEST_TYPES: readonly string[] = [
   "drag",
   "type",
   "press_key",
+  "fill_form",
   "upload_file",
 ] satisfies readonly MethodName[];
 

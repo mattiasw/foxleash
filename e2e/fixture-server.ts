@@ -43,6 +43,7 @@ export const TITLES = {
   inputFrames: "Fixture input frames",
   inputForms: "Fixture input forms",
   inputKeys: "Fixture input keys",
+  fillForm: "Fixture fill form",
   console: "Fixture console",
   consoleCsp: "Fixture console CSP",
   consoleLoad: "Fixture console load",
@@ -126,6 +127,13 @@ export const AUTOFILL_COLOURS = {
 } as const;
 /** The login the autofill tests save for the fixture server, which Firefox fills into its page. */
 export const AUTOFILL_LOGIN = { username: "WMWM MWMW", password: "pw-autofill-Jd5XqR" } as const;
+
+/** What the fill-form page's password field holds when it loads. */
+export const FILL_PASSWORD = "pw-fill-old-Ka3";
+/** What the password field holds that the fill-form page adds when its security select changes. */
+export const FILL_KEY = "psk-fill-Qw7";
+/** How long the fill-form page's slow fields' listeners run, in ms: past 4 s and past 5 s. */
+export const FILL_SLOW_MS = { slow: 4_200, slower: 5_200 } as const;
 
 /** Field values the read form holds that read_page must never return. */
 export const READ_SECRETS = {
@@ -467,6 +475,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, inputFormsPage(request.socket.localPort ?? 0));
     } else if (path === "/input-keys") {
       sendHtml(response, INPUT_KEYS_PAGE);
+    } else if (path === "/fill-form") {
+      // The other site is the same server under localhost.
+      sendHtml(response, fillFormPage(request.socket.localPort ?? 0));
     } else if (path === "/act-redirect") {
       // To the act page on another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/act` });
@@ -1949,6 +1960,136 @@ consumer.addEventListener("input", () => {
   window.consumed.push(consumer.value);
   consumer.value = "";
 });
+</script>
+</body></html>
+`;
+}
+
+// A form for fill_form, sent to the other site, with a field of each kind it fills and fields
+// whose page refuses, undoes or delays the fill. Every input, change and blur event is logged.
+function fillFormPage(port: number): string {
+  const other = `http://localhost:${port}/a`;
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.fillForm}</title></head>
+<body>
+<form id="form" action="${other}" method="get">
+<input id="text" name="text" aria-label="Text" value="Old text">
+<input id="second-text" name="second-text" aria-label="Second text" value="Old second">
+<textarea id="area" name="area" aria-label="Area">Old line</textarea>
+<input id="email" name="email" type="email" aria-label="Email" value="old@example.com">
+<input id="number" name="number" type="number" aria-label="Number" value="12">
+<input id="password" name="password" type="password" aria-label="Password" value="${FILL_PASSWORD}">
+<input id="react" aria-label="React" value="">
+<input id="cancelling" aria-label="Cancelling" value="Before">
+<input id="suggest" aria-label="Suggest" value="">
+<input id="disabled" aria-label="Disabled" value="Off" disabled>
+<select id="single" name="single" aria-label="Single">
+<option value="">Choose one</option>
+<option value="se">Sweden</option>
+<option value="no" disabled>Norway</option>
+<option value="fi">Finland</option>
+</select>
+<select id="sticky" aria-label="Sticky"><option value="a">Ay</option><option value="b">Bee</option></select>
+<select id="multi" name="multi" aria-label="Multi" multiple>
+<option value="r" selected>Red</option>
+<option value="g">Green</option>
+<option value="b">Blue</option>
+</select>
+<input id="off" type="checkbox" aria-label="Off box">
+<input id="on" type="checkbox" aria-label="On box" checked>
+<input id="first" type="radio" name="pick" aria-label="First pick" checked>
+<input id="second" type="radio" name="pick" aria-label="Second pick">
+<input id="stubborn" type="checkbox" aria-label="Stubborn box">
+<a id="link" href="${other}">Away <input id="linked" type="checkbox" aria-label="Linked box"></a>
+<select id="security" aria-label="Security"><option value="none">None</option><option value="wpa2">WPA2</option></select>
+<input id="show-key" type="checkbox" aria-label="Show key">
+<input id="short" aria-label="Short" maxlength="4" value="Ab">
+<input id="guarded" aria-label="Guarded" value="Guarded before">
+<input id="locking" aria-label="Locking" value="Locking before">
+<input id="shifty" aria-label="Shifty" value="Shifty before">
+<input id="late-cancelling" aria-label="Late cancelling" value="Late before">
+<input id="slow" aria-label="Slow" value="Slow before">
+<input id="slower" aria-label="Slower" value="Slower before">
+<button type="submit">Send</button>
+</form>
+<script>
+window.submits = 0;
+document.addEventListener("submit", () => { window.submits += 1; }, true);
+window.events = [];
+for (const type of ["input", "change", "blur"]) {
+  document.addEventListener(type, (event) => {
+    window.events.push({ id: event.target.id, type, trusted: event.isTrusted });
+  }, true);
+}
+window.countOf = (id, type) => window.events.filter((event) => event.id === id && event.type === type).length;
+// React's value tracking, as on the input page.
+window.reactState = {};
+function controlled(input, accepts) {
+  const native = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value");
+  let tracked = native.get.call(input);
+  let state = tracked;
+  window.reactState[input.id] = state;
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get() { return native.get.call(this); },
+    set(value) { tracked = String(value); native.set.call(this, value); },
+  });
+  input.addEventListener("input", () => {
+    const now = native.get.call(input);
+    if (now !== tracked) {
+      tracked = now;
+      if (accepts) state = now;
+      window.reactState[input.id] = state;
+    }
+    input.value = state;
+  });
+}
+controlled(document.getElementById("react"), true);
+// A field that takes no browser insertion, as an editor that handles beforeinput itself.
+document.getElementById("cancelling").addEventListener("beforeinput", (event) => event.preventDefault());
+// A box that clears unmatched text when it loses focus, as a suggesting combobox does.
+const suggest = document.getElementById("suggest");
+suggest.addEventListener("blur", () => { suggest.value = ""; });
+// A select whose page sets its previous option back.
+const sticky = document.getElementById("sticky");
+sticky.addEventListener("change", () => { sticky.value = "a"; });
+document.getElementById("stubborn").addEventListener("click", (event) => event.preventDefault());
+// A select that adds a password field and a checkbox that shows it as text, as a router's page does.
+const security = document.getElementById("security");
+security.addEventListener("change", () => {
+  if (document.getElementById("key") !== null) return;
+  const key = document.createElement("input");
+  key.id = "key";
+  key.type = "password";
+  key.setAttribute("aria-label", "Key");
+  key.value = "${FILL_KEY}";
+  security.after(key);
+});
+document.getElementById("show-key").addEventListener("change", (event) => {
+  const key = document.getElementById("key");
+  if (key !== null) key.type = event.target.checked ? "text" : "password";
+});
+// Fields whose page makes them read-only, or no text field, as they take text or focus.
+const guarded = document.getElementById("guarded");
+guarded.addEventListener("beforeinput", (event) => {
+  guarded.readOnly = true;
+  event.preventDefault();
+});
+const locking = document.getElementById("locking");
+locking.addEventListener("focus", () => { locking.readOnly = true; });
+const shifty = document.getElementById("shifty");
+shifty.addEventListener("focus", () => { shifty.type = "checkbox"; });
+function busy(id, type, ms) {
+  document.getElementById(id).addEventListener(type, (event) => {
+    const end = performance.now() + ms;
+    while (performance.now() < end) {}
+    if (type === "beforeinput") event.preventDefault();
+  });
+}
+busy("slow", "focus", ${FILL_SLOW_MS.slow});
+busy("slower", "focus", ${FILL_SLOW_MS.slower});
+// Takes no browser insertion, and decides that only after the text bound has passed.
+busy("late-cancelling", "beforeinput", ${FILL_SLOW_MS.slower});
 </script>
 </body></html>
 `;

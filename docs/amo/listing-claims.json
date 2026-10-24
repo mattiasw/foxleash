@@ -160,7 +160,13 @@
         },
         { "file": "apps/extension/src/read-page.ts", "contains": "matches(\":autofill\")" },
         { "file": "apps/extension/src/page-tree.ts", "contains": "autofilled ||" },
-        { "file": "apps/extension/src/page-input-dom.ts", "contains": "matches(\":autofill\")" }
+        { "file": "apps/extension/src/page-input-dom.ts", "contains": "matches(\":autofill\")" },
+        { "file": "apps/extension/src/page-fill-dom.ts", "contains": "refuseLockedField(" },
+        { "file": "apps/extension/src/page-fill-dom.ts", "contains": "page.notePasswordFields()" },
+        {
+          "file": "apps/extension/src/content.ts",
+          "contains": "notePasswordFields: () => notePasswordFields({ passwordFields })"
+        }
       ]
     },
     {

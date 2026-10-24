@@ -48,13 +48,14 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the twenty tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the twenty-one tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
       "click",
       "download",
       "drag",
+      "fill_form",
       "get_page_text",
       "hover",
       "navigate",
@@ -89,6 +90,7 @@ describe("tools", () => {
           "drag",
           "type",
           "press_key",
+          "fill_form",
           "read_console",
           "read_network",
           "resize_window",
@@ -536,6 +538,162 @@ describe("tools", () => {
       assert.equal(output.isError, undefined, name);
       assert.equal(unframed(output), pretty(result), name);
     }
+  });
+
+  it("describes fill_form with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "fill_form");
+    assert.equal(
+      tool?.description,
+      "Fill several form fields in the page in a tab of this session's Foxhand tab group in one call, in the order given. Give each field as ref, an element reference from read_page, and value: for a text field (a text, search, email, url, tel, password or number input, or a textarea), the text that replaces what it holds, where an empty string clears it; for a select, the value or label of the option to choose (value first), or a list of them for a select that takes several, which becomes its whole selection; for a checkbox, true or false; for a radio button, true. No key events are sent: Foxhand puts text in as the browser inserts typed text (execCommand insertText), and only when the page gets no input event from that, by setting the field's value as a framework's own edit does. Each text field then loses focus and gets a change event, as when the user moves on; a field whose page changes or clears it then, such as a box that suggests options, is reported as no_effect. A select gets input and change events when its selection changes. Foxhand clicks a checkbox or radio button whose state differs from the one given. A value the browser would change as the field stores it, such as letters in a number field or text longer than its maxlength, is refused. fill_form never submits the form: use press_key Enter with a field's ref, or click the submit button. The result lists the fields in the order given, each with its ref, ok, and either outcome (typed, selected, clicked or unchanged) or code and message; one field that fails does not stop the others. No value is returned, password fields included. A text field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. No field is started after 4 seconds and each text field takes at least a tenth of a second, so the fields left get not_attempted and can be filled in another call. Other frames are not entered. At most 50 fields and 100,000 characters across all values. The tab must show a site the user approved; fill_form never asks.",
+    );
+    assert.deepEqual(tool?.inputSchema.required, ["tabId", "fields"]);
+    assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), ["tabId", "fields"]);
+    const fields = record(tool?.inputSchema.properties?.fields);
+    assert.equal(fields.type, "array");
+    assert.equal(fields.minItems, 1);
+    assert.equal(fields.maxItems, 50);
+    assert.equal(fields.description, "The fields to fill, in order, at most 50");
+    const items = record(fields.items);
+    assert.deepEqual(items.required, ["ref", "value"]);
+    const properties = record(items.properties);
+    assert.deepEqual(record(properties.ref), {
+      type: "string",
+      description:
+        "An element reference from an earlier read_page of the same page: the field to set",
+    });
+    assert.equal(
+      record(properties.value).description,
+      "For a text field or textarea, the text that replaces what it holds (empty clears it); for a select, the value or label of the option to choose, or a list of them for a select that takes several; for a checkbox, true or false; for a radio button, true",
+    );
+    assert.deepEqual(record(properties.value).anyOf, [
+      { type: "string", maxLength: 50_000 },
+      { type: "boolean" },
+      { type: "array", items: { type: "string", maxLength: 50_000 } },
+    ]);
+  });
+
+  it("passes fill_form only the tab and each field's ref and value", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ fields: [] }));
+    const longest = "a".repeat(50_000);
+    const output = await client.callTool({
+      name: "fill_form",
+      arguments: {
+        tabId: 0,
+        extra: true,
+        fields: [
+          { ref: "0a1b2c3d-1", value: "hello", extra: 1 },
+          { ref: "0a1b2c3d-2", value: true },
+          { ref: "0a1b2c3d-3", value: ["a", ""] },
+          { ref: "0a1b2c3d-4", value: longest },
+          { ref: "0a1b2c3d-5", value: longest.slice(10) },
+        ],
+      },
+    });
+    assert.equal(output.isError, undefined);
+    assert.deepEqual(calls, [
+      {
+        method: "fill_form",
+        params: {
+          tabId: 0,
+          fields: [
+            { ref: "0a1b2c3d-1", value: "hello" },
+            { ref: "0a1b2c3d-2", value: true },
+            { ref: "0a1b2c3d-3", value: ["a", ""] },
+            { ref: "0a1b2c3d-4", value: longest },
+            { ref: "0a1b2c3d-5", value: longest.slice(10) },
+          ],
+        },
+      },
+    ]);
+    const params = record(calls[0]?.params);
+    assert.deepEqual(Object.keys(params), ["tabId", "fields"]);
+    assert.ok(Array.isArray(params.fields));
+    for (const field of params.fields)
+      assert.deepEqual(Object.keys(record(field)), ["ref", "value"]);
+  });
+
+  it("refuses fill_form arguments outside the schema", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ fields: [] }));
+    const field = (value: unknown) => ({ ref: "a", value });
+    const cases: [Record<string, unknown>, string][] = [
+      [{ tabId: 1, fields: [] }, "Too small: expected array to have >=1 items at fields"],
+      [
+        { tabId: 1, fields: Array.from({ length: 51 }, () => field(true)) },
+        "Too big: expected array to have <=50 items at fields",
+      ],
+      [{ tabId: 1, fields: [field(3)] }, "Invalid input at fields[0].value"],
+      [{ tabId: 1, fields: [field({ a: 1 })] }, "Invalid input at fields[0].value"],
+      [
+        { tabId: 1, fields: [field("a".repeat(50_001))] },
+        "Too big: expected string to have <=50000 characters at fields[0].value",
+      ],
+      [
+        { tabId: 1, fields: [field(["a".repeat(50_001)])] },
+        "Too big: expected string to have <=50000 characters at fields[0].value[0]",
+      ],
+      [
+        { tabId: 1, fields: [{ value: "a" }] },
+        "Invalid input: expected string, received undefined at fields[0].ref",
+      ],
+      [
+        { tabId: 1, fields: [field("a".repeat(50_000)), field("a".repeat(50_000)), field("")] },
+        "At most 100,000 characters across all values at fields",
+      ],
+      [{ tabId: -1, fields: [field(true)] }, "Too small: expected number to be >=0 at tabId"],
+    ];
+    for (const [args, reason] of cases) {
+      const output = await client.callTool({ name: "fill_form", arguments: args });
+      assert.deepEqual(
+        output,
+        {
+          content: [
+            {
+              type: "text",
+              text: `MCP error -32602: Input validation error: Invalid arguments for tool fill_form: ${reason}`,
+            },
+          ],
+          isError: true,
+        },
+        reason,
+      );
+    }
+    assert.deepEqual(calls, []);
+  });
+
+  it("takes fill_form values that add up to exactly the most characters", LIMIT, async () => {
+    const { client, calls } = await start(() => ({ fields: [] }));
+    const fields = [
+      { ref: "a", value: "a".repeat(50_000) },
+      { ref: "b", value: "a".repeat(49_999) },
+      { ref: "c", value: "" },
+    ];
+    const output = await client.callTool({ name: "fill_form", arguments: { tabId: 1, fields } });
+    assert.equal(output.isError, undefined);
+    assert.equal(calls.length, 1);
+  });
+
+  it("returns fill_form's results as JSON in one untrusted frame", LIMIT, async () => {
+    const result = {
+      fields: [
+        { ref: "0a1b2c3d-1", ok: true, outcome: "typed" },
+        { ref: "0a1b2c3d-2", ok: false, code: "not_editable", message: "No." },
+      ],
+    };
+    const { client } = await start(() => result);
+    const output = await client.callTool({
+      name: "fill_form",
+      arguments: {
+        tabId: 1,
+        fields: [
+          { ref: "0a1b2c3d-1", value: "x" },
+          { ref: "0a1b2c3d-2", value: "y" },
+        ],
+      },
+    });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(result));
   });
 
   it("passes get_page_text only the arguments given", LIMIT, async () => {

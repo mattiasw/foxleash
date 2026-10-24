@@ -292,6 +292,7 @@ describe("foxhand mcp", () => {
         "click",
         "download",
         "drag",
+        "fill_form",
         "get_page_text",
         "hover",
         "navigate",

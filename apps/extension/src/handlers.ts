@@ -40,6 +40,7 @@ import {
   scrollOptions,
   scrollResultOf,
 } from "./page-actions.ts";
+import { fillFormOptions, fillFormResultOf } from "./page-fill.ts";
 import { pressKeyOptions, pressKeyResultOf, typeOptions, typeResultOf } from "./page-input.ts";
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
@@ -166,6 +167,8 @@ export function createHandlers<Handle>({
     type: (session, params) => pageAction(session, params, "type", typeOptions, typeResultOf),
     press_key: (session, params) =>
       pageAction(session, params, "press_key", pressKeyOptions, pressKeyResultOf),
+    fill_form: (session, params) =>
+      pageAction(session, params, "fill_form", fillFormOptions, fillFormResultOf),
     read_console: readConsole,
     read_network: readNetwork,
     download,
@@ -601,18 +604,18 @@ export function createHandlers<Handle>({
    * Acts in a page through the content script, which runs only after the site gate: the tool's
    * options parsed here and again in the page, and the page's reply checked.
    */
-  async function pageAction<R>(
+  async function pageAction<O extends Params, R>(
     session: string,
     params: Params,
-    tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key",
-    parse: (params: Params) => Params | string,
-    check: (reply: unknown) => R | undefined,
+    tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form",
+    parse: (params: Params) => O | string,
+    check: (reply: unknown, options: O) => R | undefined,
   ): Promise<R> {
     const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     // The reply comes from the page's content process: own fields only, of exact types.
-    const result = check(await pages.request(session, tabId, tool, options));
+    const result = check(await pages.request(session, tabId, tool, options), options);
     if (result === undefined) {
       throw new ToolError(
         "page_error",

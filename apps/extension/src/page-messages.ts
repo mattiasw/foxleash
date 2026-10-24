@@ -37,6 +37,9 @@ export const PAGE_ERROR_CODES: readonly string[] = [
 /** The background's cap on the length of a reply as JSON. */
 export const MAX_PAGE_REPLY_CHARS = 2_000_000;
 
+/** The background's cap on the length of a page's error message. */
+export const MAX_ERROR_MESSAGE = 500;
+
 /** A failure a page handler reports: `code` is one of `PAGE_ERROR_CODES`, `message` one plain sentence. */
 export class PageError extends Error {
   readonly code: string;

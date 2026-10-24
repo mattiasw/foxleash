@@ -8,8 +8,12 @@ import {
   DEFAULT_PAGE_TEXT_CHARS,
   DEFAULT_WAIT_FOR_MS,
   DOWNLOAD_MAX_BYTES,
+  FILL_START_LIMIT_MS,
+  fillChars,
   MAX_CONSOLE_MESSAGES,
   MAX_CONSOLE_TEXT,
+  MAX_FILL_CHARS,
+  MAX_FILL_FIELDS,
   MAX_NETWORK_HEADER,
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_PATTERN,
@@ -102,6 +106,8 @@ const MAX_TYPE = MAX_TYPE_CHARS.toLocaleString("en-US");
 const TYPE = `Type text into a field or editable area in the page in a tab of this session's Foxhand tab group: Foxhand focuses the element, adds the text after what it already holds, and reads it back. Give ref, an element reference from read_page, of a text field (a text, search, email, url, tel, password or number input, or a textarea), of an element the page lets the user edit, or of a frame on the page's own site that holds an editor's input. No key events are sent: Foxhand inserts the text as the browser inserts typed text (execCommand insertText), and only when that leaves the element unchanged without the page receiving it, once more by setting the field's value as a framework's own edit does, or by inserting it into the editable area. The result gives outcome, typed when the text was read back or sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document), and method, how the text went in: exec_command, native_setter or beforeinput_dom. When the text did not appear, the call fails with no_effect: the page may accept only real typing, or took the text without showing it in the element, so read the page before typing it again. A field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. Typing a newline does not submit a form; use press_key Enter for that. Other frames are not entered. At most ${MAX_TYPE} characters. The tab must show a site the user approved; type never asks.`;
 const PRESS_KEY =
   "Press a key in the page in a tab of this session's Foxhand tab group, on the element given by ref, focused first, or else on the focused element. key is a named key (Enter, Tab, Escape, Space, Backspace, Delete, Insert, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, F1 to F12) or a single character, after any of the modifiers Shift, Control (or Ctrl), Alt and Meta joined with +, such as Control+a, Shift+Tab or Control++ for the + key. A character is sent as written, so write A for a capital A. Foxhand sends keydown, keypress for Enter and characters (not with Control or Meta), and keyup. Unless the page cancels the key, Foxhand then performs the key's default action itself: Enter in a field submits its form as the browser does, or clicks the button, link or summary it is on; Tab and Shift+Tab move focus to the next or previous element in tab order; Escape closes the open popover or modal dialog; ArrowUp and ArrowDown choose the previous or next option in a select. Enter on a link or in a form that leads to another site is refused: open such a page with navigate. Other keys reach only the page's own key handlers and insert or delete no text, so use type for text. The events are synthetic (isTrusted is false). Frames are not entered. The result gives action, the default action performed (none, submitted, clicked, focus_moved, selected_option, closed_dialog or hid_popover; none also when the form's own validation stops it), and prevented, true when the page cancelled the key. The tab must show a site the user approved; press_key never asks.";
+const MAX_FILL = MAX_FILL_CHARS.toLocaleString("en-US");
+const FILL_FORM = `Fill several form fields in the page in a tab of this session's Foxhand tab group in one call, in the order given. Give each field as ref, an element reference from read_page, and value: for a text field (a text, search, email, url, tel, password or number input, or a textarea), the text that replaces what it holds, where an empty string clears it; for a select, the value or label of the option to choose (value first), or a list of them for a select that takes several, which becomes its whole selection; for a checkbox, true or false; for a radio button, true. No key events are sent: Foxhand puts text in as the browser inserts typed text (execCommand insertText), and only when the page gets no input event from that, by setting the field's value as a framework's own edit does. Each text field then loses focus and gets a change event, as when the user moves on; a field whose page changes or clears it then, such as a box that suggests options, is reported as no_effect. A select gets input and change events when its selection changes. Foxhand clicks a checkbox or radio button whose state differs from the one given. A value the browser would change as the field stores it, such as letters in a number field or text longer than its maxlength, is refused. fill_form never submits the form: use press_key Enter with a field's ref, or click the submit button. The result lists the fields in the order given, each with its ref, ok, and either outcome (typed, selected, clicked or unchanged) or code and message; one field that fails does not stop the others. No value is returned, password fields included. A text field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. No field is started after ${FILL_START_LIMIT_MS / 1000} seconds and each text field takes at least a tenth of a second, so the fields left get not_attempted and can be filled in another call. Other frames are not entered. At most ${MAX_FILL_FIELDS} fields and ${MAX_FILL} characters across all values. The tab must show a site the user approved; fill_form never asks.`;
 const CLICK_TARGET = "click needs either ref or both x and y, not both and not neither.";
 const HOVER_TARGET = "hover needs either ref or both x and y, not both and not neither.";
 const DOUBLE_RIGHT = "click takes doubleClick only with the left button.";
@@ -627,6 +633,42 @@ export function registerTools(
     },
     ({ tabId, key, ref }) =>
       run(bridge, "press_key", ref === undefined ? { tabId, key } : { tabId, key, ref }),
+  );
+  server.registerTool(
+    "fill_form",
+    {
+      description: FILL_FORM,
+      inputSchema: {
+        tabId: tabIdSchema(),
+        fields: z
+          .array(
+            z.object({
+              ref: z
+                .string()
+                .describe(
+                  "An element reference from an earlier read_page of the same page: the field to set",
+                ),
+              value: z
+                .union([
+                  z.string().max(MAX_TYPE_CHARS),
+                  z.boolean(),
+                  z.array(z.string().max(MAX_TYPE_CHARS)),
+                ])
+                .describe(
+                  "For a text field or textarea, the text that replaces what it holds (empty clears it); for a select, the value or label of the option to choose, or a list of them for a select that takes several; for a checkbox, true or false; for a radio button, true",
+                ),
+            }),
+          )
+          .min(1)
+          .max(MAX_FILL_FIELDS)
+          .refine((fields) => fillChars(fields) <= MAX_FILL_CHARS, {
+            message: `At most ${MAX_FILL} characters across all values`,
+          })
+          .describe(`The fields to fill, in order, at most ${MAX_FILL_FIELDS}`),
+      },
+    },
+    ({ tabId, fields }) =>
+      run(bridge, "fill_form", { tabId, fields: fields.map(({ ref, value }) => ({ ref, value })) }),
   );
   server.registerTool(
     "read_console",

@@ -407,7 +407,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.equal(timers.pending(), timersBefore);
   });
 
-  for (const type of ["click", "drag", "type", "press_key", "upload_file"]) {
+  for (const type of ["click", "drag", "type", "press_key", "fill_form", "upload_file"]) {
     it(`says ${type} may already have run when the page does not answer`, async () => {
       const { fake, pages, open, grant, timers } = setup();
       await grant(SITE);
