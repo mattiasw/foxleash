@@ -1177,7 +1177,7 @@ function headingLevel(element: Element): number {
 
 /**
  * The value a field shows, or that it is protected; undefined for anything else, and no value
- * when `state` says the user cannot see the field.
+ * for a file field or when `state` says the user cannot see the field.
  */
 function fieldOf(
   element: Element,
@@ -1187,6 +1187,7 @@ function fieldOf(
 ): LineStates["field"] {
   if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
     if (isProtected(element, page)) return { protected: true, filled: element.value !== "" };
+    if (element.type === "file") return undefined;
     if (state !== undefined && !state.visible) return undefined;
     if (element instanceof HTMLTextAreaElement || VALUE_ROLES.has(role)) {
       return { value: element.value };

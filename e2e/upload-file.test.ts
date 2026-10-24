@@ -39,8 +39,10 @@ interface PageFile {
 }
 
 interface Received {
-  files: Record<"single" | "many" | "unnamed" | "zone", PageFile[]>;
-  events: Record<"single" | "many" | "unnamed" | "zone", string[]> & { documentDrops: number };
+  files: Record<"single" | "many" | "unnamed" | "typed" | "zone", PageFile[]>;
+  events: Record<"single" | "many" | "unnamed" | "typed" | "zone", string[]> & {
+    documentDrops: number;
+  };
 }
 
 // One Firefox for the file: the tests run in order on one page.
@@ -53,7 +55,7 @@ describe("upload_file in real Firefox", () => {
   let allowed = "";
   let tabId = -1;
   let context = "";
-  const refs = { single: "", many: "", unnamed: "", zone: "", plain: "" };
+  const refs = { single: "", many: "", unnamed: "", typed: "", zone: "", plain: "" };
   const big = randomBytes(1_500_000);
 
   before(
@@ -88,6 +90,7 @@ describe("upload_file in real Firefox", () => {
         ["single", new RegExp(`^ *button "Single file" \\[${REF}\\] file field$`, "m")],
         ["many", new RegExp(`^ *button "Many files" \\[${REF}\\] file field$`, "m")],
         ["unnamed", new RegExp(`^ *button \\[${REF}\\] file field$`, "m")],
+        ["typed", new RegExp(`^ *textbox "Typed file" \\[${REF}\\] file field$`, "m")],
         ["zone", new RegExp(`^ *region "Drop zone" \\[${REF}\\]$`, "m")],
         ["plain", new RegExp(`^ *button "No drops" \\[${REF}\\]$`, "m")],
       ] as const) {
@@ -95,7 +98,7 @@ describe("upload_file in real Firefox", () => {
         assert.ok(ref !== undefined, `no ref for ${pattern} in:\n${tree}`);
         refs[key] = ref;
       }
-      assert.equal(tree.match(/ file field$/gm)?.length, 3, tree);
+      assert.equal(tree.match(/ file field$/gm)?.length, 4, tree);
     },
     { timeout: 120_000 },
   );
@@ -155,6 +158,23 @@ describe("upload_file in real Firefox", () => {
       { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
     ]);
     assert.deepEqual(page.events.unnamed, ["input", "change"]);
+  });
+
+  test("a file field with a text box role never shows the chosen file's name", async () => {
+    const result = await upload(refs.typed, [join(allowed, "notes.txt")]);
+    assert.equal(result.isError, false, result.text);
+    const page = await received();
+    assert.deepEqual(page.files.typed, [
+      { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+    ]);
+    assert.deepEqual(page.events.typed, ["input", "change"]);
+    const read = await harness.call(session, "read_page", { tabId });
+    assert.equal(read.isError, false, read.text);
+    const tree = untrustedContent(read.text) ?? "";
+    assert.match(tree, new RegExp(`^ *textbox "Typed file" \\[${refs.typed}\\] file field$`, "m"));
+    for (const leaked of ["fakepath", "notes.txt", "photo.png", "big.bin"]) {
+      assert.equal(tree.includes(leaked), false, `${leaked} in:\n${tree}`);
+    }
   });
 
   test("a field that takes one file refuses two", async () => {

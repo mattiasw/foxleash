@@ -1726,10 +1726,10 @@ function minimalPdf(): string {
   return pdf;
 }
 
-// Three file fields, one taking several files and one with no label, a drop zone that cancels
-// dragover and drop, and a button that takes no drops. The page keeps the files each target got
-// in window.received and the events it saw in window.events, with the drops that reached the
-// document.
+// Four file fields, one taking several files, one with no label and one with an explicit textbox
+// role, a drop zone that cancels dragover and drop, and a button that takes no drops. The page
+// keeps the files each target got in window.received and the events it saw in window.events, with
+// the drops that reached the document.
 const UPLOAD_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.upload}</title></head>
 <body>
@@ -1737,13 +1737,14 @@ const UPLOAD_PAGE = `<!doctype html>
 <input id="single" type="file" aria-label="Single file">
 <input id="many" type="file" multiple aria-label="Many files">
 <input id="unnamed" type="file">
+<input id="typed" type="file" role="textbox" aria-label="Typed file">
 <section id="zone" aria-label="Drop zone"><p>Drop files here</p></section>
 <button id="plain" type="button">No drops</button>
 </main>
 <script>
-window.received = { single: [], many: [], unnamed: [], zone: [] };
-window.events = { single: [], many: [], unnamed: [], zone: [], documentDrops: 0 };
-for (const id of ["single", "many", "unnamed"]) {
+window.received = { single: [], many: [], unnamed: [], typed: [], zone: [] };
+window.events = { single: [], many: [], unnamed: [], typed: [], zone: [], documentDrops: 0 };
+for (const id of ["single", "many", "unnamed", "typed"]) {
   const input = document.getElementById(id);
   input.addEventListener("input", () => window.events[id].push("input"));
   input.addEventListener("change", () => {
