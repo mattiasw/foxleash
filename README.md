@@ -287,17 +287,30 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   turns into another kind of field stays protected only if the agent read the page, took a
   screenshot of it or acted in it while it was still a password field, and a text field that
   the page puts in its place shows its value.
-  A text field Firefox filled in shows its value again once Firefox no longer highlights it
-  as filled in: after you edit it, after the page's own scripts report a change to it or
-  reload the page, and possibly after the agent goes back or forward to the page or Firefox
-  restores the tab. Screenshots hide the text of these fields, also in frames from other
-  sites, with a style sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a
-  frame does not take it, such as another add-on's frame (a password manager's menu); a frame
-  showing Firefox's error page for a page that could not be loaded or does not allow being
-  shown in a frame is the exception. When the page turns a password field into another kind
-  of field after the agent read the page, took a screenshot of it or acted in it while it was
-  a password field, a screenshot hides the text of every input element in the page, input
-  buttons included, outside its frames. A field that is none of these still shows its value.
+  When the agent reloads a page, Foxhand loads it without the browser's cache, so Firefox puts
+  back no field value. It does the same after the agent goes back or forward to a page that
+  Firefox loads again instead of keeping it in memory, except a page that a form sent with
+  POST or that holds a frame a form sent with POST, and a page on a site the agent may not act
+  on. The page's fields then lose what was typed into them.
+  A text field Firefox filled in shows its value again once Firefox no longer highlights it as
+  filled in: after you edit it; after the page's own scripts report a change to it, reload the
+  page or go back or forward; after the agent goes back or forward to a page that a form sent
+  with POST or that holds a frame a form sent with POST, or to a page on a site you had not
+  approved and then approve; in a frame, after the agent goes back or forward and only that
+  frame changes; and after a tab that was unloaded, by you or by Firefox to save memory, is
+  loaded again. Possibly also after Firefox restores your windows and tabs when it starts
+  again; after the agent goes back or forward and the page delays that, or Firefox delays
+  telling Foxhand about the page's request, by more than a second, or the computer's clock is
+  set back meanwhile; and to another tool call that reads the page while the agent goes back or
+  forward to it.
+  Screenshots hide the text of these fields, also in frames from other sites, with a style
+  sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a frame does not take
+  it, such as another add-on's frame (a password manager's menu); a frame showing Firefox's
+  error page for a page that could not be loaded or does not allow being shown in a frame is
+  the exception. When the page turns a password field into another kind of field after the
+  agent read the page, took a screenshot of it or acted in it while it was a password field, a
+  screenshot hides the text of every input element in the page, input buttons included,
+  outside its frames. A field that is none of these still shows its value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
 - Downloads save only a file served by a site you approved, after any redirects: Foxhand

@@ -57,7 +57,7 @@ export interface FirefoxOutput {
   stderr: string;
 }
 
-/** A top-level browsing context, that is a tab, and the URL of its document. */
+/** A browsing context, a tab or a frame, and the URL of its document. */
 export interface BrowsingContext {
   context: string;
   url: string;
@@ -69,6 +69,8 @@ export interface Firefox {
   /** The URL of a file in the installed extension, such as its settings page. */
   extensionUrl(path: string): string;
   contexts(): Promise<BrowsingContext[]>;
+  /** The browsing contexts of a tab's frames, the direct children of its document. */
+  frames(context: string): Promise<BrowsingContext[]>;
   /** Opens `url` in a new tab, as a user would, and returns the tab's context once it loaded. */
   openContext(url: string): Promise<string>;
   /** Loads `url` in a tab, as a user would, and returns once it has loaded. */
@@ -220,12 +222,18 @@ export async function launchFirefox({
     if (!Array.isArray(tree)) {
       throw new Error(`browsingContext.getTree returned ${JSON.stringify(result)}`);
     }
-    return tree.map((entry: unknown) => {
-      if (!isRecord(entry) || typeof entry.context !== "string" || typeof entry.url !== "string") {
-        throw new Error(`browsingContext.getTree returned the context ${JSON.stringify(entry)}`);
-      }
-      return { context: entry.context, url: entry.url };
-    });
+    return tree.map(browsingContextOf);
+  }
+
+  async function frames(context: string): Promise<BrowsingContext[]> {
+    const result = await session.send("browsingContext.getTree", { root: context });
+    const tree: unknown = isRecord(result) ? result.contexts : undefined;
+    const top: unknown = Array.isArray(tree) ? tree[0] : undefined;
+    const children: unknown = isRecord(top) ? top.children : undefined;
+    if (!Array.isArray(children)) {
+      throw new Error(`browsingContext.getTree returned ${JSON.stringify(result)}`);
+    }
+    return children.map(browsingContextOf);
   }
 
   async function switchTo(context: string): Promise<void> {
@@ -257,6 +265,7 @@ export async function launchFirefox({
     },
     extensionUrl: (path) => `moz-extension://${EXTENSION_UUID}/${path}`,
     contexts,
+    frames,
     openContext(url) {
       return withDeadline(
         (async () => {
@@ -365,6 +374,13 @@ export async function launchFirefox({
   };
 }
 
+function browsingContextOf(entry: unknown): BrowsingContext {
+  if (!isRecord(entry) || typeof entry.context !== "string" || typeof entry.url !== "string") {
+    throw new Error(`browsingContext.getTree returned the context ${JSON.stringify(entry)}`);
+  }
+  return { context: entry.context, url: entry.url };
+}
+
 /** The throwaway profile's user.js. Every pref carries its reason. */
 function buildUserJs(downloadDir: string): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
@@ -378,6 +394,11 @@ function buildUserJs(downloadDir: string): string {
       "extensions.webextensions.uuids",
       JSON.stringify({ [EXTENSION_ID]: EXTENSION_UUID }),
       "Pin the extension's internal UUID (Firefox's UUIDMap reads this pref), so its settings page has a known moz-extension: URL.",
+    ],
+    [
+      "dom.confirm_repost.testing.always_accept",
+      true,
+      "Reloading a page a form sent with POST sends the form again without asking, so a test sees such a reload as a request to the server.",
     ],
     [
       "marionette.port",

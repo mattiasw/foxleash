@@ -2,7 +2,8 @@
 
 **Status:** Accepted, 2026-10-23. Extends the definition of a protected field in
 [0010](0010-page-tools-withhold-credential-field-values.md) and the field mask's selectors in
-[0013](0013-screenshots-hide-credential-field-text.md).
+[0013](0013-screenshots-hide-credential-field-text.md). Its reload without the cache is extended
+to going back and forward by [0025](0025-history-loads-and-autofilled-fields.md), 2026-10-24.
 
 ## Context
 

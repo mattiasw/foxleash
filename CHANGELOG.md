@@ -16,7 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Firefox can now start the Foxhand native host, which relays your agent's requests to the
   extension.
 - An MCP server gives your agent the `tabs_list`, `tab_open` and `navigate` tools, so it can
-  list, open and navigate the tabs in its Foxhand tab group in your Firefox.
+  list, open and navigate the tabs in its Foxhand tab group in your Firefox. `navigate`
+  reloads a page without the browser's cache, also after going back or forward to a page that
+  Firefox loads again instead of keeping it in memory, unless a form sent it with POST or its
+  site is not approved, so Firefox puts back no value it filled in from your saved logins,
+  addresses or cards, and the page's fields lose what was typed into them.
 - `npm run setup` installs the signed Foxhand extension in Firefox (you confirm once),
   connects Firefox to Foxhand and registers Foxhand with Claude Code; `npm run teardown`
   removes the native host and the registration.

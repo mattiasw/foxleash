@@ -20,7 +20,7 @@ import type {
 import { createLiveDocuments, type LiveDocument } from "./live-documents.ts";
 import { capText } from "./page-messages.ts";
 import type { SessionGroups } from "./session-groups.ts";
-import { siteOf } from "./site.ts";
+import { siteOf, withoutFragment } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
 /** The most UTF-16 units a page's log holds across all its strings; older requests go first. */
@@ -316,11 +316,6 @@ export function redactHeaders(headers: readonly HttpHeader[] | undefined): Netwo
       ? REDACTED
       : capText(value ?? "", MAX_NETWORK_HEADER).text,
   }));
-}
-
-function withoutFragment(url: string): string {
-  const hash = url.indexOf("#");
-  return hash < 0 ? url : url.slice(0, hash);
 }
 
 /** Whether it is the request of the log's document: its URL, started between the tab's commits. */

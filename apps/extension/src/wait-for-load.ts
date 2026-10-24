@@ -7,7 +7,7 @@ export const LOAD_TIMEOUT_MS = 30000;
 
 /**
  * Runs `navigate` and resolves with the tab once its load completes, or after the grace period
- * when no load starts, or as it is after the timeout. `url` is the web URL the navigation loads,
+ * when no load starts, or as it is after `timeoutMs`. `url` is the web URL the navigation loads,
  * or `undefined` when that is not known in advance (back, forward, reload). When it is given, a
  * complete that leaves the tab on about:blank starts the grace period again instead of ending the
  * wait.
@@ -18,6 +18,7 @@ export function waitForLoad<Handle>(
   tabId: number,
   url: string | undefined,
   navigate: () => Promise<unknown>,
+  timeoutMs = LOAD_TIMEOUT_MS,
 ): Promise<Tab> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -49,7 +50,7 @@ export function waitForLoad<Handle>(
       if (timeoutTimer !== undefined) return;
       timeoutTimer = timers.setTimeout(() => {
         currentTab().then(finish, fail);
-      }, LOAD_TIMEOUT_MS);
+      }, timeoutMs);
     }
 
     function restart(): void {

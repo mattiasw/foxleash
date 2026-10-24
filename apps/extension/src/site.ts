@@ -17,6 +17,12 @@ export function redactedUrl(url: string | undefined): string {
   return parsed.protocol;
 }
 
+/** The URL without its fragment. */
+export function withoutFragment(url: string): string {
+  const hash = url.indexOf("#");
+  return hash < 0 ? url : url.slice(0, hash);
+}
+
 /**
  * The host of a site, as the blocklist matches it. An IPv4-mapped IPv6 host becomes its IPv4
  * address.

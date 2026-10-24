@@ -109,6 +109,11 @@ describe("tools", () => {
         "A reload loads the page again without the browser's cache, and its form fields lose what was typed into them.",
       ),
     );
+    assert.ok(
+      navigate?.description?.includes(
+        "Going back or forward to a page that Firefox loads again instead of keeping it in memory reloads it the same way, unless a form sent it, or a frame in it, with POST, or this session may not act on its site.",
+      ),
+    );
     const tabOpen = tools.find((tool) => tool.name === "tab_open");
     assert.equal(tabOpen?.inputSchema.required, undefined);
     for (const tool of [tabOpen, navigate]) {

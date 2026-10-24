@@ -226,7 +226,7 @@ export function registerTools(
   register(
     "navigate",
     {
-      description: `Load a URL in a tab of this session's Foxhand tab group, or go back, forward or reload it, and return the tab. Give either url or action. A reload loads the page again without the browser's cache, and its form fields lose what was typed into them. ${ASKS_FIRST} ${REDACTED_TABS}`,
+      description: `Load a URL in a tab of this session's Foxhand tab group, or go back, forward or reload it, and return the tab. Give either url or action. A reload loads the page again without the browser's cache, and its form fields lose what was typed into them. Going back or forward to a page that Firefox loads again instead of keeping it in memory reloads it the same way, unless a form sent it, or a frame in it, with POST, or this session may not act on its site. ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
         tabId: z
           .number()

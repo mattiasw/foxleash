@@ -22,6 +22,7 @@ import type {
   FrameDetails,
   InjectionResult,
   NavigationDetails,
+  RequestDetails,
   Tab,
   TabUpdatedListener,
   Timers,
@@ -56,7 +57,7 @@ import {
 } from "./screenshot.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
-import { siteOf } from "./site.ts";
+import { siteOf, withoutFragment } from "./site.ts";
 import {
   type Approval,
   approvalPending,
@@ -110,6 +111,24 @@ type Handlers = {
 
 type NavigationTarget = { kind: "url"; url: string } | { kind: "action"; action: NavigateAction };
 
+/** What `navigate` watched while it went back or forward. */
+interface HistoryLoad {
+  /** Undefined while the request of the tab's last top-level commit has not been reported. */
+  reloads(): boolean | undefined;
+  /** Resolves once a request makes `reloads` defined, or after `ms`. */
+  decided(ms: number): Promise<void>;
+  stop(): void;
+}
+
+/** A top-level request `navigate` saw while it went back or forward. */
+interface TopRequest {
+  /** Without its fragment. */
+  url: string;
+  timeStamp: number;
+  /** Whether no top-level or frame request that was not a GET was reported after it. */
+  onlyGets: boolean;
+}
+
 type WaitCondition = { text: string } | { selector: string } | { navigation: true };
 
 const NAVIGATE_ACTIONS: readonly unknown[] = [
@@ -132,6 +151,18 @@ const MAX_UPLOAD_NAME = 255;
 export const CAPTURE_TIMEOUT_MS = 20_000;
 /** Bounds a whole screenshot, its page requests included, below the host's 60 s request timeout. */
 export const SCREENSHOT_TIMEOUT_MS = 50_000;
+/**
+ * How long `navigate` waits, once going back or forward has loaded a page, for that page's own
+ * request: Firefox can report it after the commit (ADR 0016 measured 211 ms). A page Firefox
+ * takes from the back-forward cache commits but makes no request, so it waits this long.
+ */
+export const HISTORY_REQUEST_TIMEOUT_MS = 1000;
+/**
+ * Bounds the wait for the reload after going back or forward, so that with the step's own wait
+ * (LOAD_GRACE_MS and LOAD_TIMEOUT_MS) and the wait for its request (HISTORY_REQUEST_TIMEOUT_MS),
+ * `navigate` answers below the host's 60 s request timeout.
+ */
+export const HISTORY_RELOAD_TIMEOUT_MS = 20_000;
 
 export function createHandlers<Handle>({
   browser,
@@ -249,15 +280,143 @@ export function createHandlers<Handle>({
       return { tab: await approveAndLoad(session, tabId, gated.url, target) };
     }
     keepPrompt(session, tabId);
-    const loaded = await waitForLoad(
+    const history =
+      target.kind === "action" && target.action !== "reload" ? watchHistoryLoad(tabId) : undefined;
+    try {
+      const loaded = await waitForLoad(
+        browser,
+        timers,
+        tabId,
+        target.kind === "url" ? target.url : undefined,
+        () => startNavigation(tabId, target),
+      );
+      const shown =
+        history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
+      const view = await access.view(session);
+      return { tab: view.tabInfo(shown) };
+    } finally {
+      history?.stop();
+    }
+  }
+
+  /**
+   * Notes a tab's top-level commits and its top-level and frame requests until `stop`, with
+   * their start times: Firefox can report a document's own request after its commit (ADR 0016),
+   * so they are matched by time, not by the order they arrive in. It `reloads` when the last
+   * top-level request started by the tab's last top-level commit is for the commit's URL, and no
+   * top-level or frame request that started from that request on, or was reported after it, was
+   * not a GET.
+   */
+  function watchHistoryLoad(tabId: number): HistoryLoad {
+    let commit: { url: string; timeStamp: number } | undefined;
+    // The latest top-level request started by the commit, and the latest one reported before any
+    // commit or started after the one it was reported after.
+    let byCommit: TopRequest | undefined;
+    let next: TopRequest | undefined;
+    let nonGetStarted = Number.NEGATIVE_INFINITY;
+    let wake: (() => void) | undefined;
+    const onRequest = (details: RequestDetails) => {
+      if (details.tabId !== tabId) return;
+      const top = details.type === "main_frame";
+      if (
+        details.method !== "GET" &&
+        // Firefox reports a load in an <object> element's frame as an object request.
+        (top || details.type === "sub_frame" || details.type === "object")
+      ) {
+        nonGetStarted = Math.max(nonGetStarted, details.timeStamp);
+        if (byCommit !== undefined) byCommit.onlyGets = false;
+        if (next !== undefined) next.onlyGets = false;
+      }
+      if (!top) return;
+      const request = {
+        url: withoutFragment(details.url),
+        timeStamp: details.timeStamp,
+        onlyGets: true,
+      };
+      if (commit !== undefined && request.timeStamp <= commit.timeStamp) {
+        byCommit = later(byCommit, request);
+      } else {
+        next = later(next, request);
+      }
+      wake?.();
+    };
+    // The commit's URL, not the tab's: the page can change its address with the History API.
+    const onCommit = (details: NavigationDetails) => {
+      if (details.tabId !== tabId || details.frameId !== 0) return;
+      commit = { url: withoutFragment(details.url), timeStamp: details.timeStamp };
+      if (next !== undefined && next.timeStamp <= commit.timeStamp) {
+        byCommit = later(byCommit, next);
+      }
+    };
+    browser.webRequest.onBeforeRequest.addListener(onRequest, { urls: ["<all_urls>"] });
+    browser.webNavigation.onCommitted.addListener(onCommit);
+    return {
+      reloads,
+      decided: (ms) =>
+        new Promise((resolve) => {
+          const timer = timers.setTimeout(done, ms);
+          wake = () => {
+            if (reloads() !== undefined) done();
+          };
+          function done(): void {
+            timers.clearTimeout(timer);
+            resolve();
+          }
+        }),
+      stop: () => {
+        browser.webRequest.onBeforeRequest.removeListener(onRequest);
+        browser.webNavigation.onCommitted.removeListener(onCommit);
+      },
+    };
+
+    function reloads(): boolean | undefined {
+      // No commit: the step loaded no document. webRequest sees no page off the web.
+      if (commit === undefined || siteOf(commit.url) === undefined) return false;
+      // Also for a page taken from the back-forward cache, which commits but makes no request.
+      if (byCommit?.url !== commit.url) return undefined;
+      return byCommit.onlyGets && nonGetStarted < byCommit.timeStamp;
+    }
+  }
+
+  /**
+   * Reloads without the cache a page that going back or forward loaded again instead of taking
+   * it from the back-forward cache: Firefox puts field values back into such a page without its
+   * autofill mark (ADR 0025). Only in the session's group, off its prompt, on a site it may act
+   * on, and never after a request that was not a GET, so no form is sent again.
+   */
+  async function reloadHistoryLoad(
+    session: string,
+    tabId: number,
+    loaded: Tab,
+    history: HistoryLoad,
+  ): Promise<Tab> {
+    // A load cut off by its timeout may not have requested its frames yet, POSTs among them.
+    if (loaded.status !== "complete") return loaded;
+    if (history.reloads() === undefined) await history.decided(HISTORY_REQUEST_TIMEOUT_MS);
+    if (history.reloads() !== true) return loaded;
+    const group = await groups.groupOf(session);
+    const view = await access.view(session);
+    const tab = await existingTab(tabId);
+    // No await from here to the reload, so a request the page sends meanwhile still counts.
+    const url = tab.url ?? "";
+    if (
+      history.reloads() !== true ||
+      group === undefined ||
+      tab.groupId !== group.id ||
+      access.openPrompt(session)?.tabId === tabId ||
+      !view.allowed(url)
+    ) {
+      return loaded;
+    }
+    history.stop();
+    return waitForLoad(
       browser,
       timers,
       tabId,
-      target.kind === "url" ? target.url : undefined,
-      () => startNavigation(tabId, target),
+      undefined,
+      () => browser.tabs.reload(tabId, { bypassCache: true }),
+      HISTORY_RELOAD_TIMEOUT_MS,
     );
-    const view = await access.view(session);
-    return { tab: view.tabInfo(loaded) };
   }
 
   /**
@@ -1185,4 +1344,9 @@ function retryUrl(prompt: OpenPrompt, target: NavigationTarget): string {
 
 function isReload(target: NavigationTarget): boolean {
   return target.kind === "action" && target.action === "reload";
+}
+
+/** The one that started later; of two that started together, the one reported later. */
+function later(kept: TopRequest | undefined, request: TopRequest): TopRequest {
+  return kept !== undefined && kept.timeStamp > request.timeStamp ? kept : request;
 }

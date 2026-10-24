@@ -166,7 +166,9 @@
         {
           "file": "apps/extension/src/content.ts",
           "contains": "notePasswordFields: () => notePasswordFields({ passwordFields })"
-        }
+        },
+        { "file": "apps/extension/src/handlers.ts", "contains": "function watchHistoryLoad(" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "function reloadHistoryLoad(" }
       ]
     },
     {

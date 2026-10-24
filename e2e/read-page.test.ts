@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
   AUTOFILL_LOGIN,
   type FixtureServer,
@@ -39,6 +39,8 @@ const SNAPSHOT = `JSON.stringify({
 })`;
 
 const AUTOFILLED = 'document.getElementById("login-name").matches(":autofill")';
+const FRAME_STATE =
+  "JSON.stringify({ href: location.href, readyState: document.readyState, timeOrigin: performance.timeOrigin })";
 
 interface Read {
   tree: string;
@@ -915,6 +917,154 @@ describe("read_page in real Firefox", () => {
     assertLines(tree, ['textbox "Login name" [*]']);
   });
 
+  test("going back to a page Firefox loads again brings back no autofilled value", async () => {
+    const tabId = await filledTab("/autofill-unload?back");
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?back") });
+    await reloadedOnce("/autofill-unload", () =>
+      harness.ok(session, "navigate", { tabId, action: "back" }),
+    );
+    await assertNoFill(tabId, fixtures.url("/autofill-unload?back"));
+  });
+
+  test("going back to a page that changes its address as it loads brings back no autofilled value", async () => {
+    const tabId = await filledTab("/autofill-moving?back");
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?moving") });
+    await reloadedOnce("/autofill-moving", () =>
+      harness.ok(session, "navigate", { tabId, action: "back" }),
+    );
+    await assertNoFill(tabId, fixtures.url("/autofill-moving?back&moved"));
+  });
+
+  test("going forward to a page Firefox loads again brings back no autofilled value", async () => {
+    const url = fixtures.url("/autofill-unload?forward");
+    const tabId = await open("/a?forward", TITLES.a);
+    await withLogin(async () => {
+      await harness.ok(session, "navigate", { tabId, url });
+      await waitForFill(url);
+    });
+    await harness.ok(session, "navigate", { tabId, action: "back" });
+    await reloadedOnce("/autofill-unload", () =>
+      harness.ok(session, "navigate", { tabId, action: "forward" }),
+    );
+    await assertNoFill(tabId, url);
+  });
+
+  test("going back over 3 pages never shows the autofilled value unmarked", async () => {
+    const path = "/autofill?b3";
+    const tabId = await filledTab(path);
+    await leave(tabId, "b3", 3);
+    const before = fixtures.hits("/autofill");
+    await goBack(tabId, 3);
+    // Firefox sometimes keeps the page in memory over three steps, mark intact (Navigation Timing
+    // still reports back_forward), and Foxhand then does not reload it.
+    if ((await firefox.evaluate(await contextOf(fixtures.url(path)), AUTOFILLED)) === true) {
+      assert.equal(fixtures.hits("/autofill"), before, "requests for /autofill");
+      await assertProtected(tabId);
+      return;
+    }
+    assert.equal(fixtures.hits("/autofill"), before + 1, "requests for /autofill");
+    await assertNoFill(tabId, fixtures.url(path));
+  });
+
+  test("going back over 4 pages brings back no autofilled value", async () => {
+    const path = "/autofill?b4";
+    const tabId = await filledTab(path);
+    await leave(tabId, "b4", 4);
+    await reloadedOnce("/autofill", () => goBack(tabId, 4));
+    await assertNoFill(tabId, fixtures.url(path));
+  });
+
+  test("going back to a page Firefox kept in memory keeps it filled and protected", async () => {
+    const path = "/autofill?kept";
+    const tabId = await filledTab(path);
+    const context = await contextOf(fixtures.url(path));
+    // No Foxhand page tool before leaving: the page stays as Firefox would keep it. The note in
+    // sessionStorage outlives a reload in the tab, so it tells whether Firefox showed this
+    // document again from memory, whatever happened after.
+    assert.equal(
+      await firefox.evaluate(
+        context,
+        `window.kept = true;
+        addEventListener("pageshow", (event) => {
+          if (event.persisted) sessionStorage.setItem("shown-from-memory", "yes");
+        });
+        true`,
+      ),
+      true,
+    );
+    const before = fixtures.hits("/autofill");
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?kept") });
+    await harness.ok(session, "navigate", { tabId, action: "back" });
+    if ((await firefox.evaluate(context, 'sessionStorage.getItem("shown-from-memory")')) === null) {
+      // Firefox did not keep the page this time and loaded it again.
+      assert.equal(fixtures.hits("/autofill"), before + 1, "requests for /autofill");
+      await assertNoFill(tabId, fixtures.url(path));
+      return;
+    }
+    assert.equal(
+      await firefox.evaluate(context, "window.kept === true"),
+      true,
+      "Foxhand reloaded a page Firefox showed again from memory",
+    );
+    assert.equal(fixtures.hits("/autofill"), before, "requests for /autofill");
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), true);
+    await assertProtected(tabId);
+  });
+
+  test("going back to a page a form sent with POST brings back its autofilled value unmarked", async () => {
+    // Accepted in ADR 0025: reloading would send the form again.
+    const posted = fixtures.url("/autofill-post");
+    const tabId = await withLogin(async () => {
+      const opened = await open("/autofill-unload?post", TITLES.autofill);
+      const context = await waitForFill(fixtures.url("/autofill-unload?post"));
+      await firefox.evaluate(context, 'document.querySelector("form").submit(), true');
+      await waitForFill(posted);
+      return opened;
+    });
+    const hits = fixtures.hits("/autofill-post");
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?post") });
+    await harness.ok(session, "navigate", { tabId, action: "back" });
+    const context = await waitForValue(posted);
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+    assertLines((await read(tabId)).tree, [
+      `textbox "Login name" [*] value="${AUTOFILL_LOGIN.username}"`,
+    ]);
+    assert.equal(fixtures.hits("/autofill-post"), hits);
+  });
+
+  test("navigating a tab to its own address brings back no autofilled value", async () => {
+    const path = "/autofill?same";
+    const tabId = await filledTab(path);
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url(path) });
+    await assertNoFill(tabId, fixtures.url(path));
+  });
+
+  test("a reload brings back no value in a frame from another site", async () => {
+    // Firefox fills no saved login into a frame from another site (ADR 0025), so the test sets
+    // the values a fill or the user would leave. It records what Firefox does and does not guard
+    // bypassCache: a reload without it restores nothing in the frame either.
+    const tabId = await open("/autofill-framed", TITLES.autofillFramed);
+    const top = await contextOf(fixtures.url("/autofill-framed"));
+    const frameUrl = `http://localhost:${fixtures.port}/autofill?frame`;
+    const loaded = await frameLoad(top, frameUrl, 0);
+    await firefox.evaluate(
+      loaded.context,
+      `document.getElementById("login-name").value = ${JSON.stringify(AUTOFILL_LOGIN.username)};
+      document.getElementById("plain-name").value = "Typed in the frame";`,
+    );
+    await harness.ok(session, "navigate", { tabId, action: "reload" });
+    const { context } = await frameLoad(top, frameUrl, loaded.timeOrigin);
+    assert.equal(
+      await firefox.evaluate(context, 'document.getElementById("login-name").value'),
+      "",
+    );
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+    assert.equal(
+      await firefox.evaluate(context, 'document.getElementById("plain-name").value'),
+      "MMMM WWWW",
+    );
+  });
+
   // Last: the blocklist then covers the fixture server for the rest of the file.
   test("a tab on a blocked site is refused", async () => {
     await harness.seedSettings({ blocklist: ["127.0.0.1", "localhost"] });
@@ -945,6 +1095,137 @@ describe("read_page in real Firefox", () => {
     const found = (await firefox.contexts()).find((context) => context.url === url);
     assert.ok(found !== undefined, `no tab shows ${url}`);
     return found.context;
+  }
+
+  /** Opens `path` in a new tab and returns its id once Firefox filled in the saved login. */
+  function filledTab(path: string): Promise<number> {
+    return withLogin(async () => {
+      // tab_open makes the tab active: login autofill waits for a visible document.
+      const tabId = await open(path, TITLES.autofill);
+      await waitForFill(fixtures.url(path));
+      return tabId;
+    });
+  }
+
+  /** Runs `steps` with the autofill login saved, and removes it after, so Firefox fills no more. */
+  async function withLogin<T>(steps: () => Promise<T>): Promise<T> {
+    await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);
+    try {
+      return await steps();
+    } finally {
+      await firefox.removeLogins();
+    }
+  }
+
+  /** The context of the tab showing `url`, once Firefox has filled in its login name field. */
+  function waitForFill(url: string): Promise<string> {
+    return pollUntil(
+      async () => {
+        const context = await contextOf(url);
+        return (await firefox.evaluate(context, AUTOFILLED)) === true ? context : undefined;
+      },
+      PAGE_TIMEOUT_MS,
+      `Firefox to fill the saved login into ${url}`,
+    );
+  }
+
+  /** The context of the tab showing `url`, once its login name field holds the saved login. */
+  function waitForValue(url: string): Promise<string> {
+    return pollUntil(
+      async () => {
+        const context = await contextOf(url);
+        const value = await firefox.evaluate(
+          context,
+          'document.getElementById("login-name").value',
+        );
+        return value === AUTOFILL_LOGIN.username ? context : undefined;
+      },
+      PAGE_TIMEOUT_MS,
+      `Firefox to put the login name back into ${url}`,
+    );
+  }
+
+  /**
+   * Runs `steps` and asserts they requested `path` from the server once: Firefox loads the page
+   * again from its cache, so the one request is Foxhand's reload without the cache.
+   */
+  async function reloadedOnce(path: string, steps: () => Promise<unknown>): Promise<void> {
+    const before = fixtures.hits(path);
+    await steps();
+    assert.equal(fixtures.hits(path), before + 1, `requests for ${path}`);
+  }
+
+  /** Navigates the tab to `pages` more pages, `/a?<label>-1` and on. */
+  async function leave(tabId: number, label: string, pages: number): Promise<void> {
+    for (let page = 1; page <= pages; page += 1) {
+      await harness.ok(session, "navigate", { tabId, url: fixtures.url(`/a?${label}-${page}`) });
+    }
+  }
+
+  async function goBack(tabId: number, pages: number): Promise<void> {
+    for (let page = 1; page <= pages; page += 1) {
+      await harness.ok(session, "navigate", { tabId, action: "back" });
+    }
+  }
+
+  /** Asserts the login name field of the tab showing `url` is empty, unmarked and read so. */
+  async function assertNoFill(tabId: number, url: string): Promise<void> {
+    const context = await contextOf(url);
+    assert.equal(
+      await firefox.evaluate(context, 'document.getElementById("login-name").value'),
+      "",
+    );
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+    const { tree, texts } = await read(tabId);
+    assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
+    assertLines(tree, ['textbox "Login name" [*]']);
+  }
+
+  /** Asserts read_page shows the tab's login name field as protected and filled. */
+  async function assertProtected(tabId: number): Promise<void> {
+    const { tree, texts } = await read(tabId);
+    assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
+    assertLines(tree, ['textbox "Login name" [*] protected filled']);
+  }
+
+  /**
+   * The frame of `top` showing `url`, once a document other than the one that started at
+   * `before` (a `performance.timeOrigin`, or 0 for any) has loaded in it. Each frame is asked
+   * for its own address, since the tree's URL of a frame from another site can be out of date.
+   */
+  function frameLoad(
+    top: string,
+    url: string,
+    before: number,
+  ): Promise<{ context: string; timeOrigin: number }> {
+    return pollUntil(
+      async () => {
+        const seen: unknown[] = [];
+        for (const frame of await firefox.frames(top)) {
+          let state: unknown;
+          try {
+            state = JSON.parse(String(await firefox.evaluate(frame.context, FRAME_STATE)));
+          } catch (error: unknown) {
+            const message = error instanceof Error ? error.message : String(error);
+            seen.push({ context: frame.context, treeUrl: frame.url, error: message });
+            continue;
+          }
+          seen.push({ context: frame.context, treeUrl: frame.url, state });
+          if (
+            isRecord(state) &&
+            state.href === url &&
+            state.readyState === "complete" &&
+            typeof state.timeOrigin === "number" &&
+            state.timeOrigin !== before
+          ) {
+            return { context: frame.context, timeOrigin: state.timeOrigin };
+          }
+        }
+        throw new Error(`the frames of ${top} are ${JSON.stringify(seen)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `${url} to load in a frame`,
+    );
   }
 });
 
