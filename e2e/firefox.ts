@@ -38,6 +38,8 @@ const CLOSE_TIMEOUT_MS = 5_000;
 export const PAGE_TIMEOUT_MS = 15_000;
 // Below the 60 s per-test timeout, so a helper whose commands stall fails with its own message.
 const HELPER_TIMEOUT_MS = 20_000;
+// How long discardTab waits for the session store to hold the tab's page, below HELPER_TIMEOUT_MS.
+const SESSION_STORE_TIMEOUT_MS = 10_000;
 const POLL_MS = 100;
 // The WebDriver web element identifier, the key of an element reference.
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
@@ -48,6 +50,49 @@ const login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsI
 login.init(origin, "", null, username, password, "", "");
 return Services.logins.addLoginAsync(login).then(() => null);`;
 const REMOVE_LOGINS = "return Services.logins.removeAllUserFacingLoginsAsync().then(() => null);";
+// Unloads the tab showing a URL as Firefox does to save memory, after flushing its session store
+// (which saves the form data) until the store holds that page as the tab's current entry. After a
+// flush and the unload, the store has held an about:blank entry after the page as the current
+// one, and selecting the tab then loaded about:blank. Firefox refuses to unload the selected tab.
+const DISCARD_TAB = `const [url, timeoutMs] = arguments;
+const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
+if (tab === undefined) throw new Error("no tab shows " + url);
+const { TabStateFlusher } = ChromeUtils.importESModule(
+  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
+);
+const { SessionStore } = ChromeUtils.importESModule(
+  "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
+);
+const { setTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
+const deadline = Date.now() + timeoutMs;
+function stored() {
+  const { entries = [], index } = JSON.parse(SessionStore.getTabState(tab));
+  return { index, entries: entries.map((entry) => entry.url), current: entries[index - 1]?.url };
+}
+async function flushed() {
+  for (;;) {
+    // As the store's own history listener does, so the flush collects the whole history again: a
+    // flush alone brings only history changes the store has not collected yet.
+    tab.linkedBrowser.frameLoader.requestSHistoryUpdate();
+    await TabStateFlusher.flush(tab.linkedBrowser);
+    const state = stored();
+    if (state.current === url) return;
+    if (Date.now() >= deadline) {
+      throw new Error("the session store never held " + url + " as the current entry: " +
+        JSON.stringify(state));
+    }
+    await new Promise((resolve) => setTimeout(resolve, 200));
+  }
+}
+return flushed().then(() => {
+  if (!gBrowser.discardBrowser(tab, true)) throw new Error("Firefox did not unload " + url);
+  const state = stored();
+  if (state.current !== url) {
+    throw new Error("Firefox unloaded " + url + " with the session store at " +
+      JSON.stringify(state));
+  }
+  return null;
+});`;
 
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
@@ -91,6 +136,12 @@ export interface Firefox {
   saveLogin(origin: string, username: string, password: string): Promise<void>;
   /** Removes every saved login. */
   removeLogins(): Promise<void>;
+  /**
+   * Unloads the tab showing `url`, as Firefox does to save memory; selecting it loads it again.
+   * Firefox does not unload the selected tab. Throws, with what Firefox's session store held,
+   * when the store does not hold `url` as the tab's current entry.
+   */
+  discardTab(url: string): Promise<void>;
   /** Resolves with the first tab that matches, polling until `timeoutMs`. */
   waitForContext(
     predicate: (context: BrowsingContext) => boolean,
@@ -344,6 +395,13 @@ export async function launchFirefox({
     },
     removeLogins() {
       return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
+    },
+    discardTab(url) {
+      return withDeadline(
+        chrome(DISCARD_TAB, [url, SESSION_STORE_TIMEOUT_MS]),
+        HELPER_TIMEOUT_MS,
+        `discardTab ${url}`,
+      );
     },
     waitForContext(predicate, timeoutMs) {
       return pollUntil(

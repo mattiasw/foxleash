@@ -291,7 +291,7 @@ export function createHandlers<Handle>({
     try {
       const loaded =
         isReload(target) && gated !== undefined
-          ? await reloadPage(session, tabId, gated.url)
+          ? await reloadPage(session, tab, gated.url)
           : await waitForLoad(
               browser,
               timers,
@@ -935,7 +935,7 @@ export function createHandlers<Handle>({
     keepPrompt(session, tabId);
     const loaded =
       target.kind === "action" && !onPrompt && tab.url === url
-        ? await reloadPage(session, tabId, url)
+        ? await reloadPage(session, tab, url)
         : await waitForLoad(browser, timers, tabId, url, () =>
             browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
           );
@@ -949,9 +949,16 @@ export function createHandlers<Handle>({
    * keep an about:blank history entry after the page and reload that instead. Then the page is
    * loaded in its place, only while the tab still shows that blank, in the session's group, off
    * its prompt, on a site the session may act on: a new load, which restores no field value
-   * either, but may come from the cache.
+   * either, but may come from the cache. A tab Firefox unloaded would reload about:blank, so its
+   * page is loaded instead, which may also come from the cache.
    */
-  async function reloadPage(session: string, tabId: number, url: string): Promise<Tab> {
+  async function reloadPage(session: string, tab: Tab, url: string): Promise<Tab> {
+    const tabId = tab.id;
+    if (tab.discarded === true) {
+      return waitForLoad(browser, timers, tabId, url, () =>
+        browser.tabs.update(tabId, { url, loadReplace: true }),
+      );
+    }
     // No URL to wait for: the reload loads whichever entry Firefox reloads.
     const reloaded = await waitForLoad(browser, timers, tabId, undefined, () =>
       browser.tabs.reload(tabId, { bypassCache: true }),
@@ -960,18 +967,18 @@ export function createHandlers<Handle>({
     if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;
     const group = await groups.groupOf(session);
     const view = await access.view(session);
-    const tab = await existingTab(tabId);
+    const current = await existingTab(tabId);
     // No await from here to the load. Firefox changes a tab's url only when a load commits, so a
     // load started meanwhile still shows about:blank, but not complete.
     if (
-      tab.url !== "about:blank" ||
-      tab.status !== "complete" ||
+      current.url !== "about:blank" ||
+      current.status !== "complete" ||
       group === undefined ||
-      tab.groupId !== group.id ||
+      current.groupId !== group.id ||
       access.openPrompt(session)?.tabId === tabId ||
       !view.allowed(url)
     ) {
-      return tab;
+      return current;
     }
     return waitForLoad(
       browser,

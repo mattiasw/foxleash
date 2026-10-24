@@ -1645,6 +1645,70 @@ describe("navigate reload that Firefox lands on about:blank", { timeout: 10000 }
   });
 });
 
+describe("navigate reload of a tab Firefox unloaded", { timeout: 10000 }, () => {
+  it("loads the page in place of the reload, then reloads it once it is loaded again", async (t) => {
+    const { fake, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    fakeTab.discarded = true;
+    const history = [...fakeTab.history];
+    const updates = fake.tabUpdates.length;
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    assert.deepEqual(await navigate("s1", { tabId: tab.id, action: "reload" }), tab);
+    assert.equal(reload.mock.callCount(), 0);
+    assert.deepEqual(fake.tabUpdates.slice(updates), [
+      { tabId: tab.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    assert.equal(fakeTab.discarded, false);
+    assert.deepEqual(fakeTab.history, history);
+    const reloaded = fake.tabUpdates.length;
+    await navigate("s1", { tabId: tab.id, action: "reload" });
+    assert.deepEqual(
+      reload.mock.calls.map((made) => made.arguments),
+      [[tab.id, { bypassCache: true }]],
+    );
+    assert.deepEqual(fake.tabUpdates.slice(reloaded), []);
+  });
+
+  it("loads the page after the answer in place of the reload", async (t) => {
+    const { fake, call, open, timeOut } = setup();
+    const other = await open("s1");
+    const otherTab = fake.tabs.get(other.id);
+    assert.ok(otherTab);
+    otherTab.url = "https://a.example/page";
+    otherTab.history = ["https://a.example/page"];
+    otherTab.discarded = true;
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    const updates = fake.tabUpdates.length;
+    const reloaded = call("s1", "navigate", { tabId: other.id, action: "reload" });
+    await flush();
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await reloaded;
+    assert.ok("tab" in result);
+    // The prompt's tab is the active one.
+    assert.deepEqual(result.tab, {
+      id: other.id,
+      url: "https://a.example/page",
+      title: "Title of https://a.example/page",
+      active: false,
+    });
+    assert.equal(reload.mock.callCount(), 0);
+    assert.deepEqual(fake.tabUpdates.slice(updates), [
+      { tabId: other.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    assert.equal(otherTab.discarded, false);
+    assert.deepEqual(otherTab.history, ["https://a.example/page"]);
+  });
+});
+
 describe("approval", { timeout: 10000 }, () => {
   it("loads nothing before the answer, then replaces the prompt with the page", async () => {
     const { fake, call, page } = setup();

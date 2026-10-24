@@ -308,6 +308,8 @@ export interface Tab {
   url?: string;
   title?: string;
   status?: string;
+  /** True while Firefox has unloaded the tab to save memory. */
+  discarded?: boolean;
   /** -1 when the tab is in no group. */
   groupId?: number;
 }

@@ -203,6 +203,7 @@ export interface FakeTab {
   url: string;
   title: string;
   status: string;
+  discarded?: boolean;
   groupId: number;
   history: string[];
   index: number;
@@ -883,6 +884,7 @@ export function createFakeBrowser(): FakeBrowser {
   }
 
   function load(tab: FakeTab, url: string): void {
+    if (tab.discarded === true) tab.discarded = false;
     const changed = tab.url !== url;
     tab.url = url;
     dropContentScript(tab.id);

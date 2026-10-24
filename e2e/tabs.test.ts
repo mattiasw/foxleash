@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import type { Firefox } from "./firefox.ts";
 import {
   counterTitle,
   type FixtureServer,
@@ -19,6 +21,7 @@ import {
 // One Firefox for the file: the tests run in order and build on each other's tabs.
 describe("tabs in real Firefox", () => {
   let harness: Harness;
+  let firefox: Firefox;
   let fixtures: FixtureServer;
   let session: Session;
   let tabId = -1;
@@ -29,7 +32,7 @@ describe("tabs in real Firefox", () => {
       harness = createHarness();
       harness.install();
       fixtures = await startFixtureServer();
-      await harness.startFirefox(EXTENSION_DIST);
+      firefox = await harness.startFirefox(EXTENSION_DIST);
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
@@ -87,6 +90,28 @@ describe("tabs in real Firefox", () => {
     const count = parseCount(first.title);
     const reloaded = tabOf(await harness.ok(session, "navigate", { tabId, action: "reload" }));
     assert.equal(reloaded.title, counterTitle(count + 1));
+  });
+
+  test("navigate reload loads a page Firefox unloaded to save memory", async () => {
+    const url = fixtures.url("/counter");
+    const shown = tabsOf(await harness.ok(session, "tabs_list")).find((tab) => tab.id === tabId);
+    const count = parseCount(shown?.title ?? "");
+    // Firefox does not unload the selected tab.
+    const other = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    try {
+      await firefox.discardTab(url);
+      const reloaded = tabOf(await harness.ok(session, "navigate", { tabId, action: "reload" }));
+      assert.equal(reloaded.url, url);
+      assert.equal(reloaded.title, counterTitle(count + 1));
+      const read = await harness.call(session, "read_page", { tabId });
+      assert.equal(read.isError, false, read.text);
+      // A plain reload of an unloaded tab turns it blank only after navigate has answered.
+      await sleep(2000);
+      const later = await harness.call(session, "read_page", { tabId });
+      assert.equal(later.isError, false, later.text);
+    } finally {
+      await harness.ok(session, "tab_close", { tabId: other.id });
+    }
   });
 
   test("another session cannot navigate a tab outside its own group", async () => {
