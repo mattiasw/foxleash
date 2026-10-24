@@ -86,9 +86,9 @@ For a tab on a site you have not approved, the agent sees only the site's addres
 host and port), with no path, query or title. A local file shows only as `file:`.
 
 Each agent session's tabs open in an orange tab group titled Foxhand, and Foxhand acts only
-on tabs in that group, including tabs you move into it. When the agent session ends, Foxhand
-closes its group if the group holds only blank tabs, so pages you may still be reading stay
-open.
+on tabs in that group, including tabs you move into it and tabs that a page in the group
+opens, also after your own click. When the agent session ends, Foxhand closes its group if the
+group holds only blank tabs, so pages you may still be reading stay open.
 
 The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
 never closes the last tab of a window. `resize_window` resizes the whole window that holds the
@@ -157,7 +157,10 @@ styles do not apply and pages that ignore simulated input do not react. Foxhand 
 element that another one covers, naming the covering element, and does not act inside frames.
 It refuses clicks on links and form buttons that lead to another site or out of the browser,
 such as to an email address: the agent opens a page on another site with `navigate`, which asks
-you first. These tools work only on a tab showing a site you approved, and never ask.
+you first. Firefox's pop-up blocker stops a link or form button that opens a new tab unless you
+allow pop-ups for the site; a new tab that does open joins the agent's tab group, while a new
+window is out of the agent's reach. These tools work only on a tab showing a site you
+approved, and never ask.
 
 The agent types text with `type`, into a text field or an editable area from `read_page`.
 Foxhand focuses the element, adds the text after what it already holds, and reads it back. It
@@ -185,6 +188,7 @@ key: Enter submits the form or clicks the button or link, Tab and Shift+Tab move
 Escape closes an open popover or dialog, and the arrow keys choose an option in a list. Other
 keys reach only the page's own key handlers and do not insert or delete text. Enter on a link
 or in a form that leads to another site or out of the browser is refused, as clicks are.
+Enter on a link or in a form that opens a new tab meets the pop-up blocker, as clicks do.
 `press_key` works only on a tab showing a site you approved, and never asks.
 
 The agent runs several tool calls in one call with `batch`, up to 20, one after the other in
@@ -331,8 +335,9 @@ panels with destructive actions), and stay nearby while it works.
 Firefox gives extensions no way to produce real user input, so all clicks and keystrokes
 are simulated. Some things therefore do not work:
 
-- actions that need a real user gesture: opening pop-up windows, writing to the
-  clipboard, entering fullscreen, opening a file picker,
+- actions that need a real user gesture: opening pop-up windows and new tabs (unless you
+  allow pop-ups for the site), writing to the clipboard, entering fullscreen, opening a file
+  picker,
 - sites that ignore simulated events.
 
 The agent is told about these limits and asks you to take such steps yourself.

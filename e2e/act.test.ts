@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { ACT_DRAG_DATA, type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -19,6 +19,15 @@ interface Page {
   tabId: number;
   context: string;
   tree: string;
+}
+
+interface TabState {
+  id: number;
+  url: string;
+  groupId: number;
+  openerTabId: number | undefined;
+  windowId: number;
+  status: string;
 }
 
 // One Firefox for the file: the tests run in order, several on the same page.
@@ -351,6 +360,87 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     );
   });
 
+  test("a same-site link or form that opens a new tab opens nothing while Firefox blocks pop-ups", async () => {
+    const settings = await harness.settingsPage();
+    try {
+      for (const [tool, line, action] of [
+        ["click", 'link "New tab"', undefined],
+        ["click", 'button "Send new tab"', undefined],
+        ["press_key", 'link "New tab"', "clicked"],
+        ["press_key", 'textbox "New tab query"', "submitted"],
+      ] as const) {
+        const page = await open("/act-new-tab", TITLES.actNewTab);
+        const before = idsOf(await queryTabs(settings));
+        const ref = refOf(page.tree, line);
+        const args =
+          tool === "click" ? { tabId: page.tabId, ref } : { tabId: page.tabId, ref, key: "Enter" };
+        const result = await harness.ok(session, tool, args);
+        if (action !== undefined) {
+          assert.deepEqual(result, { action, prevented: false }, `${tool} on ${line}`);
+        }
+        const blocked = await pollUntil(
+          async () => {
+            const count = await firefox.blockedPopups(page.url);
+            return count > 0 ? count : undefined;
+          },
+          PAGE_TIMEOUT_MS,
+          `Firefox to block the pop-up from ${tool} on ${line}`,
+        );
+        assert.equal(blocked, 1, `${tool} on ${line}`);
+        const tabs = await queryTabs(settings);
+        assert.deepEqual(idsOf(tabs), before, `${tool} on ${line}`);
+        assert.equal(tabs.find(({ id }) => id === page.tabId)?.url, page.url, `${tool} on ${line}`);
+      }
+    } finally {
+      await firefox.closeContext(settings);
+    }
+  });
+
+  test("a same-site link or form opens its new tab in the session's group where pop-ups are allowed", async () => {
+    const settings = await harness.settingsPage();
+    try {
+      await firefox.allowPopups(fixtures.site);
+      for (const line of ['link "New tab"', 'button "Send new tab"']) {
+        const page = await open("/act-new-tab", TITLES.actNewTab);
+        const before = new Set(idsOf(await queryTabs(settings)));
+        await harness.ok(session, "click", { tabId: page.tabId, ref: refOf(page.tree, line) });
+        const tabs = await pollUntil(
+          async () => {
+            const all = await queryTabs(settings);
+            const added = all.filter(({ id, status }) => !before.has(id) && status === "complete");
+            return added.length > 0 ? all : undefined;
+          },
+          PAGE_TIMEOUT_MS,
+          `a new tab from ${line}`,
+        );
+        const added = tabs.filter(({ id }) => !before.has(id));
+        assert.equal(added.length, 1, `${line} opened ${JSON.stringify(added)}`);
+        const tab = added[0];
+        const opener = tabs.find(({ id }) => id === page.tabId);
+        assert.ok(tab !== undefined && opener !== undefined, JSON.stringify(tabs));
+        assert.equal(tab.openerTabId, page.tabId, line);
+        assert.equal(tab.windowId, opener.windowId, line);
+        assert.notEqual(opener.groupId, -1, line);
+        assert.equal(tab.groupId, opener.groupId, line);
+        await pollUntil(
+          async () => {
+            const listed = tabsOf(await harness.ok(session, "tabs_list")).find(
+              ({ id }) => id === tab.id,
+            );
+            if (listed?.title === TITLES.a) return listed;
+            throw new Error(`tab ${tab.id} is listed as ${JSON.stringify(listed)}`);
+          },
+          PAGE_TIMEOUT_MS,
+          `tab ${tab.id} to be listed with ${TITLES.a}`,
+        );
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+      }
+    } finally {
+      await firefox.resetPopups(fixtures.site);
+      await firefox.closeContext(settings);
+    }
+  });
+
   test("scroll moves the page, an inner panel and an element into view", async () => {
     const page = await open("/act-scroll", TITLES.actScroll);
     assert.deepEqual(
@@ -585,6 +675,31 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     return log.filter((entry) => typeof entry === "string" && /^(click|dblclick):/.test(entry));
   }
 
+  /** Every tab in every window, read from the extension's settings page. */
+  async function queryTabs(settings: string): Promise<TabState[]> {
+    const json = await firefox.evaluate(
+      settings,
+      "browser.tabs.query({}).then((tabs) => JSON.stringify(tabs.map(({ id, url, groupId, openerTabId, windowId, status }) => ({ id, url, groupId, openerTabId, windowId, status }))))",
+    );
+    assert.equal(typeof json, "string", `tabs.query returned ${String(json)}`);
+    const tabs: unknown = JSON.parse(String(json));
+    assert.ok(Array.isArray(tabs), `tabs.query returned ${String(json)}`);
+    return tabs.map((tab: unknown) => {
+      assert.ok(
+        isRecord(tab) &&
+          typeof tab.id === "number" &&
+          typeof tab.url === "string" &&
+          typeof tab.groupId === "number" &&
+          (tab.openerTabId === undefined || typeof tab.openerTabId === "number") &&
+          typeof tab.windowId === "number" &&
+          typeof tab.status === "string",
+        `unexpected tab ${JSON.stringify(tab)}`,
+      );
+      const { id, url, groupId, openerTabId, windowId, status } = tab;
+      return { id, url, groupId, openerTabId, windowId, status };
+    });
+  }
+
   async function assertFocusOnBody(page: Page): Promise<void> {
     const onBody = await evaluate(page, "document.activeElement === document.body");
     const active = await evaluate(
@@ -599,6 +714,10 @@ function refOf(tree: string, line: string): string {
   const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];
   assert.ok(ref !== undefined, `no ref for ${line} in:\n${tree}`);
   return ref;
+}
+
+function idsOf(tabs: TabState[]): number[] {
+  return tabs.map(({ id }) => id).sort((a, b) => a - b);
 }
 
 function record(value: unknown): Record<string, unknown> {

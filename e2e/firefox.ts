@@ -50,6 +50,19 @@ const login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsI
 login.init(origin, "", null, username, password, "", "");
 return Services.logins.addLoginAsync(login).then(() => null);`;
 const REMOVE_LOGINS = "return Services.logins.removeAllUserFacingLoginsAsync().then(() => null);";
+// The permission a user's pop-up exception for a site stores.
+const ALLOW_POPUPS = `const [origin] = arguments;
+const principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(origin);
+Services.perms.addFromPrincipal(principal, "popup", Services.perms.ALLOW_ACTION);
+return null;`;
+const RESET_POPUPS = `const [origin] = arguments;
+const principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(origin);
+Services.perms.removeFromPrincipal(principal, "popup");
+return null;`;
+const BLOCKED_POPUPS = `const [url] = arguments;
+const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
+if (tab === undefined) throw new Error("no tab shows " + url);
+return tab.linkedBrowser.popupAndRedirectBlocker.getBlockedPopupCount();`;
 // Unloads the tab showing a URL as Firefox does to save memory, after flushing its session store
 // (which saves the form data) until the store holds that page as the tab's current entry. After a
 // flush and the unload, the store has held an about:blank entry after the page as the current
@@ -143,6 +156,12 @@ export interface Firefox {
   saveLogin(origin: string, username: string, password: string): Promise<void>;
   /** Removes every saved login. */
   removeLogins(): Promise<void>;
+  /** Allows pop-ups for `origin`, as a user's pop-up exception for a site does. */
+  allowPopups(origin: string): Promise<void>;
+  /** Removes the pop-up exception for `origin`, so Firefox's pop-up blocker applies again. */
+  resetPopups(origin: string): Promise<void>;
+  /** How many pop-ups Firefox has blocked in the tab showing `url`. Throws when no tab shows it. */
+  blockedPopups(url: string): Promise<number>;
   /**
    * Unloads the tab showing `url`, as Firefox does to save memory; selecting it loads it again.
    * Firefox does not unload the selected tab. Throws, with what Firefox's session store held,
@@ -321,12 +340,17 @@ export async function launchFirefox({
     await input.send("WebDriver:SwitchToWindow", { handle: context });
   }
 
-  // Runs `script` with Firefox's privileges, awaiting a promise it returns. Back to content after,
-  // which click's commands need.
+  // Runs `script` with Firefox's privileges, awaiting a promise it returns.
   async function chrome(script: string, args: unknown[]): Promise<void> {
+    await chromeResponse(script, args);
+  }
+
+  // As chrome, resolving with Marionette's response, `{ value }`. Back to content after, which
+  // click's commands need.
+  async function chromeResponse(script: string, args: unknown[]): Promise<unknown> {
     await input.send("Marionette:SetContext", { value: "chrome" });
     try {
-      await input.send("WebDriver:ExecuteScript", { script, args });
+      return await input.send("WebDriver:ExecuteScript", { script, args });
     } finally {
       await input.send("Marionette:SetContext", { value: "content" });
     }
@@ -469,6 +493,33 @@ export async function launchFirefox({
     removeLogins() {
       return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
     },
+    allowPopups(origin) {
+      return withDeadline(
+        chrome(ALLOW_POPUPS, [origin]),
+        HELPER_TIMEOUT_MS,
+        `allowPopups ${origin}`,
+      );
+    },
+    resetPopups(origin) {
+      return withDeadline(
+        chrome(RESET_POPUPS, [origin]),
+        HELPER_TIMEOUT_MS,
+        `resetPopups ${origin}`,
+      );
+    },
+    blockedPopups(url) {
+      return withDeadline(
+        chromeResponse(BLOCKED_POPUPS, [url]).then((response) => {
+          const count = isRecord(response) ? response.value : undefined;
+          if (typeof count !== "number") {
+            throw new Error(`blockedPopups ${url} returned ${JSON.stringify(response)}`);
+          }
+          return count;
+        }),
+        HELPER_TIMEOUT_MS,
+        `blockedPopups ${url}`,
+      );
+    },
     discardTab(url) {
       return withDeadline(
         chrome(DISCARD_TAB, [url, SESSION_STORE_TIMEOUT_MS]),
@@ -521,6 +572,11 @@ function buildUserJs(downloadDir: string, holdBeforeUnloadPrompts: boolean): str
       "Start blank: the default about:home is a privileged page that fetches remote content.",
     ],
     ["browser.startup.homepage", "about:blank", "Same reason."],
+    [
+      "dom.disable_open_during_load",
+      true,
+      "Keep Firefox's pop-up blocker on, as it is for users: Firefox's remote agent turns it off unless the profile sets it.",
+    ],
     [
       "extensions.webextensions.uuids",
       JSON.stringify({ [EXTENSION_ID]: EXTENSION_UUID }),

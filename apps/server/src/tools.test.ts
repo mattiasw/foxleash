@@ -208,6 +208,7 @@ describe("tools", () => {
         words: [
           "pointerdown, mousedown, pointerup, mouseup and click",
           "Links and form buttons that lead to another site are refused: open such a page with navigate.",
+          "Firefox's pop-up blocker stops a link or form button that opens a new tab",
           "click never asks",
         ],
       },
@@ -445,6 +446,7 @@ describe("tools", () => {
           "Escape closes the open popover or modal dialog",
           "ArrowUp and ArrowDown choose the previous or next option in a select",
           "Enter on a link or in a form that leads to another site is refused: open such a page with navigate.",
+          "Enter on a link or in a form that opens a new tab meets Firefox's pop-up blocker as click does",
           "insert or delete no text, so use type for text",
           "Frames are not entered.",
           "none, submitted, clicked, focus_moved, selected_option, closed_dialog or hid_popover",

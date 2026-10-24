@@ -57,7 +57,7 @@ The agent can:
 - upload files from allowed folders,
 - download files from sites you approved into your Firefox download folder.
 
-Each agent session works in its own orange tab group titled Foxhand, and Foxhand acts only on tabs in that group, including tabs you move into it. When the agent session ends, Foxhand closes its group if the group holds only blank tabs, so pages you may still be reading stay open. The Foxhand button in the toolbar shows ON on the tabs an agent session can use, and clicking it opens Foxhand's settings.
+Each agent session works in its own orange tab group titled Foxhand, and Foxhand acts only on tabs in that group, including tabs you move into it and tabs that a page in the group opens, also after your own click. When the agent session ends, Foxhand closes its group if the group holds only blank tabs, so pages you may still be reading stay open. The Foxhand button in the toolbar shows ON on the tabs an agent session can use, and clicking it opens Foxhand's settings.
 
 Foxhand acts in your logged-in browser. The main risk is prompt injection: a web page can contain instructions aimed at the AI model, such as an instruction to send the contents of the page somewhere. Models can be fooled by these, and no defense is complete. Foxhand limits what a fooled agent can do:
 
@@ -70,7 +70,7 @@ Foxhand acts in your logged-in browser. The main risk is prompt injection: a web
 
 Foxhand asks before it opens a page on a site you have not approved, and it refuses clicks on links and form buttons that lead to another site or out of the browser, such as to an email address, so a fooled agent cannot send what it read to another site by putting it in an address, with two exceptions: going back or forward in a tab's history can return to a page on a site you have not approved, and a page on an approved site can redirect, including through an address the agent chose, or send the tab to another site with its own scripts, for example after a click, before Foxhand can ask. In both cases the agent sees only that site's address. A page's own scripts can also open an email address. Your agent's own permission settings still apply on top of this, but do not rely on them alone. Avoid using Foxhand on sites where a mistake is costly (banking, health records, admin panels with destructive actions), and stay nearby while it works.
 
-Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (opening pop-up windows, writing to the clipboard, entering fullscreen, opening a file picker) do not work, and neither do sites that ignore simulated events.
+Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (writing to the clipboard, entering fullscreen, opening a file picker, and opening pop-up windows and new tabs unless you allow pop-ups for the site) do not work, and neither do sites that ignore simulated events.
 
 Foxhand runs on Linux only, with Firefox desktop 140 or later. It does not work on Firefox for Android.
 
@@ -100,7 +100,7 @@ When your AI agent asks for it, the extension sends page content and browsing ac
 
 What the agent can reach:
 
-- Only tabs in the agent's Foxhand tab group, such as tabs it opened there and tabs you moved into it.
+- Only tabs in the agent's Foxhand tab group, such as tabs it opened there, tabs you moved into it and tabs that a page in the group opened.
 - Page content (page text, form fields, screenshots, console messages and network requests) comes only from what a tab showed or loaded while its page was on a site you approved with a click in the browser. It can include what that page loads or shows from other sites, blocklisted ones included. The agent cannot approve a site.
 - For a tab on a site you approved, the agent gets its URL and title. For any other tab in the group it gets only the site's address (scheme, host and port), with no path, query or title, and for a local file or another page that is not a website, only the kind of address, such as file:.
 - Foxhand asks you before the agent opens a page on a site you have not approved. The extension's settings list the sites you allowed or refused for each running agent session, where you can forget those answers. Going back or forward in a tab's history, and a page on an approved site that redirects or, with its own scripts, sends the tab to another site, for example after a click, can still reach a site you have not approved without asking; the agent then sees only that site's address. Whatever the agent puts in an address, types or submits in a page goes to that website, and to wherever that page sends it, as it would if you did it yourself.

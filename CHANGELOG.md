@@ -68,7 +68,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and `drag` tools, on an element from `read_page` or at a point, on sites you approved.
   Clicks on links and form buttons that lead to another site, or out of the browser such as to
   an email address, are refused; your agent opens a page on another site with `navigate`,
-  which asks you first.
+  which asks you first. A link or form button that opens a new tab, clicked or pressed with
+  Enter, opens nothing while Firefox's pop-up blocker stops it, as it does unless you allow
+  pop-ups for the site; a new tab that a page in the agent's Foxhand tab group opens, also
+  after your own click, joins that group.
 - Your agent can read a page's console messages, uncaught errors and unhandled promise
   rejections with the `read_console` tool, filtered by level and pattern, only from pages
   that loaded on sites you approved.

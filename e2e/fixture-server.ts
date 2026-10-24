@@ -33,6 +33,7 @@ export const TITLES = {
   upload: "Fixture upload",
   act: "Fixture act",
   actLinks: "Fixture act links",
+  actNewTab: "Fixture act new tab",
   actScroll: "Fixture act scroll",
   actModal: "Fixture act modal",
   actBodyScroll: "Fixture act body scroll",
@@ -478,6 +479,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/act-links") {
       // The other site is the same server under localhost.
       sendHtml(response, actLinksPage(request.socket.localPort ?? 0));
+    } else if (path === "/act-new-tab") {
+      sendHtml(response, ACT_NEW_TAB_PAGE);
     } else if (path === "/act-scroll") {
       sendHtml(response, ACT_SCROLL_PAGE);
     } else if (path === "/act-modal") {
@@ -1922,6 +1925,15 @@ rewritten.addEventListener("mousedown", () => { rewritten.href = ${JSON.stringif
 </body></html>
 `;
 }
+
+// A same-site link and a same-site form that open their page in a new tab.
+const ACT_NEW_TAB_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actNewTab}</title></head>
+<body>
+<p><a href="/a" target="_blank">New tab</a></p>
+<form action="/a" method="get" target="_blank"><input name="q" aria-label="New tab query"><button type="submit">Send new tab</button></form>
+</body></html>
+`;
 
 // A tall page with a scrolling panel, a panel whose own wheel listener cancels the wheel, and a
 // button far down. The viewport's centre is on the plain wrapper.

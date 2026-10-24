@@ -70,6 +70,12 @@ the extension's internal UUID (`EXTENSION_UUID` in `e2e/firefox.ts`) with the
 `harness.seedSettings` writes `storage.local` from that page and is the only way tests write
 settings: the extension has no test hook.
 
+The profile keeps Firefox's pop-up blocker on (`dom.disable_open_during_load`), which
+Firefox's remote agent would otherwise switch off, so a test sees the pop-up blocking users
+get. `firefox.allowPopups(origin)` allows pop-ups for a site, as a user's pop-up exception
+does, `firefox.resetPopups(origin)` removes that exception again, and
+`firefox.blockedPopups(url)` reads how many pop-ups Firefox blocked in a tab.
+
 A test that answers a page's beforeunload prompt itself starts Firefox with
 `harness.startFirefox(EXTENSION_DIST, { holdBeforeUnloadPrompts: true })`. That asks WebDriver
 to leave those prompts open (`unhandledPromptBehavior: { beforeUnload: "ignore" }`) instead of
