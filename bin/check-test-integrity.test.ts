@@ -252,6 +252,74 @@ describe("check-test-integrity.sh", () => {
       `const re = /[a//]/; test${m(".", "only(")}name, fn)\n  /* chained */\n  .then(done);\n`,
     ],
     [
+      "a skip split from its receiver by a trailing comment holding a comment's end, after a regex holding its start",
+      `x(/a\\/*/); test // flaky */\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment holding a comment's end, after a regex stripping trailing slashes",
+      `const p = s.replace(/\\/*$/, ""); test // see */\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment holding a comment's end and a dot, after a regex holding its start",
+      `x(/a\\/*/); test // a */ b.\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a trailing comment holding a comment's end",
+      `x(1); test // flaky */\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip two links below a root whose trailing comment holds a comment's end, after a regex holding its start",
+      `x(/a\\/*/); test // flaky */\n  .sequential\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from a link by a block comment spanning its line end, below a chain whose root's trailing comment holds a comment's end after a regex holding its start",
+      `x(/a\\/*/); test // flaky */\n  .concurrent("a", () => {\n    run();\n  });\ntest\n  .describe /${m("*", " see")}\n  https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a quoted trailing comment after a block comment holding a quote",
+      `test /${m("* it's flaky *", "/")} // don't\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a quoted trailing comment after a block comment holding a URL and a quote",
+      `test /${m("* see https://x, it's flaky *", "/")} // don't\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment spanning the root's line end",
+      `test /${m("*", " see")}\n  https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment whose closing line holds a quote",
+      `test /${m("*", " see")}\n  it's flaky *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment whose next line starts like a line comment",
+      `test /${m("*", " see")}\n  // https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip after the close of a block comment spanning the root's line end",
+      `test /${m("*", " see")}\n  https://x *${m("/")} ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment whose closing line opens another",
+      `test /${m("*", " a")}\n  b *${m("/")} /${m("*", " c")}\n  d *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment over three lines",
+      `test /${m("*", " see")}\n  https://x,\n  flaky on CI *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from its receiver by a block comment whose first line holds a glob",
+      `test /${m("*", " see src/", "*.ts")}\n  for the list *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from a link by a block comment spanning the link's line end",
+      `test\n  .describe /${m("*", " see")}\n  https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
+      "a skip split from a root after the close of a block comment holding a quote, by a quoted trailing comment",
+      `/${m("*", " see")}\n  it's flaky *${m("/")} test // don't.\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+    ],
+    [
       "a focus on an added line that starts with two plus signs",
       `let n = 0;\n++n && ${m("test.", "only(")}"t", () => {});\n`,
     ],
@@ -1263,6 +1331,30 @@ describe("check-test-integrity.sh", () => {
       false,
     ],
     [
+      "a skip edited in under an unchanged receiver line ending in a block comment holding a quote and a quoted trailing comment",
+      `test /${m("* it's flaky *", "/")} // don't\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("* it's flaky *", "/")} // don't\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line whose block comment spans its line end",
+      `test /${m("*", " see")}\n  https://x *${m("/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `test /${m("*", " see")}\n  https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line whose block comment spans its line end, in a hunk after one ending inside a block comment",
+      `const a = 1; /${m("*", " the setup below")}\n${" * note\n".repeat(10)} *${m("/")}\n${"step();\n".repeat(10)}test /${m("*", " see")}\n  https://x *${m("/")}\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `const a = 2; /${m("*", " the setup below")}\n${" * note\n".repeat(10)} *${m("/")}\n${"step();\n".repeat(10)}test /${m("*", " see")}\n  https://x *${m("/")}\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
+      "a skip edited in under an unchanged receiver line whose trailing comment holds a comment's end, after a regex holding its start",
+      `x(/a\\/*/); test // flaky */\n  .concurrent("t", () => {\n    run();\n  });\n`,
+      `x(/a\\/*/); test // flaky */\n  ${m(".", "skip(")}"t", () => {\n    run();\n  });\n`,
+      false,
+    ],
+    [
       "a skip edited in below a receiver line and a blank context line under diff.suppressBlankEmpty",
       "test\n\nx();\n",
       `test\n\n  ${m(".", "skip(")}"t", fn);\n`,
@@ -1549,6 +1641,10 @@ describe("check-test-integrity.sh", () => {
     [
       "a database cursor skip on a context object",
       `test("t", async () => {\n  const rows = await context.db.collection("u").find({})${m(".", "skip(")}10);\n  assert.ok(rows);\n});\n`,
+    ],
+    [
+      "a cursor skip below a trailing comment ending in a test name, after a regex holding a quote",
+      `test("pages", async () => {\n  const rows = await db.find({ name: /'/ }) // page 1 is in the first test\n    ${m(".", "skip(")}10);\n  assert.equal(rows.length, 10);\n});\n`,
     ],
     [
       "an option-object skip on a name starting with function and a dollar sign",
