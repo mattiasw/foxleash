@@ -51,8 +51,10 @@ commit's.
 - **Late requests of the previous page.** A request is kept only when the site of its top-level
   document (`documentUrl`, else `originUrl`, in the top frame; the last of `frameAncestors` in a
   frame) is the log's site. An unload beacon of the previous page, which Firefox sends after the
-  new page committed, does not land in the new page's log. Events for request ids the current log
-  does not know are ignored.
+  new page committed, does not land in the new page's log. Nor does a request, or a redirect hop
+  of one, that started before the log's commit: Firefox can report a request of the previous page
+  only after the new page's commit. Events for request ids the current log does not know are
+  ignored.
 - **Redaction at record time.** The values of `Cookie`, `Set-Cookie`, `Authorization` and
   `Proxy-Authorization` are replaced with `[redacted]`, the name compared in lowercase before any
   cut, so an unredacted value never sits in the log. `binaryValue` is never read.
@@ -79,8 +81,11 @@ commit's.
 
 ## Consequences
 
-- Requests the page starts before its commit is reported can be missed, apart from its own
-  document request.
+- Requests started before the page's commit are left out, apart from its own document request.
+  That covers any request Firefox starts for the page ahead of its commit, such as an Early
+  Hints preload. `timeStamp` is wall-clock time, so when the system clock steps back past the
+  commit, the page's requests are left out until the clock passes the commit's time again or
+  the page loads again, while `recording` stays true.
 - A page that loaded before the user approved its site, or whose access was interrupted, is not
   recorded until it loads again; `recording: false` says so.
 - The latest `main_frame` request of every tab, the user's own included, is held in memory
@@ -94,6 +99,8 @@ commit's.
   document, on the same approved site).
 - Without a commit, same-site documents share a list: a same-site page's unload requests, or a
   same-site page restored from the back-forward cache.
+- A redirect hop that an earlier same-site page's request makes after the commit lands in the new
+  page's list.
 - URLs and other headers can still carry tokens; the listing's `authenticationInfo` declaration
   says so.
 - A result that does not fit in one tool result is cut to the newest requests that do.

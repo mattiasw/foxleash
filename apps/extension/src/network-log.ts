@@ -183,6 +183,8 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
     }
     const log = current(tabId);
     if (log === undefined) return;
+    // Firefox can report an earlier document's request after this one committed.
+    if (details.timeStamp < log.at) return;
     // A request the previous document makes after this one committed, such as an unload beacon.
     if (siteOf(topDocumentUrl(details) ?? "") !== log.site) return;
     const entry = entryOf(details);

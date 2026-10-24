@@ -358,7 +358,7 @@ describe("network log", { timeout: 10000 }, () => {
     assert.deepEqual(read(tab.id, ALL, "s1", "https://c.example"), NONE);
     await fake.browser.tabs.reload(tab.id);
     await flush();
-    request(tab.id, "https://c.example/reloaded", options);
+    request(tab.id, "https://c.example/reloaded", { ...options, timeStamp: 2000 });
     assert.deepEqual(urlsOf(read(tab.id, ALL, "s1", "https://c.example")), [
       "https://c.example/reloaded",
     ]);
@@ -390,6 +390,31 @@ describe("network log", { timeout: 10000 }, () => {
       fromCache: false,
     });
     assert.deepEqual(read(tab.id), { recording: true, requests: [], truncated: false });
+  });
+
+  it("leaves out an earlier page's request that Firefox reports after the next commit", async () => {
+    const { commit, fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    commit(tab.id, `${SITE}/next`, 2000);
+    await flush();
+    const old = request(tab.id, `${SITE}/old`, { timeStamp: 1999 });
+    fake.emitWebRequest("onSendHeaders", {
+      requestId: old,
+      tabId: tab.id,
+      timeStamp: 2002,
+      requestHeaders: [],
+    });
+    fake.emitWebRequest("onCompleted", {
+      requestId: old,
+      tabId: tab.id,
+      timeStamp: 2003,
+      statusCode: 200,
+      fromCache: false,
+    });
+    const next = { documentUrl: `${SITE}/next` };
+    request(tab.id, `${SITE}/at-commit`, { ...next, timeStamp: 2000 });
+    request(tab.id, `${SITE}/after`, { ...next, timeStamp: 2001 });
+    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/at-commit`, `${SITE}/after`]);
   });
 
   it("keeps only requests whose top-level document is on the log's site", async () => {
@@ -736,7 +761,10 @@ describe("network log", { timeout: 10000 }, () => {
     const second = hold();
     fake.navigateByUser(tab.id, `${SITE}/third`);
     fake.navigateByUser(tab.id, "https://c.example/");
-    request(tab.id, "https://c.example/api", { documentUrl: "https://c.example/" });
+    request(tab.id, "https://c.example/api", {
+      documentUrl: "https://c.example/",
+      timeStamp: 2000,
+    });
     first();
     await flush();
     assert.deepEqual(read(tab.id, ALL, "s1", "https://c.example"), NONE);
@@ -921,11 +949,13 @@ describe("network log", { timeout: 10000 }, () => {
     // Without the page's own request, all of them would fit.
     assert.ok(count * each <= MAX_LOG_CHARS);
     for (let index = 0; index < count; index += 1) {
-      const id = request(tab.id, `${SITE}/${String(index).padStart(3, "0")}`);
+      const id = request(tab.id, `${SITE}/${String(index).padStart(3, "0")}`, {
+        timeStamp: 2000,
+      });
       fake.emitWebRequest("onHeadersReceived", {
         requestId: id,
         tabId: tab.id,
-        timeStamp: 1002,
+        timeStamp: 2001,
         statusCode: 200,
         responseHeaders: headers,
       });
@@ -948,11 +978,11 @@ describe("network log", { timeout: 10000 }, () => {
     request(0, `${SITE}/`, { type: "main_frame" });
     fake.navigateByUser(0, `${SITE}/`);
     await flush();
-    const id = request(0, `${SITE}/api`);
+    const id = request(0, `${SITE}/api`, { timeStamp: 2000 });
     fake.emitWebRequest("onHeadersReceived", {
       requestId: id,
       tabId: 0,
-      timeStamp: 1001,
+      timeStamp: 2001,
       statusCode: 204,
     });
     assert.deepEqual(
@@ -1207,7 +1237,7 @@ async function reloadAndRead(
 ): Promise<void> {
   await fake.browser.tabs.reload(tabId);
   await flush();
-  request(tabId, `${site}/reloaded`, { documentUrl: `${site}/` });
+  request(tabId, `${site}/reloaded`, { documentUrl: `${site}/`, timeStamp: 2000 });
   assert.deepEqual(read(tabId, ALL, "s1", site), {
     recording: true,
     requests: [
@@ -1215,7 +1245,7 @@ async function reloadAndRead(
         url: `${site}/reloaded`,
         method: "GET",
         type: "xmlhttprequest",
-        startTime: 1000,
+        startTime: 2000,
         requestHeaders: [],
         responseHeaders: [],
       },
