@@ -112,3 +112,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Closing a tab whose page asks you to confirm leaving it no longer holds up your agent's other
   tab closes and session ends until you answer. The agent learns within seconds that the page is
   waiting for you, and no longer hears that the tab closed when you choose to stay on the page.
+- Your Firefox window, or Firefox itself, no longer closes when your agent closes a tab while a
+  tab it is opening in the same window fails to open.

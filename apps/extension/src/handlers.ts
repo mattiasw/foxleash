@@ -268,7 +268,7 @@ export function createHandlers<Handle>({
       approval = await access.ask(session, url, tab.id);
     } catch (error) {
       // Nothing was shown in the tab, so it would only be left blank.
-      await browser.tabs.remove([tab.id]).catch(() => {});
+      await removeNewTab(tab.id);
       throw error;
     }
     await approval.answer;
@@ -296,7 +296,7 @@ export function createHandlers<Handle>({
       await groups.ensureGroup(session, tab);
     } catch (error) {
       // Selected outside the group, it would load the page there.
-      await browser.tabs.remove([tab.id]).catch(() => {});
+      await removeNewTab(tab.id);
       throw error;
     }
     await waitForLoad(browser, timers, tab.id, url, () =>
@@ -305,6 +305,15 @@ export function createHandlers<Handle>({
     const selected = await browser.tabs.update(tab.id, { active: true });
     const view = await access.view(session);
     return view.tabInfo(selected);
+  }
+
+  /**
+   * Removes a tab tab_open created and gave up on, in turn with other closes, and leaves it when
+   * it is its window's last tab. Never rejects: tab_open reports the error that made it give up.
+   */
+  async function removeNewTab(tabId: number): Promise<void> {
+    const closed = await groups.closeTab(tabId, () => {}).catch(() => undefined);
+    if (closed) await closed.removed.catch(() => {});
   }
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {

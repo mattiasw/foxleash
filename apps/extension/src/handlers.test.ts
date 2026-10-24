@@ -200,6 +200,31 @@ describe("tab_open", { timeout: 10000 }, () => {
     ]);
   });
 
+  it("keeps a tab in the window when tab_close runs while tab_open removes the tab it could not group", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://example.com");
+    const first = await open("s1");
+    const refusal = new Error("No group with id: 2");
+    const grouping = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    fake.browser.tabs.group = async () => {
+      grouping.resolve();
+      await held.promise;
+      throw refusal;
+    };
+    const opening = call("s1", "tab_open", { url: "https://example.com/" });
+    await grouping.promise;
+    assert.deepEqual(await call("s1", "tab_close", { tabId: first.id }), { tabs: [] });
+    held.resolve();
+    await assert.rejects(opening, (error: unknown) => error === refusal);
+    const kept = [...fake.tabs.values()];
+    assert.equal(kept.length, 1);
+    assert.notEqual(kept[0]?.id, first.id);
+    assert.equal(kept[0]?.groupId, -1);
+    assert.equal(kept[0]?.discarded, true);
+    assert.equal(kept[0]?.active, false);
+  });
+
   it("has the fake create a discarded tab unloaded and load it only once selected", async () => {
     const { fake } = setup();
     const commits: string[] = [];
@@ -2305,6 +2330,7 @@ describe("approval", { timeout: 10000 }, () => {
 
   it("removes the new tab when the prompt cannot be shown in it", async () => {
     const { fake, call } = setup();
+    const user = fake.openTab({ url: "https://user.example/" });
     const remove = fake.browser.tabs.remove;
     fake.browser.tabs.remove = async (tabIds) => {
       await flush();
@@ -2316,7 +2342,7 @@ describe("approval", { timeout: 10000 }, () => {
       return update(tabId, properties);
     };
     await assert.rejects(call("s1", "tab_open", { url: "https://a.example/" }), /Invalid tab ID/);
-    assert.equal(fake.tabs.size, 0);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
   });
 
   it("still fails with the refusal when the new tab cannot be removed", async () => {
@@ -2330,6 +2356,57 @@ describe("approval", { timeout: 10000 }, () => {
     });
     assert.equal(fake.tabs.size, 2);
     void first.catch(() => {});
+  });
+
+  it("keeps a tab in the window when tab_close runs while tab_open removes the tab it could not show the prompt in", async () => {
+    const { fake, call, open } = setup();
+    const first = await open("s1");
+    const refusal = new Error("Invalid tab ID");
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.active === true) throw refusal;
+      return update(tabId, properties);
+    };
+    const asked = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      if (!tabIds.includes(first.id)) {
+        asked.resolve();
+        await held.promise;
+      }
+      return remove(tabIds);
+    };
+    const opening = call("s1", "tab_open", { url: "https://a.example/" });
+    await asked.promise;
+    const closed = await call("s1", "tab_close", { tabId: first.id }).then(
+      () => "resolved",
+      (error: unknown) => error,
+    );
+    held.resolve();
+    await assert.rejects(opening, (error: unknown) => error === refusal);
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
+    assert.ok(closed instanceof ToolError);
+    assert.equal(closed.code, "last_tab");
+  });
+
+  it("still fails with the prompt's error when the new tab is gone before its removal", async () => {
+    const { fake, call } = setup();
+    const user = fake.openTab({ url: "https://user.example/" });
+    const refusal = new Error("Invalid tab ID");
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.active === true) {
+        fake.removeTab(tabId);
+        throw refusal;
+      }
+      return update(tabId, properties);
+    };
+    await assert.rejects(
+      call("s1", "tab_open", { url: "https://a.example/" }),
+      (error: unknown) => error === refusal,
+    );
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
   });
 });
 
