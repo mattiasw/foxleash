@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { Firefox } from "./firefox.ts";
+import { type Firefox, pollUntil } from "./firefox.ts";
 import {
   counterTitle,
   type FixtureServer,
@@ -57,6 +57,7 @@ describe("tabs in real Firefox", () => {
     const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
     assert.equal(tab.title, TITLES.a);
     assert.equal(tab.url, fixtures.url("/a"));
+    assert.equal(tab.active, true);
     tabId = tab.id;
   });
 
@@ -111,6 +112,57 @@ describe("tabs in real Firefox", () => {
       assert.equal(later.isError, false, later.text);
     } finally {
       await harness.ok(session, "tab_close", { tabId: other.id });
+    }
+  });
+
+  test("a tab_open tab Firefox unloaded comes back with only its page in its history", async () => {
+    // The query only makes the URL unique; /slow holds its answer past the load grace period.
+    const url = fixtures.url("/slow?unloaded");
+    const started = Date.now();
+    const opened = tabOf(await harness.ok(session, "tab_open", { url }));
+    let other: number | undefined;
+    try {
+      assert.equal(opened.url, url);
+      assert.equal(opened.title, TITLES.slow);
+      assert.equal(opened.active, true);
+      // A load wait that missed the load's end would answer only at its 30 s timeout.
+      assert.ok(Date.now() - started < 20_000, `tab_open took ${Date.now() - started} ms`);
+      assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+      // Firefox does not unload the selected tab.
+      other = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") })).id;
+      await firefox.discardTab(url);
+      await harness.ok(session, "tab_select", { tabId: opened.id });
+      await pollUntil(
+        async () => {
+          const history = await firefox.sessionHistory(url);
+          if (history.entries[history.index - 1] !== url) {
+            throw new Error(`the history is ${JSON.stringify(history)}`);
+          }
+          return history;
+        },
+        5000,
+        `${url} as the current entry`,
+      );
+      // Read again as late as the stray about:blank entry was seen: 1.5 s after the select.
+      await sleep(1500);
+      assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+    } finally {
+      const tabIds = other === undefined ? [opened.id] : [opened.id, other];
+      for (const id of tabIds) await harness.ok(session, "tab_close", { tabId: id });
+    }
+  });
+
+  test("tab_open loads a page again that the cache holds", async () => {
+    const url = fixtures.url("/counter-no-cache");
+    const first = tabOf(await harness.ok(session, "tab_open", { url }));
+    let second: number | undefined;
+    try {
+      const again = tabOf(await harness.ok(session, "tab_open", { url }));
+      second = again.id;
+      assert.equal(again.title, counterTitle(parseCount(first.title) + 1));
+    } finally {
+      const tabIds = second === undefined ? [first.id] : [first.id, second];
+      for (const id of tabIds) await harness.ok(session, "tab_close", { tabId: id });
     }
   });
 

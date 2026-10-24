@@ -106,6 +106,30 @@ return flushed().then(() => {
   }
   return null;
 });`;
+// Collects every loaded tab's whole history into the session store first (an unloaded tab has no
+// frame loader), then finds the tab by its stored history, so a tab showing about:blank is found.
+const SESSION_HISTORY = `const [url] = arguments;
+const { TabStateFlusher } = ChromeUtils.importESModule(
+  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
+);
+const { SessionStore } = ChromeUtils.importESModule(
+  "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
+);
+return Promise.all(
+  gBrowser.tabs
+    .filter((tab) => tab.linkedBrowser.frameLoader)
+    .map((tab) => {
+      tab.linkedBrowser.frameLoader.requestSHistoryUpdate();
+      return TabStateFlusher.flush(tab.linkedBrowser);
+    }),
+).then(() => {
+  const held = gBrowser.tabs
+    .map((tab) => JSON.parse(SessionStore.getTabState(tab)))
+    .filter(({ entries = [] }) => entries.some((entry) => entry.url === url));
+  if (held.length !== 1) throw new Error(held.length + " tabs hold " + url);
+  const [{ entries, index }] = held;
+  return { index, entries: entries.map((entry) => entry.url) };
+});`;
 
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
@@ -168,6 +192,11 @@ export interface Firefox {
    * when the store does not hold `url` as the tab's current entry.
    */
   discardTab(url: string): Promise<void>;
+  /**
+   * The session history Firefox's session store holds for the one tab whose history includes
+   * `url`: its entries' URLs and the 1-based index of the current one.
+   */
+  sessionHistory(url: string): Promise<{ index: number; entries: string[] }>;
   /** Resolves with the first tab that matches, polling until `timeoutMs`. */
   waitForContext(
     predicate: (context: BrowsingContext) => boolean,
@@ -525,6 +554,25 @@ export async function launchFirefox({
         chrome(DISCARD_TAB, [url, SESSION_STORE_TIMEOUT_MS]),
         HELPER_TIMEOUT_MS,
         `discardTab ${url}`,
+      );
+    },
+    sessionHistory(url) {
+      return withDeadline(
+        chromeResponse(SESSION_HISTORY, [url]).then((response) => {
+          const value = isRecord(response) ? response.value : undefined;
+          const index = isRecord(value) ? value.index : undefined;
+          const entries = isRecord(value) ? value.entries : undefined;
+          if (
+            typeof index !== "number" ||
+            !Array.isArray(entries) ||
+            !entries.every((entry) => typeof entry === "string")
+          ) {
+            throw new Error(`sessionHistory ${url} returned ${JSON.stringify(response)}`);
+          }
+          return { index, entries };
+        }),
+        HELPER_TIMEOUT_MS,
+        `sessionHistory ${url}`,
       );
     },
     waitForContext(predicate, timeoutMs) {

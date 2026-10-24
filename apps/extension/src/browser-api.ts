@@ -30,7 +30,12 @@ export interface BrowserApi {
   tabs: {
     query(queryInfo: { groupId?: number; windowId?: number }): Promise<Tab[]>;
     get(tabId: number): Promise<Tab>;
-    create(createProperties: { url: string; active: boolean; windowId?: number }): Promise<Tab>;
+    create(createProperties: {
+      url: string;
+      active: boolean;
+      windowId?: number;
+      discarded?: boolean;
+    }): Promise<Tab>;
     update(
       tabId: number,
       updateProperties: { url?: string; active?: boolean; loadReplace?: boolean },

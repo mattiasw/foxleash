@@ -90,7 +90,8 @@ export interface FakeBrowser {
   committedListenerCount(): number;
   /**
    * Whether `tabs.create` fires `webNavigation.onCommitted` for the created tab's top frame and
-   * URL, as Firefox's own load of it does; true by default. `openTab` never fires it.
+   * URL, as Firefox's own load of it does; true by default. `openTab` and a `discarded` create,
+   * which loads nothing until `tabs.update` loads a URL into the tab or selects it, never fire it.
    */
   commitOnCreate: boolean;
   /** Fires `webNavigation.onCompleted`. A load in a tab fires it for its top frame too. */
@@ -363,7 +364,22 @@ export function createFakeBrowser(): FakeBrowser {
           .filter((tab) => windowId === undefined || tab.windowId === windowId)
           .map(snapshot),
       get: async (tabId) => snapshot(tabOf(tabId)),
-      create: async ({ url, active, windowId }) => {
+      create: async ({ url, active, windowId, discarded }) => {
+        if (discarded === true) {
+          if (active) throw new Error("Active tabs cannot be created and discarded.");
+          if (url.startsWith("about:")) {
+            throw new Error('Cannot create a discarded new tab or "about" urls.');
+          }
+          // Firefox labels a tab it has not loaded with its URL, and loads it once selected.
+          const tab = fake.openTab({
+            url,
+            active: false,
+            discarded: true,
+            title: url,
+            windowId: windowId ?? fake.currentWindowId,
+          });
+          return snapshot(tab);
+        }
         const tab = fake.openTab({ url, active, windowId: windowId ?? fake.currentWindowId });
         // Firefox loads the URL a tab is created on and reports that commit. Here it reaches
         // listeners before the caller's await of create resumes: a listener added after misses it.
@@ -380,7 +396,13 @@ export function createFakeBrowser(): FakeBrowser {
         fake.tabUpdates.push({ tabId, ...properties });
         if (properties.active === true) activate(tab);
         const { url } = properties;
-        if (url === undefined) return snapshot(tab);
+        if (url === undefined) {
+          // Firefox loads a tab it has not loaded yet once it is selected, without a new entry.
+          if (properties.active === true && tab.discarded === true) {
+            load(tab, tab.history[tab.index] ?? tab.url);
+          }
+          return snapshot(tab);
+        }
         if (properties.loadReplace === true) {
           tab.history = [...tab.history.slice(0, tab.index), url];
         } else {

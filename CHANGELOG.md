@@ -106,5 +106,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Tabs your agent opens on a page no longer come back blank when Firefox unloads them to save
-  memory and you select them again.
+- Tabs your agent opens on a page of a site you approved no longer come back blank, or with a
+  Forward button that leads to a blank page, when Firefox unloads them to save memory and you
+  select them again.

@@ -111,10 +111,143 @@ describe("tab_open", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.get(1)?.active, false);
   });
 
-  it("returns the opened page when the blank tab's own load completes after it", async () => {
+  it("creates the tab unloaded on an approved page, loads it in the group, then selects it", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://example.com");
+    fake.commitOnCreate = false;
+    const creates = recordCreates(fake);
+    const atUpdate: unknown[] = [];
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const tab = fake.tabs.get(tabId);
+      atUpdate.push({ groupId: tab?.groupId, discarded: tab?.discarded, status: tab?.status });
+      return update(tabId, properties);
+    };
+    let opened: TabInfo | undefined;
+    open("s1", "https://example.com/a").then((tab) => {
+      opened = tab;
+    });
+    await flush();
+    assert.ok(opened, "waited for something besides the page's load");
+    assert.equal(timers.pending(), 0);
+    assert.deepEqual(creates, [{ url: "https://example.com/a", active: false, discarded: true }]);
+    const groupId = groupIdOf(fake, opened.id);
+    assert.deepEqual(atUpdate, [
+      { groupId, discarded: true, status: "complete" },
+      { groupId, discarded: false, status: "complete" },
+    ]);
+    assert.deepEqual(opened, {
+      id: opened.id,
+      url: "https://example.com/a",
+      title: "Title of https://example.com/a",
+      active: true,
+    });
+    const tab = fake.tabs.get(opened.id);
+    assert.deepEqual(
+      { history: tab?.history, index: tab?.index, discarded: tab?.discarded, status: tab?.status },
+      { history: ["https://example.com/a"], index: 0, discarded: false, status: "complete" },
+    );
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: opened.id, url: "https://example.com/a", loadReplace: true },
+      { tabId: opened.id, active: true },
+    ]);
+  });
+
+  it("creates the unloaded tab in the window of the session's group", async () => {
     const { fake, open, grant } = setup();
     await grant("https://example.com");
-    reportBlankLoadBefore(fake, "https://example.com/path");
+    await open("s1");
+    fake.currentWindowId = 2;
+    const creates = recordCreates(fake);
+    await open("s1", "https://example.com/a");
+    assert.deepEqual(creates, [
+      { url: "https://example.com/a", active: false, discarded: true, windowId: 1 },
+    ]);
+  });
+
+  it("watches no commits for an approved page and closes the tab it could not group", async () => {
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
+    const before = fake.committedListenerCount();
+    const during: number[] = [];
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async (properties) => {
+      during.push(fake.committedListenerCount());
+      return create(properties);
+    };
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      during.push(fake.committedListenerCount());
+      return update(tabId, properties);
+    };
+    const first = await open("s1", "https://example.com/");
+    assert.deepEqual(during, [before, before, before]);
+    assert.equal(fake.committedListenerCount(), before);
+    fake.browser.tabGroups.update = async () => {
+      throw new Error("No group with id: 2");
+    };
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      await flush();
+      return remove(tabIds);
+    };
+    await assert.rejects(open("s2", "https://example.com/"), /No group with id/);
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: first.id, url: "https://example.com/", loadReplace: true },
+      { tabId: first.id, active: true },
+    ]);
+  });
+
+  it("has the fake create a discarded tab unloaded and load it only once selected", async () => {
+    const { fake } = setup();
+    const commits: string[] = [];
+    fake.browser.webNavigation.onCommitted.addListener((details) => {
+      commits.push(details.url);
+    });
+    const shown = fake.openTab({ active: true });
+    const created = await fake.browser.tabs.create({
+      url: "https://example.com/",
+      active: false,
+      discarded: true,
+    });
+    await flush();
+    assert.deepEqual(created, {
+      id: created.id,
+      windowId: 1,
+      active: false,
+      url: "https://example.com/",
+      title: "https://example.com/",
+      status: "complete",
+      discarded: true,
+      groupId: -1,
+    });
+    await fake.browser.tabs.update(shown.id, { active: true });
+    await flush();
+    assert.deepEqual(commits, []);
+    await fake.browser.tabs.update(created.id, { active: true });
+    await flush();
+    assert.deepEqual(commits, ["https://example.com/"]);
+    assert.equal(fake.tabs.get(created.id)?.discarded, false);
+  });
+
+  it("has the fake refuse a discarded tab that is active or on an about: URL", async () => {
+    const { fake } = setup();
+    await assert.rejects(
+      fake.browser.tabs.create({ url: "https://example.com/", active: true, discarded: true }),
+      { message: "Active tabs cannot be created and discarded." },
+    );
+    await assert.rejects(
+      fake.browser.tabs.create({ url: "about:blank", active: false, discarded: true }),
+      { message: 'Cannot create a discarded new tab or "about" urls.' },
+    );
+    assert.equal(fake.tabs.size, 0);
+  });
+
+  it("returns the opened page when a blank load completes before it", async () => {
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
+    reportBlankLoadInUnloaded(fake);
     const tab = await open("s1", "https://example.com/path");
     assert.deepEqual(tab, {
       id: tab.id,
@@ -291,45 +424,6 @@ describe("tab_open", { timeout: 10000 }, () => {
     );
   });
 
-  it("loads the page only once the blank tab's own load has committed", async () => {
-    const { fake, call, grant } = setup();
-    await grant("https://example.com");
-    const other = fake.openTab();
-    fake.commitOnCreate = false;
-    const opened = call("s1", "tab_open", { url: "https://example.com/x" });
-    await flush();
-    const tab = [...fake.tabs.values()].at(-1);
-    assert.ok(tab);
-    assert.equal(loadsOf(fake, "https://example.com/x"), 0);
-    assert.equal(tab.url, "about:blank");
-    fake.emitCommitted({ tabId: other.id, frameId: 0, url: "about:blank" });
-    fake.emitCommitted({ tabId: tab.id, frameId: 1, url: "about:blank" });
-    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://example.com/y" });
-    await flush();
-    assert.equal(loadsOf(fake, "https://example.com/x"), 0);
-    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
-    const result = await opened;
-    assert.ok("tab" in result);
-    assert.equal(result.tab.url, "https://example.com/x");
-    assert.deepEqual(fake.tabUpdates, [{ tabId: tab.id, url: "https://example.com/x" }]);
-  });
-
-  it("loads the page after BLANK_COMMIT_TIMEOUT_MS when the blank tab reports no commit", async () => {
-    const { fake, timers, call, grant } = setup();
-    await grant("https://example.com");
-    fake.commitOnCreate = false;
-    const opened = call("s1", "tab_open", { url: "https://example.com/x" });
-    await flush();
-    timers.advance(BLANK_COMMIT_TIMEOUT_MS - 1);
-    await flush();
-    assert.equal(loadsOf(fake, "https://example.com/x"), 0);
-    timers.advance(1);
-    const result = await opened;
-    assert.ok("tab" in result);
-    assert.equal(result.tab.url, "https://example.com/x");
-    assert.equal(loadsOf(fake, "https://example.com/x"), 1);
-  });
-
   it("opens a tab without a url without waiting for a commit", async () => {
     const { fake, timers, open } = setup();
     fake.commitOnCreate = false;
@@ -342,21 +436,28 @@ describe("tab_open", { timeout: 10000 }, () => {
     assert.equal(timers.pending(), 0);
   });
 
-  it("stops watching commits once the tab is open or cannot be opened", async () => {
-    const { fake, open, grant } = setup();
-    await grant("https://example.com");
+  it("stops watching commits once a prompt's tab is open or cannot be opened", async () => {
+    const { fake, call, page } = setup();
     const before = fake.committedListenerCount();
-    await open("s1", "https://example.com/");
+    const opened = call("s1", "tab_open", { url: "https://example.com/" });
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    await opened;
     assert.equal(fake.committedListenerCount(), before);
     fake.browser.tabGroups.update = async () => {
-      throw new Error("No group with id: 1");
+      throw new Error("No group with id: 2");
     };
-    await assert.rejects(open("s2", "https://example.com/"), /No group with id/);
+    await assert.rejects(
+      call("s2", "tab_open", { url: "https://example.com/" }),
+      /No group with id/,
+    );
     assert.equal(fake.committedListenerCount(), before);
     fake.browser.tabs.create = async () => {
       throw new Error("No window with id: 1");
     };
-    await assert.rejects(open("s3", "https://example.com/"), /No window with id/);
+    await assert.rejects(
+      call("s3", "tab_open", { url: "https://example.com/" }),
+      /No window with id/,
+    );
     assert.equal(fake.committedListenerCount(), before);
   });
 });
@@ -1809,6 +1910,7 @@ describe("approval", { timeout: 10000 }, () => {
 
   it("shows the approval prompt only once the blank tab's own load has committed", async () => {
     const { fake, call, page, access } = setup();
+    const other = fake.openTab();
     fake.commitOnCreate = false;
     const opened = call("s1", "tab_open", { url: "https://a.example/x" });
     await flush();
@@ -1817,9 +1919,33 @@ describe("approval", { timeout: 10000 }, () => {
     assert.equal(tab.url, "about:blank");
     assert.deepEqual(fake.tabUpdates, []);
     assert.equal(access.openPrompt("s1"), undefined);
+    fake.emitCommitted({ tabId: other.id, frameId: 0, url: "about:blank" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 1, url: "about:blank" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://a.example/y" });
+    await flush();
+    assert.equal(tab.url, "about:blank");
+    assert.equal(access.openPrompt("s1"), undefined);
     fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
     const shown = await page("s1");
     assert.match(tab.url, /^moz-extension:\/\/.*\/approve\.html\?id=/);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await opened;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/x");
+  });
+
+  it("shows the approval prompt after BLANK_COMMIT_TIMEOUT_MS when the blank tab reports no commit", async () => {
+    const { fake, timers, call, page, access } = setup();
+    fake.commitOnCreate = false;
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    await flush();
+    timers.advance(BLANK_COMMIT_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    timers.advance(1);
+    const shown = await page("s1");
+    const [tab] = fake.tabs.values();
+    assert.match(tab?.url ?? "", /^moz-extension:\/\/.*\/approve\.html\?id=/);
     shown.deliver({ type: "answer", answer: "once" });
     const result = await opened;
     assert.ok("tab" in result);
@@ -1838,11 +1964,7 @@ describe("approval", { timeout: 10000 }, () => {
     const result = await navigated;
     assert.ok("tab" in result);
     assert.equal(result.tab.url, "https://b.example/y");
-    assert.deepEqual(fake.tabs.get(tab.id)?.history, [
-      "about:blank",
-      "https://a.example/",
-      "https://b.example/y",
-    ]);
+    assert.deepEqual(fake.tabs.get(tab.id)?.history, ["https://a.example/", "https://b.example/y"]);
   });
 
   it("keeps a tab refused by Don't allow on the prompt page", async () => {
@@ -5074,6 +5196,35 @@ function reportBlankLoadBefore(fake: FakeBrowser, url: string): void {
     }
     return update(tabId, properties);
   };
+}
+
+/**
+ * Makes loading a URL into a tab Firefox has not loaded first report a load that leaves it on
+ * about:blank, as for a new tab's own blank load, and start the load of its page a turn later.
+ */
+function reportBlankLoadInUnloaded(fake: FakeBrowser): void {
+  const update = fake.browser.tabs.update;
+  fake.browser.tabs.update = async (tabId, properties) => {
+    const tab = fake.tabs.get(tabId);
+    if (properties.url !== undefined && tab?.discarded === true) {
+      tab.url = "about:blank";
+      fake.emitStatus(tabId, "loading");
+      fake.emitStatus(tabId, "complete");
+      await flush();
+    }
+    return update(tabId, properties);
+  };
+}
+
+/** Records every `tabs.create` call's properties, in order. */
+function recordCreates(fake: FakeBrowser): unknown[] {
+  const creates: unknown[] = [];
+  const create = fake.browser.tabs.create;
+  fake.browser.tabs.create = async (properties) => {
+    creates.push(properties);
+    return create(properties);
+  };
+  return creates;
 }
 
 /**

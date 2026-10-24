@@ -233,10 +233,14 @@ export function createHandlers<Handle>({
       return { tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }) };
     }
     const group = await groups.groupOf(session);
+    if (url !== undefined && decision?.decision === "allowed") {
+      return { tab: await openOnPage(session, url, group?.windowId) };
+    }
     const blank = url === undefined ? undefined : watchBlankCommits(browser, timers);
     let tab: Tab;
     try {
-      // Opened blank and grouped first, so the page never loads outside the session's group.
+      // Opened blank and grouped first, so the prompt, and after approval the page, load only in
+      // the session's group.
       tab = await browser.tabs.create(
         group === undefined
           ? { url: "about:blank", active: true }
@@ -254,23 +258,48 @@ export function createHandlers<Handle>({
       const view = await access.view(session);
       return { tab: view.tabInfo(current) };
     }
-    if (decision?.decision === "ask") {
-      let approval: Approval;
-      try {
-        approval = await access.ask(session, url, tab.id);
-      } catch (error) {
-        // Nothing was shown in the tab, so it would only be left blank.
-        await browser.tabs.remove([tab.id]).catch(() => {});
-        throw error;
-      }
-      await approval.answer;
-      return { tab: await loadAfterAnswer(session, tab.id, url, { kind: "url", url }) };
+    let approval: Approval;
+    try {
+      approval = await access.ask(session, url, tab.id);
+    } catch (error) {
+      // Nothing was shown in the tab, so it would only be left blank.
+      await browser.tabs.remove([tab.id]).catch(() => {});
+      throw error;
     }
-    const loaded = await waitForLoad(browser, timers, tab.id, url, () =>
-      browser.tabs.update(tab.id, { url }),
+    await approval.answer;
+    return { tab: await loadAfterAnswer(session, tab.id, url, { kind: "url", url }) };
+  }
+
+  /**
+   * Created unloaded on its page: Firefox gives a tab that started on about:blank an about:blank
+   * history entry after its page when it unloads and restores it. Grouped before its page loads,
+   * so the page never loads outside the session's group. Loaded before it is selected: selecting
+   * a tab Firefox has not loaded restores its page as a history load, which shows the cached copy
+   * without asking the server unless the response was `no-store`.
+   */
+  async function openOnPage(
+    session: string,
+    url: string,
+    windowId: number | undefined,
+  ): Promise<TabInfo> {
+    const tab = await browser.tabs.create(
+      windowId === undefined
+        ? { url, active: false, discarded: true }
+        : { url, active: false, discarded: true, windowId },
     );
+    try {
+      await groups.ensureGroup(session, tab);
+    } catch (error) {
+      // Selected outside the group, it would load the page there.
+      await browser.tabs.remove([tab.id]).catch(() => {});
+      throw error;
+    }
+    await waitForLoad(browser, timers, tab.id, url, () =>
+      browser.tabs.update(tab.id, { url, loadReplace: true }),
+    );
+    const selected = await browser.tabs.update(tab.id, { active: true });
     const view = await access.view(session);
-    return { tab: view.tabInfo(loaded) };
+    return view.tabInfo(selected);
   }
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {

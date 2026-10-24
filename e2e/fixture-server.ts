@@ -590,6 +590,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
+    } else if (path === "/counter-no-cache") {
+      // Cached, but a load asks again; a history load shows the cached copy.
+      sendPage(response, counterTitle(hits.get(path) ?? 0), { "Cache-Control": "no-cache" });
     } else {
       // Firefox asks for /favicon.ico; it must not reach the counter.
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
