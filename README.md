@@ -238,8 +238,9 @@ in Firefox's downloads panel and history.
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
 selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
 asks for up to 30. Text is matched in the text the page shows, without the values of form
-fields. A selector that contains both `[` and `value` is refused, since it could test what a
-password field holds. A page that changes its address with its own scripts
+fields. A selector that contains `[` together with `value` or `ng-reflect` is refused, since it
+could test what a password field holds, which Angular development builds can copy into
+`ng-reflect` attributes. A page that changes its address with its own scripts
 (`history.pushState` or `replaceState`) counts as a navigation. Waiting for text or a selector
 works only on a tab showing a site you approved, and never asks.
 

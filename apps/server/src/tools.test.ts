@@ -1188,7 +1188,8 @@ describe("wait_for", () => {
     for (const words of [
       "case-sensitive",
       "leaves out the values of form fields",
-      'a selector that contains both "[" and "value", in any letter case or escaped, is refused',
+      'a selector that contains "[" together with "value" or "ng-reflect", in any letter case or escaped, is refused',
+      "which Angular development builds can copy into ng-reflect attributes",
       "history.pushState or replaceState",
       "or navigation true, to wait until the next navigation in the tab finishes",
       "10 unless given, at most 30",

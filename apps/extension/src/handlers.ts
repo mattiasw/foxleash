@@ -1113,10 +1113,17 @@ function waitCondition(params: Params): WaitCondition {
   if (text !== undefined) return { text: waitText(text, "text") };
   if (selector !== undefined) {
     const checked = waitText(selector, "selector");
-    if (testsValue(checked)) {
+    const word = mirroredValueWord(checked);
+    if (word === "value") {
       throw new ToolError(
         "invalid_params",
         'wait_for does not take a selector that contains both "[" and "value", since it could test what a password field holds.',
+      );
+    }
+    if (word === "ng-reflect") {
+      throw new ToolError(
+        "invalid_params",
+        'wait_for does not take a selector that contains both "[" and "ng-reflect", since Angular can copy field values into those attributes.',
       );
     }
     return { selector: checked };
@@ -1137,14 +1144,17 @@ function waitText(value: unknown, name: "text" | "selector"): string {
   return value;
 }
 
-// ADR 0010: wait_for answers no field values. A selector on the value attribute would, asked
-// again and again ([value^="a"], [value^="b"], ...), read a password the page mirrors into it.
-function testsValue(selector: string): boolean {
-  if (!selector.includes("[")) return false;
+// ADR 0010 and 0026: wait_for answers no field values. A selector on the value attribute would,
+// asked again and again ([value^="a"], [value^="b"], ...), read a password the page mirrors into
+// it, and Angular development builds can mirror bound values into ng-reflect-* attributes.
+function mirroredValueWord(selector: string): "value" | "ng-reflect" | undefined {
+  if (!selector.includes("[")) return undefined;
   const decoded = selector
     .replace(CSS_ESCAPE, decodeEscape)
     .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
-  return decoded.includes("value");
+  if (decoded.includes("value")) return "value";
+  if (decoded.includes("ng-reflect")) return "ng-reflect";
+  return undefined;
 }
 
 /**
@@ -1157,7 +1167,8 @@ const CSS_ESCAPE = /\\(?:([0-9a-fA-F]{1,6})(?:\r\n|[ \t\n\r\f])?|\r\n|[\n\r\f]|(
 function decodeEscape(_escape: string, hex: string | undefined, char: string | undefined): string {
   if (hex !== undefined) {
     const code = Number.parseInt(hex, 16);
-    // CSS also turns 0 and surrogates into U+FFFD; no letter of "value" can come from either.
+    // CSS also turns 0 and surrogates into U+FFFD; no character of "value" or "ng-reflect" can
+    // come from either.
     return code > 0x10ffff ? "\uFFFD" : String.fromCodePoint(code);
   }
   return char ?? "";

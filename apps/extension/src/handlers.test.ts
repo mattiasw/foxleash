@@ -2724,6 +2724,8 @@ describe("wait_for", { timeout: 10000 }, () => {
       "[*|value]",
       ":has([value])",
       ".value[name=q]",
+      "[ng-reflect-value]",
+      "[value][ng-reflect-model]",
     ];
     for (const selector of refused) {
       await assert.rejects(
@@ -2732,6 +2734,25 @@ describe("wait_for", { timeout: 10000 }, () => {
           code: "invalid_params",
           message:
             'wait_for does not take a selector that contains both "[" and "value", since it could test what a password field holds.',
+        },
+        JSON.stringify(selector),
+      );
+    }
+    const ngReflect = [
+      'input[type=password][ng-reflect-model^="a"]',
+      "[NG-REFLECT-MODEL]",
+      "[ng\\-reflect-model]",
+      "[\\6e g-reflect-model]",
+      "[*|ng-reflect-model]",
+      "form:has([ng-reflect-model])",
+    ];
+    for (const selector of ngReflect) {
+      await assert.rejects(
+        call("s1", "wait_for", { tabId: tab.id, selector }),
+        {
+          code: "invalid_params",
+          message:
+            'wait_for does not take a selector that contains both "[" and "ng-reflect", since Angular can copy field values into those attributes.',
         },
         JSON.stringify(selector),
       );
@@ -2746,6 +2767,8 @@ describe("wait_for", { timeout: 10000 }, () => {
       "[\\d800]",
       ".total-value",
       "#value",
+      ".ng-reflect-note",
+      "[ng-model]",
     ];
     for (const selector of asked) {
       await call("s1", "wait_for", { tabId: tab.id, selector });
