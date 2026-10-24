@@ -62,7 +62,7 @@ describe("type and press_key in real Firefox", () => {
     { timeout: 60_000 },
   );
 
-  test("type adds the text after what a field, a textarea and an editable area hold", async () => {
+  test("type adds the text after what a field and a textarea hold, and at the start of an editable area", async () => {
     assert.deepEqual(await type(input, 'textbox "Plain"', " world"), typed("exec_command"));
     assert.equal(await evaluate(input, 'document.getElementById("plain").value'), "Hello world");
     assert.deepEqual(await type(input, 'textbox "Area"', "\nmore"), typed("exec_command"));
@@ -70,15 +70,82 @@ describe("type and press_key in real Firefox", () => {
     assert.deepEqual(await type(input, 'textbox "Editable"', "!"), typed("exec_command"));
     assert.equal(
       await evaluate(input, 'document.getElementById("editable").textContent'),
-      "Start!",
+      "!Start",
     );
   });
 
-  test("type into a paragraph of an editable area puts the text at that paragraph's end", async () => {
+  test("type into a paragraph of an editable area puts the text at that paragraph's start when the caret is not in it", async () => {
     const result = await type(input, 'group "First paragraph"', "+");
     assert.equal(result.outcome, "typed");
-    assert.equal(await evaluate(input, 'document.getElementById("first").textContent'), "One+");
+    assert.equal(await evaluate(input, 'document.getElementById("first").textContent'), "+One");
     assert.equal(await evaluate(input, 'document.getElementById("second").textContent'), "Two");
+    // The caret is now in the first paragraph: inside the editing host, not the target.
+    assert.equal((await type(input, 'group "Second paragraph"', "-")).outcome, "typed");
+    assert.equal(await evaluate(input, 'document.getElementById("second").textContent'), "-Two");
+    assert.equal(await evaluate(input, 'document.getElementById("first").textContent'), "+One");
+  });
+
+  test("type adds the text at the caret the page put in an editable area, and goes on from there", async () => {
+    await evaluate(input, 'getSelection().collapse(document.getElementById("reply-line"), 0)');
+    assert.deepEqual(await type(input, 'textbox "Reply"', "Thanks"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("reply-line").textContent'),
+      "Thanks",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("greeting").textContent'),
+      "Hi Ann,",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("reply-signature").textContent'),
+      "-- Signature",
+    );
+    assert.equal((await type(input, 'textbox "Reply"', " again")).outcome, "typed");
+    assert.equal(
+      await evaluate(input, 'document.getElementById("reply").textContent'),
+      "Hi Ann,Thanks again-- Signature",
+    );
+  });
+
+  test("type into an editable area after a field puts the text at its start, above a signature", async () => {
+    await evaluate(input, 'getSelection().collapse(document.getElementById("signature"), 1)');
+    // Focusing a field moves the caret after the signature out of the body, as in a compose
+    // window where the recipients and subject are filled in first.
+    assert.equal((await type(input, 'textbox "Subject"', "Hi")).outcome, "typed");
+    assert.deepEqual(await type(input, 'textbox "Compose"', "Hello"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("signature").textContent'),
+      "-- Signature",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose").textContent'),
+      "Hello-- Signature",
+    );
+  });
+
+  test("type keeps a selection the page made in an editable area and adds the text after it", async () => {
+    await evaluate(
+      input,
+      '(() => { const text = document.getElementById("selected").firstChild; getSelection().setBaseAndExtent(text, 6, text, 11); })()',
+    );
+    assert.equal((await type(input, 'textbox "Selected"', "!")).outcome, "typed");
+    assert.equal(
+      await evaluate(input, 'document.getElementById("selected").textContent'),
+      "Hello world!, bye",
+    );
+  });
+
+  test("type puts the text at the start of an editable area when the caret is in a part the page made not editable", async () => {
+    await evaluate(
+      input,
+      '(() => { document.getElementById("island-host").focus(); getSelection().collapse(document.getElementById("island").firstChild, 2); })()',
+    );
+    assert.equal((await type(input, 'textbox "Island"', "x")).outcome, "typed");
+    assert.equal(
+      await evaluate(input, 'document.getElementById("island-host").textContent'),
+      "xFixed text",
+    );
+    assert.equal(await evaluate(input, 'document.getElementById("island").textContent'), "Fixed");
   });
 
   test("type into a field in a shadow root", async () => {
@@ -140,7 +207,23 @@ describe("type and press_key in real Firefox", () => {
     );
     assert.equal(
       await evaluate(input, 'document.getElementById("untrusting-editable").textContent'),
-      "Keep!",
+      "!Keep",
+    );
+    assert.deepEqual(
+      await type(input, 'textbox "Wandering editable"', "!"),
+      typed("beforeinput_dom"),
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("wandering").textContent'),
+      "!Keep",
+    );
+    assert.deepEqual(
+      await type(input, 'textbox "Selecting editable"', "!"),
+      typed("beforeinput_dom"),
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("selecting").textContent'),
+      "Kee!p",
     );
   });
 

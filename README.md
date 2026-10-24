@@ -163,12 +163,15 @@ window is out of the agent's reach. These tools work only on a tab showing a sit
 approved, and never ask.
 
 The agent types text with `type`, into a text field or an editable area from `read_page`.
-Foxhand focuses the element, adds the text after what it already holds, and reads it back. It
-sends no key events: it inserts the text the way the browser inserts typed text, and when that
-changes nothing and the page did not receive it, once more by setting the field's value the way
-a page's own scripts do. When
-an editor cannot be read back, such as the body of a Google Docs document, the result says the
-text was sent but not confirmed. `type` refuses a field that Firefox filled in from your saved
+Foxhand focuses the element, adds the text and reads it back. A text field gets the text after
+what it already holds. An editable area gets it at its caret when the caret is in it, and
+otherwise at its start, so in an email body the text goes above a signature that is already
+there. Text typed in several calls follows on, but once the agent types into another field, the
+next text goes at the start of the area again. It sends no key events: it inserts the text the
+way the browser inserts typed text, and when that changes nothing and the page did not receive
+it, once more by setting the field's value the way a page's own scripts do. When an editor
+cannot be read back, such as the body of a Google Docs document, the result says the text was
+sent but not confirmed. `type` refuses a field that Firefox filled in from your saved
 logins, addresses or cards, until you edit it. It works only on a tab showing a site you
 approved, and never asks.
 

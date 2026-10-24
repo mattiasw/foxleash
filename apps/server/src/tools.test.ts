@@ -423,7 +423,9 @@ describe("tools", () => {
         required: ["tabId", "ref", "text"],
         properties: ["tabId", "ref", "text"],
         words: [
-          "adds the text after what it already holds, and reads it back",
+          "adds the text, and reads it back",
+          "a text field gets the text after what it already holds; an editable area gets it at its caret when that is inside the element once focused, else at the element's start",
+          "type an email's body in one call, after its other fields",
           "No key events are sent",
           "sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document)",
           "exec_command, native_setter or beforeinput_dom",

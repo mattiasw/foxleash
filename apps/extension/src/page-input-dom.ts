@@ -49,9 +49,10 @@ const EDITABLE = '[contenteditable]:not([contenteditable="false"])';
 const DOCS_INPUT_FRAME = ".docs-texteventtarget-iframe";
 
 /**
- * type in the page: focuses the element, inserts the text after what it holds with
- * execCommand insertText, reads it back, and falls back once to the native value setter or to
- * beforeinput plus DOM insertion when nothing changed.
+ * type in the page: focuses the element, inserts the text with execCommand insertText, after
+ * what a field holds and in an editable area at its caret when inside the element, else at its
+ * start, reads it back, and falls back once to the native value setter or to beforeinput plus
+ * DOM insertion when nothing changed.
  */
 export async function typeText(options: TypeOptions, page: InputPage): Promise<Result<"type">> {
   const started = performance.now();
@@ -60,7 +61,7 @@ export async function typeText(options: TypeOptions, page: InputPage): Promise<R
   if ("error" in lookup) throw refError(ref, lookup.error);
   const target = typeTarget(lookup.element, ref);
   focusTarget(target, ref);
-  const caretKnown = caretAtEnd(target);
+  const caretKnown = placeCaret(target);
   const before = contentOf(target);
   // execCommand inserts at the caret, which is unknown in a field without a selection.
   const execFirst = target.field === undefined || caretKnown || before === "";
@@ -81,8 +82,8 @@ export async function typeText(options: TypeOptions, page: InputPage): Promise<R
     if (contentOf(target) !== before) return { outcome: "typed", method: "native_setter" };
     throw noEffect(ref);
   }
-  // The page may have replaced the editable's content, and the caret with it.
-  caretAtEnd(target);
+  // The page may have replaced the editable's content, and moved the caret with it.
+  placeCaret(target);
   if (sendBeforeInput(target.host, text)) {
     // The page's beforeinput listener may have run past the bound.
     if (late(started)) throw noEffect(ref);
@@ -199,8 +200,13 @@ export function isFocused(element: Element): boolean {
   return active === element;
 }
 
-/** Puts the caret at the end, and whether it could: some inputs, such as email, have none. */
-function caretAtEnd(target: TypeTarget): boolean {
+/**
+ * Places the caret, and whether it could: a field's at its end (some inputs, such as email, have
+ * none); an editable area's at its caret when inside the element, collapsed to the end of a
+ * selection so nothing is replaced, else at the element's start, where Firefox puts the caret
+ * when it focuses an editing host.
+ */
+function placeCaret(target: TypeTarget): boolean {
   const { field } = target;
   if (field !== undefined) {
     const end = field.value.length;
@@ -214,12 +220,24 @@ function caretAtEnd(target: TypeTarget): boolean {
   const editable = target.editable;
   const selection = viewOf(editable).getSelection();
   if (selection === null) return false;
-  const range = editable.ownerDocument.createRange();
-  range.selectNodeContents(editable);
-  range.collapse(false);
+  const inside = caretInside(editable, selection);
+  const atStart = inside === null;
+  const range = inside?.cloneRange() ?? editable.ownerDocument.createRange();
+  if (atStart) range.selectNodeContents(editable);
+  range.collapse(atStart);
   selection.removeAllRanges();
   selection.addRange(range);
   return true;
+}
+
+/** The selection's first range when it lies inside the editable and ends in an editable place. */
+function caretInside(editable: HTMLElement, selection: Selection): Range | null {
+  const range = selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
+  if (range === null || !editable.contains(range.commonAncestorContainer)) return null;
+  const view = viewOf(editable);
+  const end = range.endContainer;
+  const element = end instanceof view.Element ? end : end.parentElement;
+  return element instanceof view.HTMLElement && element.isContentEditable ? range : null;
 }
 
 /**
@@ -341,22 +359,23 @@ function insertTextInit(text: string): InputEventInit {
 }
 
 /**
- * The text at the caret, or at the end when the caret left the editable, then an input event on
- * the editing host.
+ * The text at the caret, at the end of a selection, or at the editable's start when the caret is
+ * not in it, then an input event on the editing host.
  */
 function insertAtCaret(editable: HTMLElement, host: HTMLElement, text: string): void {
   const view = viewOf(host);
   const node = editable.ownerDocument.createTextNode(text);
   const selection = view.getSelection();
-  const range = selection !== null && selection.rangeCount > 0 ? selection.getRangeAt(0) : null;
-  if (selection !== null && range !== null && editable.contains(range.commonAncestorContainer)) {
+  const range = selection === null ? null : caretInside(editable, selection);
+  if (selection !== null && range !== null) {
+    range.collapse(false);
     range.insertNode(node);
     range.setStartAfter(node);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
   } else {
-    editable.append(node);
+    editable.prepend(node);
   }
   host.dispatchEvent(new view.InputEvent("input", insertTextInit(text)));
 }

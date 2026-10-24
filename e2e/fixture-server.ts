@@ -2006,7 +2006,12 @@ function inputPage(port: number): string {
 <input id="plain" aria-label="Plain" value="Hello">
 <textarea id="area" aria-label="Area">Line</textarea>
 <div id="editable" contenteditable="true" aria-label="Editable">Start</div>
-<div id="paragraphs" contenteditable="true" aria-label="Paragraphs"><p id="first" role="group" aria-label="First paragraph">One</p><p id="second">Two</p></div>
+<div id="paragraphs" contenteditable="true" aria-label="Paragraphs"><p id="first" role="group" aria-label="First paragraph">One</p><p id="second" role="group" aria-label="Second paragraph">Two</p></div>
+<input id="subject" aria-label="Subject">
+<div id="compose" contenteditable="true" aria-label="Compose"><div id="compose-top"><br></div><div id="signature">-- Signature</div></div>
+<div id="reply" contenteditable="true" aria-label="Reply"><div id="greeting">Hi Ann,</div><div id="reply-line"><br></div><div id="reply-signature">-- Signature</div></div>
+<div id="selected" contenteditable="true" aria-label="Selected">Hello world, bye</div>
+<div id="island-host" contenteditable="true" aria-label="Island"><span id="island" contenteditable="false">Fixed</span> text</div>
 <div id="shadow-host"></div>
 <input id="email" type="email" aria-label="Email" value="a@b.c">
 <input id="number" type="number" aria-label="Number" value="12">
@@ -2016,6 +2021,8 @@ function inputPage(port: number): string {
 <input id="react-frozen" aria-label="React frozen" value="Fixed">
 <input id="untrusting" aria-label="Untrusting" value="Keep">
 <div id="untrusting-editable" contenteditable="true" aria-label="Untrusting editable">Keep</div>
+<div id="wandering" contenteditable="true" aria-label="Wandering editable">Keep</div>
+<div id="selecting" contenteditable="true" aria-label="Selecting editable">Keep</div>
 <input id="consumer" aria-label="Consumer" value="">
 <input id="disabled" aria-label="Disabled" value="Off" disabled>
 <input id="readonly" aria-label="Read only" value="Fixed" readonly>
@@ -2056,6 +2063,8 @@ controlled(document.getElementById("react-frozen"), false);
 // A page that stops the browser's own input event before anything sees it, and undoes it.
 const untrusting = document.getElementById("untrusting");
 const untrustingEditable = document.getElementById("untrusting-editable");
+const wandering = document.getElementById("wandering");
+const selecting = document.getElementById("selecting");
 window.addEventListener("input", (event) => {
   if (!event.isTrusted) return;
   if (event.target === untrusting) {
@@ -2064,8 +2073,23 @@ window.addEventListener("input", (event) => {
   } else if (event.target === untrustingEditable) {
     event.stopImmediatePropagation();
     untrustingEditable.textContent = "Keep";
+  } else if (event.target === wandering) {
+    event.stopImmediatePropagation();
+    wandering.textContent = "Keep";
+  } else if (event.target === selecting) {
+    event.stopImmediatePropagation();
+    selecting.textContent = "Keep";
   }
 }, true);
+// An editor that moves the caret away when it gets beforeinput.
+wandering.addEventListener("beforeinput", (event) => {
+  if (!event.isTrusted) getSelection().collapse(document.getElementById("block"), 0);
+});
+// An editor that selects the "ee" of "Keep" when it gets beforeinput.
+selecting.addEventListener("beforeinput", (event) => {
+  const text = selecting.firstChild;
+  if (!event.isTrusted) getSelection().setBaseAndExtent(text, 1, text, 3);
+});
 // A field that takes what is typed into it and clears itself, as a hidden editor input does.
 window.consumed = [];
 const consumer = document.getElementById("consumer");
