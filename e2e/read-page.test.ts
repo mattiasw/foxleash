@@ -704,6 +704,75 @@ describe("read_page in real Firefox", () => {
     assertLines(tree, ['textbox "Hidden label name" [*]']);
   });
 
+  test("a read leaves out a hidden drop-down's options, a list box's hidden selection and a content-visibility: hidden field's value", async () => {
+    const path = "/read-ref-hidden?fresh=3";
+    const tabId = await open(path, TITLES.readRefHidden);
+    const tokens = [
+      READ_HIDDEN.optionDropDown,
+      READ_HIDDEN.optionDropDownGroup,
+      READ_HIDDEN.valueContentVisibility,
+      READ_HIDDEN.selectValueContentVisibility,
+      READ_HIDDEN.areaValueContentVisibility,
+      READ_HIDDEN.labelContentVisibility,
+      READ_HIDDEN.listBoxSelectedAttribute,
+      READ_HIDDEN.listBoxSelectedVisibility,
+      READ_HIDDEN.listBoxSelectedContentVisibility,
+      READ_HIDDEN.listBoxSelectedChild,
+      READ_HIDDEN.listBoxLabelContent,
+    ];
+    const full = await read(tabId);
+    assert.deepEqual(leakedTokens([full], tokens), []);
+    const listBox = 'listbox "Shown list value"';
+    const listBoxValue = 'value="Shown list value one, Shown list value two, Shown row label"';
+    const fields = [
+      'textbox "Content hidden note"',
+      'combobox "Content hidden pick"',
+      'textbox "Content hidden area"',
+      'textbox "Content hidden label field"',
+    ];
+    assertLines(full.tree, [
+      ...fields.map((field) => `${field} [*]`),
+      // A list box paints an option that is visible in it.
+      'option "Shown list choice" [*]',
+      'option "Shown multiple choice" [*]',
+      // A list box shows its selection only in the rows it paints.
+      `${listBox} [*] ${listBoxValue}`,
+      '  option "Shown list value one" [*] selected',
+      '  option "Shown list value two" [*] selected',
+      '  option "Shown row label" [*] selected',
+    ]);
+    const found = lines(withoutRefs(full.tree));
+    assert.equal(found[found.indexOf(`${fields[1]} [*]`) + 1], `${fields[2]} [*]`, full.tree);
+
+    // A hidden drop-down has no line, so its refs come from a read while it is shown.
+    const context = await contextOf(fixtures.url(path));
+    const select = 'document.getElementById("select-dropdown-hidden").style';
+    assert.equal(await firefox.evaluate(context, `${select}.visibility = "visible"`), "visible");
+    const shown = (await read(tabId)).tree;
+    const option = `  option "${READ_HIDDEN.optionDropDown}"`;
+    assertLines(shown, ['combobox "Hidden drop-down pick" [*] value="Drop one"', `${option} [*]`]);
+    const selectRef = refOf(shown, 'combobox "Hidden drop-down pick"');
+    const optionRef = refOf(shown, option);
+    assert.equal(await firefox.evaluate(context, `${select}.visibility = "hidden"`), "hidden");
+
+    const dropDown = [await read(tabId, { ref: selectRef }), await read(tabId, { ref: optionRef })];
+    assert.deepEqual(
+      dropDown.map(({ tree }) => tree),
+      [`combobox "Hidden drop-down pick" [${selectRef}]`, `option [${optionRef}]`],
+    );
+    const fieldRefs = fields.map((field) => refOf(full.tree, field));
+    const fieldReads: Read[] = [];
+    for (const ref of fieldRefs) fieldReads.push(await read(tabId, { ref }));
+    assert.deepEqual(
+      fieldReads.map(({ tree }) => lines(tree)[0]),
+      fields.map((field, index) => `${field} [${fieldRefs[index]}]`),
+    );
+    const listBoxRef = refOf(full.tree, listBox);
+    const listBoxRead = await read(tabId, { ref: listBoxRef });
+    assert.equal(lines(listBoxRead.tree)[0], `${listBox} [${listBoxRef}] ${listBoxValue}`);
+    assert.deepEqual(leakedTokens([...dropDown, ...fieldReads, listBoxRead], tokens), []);
+  });
+
   test("a ref read's first line leaves out a name or value the page hid after the read", async () => {
     const tabId = await open("/read-ref-hidden?fresh=2", TITLES.readRefHidden);
     const { tree } = await read(tabId);
@@ -1264,6 +1333,13 @@ function assertNoSecrets(texts: string[], secrets: string[]): void {
   for (const secret of secrets) {
     for (const text of texts) assert.equal(text.includes(secret), false, `${secret} in:\n${text}`);
   }
+}
+
+/** The tokens any of the reads' texts contain, all of them where assertNoSecrets stops at one. */
+function leakedTokens(reads: Read[], tokens: string[]): string[] {
+  return tokens.filter((token) =>
+    reads.some(({ texts }) => texts.some((text) => text.includes(token))),
+  );
 }
 
 function refOf(tree: string, start: string): string {

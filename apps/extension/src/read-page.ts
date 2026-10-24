@@ -247,6 +247,7 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
         const boxed =
           style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
         const textVisible = style.visibility === "visible" && boxed;
+        const state: TextState = { boxed, visible: textVisible };
         const scope: Scope = {
           element,
           lineLevel: undefined,
@@ -257,11 +258,11 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
           boxed,
           textVisible,
           block,
-          content: detailsContent(element, { boxed, visible: textVisible }),
+          content: detailsContent(element, state),
         };
         if (lined) {
           if (!flushPending()) return false;
-          const named = nameOf(element, role, page);
+          const named = nameOf(element, role, page, state);
           const level = top().childLevel;
           const placed = place(level, top().owner, () =>
             formatLine({
@@ -269,7 +270,7 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
               role,
               name: named.name,
               ref: page.refs.refFor(element),
-              states: statesOf(element, role, focused, page),
+              states: statesOf(element, role, focused, page, state),
             }),
           );
           if (!placed) return false;
@@ -585,10 +586,11 @@ function presenceOf(element: Element, style: CSSStyleDeclaration): Presence {
 }
 
 /**
- * Whether an option or optgroup is hidden by itself, by an element between it and its select, or
- * by the select's content-visibility. Firefox may give the options of a closed drop-down no box,
- * so checkVisibility() cannot tell, and a list box lays out what is between, so each element
- * there must render the next.
+ * Whether an option or optgroup is hidden by itself, by an element between it and its select, by
+ * the select's content-visibility, or by the visibility of a drop-down, which cannot be opened
+ * while hidden. Firefox may give the options of a closed drop-down no box, so checkVisibility()
+ * cannot tell, and a list box lays out what is between, so each element there must render the
+ * next.
  */
 function optionHidden(option: Element, select: Element): boolean {
   let current: Element | null = option;
@@ -610,7 +612,15 @@ function optionHidden(option: Element, select: Element): boolean {
     }
     current = parent;
   }
-  return getComputedStyle(select).contentVisibility === "hidden";
+  const style = getComputedStyle(select);
+  if (style.contentVisibility === "hidden") return true;
+  return (
+    select instanceof HTMLSelectElement && !isListBox(select) && style.visibility !== "visible"
+  );
+}
+
+function isListBox(select: HTMLSelectElement): boolean {
+  return select.multiple || select.size > 1;
 }
 
 /** The state of the text directly inside `root`, judged by its flat-tree ancestors too. */
@@ -769,9 +779,7 @@ function implicitRole(element: Element, page: PageMemory): string | undefined {
     case "textarea":
       return "textbox";
     case "select":
-      return element instanceof HTMLSelectElement && (element.multiple || element.size > 1)
-        ? "listbox"
-        : "combobox";
+      return element instanceof HTMLSelectElement && isListBox(element) ? "listbox" : "combobox";
     case "option":
       return "option";
     case "img":
@@ -1187,7 +1195,15 @@ function fieldOf(
   }
   if (element instanceof HTMLSelectElement) {
     if (state !== undefined && !state.visible) return undefined;
-    return { value: Array.from(element.selectedOptions, (option) => option.label).join(", ") };
+    const selected = Array.from(element.selectedOptions);
+    // A drop-down's box shows the selected option's whole label; a list box only what its rows
+    // paint.
+    const labels = isListBox(element)
+      ? selected
+          .filter((option) => optionPainted(option, element))
+          .map((option) => paintedLabel(option))
+      : selected.map((option) => option.label);
+    return { value: labels.join(", ") };
   }
   return undefined;
 }
@@ -1200,4 +1216,17 @@ function isProtected(field: HTMLInputElement | HTMLTextAreaElement, page: PageMe
     wasPassword: page.passwordFields.has(field),
     autofilled: field.matches(":autofill"),
   });
+}
+
+/** Whether a list box the user sees paints the option's text, as the option's line says. */
+function optionPainted(option: HTMLOptionElement, select: HTMLSelectElement): boolean {
+  if (optionHidden(option, select)) return false;
+  const style = getComputedStyle(option);
+  return style.visibility === "visible" && style.contentVisibility !== "hidden";
+}
+
+/** What a painted list box row shows: the option's label attribute, or its shown content. */
+function paintedLabel(option: HTMLOptionElement): string {
+  if ((option.getAttribute("label") ?? "") !== "") return option.label;
+  return collectText(option, false, { boxed: true, visible: true });
 }

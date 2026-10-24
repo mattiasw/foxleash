@@ -201,6 +201,17 @@ export const READ_HIDDEN = {
   optionCanvas: "hidden-option-canvas-Pw7",
   optionDetails: "hidden-option-details-Qx8",
   optionListSkipped: "hidden-option-list-skipped-Ry9",
+  optionDropDown: "hidden-option-dropdown-visibility-Rh5",
+  optionDropDownGroup: "hidden-option-dropdown-group-Ui8",
+  valueContentVisibility: "hidden-value-content-visibility-Sj6",
+  selectValueContentVisibility: "hidden-select-value-content-visibility-Wl1",
+  areaValueContentVisibility: "hidden-area-value-content-visibility-Xm2",
+  labelContentVisibility: "hidden-label-content-visibility-Vk9",
+  listBoxSelectedAttribute: "hidden-listbox-selected-attribute-Tn3",
+  listBoxSelectedVisibility: "hidden-listbox-selected-visibility-Yp4",
+  listBoxSelectedContentVisibility: "hidden-listbox-selected-content-visibility-Zq5",
+  listBoxSelectedChild: "hidden-listbox-selected-child-Ar6",
+  listBoxLabelContent: "hidden-listbox-label-content-Bs7",
 } as const;
 
 /**
@@ -1101,7 +1112,9 @@ const READ_REFS_PAGE = `<!doctype html>
 // button the test moves into a canvas, an SVG one into defs, an option into a div in its select
 // and one into an hr in its select), fields, fieldsets, a figure and a table whose name sources
 // or values the test changes and hides, ones whose legend, figcaption, caption or label is hidden
-// from the start, and custom elements with open shadow roots.
+// from the start, a visibility: hidden drop-down and list boxes with a visible option, a list box
+// with hidden selected options, a selected option with a hidden child and a labelled one, fields
+// with their own content-visibility: hidden, and custom elements with open shadow roots.
 const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readRefHidden}</title>
 <style>
@@ -1199,8 +1212,20 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <fieldset><legend hidden>${READ_HIDDEN.legendAttribute}</legend><input aria-label="Static legend attribute field"></fieldset>
 <figure><p>Static figure body</p><figcaption style="display: none">${READ_HIDDEN.figcaptionDisplay}</figcaption></figure>
 <table><caption hidden>${READ_HIDDEN.captionAttribute}</caption><tr><td>Static table cell</td></tr></table>
+<select id="select-dropdown-hidden" aria-label="Hidden drop-down pick" style="visibility: hidden"><option>Drop one</option><option id="option-dropdown-hidden" style="visibility: visible">${READ_HIDDEN.optionDropDown}</option><optgroup label="Drop group" style="visibility: visible"><option style="visibility: visible">${READ_HIDDEN.optionDropDownGroup}</option></optgroup></select>
+<select size="2" aria-label="Hidden list pick" style="visibility: hidden"><option>List one</option><option style="visibility: visible">Shown list choice</option></select>
+<select multiple aria-label="Hidden multiple pick" style="visibility: hidden"><option>Multiple one</option><option style="visibility: visible">Shown multiple choice</option></select>
+<select multiple aria-label="Shown list value"><option selected>Shown list value one</option><option id="option-list-value-child" selected>Shown list value two</option><option selected label="Shown row label">${READ_HIDDEN.listBoxLabelContent}</option><option selected hidden>${READ_HIDDEN.listBoxSelectedAttribute}</option><option selected style="visibility: hidden">${READ_HIDDEN.listBoxSelectedVisibility}</option><option selected style="content-visibility: hidden">${READ_HIDDEN.listBoxSelectedContentVisibility}</option></select>
+<input id="input-cv-value" aria-label="Content hidden note" value="${READ_HIDDEN.valueContentVisibility}" style="content-visibility: hidden">
+<select id="select-cv-value" aria-label="Content hidden pick" style="content-visibility: hidden"><option>${READ_HIDDEN.selectValueContentVisibility}</option></select>
+<textarea id="textarea-cv-value" aria-label="Content hidden area" style="content-visibility: hidden">${READ_HIDDEN.areaValueContentVisibility}</textarea>
+<label for="input-cv-label" style="display: none">${READ_HIDDEN.labelContentVisibility}</label><input id="input-cv-label" title="Content hidden label field" style="content-visibility: hidden">
 <label for="input-hidden-label" style="display: none">Hidden label name</label><input id="input-hidden-label">
 <script>
+const hiddenChild = document.createElement("span");
+hiddenChild.hidden = true;
+hiddenChild.textContent = "${READ_HIDDEN.listBoxSelectedChild}";
+document.getElementById("option-list-value-child").append(hiddenChild);
 for (const [name, html] of [
   ["slot-host", "<div><slot></slot></div>"],
   ["top-host", ""],
