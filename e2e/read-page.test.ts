@@ -719,6 +719,9 @@ describe("read_page in real Firefox", () => {
       READ_HIDDEN.listBoxSelectedContentVisibility,
       READ_HIDDEN.listBoxSelectedChild,
       READ_HIDDEN.listBoxLabelContent,
+      READ_HIDDEN.buttonValueContentVisibility,
+      READ_HIDDEN.listBoxSelectedDisplay,
+      READ_HIDDEN.listBoxSelectedGroup,
     ];
     const full = await read(tabId);
     assert.deepEqual(leakedTokens([full], tokens), []);
@@ -729,6 +732,7 @@ describe("read_page in real Firefox", () => {
       'combobox "Content hidden pick"',
       'textbox "Content hidden area"',
       'textbox "Content hidden label field"',
+      'button "Content hidden button"',
     ];
     assertLines(full.tree, [
       ...fields.map((field) => `${field} [*]`),
@@ -740,12 +744,26 @@ describe("read_page in real Firefox", () => {
       '  option "Shown list value one" [*] selected',
       '  option "Shown list value two" [*] selected',
       '  option "Shown row label" [*] selected',
+      // Firefox draws a drop-down's selected option's whole label however it is hidden.
+      'combobox "Drawn hidden pick" [*] value="Drawn hidden choice"',
+      'combobox "Drawn child pick" [*] value="Drawn child drawn tail"',
+      'combobox "Drawn empty label pick" [*] value="Drawn empty label text"',
     ]);
     const found = lines(withoutRefs(full.tree));
+    assert.equal(
+      found.some((line) => line.includes('option "Drawn hidden choice"')),
+      false,
+      full.tree,
+    );
     assert.equal(found[found.indexOf(`${fields[1]} [*]`) + 1], `${fields[2]} [*]`, full.tree);
+    const context = await contextOf(fixtures.url(path));
+    assert.equal(
+      await firefox.evaluate(context, 'CSS.supports("appearance", "base-select")'),
+      false,
+      "with appearance: base-select a drop-down can draw text other than its option's label",
+    );
 
     // A hidden drop-down has no line, so its refs come from a read while it is shown.
-    const context = await contextOf(fixtures.url(path));
     const select = 'document.getElementById("select-dropdown-hidden").style';
     assert.equal(await firefox.evaluate(context, `${select}.visibility = "visible"`), "visible");
     const shown = (await read(tabId)).tree;
@@ -890,6 +908,29 @@ describe("read_page in real Firefox", () => {
         line: 'textbox "Shown value"',
         change: `document.getElementById("input-value-shown").value = token;`,
         first: (ref: string, token: string) => `textbox "Shown value" [${ref}] value="${token}"`,
+        secret: false,
+      },
+      {
+        id: "button-Fq8",
+        line: 'button "Send hidden"',
+        change: `document.getElementById("input-button-hidden").value = token;
+          document.getElementById("input-button-hidden").style.display = "none";`,
+        first: (ref: string) => `button [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "invisible-button-Gr9",
+        line: 'button "Send invisible"',
+        change: `document.getElementById("input-button-invisible").value = token;
+          document.getElementById("input-button-invisible").style.visibility = "hidden";`,
+        first: (ref: string) => `button [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "shown-button-Hs1",
+        line: 'button "Send shown"',
+        change: `document.getElementById("input-button-shown").value = token;`,
+        first: (ref: string, token: string) => `button "${token}" [${ref}]`,
         secret: false,
       },
       {

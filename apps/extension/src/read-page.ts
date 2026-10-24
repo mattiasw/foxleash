@@ -934,8 +934,13 @@ function ownName(element: Element, page: PageMemory, startState?: TextState): st
     return first(
       labelsText(element.labels, startState),
       ...(element.type === "image" ? [element.getAttribute("alt")] : []),
-      // A label, not user data, unless the page made a credential field a button.
-      ...(BUTTON_INPUTS.has(element.type) && !isProtected(element, page) ? [element.value] : []),
+      // A label, not user data, unless the page made a credential field a button; it names
+      // the button only while the user sees it.
+      ...(BUTTON_INPUTS.has(element.type) &&
+      !isProtected(element, page) &&
+      (startState === undefined || startState.visible)
+        ? [element.value]
+        : []),
       element.getAttribute("title"),
       element.getAttribute("placeholder"),
     );
@@ -1197,13 +1202,13 @@ function fieldOf(
   if (element instanceof HTMLSelectElement) {
     if (state !== undefined && !state.visible) return undefined;
     const selected = Array.from(element.selectedOptions);
-    // A drop-down's box shows the selected option's whole label; a list box only what its rows
-    // paint.
+    // Firefox draws a closed drop-down's selected option's whole label however the option, its
+    // group or its content is hidden; a list box shows only what its rows paint.
     const labels = isListBox(element)
       ? selected
           .filter((option) => optionPainted(option, element))
           .map((option) => paintedLabel(option))
-      : selected.map((option) => option.label);
+      : selected.map((option) => option.label || option.text);
     return { value: labels.join(", ") };
   }
   return undefined;
