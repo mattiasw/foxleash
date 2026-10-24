@@ -238,6 +238,20 @@ describe("endSession", { timeout: 10000 }, () => {
     const page = fake.openTab({ url: "https://example.com/" });
     assert.equal(await groups.ensureGroup("s1", page), group?.id);
   });
+
+  it("keeps a blank group whose window's only other tab is being removed", async () => {
+    const { fake, groups, open } = setup();
+    const page = await open("s2", { url: "https://example.com/", windowId: 2 });
+    const blank = await open("s1", { url: "about:blank", windowId: 2 });
+    const calls: number[][] = [];
+    fake.browser.tabs.remove = async (tabIds) => {
+      calls.push(tabIds);
+    };
+    assert.equal(await groups.closeTab(page.id, () => {}), true);
+    await groups.endSession("s1");
+    assert.deepEqual(calls, [[page.id]]);
+    assert.equal(fake.tabs.has(blank.id), true);
+  });
 });
 
 describe("closeTab", { timeout: 10000 }, () => {
@@ -367,6 +381,77 @@ describe("closeTab", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.has(tab.id), true);
     assert.equal(await groups.closeTab(tab.id, () => {}), true);
     assert.equal(fake.tabs.has(tab.id), false);
+  });
+
+  it("keeps a window's other tab while Firefox still holds the first one it was asked to remove", async () => {
+    const { fake, groups, open } = setup();
+    const first = await open("s1", { url: "https://a.example/", windowId: 2 });
+    const second = await open("s1", { url: "https://b.example/", windowId: 2 });
+    // As a beforeunload prompt does: the removal resolves and the tab stays.
+    fake.browser.tabs.remove = async () => {};
+    const closed = await Promise.all([
+      groups.closeTab(first.id, () => {}),
+      groups.closeTab(second.id, () => {}),
+    ]);
+    assert.deepEqual(closed, [true, false]);
+    assert.equal(fake.tabs.has(second.id), true);
+    fake.removeTab(first.id);
+    assert.deepEqual(
+      [...fake.tabs.values()].filter((tab) => tab.windowId === 2).map((tab) => tab.id),
+      [second.id],
+    );
+  });
+
+  it("refuses while a removal it started is pending, and counts again once Firefox removed the tab", async () => {
+    const { fake, groups, open } = setup();
+    const first = await open("s1", { url: "https://a.example/", windowId: 2 });
+    const second = await open("s1", { url: "https://b.example/", windowId: 2 });
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async () => {};
+    assert.equal(await groups.closeTab(first.id, () => {}), true);
+    assert.equal(await groups.closeTab(second.id, () => {}), false);
+    fake.removeTab(first.id);
+    const third = await open("s1", { url: "https://c.example/", windowId: 2 });
+    fake.browser.tabs.remove = remove;
+    assert.equal(await groups.closeTab(second.id, () => {}), true);
+    assert.deepEqual(
+      [...fake.tabs.values()].filter((tab) => tab.windowId === 2).map((tab) => tab.id),
+      [third.id],
+    );
+  });
+
+  it("forgets a tab Firefox refused to remove, so its sibling still closes", async () => {
+    const { fake, groups, open } = setup();
+    const a = await open("s1", { url: "https://a.example/", windowId: 2 });
+    const b = await open("s1", { url: "https://b.example/", windowId: 2 });
+    const remove = fake.browser.tabs.remove;
+    const refusal = new Error("Invalid tab ID");
+    fake.browser.tabs.remove = () => Promise.reject(refusal);
+    await assert.rejects(
+      groups.closeTab(a.id, () => {}),
+      refusal,
+    );
+    fake.browser.tabs.remove = remove;
+    assert.equal(await groups.closeTab(b.id, () => {}), true);
+    assert.equal(fake.tabs.has(b.id), false);
+    assert.equal(fake.tabs.has(a.id), true);
+    assert.equal(await groups.closeTab(a.id, () => {}), false);
+  });
+
+  it("still counts a tab whose first removal is pending when a second removal of it fails", async () => {
+    const { fake, groups, open } = setup();
+    const a = await open("s1", { url: "https://a.example/", windowId: 2 });
+    const b = await open("s1", { url: "https://b.example/", windowId: 2 });
+    fake.browser.tabs.remove = async () => {};
+    assert.equal(await groups.closeTab(a.id, () => {}), true);
+    const refusal = new Error("Cannot remove the tab");
+    fake.browser.tabs.remove = () => Promise.reject(refusal);
+    await assert.rejects(
+      groups.closeTab(a.id, () => {}),
+      refusal,
+    );
+    fake.browser.tabs.remove = async () => {};
+    assert.equal(await groups.closeTab(b.id, () => {}), false);
   });
 });
 

@@ -22,6 +22,7 @@ import {
   describeOutput,
   type Firefox,
   isRecord,
+  type LaunchOptions,
   launchFirefox,
   PAGE_TIMEOUT_MS,
   pollUntil,
@@ -81,7 +82,10 @@ export interface Harness {
   env: Record<string, string>;
   /** Installs the native host into the temp home only (`install --no-claude --no-extension`). */
   install(): void;
-  startFirefox(extensionDir: string): Promise<Firefox>;
+  startFirefox(
+    extensionDir: string,
+    options?: Pick<LaunchOptions, "holdBeforeUnloadPrompts">,
+  ): Promise<Firefox>;
   /**
    * Writes `entries` into the extension's storage.local from its settings page, in the Firefox
    * started last. The only way tests write settings: the extension has no test hook.
@@ -220,7 +224,7 @@ export function createHarness(): Harness {
       );
     },
 
-    async startFirefox(extensionDir) {
+    async startFirefox(extensionDir, options) {
       assertOpen();
       assert.ok(
         existsSync(join(extensionDir, "manifest.json")),
@@ -233,6 +237,7 @@ export function createHarness(): Harness {
         profileDir: profile,
         env,
         downloadDir: downloads,
+        ...options,
       });
       if (closed) {
         // close() ran while Firefox started and could not reach it.

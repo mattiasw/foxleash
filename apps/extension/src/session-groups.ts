@@ -13,7 +13,7 @@ export interface SessionGroups {
    * sessions together with endSession's. The tab and its window are read when its turn comes.
    * `check` gets the tab as read then and runs right before the removal, with no await in
    * between, and may throw to refuse it. Resolves false, removing nothing, for a window's last
-   * tab.
+   * tab; a tab this already asked Firefox to remove counts as gone until Firefox removes it.
    */
   closeTab(tabId: number, check: (tab: Tab) => void): Promise<boolean>;
   /**
@@ -39,6 +39,10 @@ export function createSessionGroups(
   // One at a time across sessions: two ending at once would each count the other's tabs as
   // keeping their window open, and close it between them.
   let closing: Promise<unknown> = Promise.resolve();
+  // Tabs handed to tabs.remove that Firefox has not removed yet. A tab the user keeps with Stay
+  // on its beforeunload prompt stays here, so later closes in its window refuse.
+  const removing = new Set<number>();
+  browser.tabs.onRemoved.addListener((tabId) => removing.delete(tabId));
 
   return { groupOf, ensureGroup, endSession, closeTab, isSessionGroup, sessionOf };
 
@@ -73,9 +77,11 @@ export function createSessionGroups(
         const tab = await browser.tabs.get(tabId);
         const windowTabs = await browser.tabs.query({ windowId: tab.windowId });
         // Removing a window's last tab closes the window, and closing the last window quits Firefox.
-        if (!windowTabs.some((other) => other.id !== tabId)) return false;
+        if (!windowTabs.some((other) => other.id !== tabId && !removing.has(other.id))) {
+          return false;
+        }
         check(tab);
-        await browser.tabs.remove([tabId]);
+        await removeTabs([tabId]);
         return true;
       });
     closing = close;
@@ -146,9 +152,21 @@ export function createSessionGroups(
     const promptPage = browser.runtime.getURL(PROMPT_PAGE);
     if (!tabs.every((tab) => isBlank(tab, promptPage))) return;
     // Removing a window's last tabs closes the window, and closing the last window quits Firefox.
-    if (windowTabs.length === tabs.length) return;
-    await browser.tabs.remove(tabs.map((tab) => tab.id));
+    if (!windowTabs.some((tab) => tab.groupId !== group.id && !removing.has(tab.id))) return;
+    await removeTabs(tabs.map((tab) => tab.id));
     forget(session, group.id);
+  }
+
+  async function removeTabs(tabIds: number[]): Promise<void> {
+    // An earlier removal that Firefox has not finished keeps its ids when this one fails.
+    const added = tabIds.filter((id) => !removing.has(id));
+    for (const id of added) removing.add(id);
+    try {
+      await browser.tabs.remove(tabIds);
+    } catch (error) {
+      for (const id of added) removing.delete(id);
+      throw error;
+    }
   }
 
   function forget(session: string, id: number): void {

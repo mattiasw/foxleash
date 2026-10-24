@@ -118,6 +118,8 @@ export interface Firefox {
   frames(context: string): Promise<BrowsingContext[]>;
   /** Opens `url` in a new tab, as a user would, and returns the tab's context once it loaded. */
   openContext(url: string): Promise<string>;
+  /** Opens a window in the background, without loading a page, and returns its tab's context. */
+  openWindow(): Promise<string>;
   /** Loads `url` in a tab, as a user would, and returns once it has loaded. */
   navigate(context: string, url: string): Promise<void>;
   /** Evaluates `expression` in the tab's page, awaiting a promise, and returns a primitive. */
@@ -132,6 +134,11 @@ export interface Firefox {
    */
   activate(context: string): Promise<void>;
   closeContext(context: string): Promise<void>;
+  /**
+   * Watches the tab for a user prompt. A page's beforeunload prompt stays open for the watch to
+   * answer only in a Firefox launched with `holdBeforeUnloadPrompts`.
+   */
+  watchPrompt(context: string): Promise<PromptWatch>;
   /** Saves a login for `origin` that Firefox fills into any form on it. */
   saveLogin(origin: string, username: string, password: string): Promise<void>;
   /** Removes every saved login. */
@@ -151,6 +158,20 @@ export interface Firefox {
   close(): Promise<void>;
 }
 
+/** A watch on one tab for a user prompt, such as a page's beforeunload prompt. */
+export interface PromptWatch {
+  /**
+   * Resolves with the prompt's type, such as "beforeunload", once one opened in the tab after
+   * the watch began.
+   */
+  opened(): Promise<string>;
+  /**
+   * Answers the open prompt with BiDi's browsingContext.handleUserPrompt; for a beforeunload
+   * prompt, true leaves the page.
+   */
+  answer(accept: boolean): Promise<void>;
+}
+
 export interface LaunchOptions {
   binary: string;
   profileDir: string;
@@ -158,6 +179,11 @@ export interface LaunchOptions {
   /** Where Firefox saves downloads. */
   downloadDir: string;
   lifetimeSeconds?: number;
+  /**
+   * Leaves a page's beforeunload prompt open for the test to answer, instead of WebDriver
+   * accepting it at once, and shows it without a click on the page first.
+   */
+  holdBeforeUnloadPrompts?: boolean;
 }
 
 /**
@@ -173,8 +199,9 @@ export async function launchFirefox({
   env,
   downloadDir,
   lifetimeSeconds = FIREFOX_LIFETIME_SECONDS,
+  holdBeforeUnloadPrompts = false,
 }: LaunchOptions): Promise<Firefox> {
-  writeFileSync(join(profileDir, "user.js"), buildUserJs(downloadDir));
+  writeFileSync(join(profileDir, "user.js"), buildUserJs(downloadDir, holdBeforeUnloadPrompts));
   const child = spawn(
     "sh",
     [
@@ -227,7 +254,10 @@ export async function launchFirefox({
       waitForLine(child, streams, parseMarionettePort, "the Marionette listening line"),
     ]);
     marionette = await connectMarionette(port);
-    const created = await marionette.send("WebDriver:NewSession", { webSocketUrl: true });
+    const created = await marionette.send("WebDriver:NewSession", {
+      webSocketUrl: true,
+      ...(holdBeforeUnloadPrompts ? { unhandledPromptBehavior: { beforeUnload: "ignore" } } : {}),
+    });
     bidi = await connectBidi(webSocketUrlOf(created));
   } catch (error: unknown) {
     killGroupSync(child);
@@ -337,6 +367,23 @@ export async function launchFirefox({
         `openContext ${url}`,
       );
     },
+    openWindow() {
+      return withDeadline(
+        (async () => {
+          const created = await session.send("browsingContext.create", {
+            type: "window",
+            background: true,
+          });
+          const context = isRecord(created) ? created.context : undefined;
+          if (typeof context !== "string") {
+            throw new Error(`browsingContext.create returned ${JSON.stringify(created)}`);
+          }
+          return context;
+        })(),
+        HELPER_TIMEOUT_MS,
+        "openWindow",
+      );
+    },
     navigate(context, url) {
       return withDeadline(load(context, url), HELPER_TIMEOUT_MS, `navigate ${context} ${url}`);
     },
@@ -385,6 +432,32 @@ export async function launchFirefox({
     },
     async closeContext(context) {
       await session.send("browsingContext.close", { context });
+    },
+    async watchPrompt(context) {
+      const { promise, resolve } = Promise.withResolvers<string>();
+      const stop = session.onEvent((method, params) => {
+        if (method !== "browsingContext.userPromptOpened") return;
+        if (!isRecord(params) || params.context !== context) return;
+        stop();
+        resolve(String(params.type));
+      });
+      try {
+        await session.send("session.subscribe", { events: ["browsingContext.userPromptOpened"] });
+      } catch (error: unknown) {
+        stop();
+        throw error;
+      }
+      return {
+        opened: () => withDeadline(promise, PAGE_TIMEOUT_MS, `a user prompt in ${context}`),
+        answer: (accept) =>
+          withDeadline(
+            session
+              .send("browsingContext.handleUserPrompt", { context, accept })
+              .then(() => undefined),
+            HELPER_TIMEOUT_MS,
+            `answering the user prompt in ${context}`,
+          ),
+      };
     },
     saveLogin(origin, username, password) {
       return withDeadline(
@@ -440,7 +513,7 @@ function browsingContextOf(entry: unknown): BrowsingContext {
 }
 
 /** The throwaway profile's user.js. Every pref carries its reason. */
-function buildUserJs(downloadDir: string): string {
+function buildUserJs(downloadDir: string, holdBeforeUnloadPrompts: boolean): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
     [
       "browser.startup.page",
@@ -494,6 +567,13 @@ function buildUserJs(downloadDir: string): string {
       "The fixture server is plain http on 127.0.0.1, and Firefox fills saved logins into http pages only with this; its default is false.",
     ],
   ];
+  if (holdBeforeUnloadPrompts) {
+    prefs.push([
+      "dom.require_user_interaction_for_beforeunload",
+      false,
+      "Show a page's beforeunload prompt without a click on the page first, so a test can make one appear.",
+    ]);
+  }
   return prefs
     .map(
       ([name, value, reason]) =>
@@ -645,6 +725,8 @@ function webSocketUrlOf(created: unknown): string {
 
 interface Bidi {
   send(method: string, params: Record<string, unknown>): Promise<unknown>;
+  /** Calls `listener` with every event; returns the function that removes it. */
+  onEvent(listener: (method: string, params: unknown) => void): () => void;
   close(): void;
 }
 
@@ -652,6 +734,7 @@ interface Bidi {
 async function connectBidi(url: string): Promise<Bidi> {
   const socket = new WebSocket(url);
   const pending = pendingCommands("BiDi");
+  const listeners = new Set<(method: string, params: unknown) => void>();
 
   socket.addEventListener("message", (event) => {
     const data: unknown = event.data;
@@ -662,8 +745,14 @@ async function connectBidi(url: string): Promise<Bidi> {
     } catch {
       return;
     }
-    // Events carry no id; a reply to a command that already timed out finds no waiter.
-    if (!isRecord(message) || typeof message.id !== "number") return;
+    if (!isRecord(message)) return;
+    if (message.type === "event" && typeof message.method === "string") {
+      // A copy: a listener may remove itself.
+      for (const listener of [...listeners]) listener(message.method, message.params);
+      return;
+    }
+    // A reply to a command that already timed out finds no waiter.
+    if (typeof message.id !== "number") return;
     const waiter = pending.take(message.id);
     if (waiter === undefined) return;
     if (message.type === "success") {
@@ -697,6 +786,12 @@ async function connectBidi(url: string): Promise<Bidi> {
       const { id, promise } = pending.start(method);
       socket.send(JSON.stringify({ id, method, params }));
       return promise;
+    },
+    onEvent(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
     },
     close() {
       socket.close();

@@ -70,6 +70,13 @@ the extension's internal UUID (`EXTENSION_UUID` in `e2e/firefox.ts`) with the
 `harness.seedSettings` writes `storage.local` from that page and is the only way tests write
 settings: the extension has no test hook.
 
+A test that answers a page's beforeunload prompt itself starts Firefox with
+`harness.startFirefox(EXTENSION_DIST, { holdBeforeUnloadPrompts: true })`. That asks WebDriver
+to leave those prompts open (`unhandledPromptBehavior: { beforeUnload: "ignore" }`) instead of
+accepting them at once, and lets them show without a click on the page first. The test waits
+for the prompt and answers it with `firefox.watchPrompt`, which uses BiDi's
+`browsingContext.userPromptOpened` event and `browsingContext.handleUserPrompt`.
+
 The approval prompt's buttons answer only a second after its page is both visible and
 focused, so `harness.waitForArmed` first brings the prompt's tab to the front with
 `firefox.activate`, which sends the same Marionette `WebDriver:SwitchToWindow` that

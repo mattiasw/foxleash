@@ -55,6 +55,7 @@ export const TITLES = {
   downloadLogin: "Fixture download login",
   autofill: "Fixture autofill",
   autofillFramed: "Fixture autofill framed",
+  beforeUnload: "Fixture before unload",
 } as const;
 
 /** The text the wait-late page adds, in an element with the id late, after WAIT_LATE_MS. */
@@ -567,6 +568,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/download/same") {
       response.writeHead(302, { Location: "/download/receipt.pdf" });
       response.end();
+    } else if (path === "/before-unload") {
+      sendHtml(response, BEFORE_UNLOAD_PAGE);
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
@@ -677,6 +680,18 @@ addEventListener("load", () => {
     location.href = "/a";
   }, ${WAIT_LATE_MS});
 });
+</script>
+</body></html>
+`;
+
+const BEFORE_UNLOAD_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.beforeUnload}</title></head>
+<body><h1>${TITLES.beforeUnload}</h1>
+<script>
+window.onbeforeunload = (event) => {
+  event.preventDefault();
+  event.returnValue = "";
+};
 </script>
 </body></html>
 `;
