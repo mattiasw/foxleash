@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import { createFakeBrowser, createFakeTimers, type FakeTab, flush } from "./fake-browser.ts";
 import {
   createLiveDocuments,
@@ -7,7 +7,7 @@ import {
   type LiveDocumentsDeps,
 } from "./live-documents.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite } from "./settings.ts";
+import { grantSite, revokeSite } from "./settings.ts";
 import { createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 const SITE = "https://a.example";
@@ -73,7 +73,117 @@ describe("live documents", { timeout: 10000 }, () => {
     );
   });
 
-  it("does not call onDecided for a commit that is no longer the tab's latest", async () => {
+  it("gives onDecided the commit's documentId, when it has one", async (t) => {
+    quiet(t);
+    const decided: [number, string | undefined, string | undefined][] = [];
+    const { fake, tabIn } = setup({
+      onDecided: (tabId, live, documentId) => {
+        decided.push([tabId, live?.site, documentId]);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A, documentId: "doc-1" });
+    await flush();
+    fake.emitCommitted({
+      tabId: tab.id,
+      frameId: 0,
+      url: "https://c.example/",
+      documentId: "doc-2",
+    });
+    await flush();
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    assert.deepEqual(decided, [
+      [tab.id, SITE, "doc-1"],
+      [tab.id, undefined, "doc-2"],
+      [tab.id, SITE, undefined],
+    ]);
+  });
+
+  it("logs a drop by an update or a detach once, with its reason and at most the site", async (t) => {
+    const warned = quiet(t);
+    const { fake, documents, liveTab } = setup({});
+    const ungrouped = await liveTab();
+    fake.ungroup(ungrouped.id);
+    fake.ungroup(ungrouped.id);
+    const moved = await liveTab();
+    fake.pushState(moved.id, "https://b.example/secret?q=1");
+    fake.pushState(moved.id, "https://c.example/");
+    const blank = await liveTab();
+    fake.pushState(blank.id, "about:blank");
+    const detached = await liveTab();
+    fake.emitDetached(detached.id);
+    fake.emitDetached(detached.id);
+    for (const tab of [ungrouped, moved, blank, detached]) {
+      assert.equal(documents.live(tab.id), undefined);
+    }
+    assert.deepEqual(warned(), [
+      { event: "test_failed", tabId: ungrouped.id, reason: "group" },
+      { event: "test_failed", tabId: moved.id, reason: "site", site: "https://b.example" },
+      { event: "test_failed", tabId: blank.id, reason: "site", site: "about:blank" },
+      { event: "test_failed", tabId: detached.id, reason: "detached" },
+    ]);
+    assert.doesNotMatch(JSON.stringify(warned()), /secret/);
+  });
+
+  it("logs a drop by a recheck with its reason, only when it drops", async (t) => {
+    const warned = quiet(t);
+    const { fake, documents, liveTab, tabIn } = setup({});
+    const tab = await tabIn();
+    const read = fake.browser.storage.local.get;
+    let moved = false;
+    // The gate reads storage after it read the tab's group; the tab leaves while it waits.
+    const get = t.mock.method(fake.browser.storage.local, "get", async (...args: unknown[]) => {
+      const stored = await Reflect.apply(read, fake.browser.storage.local, args);
+      if (!moved) {
+        moved = true;
+        fake.ungroup(tab.id);
+      }
+      return stored;
+    });
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    get.mock.restore();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(warned(), [{ event: "test_failed", tabId: tab.id, reason: "group" }]);
+
+    // A recheck of a document an update already dropped.
+    const gone = await liveTab();
+    fake.emitStorageChanged("local");
+    fake.ungroup(gone.id);
+    await flush();
+    assert.deepEqual(warned().slice(1), [
+      { event: "test_failed", tabId: gone.id, reason: "group" },
+    ]);
+
+    const revoked = await liveTab();
+    await revokeSite(fake.browser, SITE);
+    await flush();
+    assert.equal(documents.live(revoked.id), undefined);
+    assert.deepEqual(warned().slice(2), [
+      { event: "test_failed", tabId: revoked.id, reason: "refused", code: "site_not_approved" },
+    ]);
+  });
+
+  it("logs no drop at a new commit, a close or a withdrawal", async (t) => {
+    const warned = quiet(t);
+    const { fake, documents, liveTab } = setup({});
+    const replaced = await liveTab();
+    fake.emitCommitted({ tabId: replaced.id, frameId: 0, url: "https://c.example/" });
+    await flush();
+    assert.equal(documents.live(replaced.id), undefined);
+    const closed = await liveTab();
+    fake.removeTab(closed.id);
+    const withdrawn = await liveTab();
+    documents.withdraw("s1", SITE);
+    assert.equal(documents.live(withdrawn.id), undefined);
+    await flush();
+    assert.deepEqual(warned(), []);
+  });
+
+  it("does not call onDecided for a commit that is no longer the tab's latest", async (t) => {
+    quiet(t);
     const decided: [number, string | undefined][] = [];
     const { fake, tabIn } = setup({
       onDecided: (tabId, live) => {
@@ -185,5 +295,20 @@ function setup(hooks: Pick<LiveDocumentsDeps, "onCommit" | "onDecided">) {
     return tab;
   }
 
-  return { fake, documents, tabIn };
+  /** A tab in s1's group with a live document on A's site. */
+  async function liveTab(): Promise<FakeTab> {
+    const tab = await tabIn();
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    assert.ok(documents.live(tab.id) !== undefined);
+    return tab;
+  }
+
+  return { fake, documents, tabIn, liveTab };
+}
+
+/** Keeps the log lines out of the test output; returns a reader for them. */
+function quiet(t: TestContext): () => Record<string, unknown>[] {
+  const warn = t.mock.method(console, "warn", () => {});
+  return () => warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
 }

@@ -240,6 +240,8 @@ export interface NavigationDetails {
   url: string;
   /** ms since the epoch, the clock of `webRequest`'s `timeStamp`. */
   timeStamp: number;
+  /** Firefox's id of the frame's document, where Firefox gives one. */
+  documentId?: string;
 }
 
 /** The options of `tabs.captureTab` that the extension uses. */
@@ -259,6 +261,8 @@ export interface CaptureArea {
 /** One frame's outcome of `scripting.executeScript`. */
 export interface InjectionResult<T> {
   frameId: number;
+  /** Firefox's id of the document the script ran in, where Firefox gives one. */
+  documentId?: string;
   result?: T;
   error?: unknown;
 }

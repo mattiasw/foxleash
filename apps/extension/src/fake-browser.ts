@@ -51,8 +51,10 @@ export interface FakeBrowser {
   failNextSet(): void;
   /** Every `scripting.executeScript` call, in order, with only the keys it was given. */
   injections: Injection[];
-  /** What each `scripting.executeScript` call resolves to. */
+  /** What each `scripting.executeScript` call resolves to, once `nextInjectionResults` is empty. */
   injectionResults: InjectionResult<unknown>[];
+  /** What the next `scripting.executeScript` calls resolve to, one entry each, first to last. */
+  nextInjectionResults: InjectionResult<unknown>[][];
   /** Makes the next `scripting.executeScript` reject with `error`, once. */
   failNextInjection(error: unknown): void;
   /** Every `tabs.captureTab` call, in order, with only the option keys it was given. */
@@ -556,6 +558,7 @@ export function createFakeBrowser(): FakeBrowser {
     },
     injections: [],
     injectionResults: [{ frameId: 0, result: null }],
+    nextInjectionResults: [],
     failNextInjection: (error) => {
       injectionFailure = { error };
     },
@@ -784,7 +787,7 @@ export function createFakeBrowser(): FakeBrowser {
     injectionFailure = undefined;
     if (failure !== undefined) throw failure.error;
     // The fake runs no page, so what each frame returned is the test's to say.
-    return structuredClone(fake.injectionResults);
+    return structuredClone(fake.nextInjectionResults.shift() ?? fake.injectionResults);
   }
 
   async function captureTab(tabId: number, options: CaptureOptions): Promise<string> {

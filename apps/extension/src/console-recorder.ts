@@ -9,6 +9,9 @@ export interface RecorderOptions {
   replyEvent: string;
 }
 
+/** What `recordConsole` did in the document it ran in. */
+export type RecorderStatus = "started" | "present" | "elsewhere" | "refused";
+
 /** What the recorder reads from the page's global. */
 export interface RecorderPage {
   location: { protocol: string; hostname: string; port: string };
@@ -27,22 +30,27 @@ export interface RecorderPage {
  * `scripting.executeScript` serializes this function with `toString()`, so everything it uses
  * lives inside it. Everything it calls after it starts is captured first, so a page that later
  * replaces a built-in cannot change what it does beyond its own records.
+ *
+ * Returns `"started"` when it started the recorder, `"present"` when the document already had
+ * one, `"elsewhere"` in a document not on `site`, and `"refused"` when the page would not take
+ * the marker.
  */
 export function recordConsole(
   site: string,
   options: RecorderOptions,
   page: RecorderPage = globalThis,
-): void {
+): RecorderStatus {
   const where = page.location;
   // The site as `siteOf` in site.ts writes it: scheme, host without a trailing dot, port.
   const host = where.hostname.endsWith(".") ? where.hostname.slice(0, -1) : where.hostname;
-  if (`${where.protocol}//${host}${where.port === "" ? "" : `:${where.port}`}` !== site) return;
-  if (Object.hasOwn(page, "__foxhandConsole")) return;
+  if (`${where.protocol}//${host}${where.port === "" ? "" : `:${where.port}`}` !== site)
+    return "elsewhere";
+  if (Object.hasOwn(page, "__foxhandConsole")) return "present";
   try {
     // Exactly { value: true }: Firefox's WindowProxy can throw on an explicit configurable: false.
     Object.defineProperty(page, "__foxhandConsole", { value: true });
   } catch {
-    return;
+    return "refused";
   }
 
   const apply = Reflect.apply;
@@ -134,6 +142,8 @@ export function recordConsole(
       // The content script then hears no reply.
     }
   });
+
+  return "started";
 
   function replace(level: ConsoleLevel): void {
     try {

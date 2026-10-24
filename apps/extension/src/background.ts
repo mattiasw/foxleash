@@ -31,7 +31,7 @@ const access = createSiteAccess({
     network.withdraw(session, site);
   },
 });
-const recordings = createConsoleRecording({ browser, groups, access });
+const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });
 const uploads = createUploads(timers);

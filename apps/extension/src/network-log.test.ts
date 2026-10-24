@@ -721,6 +721,7 @@ describe("network log", { timeout: 10000 }, () => {
   });
 
   it("keeps the requests made while the commit is checked once it passes, else drops them", async (t) => {
+    quiet(t);
     const { fake, read, request, tabIn } = setup();
     const hold = holdTabsGet(t, fake);
     const tab = await tabIn("s1", URL_A);
@@ -742,6 +743,7 @@ describe("network log", { timeout: 10000 }, () => {
   });
 
   it("lets only the latest commit open or drop a tab's log", async (t) => {
+    quiet(t);
     const { fake, read, request, tabIn, sessions } = setup();
     const hold = holdTabsGet(t, fake);
     const tab = await tabIn("s1", URL_A);
@@ -795,7 +797,8 @@ describe("network log", { timeout: 10000 }, () => {
     await reloadAndRead(fake, tab.id, OTHER, request, read);
   });
 
-  it("stops recording when the tab leaves the group, until the page loads again", async () => {
+  it("stops recording when the tab leaves the group, until the page loads again", async (t) => {
+    quiet(t);
     const { fake, read, request, tabIn, groups } = setup();
     const tab = await tabIn("s1", URL_A);
     request(tab.id, `${SITE}/before`);
@@ -809,7 +812,8 @@ describe("network log", { timeout: 10000 }, () => {
     await reloadAndRead(fake, tab.id, SITE, request, read);
   });
 
-  it("stops recording when stored access no longer allows the site", async () => {
+  it("stops recording when stored access no longer allows the site", async (t) => {
+    quiet(t);
     const { fake, read, request, tabIn } = setup();
     const tab = await tabIn("s1", URL_A);
     request(tab.id, `${SITE}/before`);
@@ -823,7 +827,8 @@ describe("network log", { timeout: 10000 }, () => {
     await reloadAndRead(fake, tab.id, SITE, request, read);
   });
 
-  it("stops recording when the tab shows another site without a commit", async () => {
+  it("stops recording when the tab shows another site without a commit", async (t) => {
+    quiet(t);
     const { fake, read, request, tabIn } = setup();
     const tab = await tabIn("s1", URL_A);
     request(tab.id, `${SITE}/before`);

@@ -462,7 +462,7 @@ describe("recordConsole", () => {
     it(`installs nothing in a document on ${href}`, () => {
       const page = new FakePage(href);
       const before = { ...page.console };
-      recordConsole(SITE, OPTIONS, asPage(page));
+      assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "elsewhere");
       assert.deepEqual(page.console, before);
       assert.equal(Object.hasOwn(page, "__foxhandConsole"), false);
       page.dispatchEvent(errorEvent({ message: "boom" }));
@@ -480,7 +480,7 @@ describe("recordConsole", () => {
 
   it("records on a site with a port", () => {
     const page = new FakePage("http://127.0.0.1:4567/");
-    recordConsole("http://127.0.0.1:4567", OPTIONS, asPage(page));
+    assert.equal(recordConsole("http://127.0.0.1:4567", OPTIONS, asPage(page)), "started");
     page.log("log", "here");
     assert.equal(read(page).messages.length, 1);
   });
@@ -488,7 +488,7 @@ describe("recordConsole", () => {
   it("starts only once in a document", () => {
     const page = started();
     const wrapped = page.console.log;
-    recordConsole(SITE, OPTIONS, asPage(page));
+    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "present");
     assert.equal(page.console.log, wrapped);
     page.log("log", "once");
     assert.equal(page.calls.length, 1);
@@ -506,7 +506,7 @@ describe("recordConsole", () => {
     const page = new FakePage();
     Object.defineProperty(page, "__foxhandConsole", { value: false });
     const before = { ...page.console };
-    recordConsole(SITE, OPTIONS, asPage(page));
+    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "present");
     assert.deepEqual(page.console, before);
     assert.deepEqual(replies(page), []);
   });
@@ -515,7 +515,7 @@ describe("recordConsole", () => {
     const page = new FakePage();
     const before = { ...page.console };
     Object.preventExtensions(page);
-    recordConsole(SITE, OPTIONS, asPage(page));
+    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "refused");
     assert.deepEqual(page.console, before);
     assert.deepEqual(replies(page), []);
   });
@@ -549,7 +549,7 @@ describe("recordConsole from its own text", () => {
     const fresh: unknown = vm.runInNewContext(`(${FUNCTION})`);
     assert.equal(typeof fresh, "function");
     const page = new FakePage();
-    (fresh as typeof recordConsole)(SITE, OPTIONS, asPage(page));
+    assert.equal((fresh as typeof recordConsole)(SITE, OPTIONS, asPage(page)), "started");
     page.log("warn", "from", { a: [1] }, new Error("boom"));
     page.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: "late" }));
     const reply = read(page);
@@ -566,7 +566,7 @@ describe("recordConsole from its own text", () => {
 
 function started(options: Partial<RecorderOptions> = {}, href?: string): FakePage {
   const page = new FakePage(href);
-  recordConsole(SITE, { ...OPTIONS, ...options }, asPage(page));
+  assert.equal(recordConsole(SITE, { ...OPTIONS, ...options }, asPage(page)), "started");
   return page;
 }
 

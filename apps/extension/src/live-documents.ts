@@ -2,7 +2,7 @@ import type { BrowserApi } from "./browser-api.ts";
 import { allowedSiteFor, ToolError } from "./handlers.ts";
 import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
-import { siteOf } from "./site.ts";
+import { redactedUrl, siteOf } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
 /** A top-frame document whose session may act on its site, uninterrupted since its commit. */
@@ -16,15 +16,24 @@ export interface LiveDocumentsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
   access: Pick<SiteAccess, "view" | "openPrompt">;
-  /** The `event` of the warning logged when a check fails for another reason than the gate. */
+  /**
+   * The `event` of the warning logged when a check fails for another reason than the gate, and
+   * when a live document stops being live for a reason other than a commit, its tab closing, a
+   * withdrawal or `onDecided`.
+   */
   failure: string;
   /** Runs at each top-frame commit, synchronously, before the commit is checked. */
   onCommit?: (tabId: number, url: string, timeStamp: number) => void;
   /**
    * Runs when the check of a commit ends while it is still the tab's latest: with its live document,
-   * or undefined when it has none. The document stops being live when this rejects or gives false.
+   * or undefined when it has none, and the commit's documentId, when Firefox gave one. The document
+   * stops being live when this rejects or gives false.
    */
-  onDecided?: (tabId: number, live: LiveDocument | undefined) => boolean | Promise<boolean>;
+  onDecided?: (
+    tabId: number,
+    live: LiveDocument | undefined,
+    documentId: string | undefined,
+  ) => boolean | Promise<boolean>;
 }
 
 export interface LiveDocuments {
@@ -52,14 +61,16 @@ export function createLiveDocuments({
   const latest = new Map<number, number>();
   let commits = 0;
 
-  browser.webNavigation.onCommitted.addListener(({ tabId, frameId, url, timeStamp }) => {
-    if (frameId !== 0) return;
-    commits += 1;
-    latest.set(tabId, commits);
-    entries.delete(tabId);
-    onCommit?.(tabId, url, timeStamp);
-    void start(tabId, url, commits);
-  });
+  browser.webNavigation.onCommitted.addListener(
+    ({ tabId, frameId, url, timeStamp, documentId }) => {
+      if (frameId !== 0) return;
+      commits += 1;
+      latest.set(tabId, commits);
+      entries.delete(tabId);
+      onCommit?.(tabId, url, timeStamp);
+      void start(tabId, url, commits, documentId);
+    },
+  );
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const entry = entries.get(tabId);
     if (entry === undefined) return;
@@ -68,14 +79,18 @@ export function createLiveDocuments({
     const groupId = changeInfo.groupId ?? tab.groupId;
     // A page restored from the back-forward cache brings its own URL, and no commit.
     const moved = changeInfo.url !== undefined && siteOf(changeInfo.url) !== entry.site;
-    if (groupId !== entry.groupId || moved) entries.delete(tabId);
+    if (groupId !== entry.groupId) drop(tabId, entry, { reason: "group" });
+    else if (moved) drop(tabId, entry, { reason: "site", site: redactedUrl(changeInfo.url) });
   });
   browser.tabs.onRemoved.addListener((tabId) => {
     entries.delete(tabId);
     latest.delete(tabId);
   });
   // A group stays in its window, so a tab moved to another window has left it.
-  browser.tabs.onDetached.addListener((tabId) => entries.delete(tabId));
+  browser.tabs.onDetached.addListener((tabId) => {
+    const entry = entries.get(tabId);
+    if (entry !== undefined) drop(tabId, entry, { reason: "detached" });
+  });
   browser.storage.onChanged.addListener((_changes, areaName) => {
     if (areaName !== "local") return;
     // Stored approvals and the blocklist live there: only a change that narrows access drops.
@@ -84,7 +99,12 @@ export function createLiveDocuments({
 
   return { live, withdraw };
 
-  async function start(tabId: number, url: string, commit: number): Promise<void> {
+  async function start(
+    tabId: number,
+    url: string,
+    commit: number,
+    documentId: string | undefined,
+  ): Promise<void> {
     let entry: LiveDocument | undefined;
     try {
       const tab = await browser.tabs.get(tabId);
@@ -105,7 +125,7 @@ export function createLiveDocuments({
     }
     if (latest.get(tabId) !== commit) return;
     try {
-      const kept = await onDecided?.(tabId, entry);
+      const kept = await onDecided?.(tabId, entry, documentId);
       if (kept === false && entry !== undefined) drop(tabId, entry);
     } catch (error: unknown) {
       warn({ event: failure, tabId, error: String(error) });
@@ -115,20 +135,26 @@ export function createLiveDocuments({
 
   /** Drops the entry unless the tab is still in its group and the gate still passes its site. */
   async function recheck(tabId: number, entry: LiveDocument): Promise<void> {
+    let reason: Record<string, unknown> | undefined;
     try {
       const { groupId } = await browser.tabs.get(tabId);
       if (groupId === entry.groupId) {
         await allowedSiteFor(access, entry.session, tabId, entry.site);
         return;
       }
+      reason = { reason: "group" };
     } catch (error: unknown) {
-      if (!(error instanceof ToolError)) warn({ event: failure, tabId, error: String(error) });
+      if (error instanceof ToolError) reason = { reason: "refused", code: error.code };
+      else warn({ event: failure, tabId, error: String(error) });
     }
-    drop(tabId, entry);
+    drop(tabId, entry, reason);
   }
 
-  function drop(tabId: number, entry: LiveDocument): void {
-    if (entries.get(tabId) === entry) entries.delete(tabId);
+  /** Ends the entry if it is still the tab's live document, logging `reason` when given. */
+  function drop(tabId: number, entry: LiveDocument, reason?: Record<string, unknown>): void {
+    if (entries.get(tabId) !== entry) return;
+    entries.delete(tabId);
+    if (reason !== undefined) warn({ event: failure, tabId, ...reason });
   }
 
   function live(tabId: number): LiveDocument | undefined {
