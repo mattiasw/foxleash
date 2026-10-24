@@ -293,7 +293,7 @@ export function registerTools(
   register(
     "tab_close",
     {
-      description: `Close a tab of this session's Foxhand tab group and return the tabs left in the group. Foxhand refuses to close the last tab of a window, since that would close the window, and the tab where Foxhand is asking the user about a site. ${REDACTED_TABS}`,
+      description: `Close a tab of this session's Foxhand tab group and return the tabs left in the group. Foxhand refuses to close the last tab of a window, since that would close the window, and the tab where Foxhand is asking the user about a site. If the page asks the user to confirm leaving it, Foxhand says so and Firefox closes the tab once the user agrees. ${REDACTED_TABS}`,
       inputSchema: { tabId: tabIdSchema() },
     },
     ({ tabId }) => run(bridge, "tab_close", { tabId }),

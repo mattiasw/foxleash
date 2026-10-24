@@ -169,6 +169,11 @@ export const HISTORY_RELOAD_TIMEOUT_MS = 20_000;
  * request timeout.
  */
 export const BLANK_RELOAD_TIMEOUT_MS = 20_000;
+/**
+ * How long `tab_close` waits for Firefox to remove the tab: a page's beforeunload prompt holds the
+ * removal until the user answers it.
+ */
+export const CLOSE_CONFIRM_TIMEOUT_MS = 5_000;
 
 export function createHandlers<Handle>({
   browser,
@@ -486,7 +491,9 @@ export function createHandlers<Handle>({
 
   /**
    * Closes a tab of the session's group, unless it is the last tab of its window or shows the
-   * session's open prompt, and returns the tabs left in the group.
+   * session's open prompt, and returns the tabs left in the group. When Firefox has not removed
+   * the tab within CLOSE_CONFIRM_TIMEOUT_MS it refuses, saying the page asked the user to confirm
+   * leaving it; when the user chose to stay on the page, it says so.
    */
   async function tabClose(session: string, params: Params): Promise<Result<"tab_close">> {
     const tabId = tabIdParam(params, "tab_close");
@@ -499,6 +506,33 @@ export function createHandlers<Handle>({
       throw new ToolError(
         "last_tab",
         `Tab ${tabId} is the last tab in its window, and closing it would close the window.`,
+      );
+    }
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(
+      () =>
+        reject(
+          new ToolError(
+            "close_needs_confirm",
+            `Tab ${tabId}'s page asked the user to confirm leaving it. Firefox closes the tab when the user chooses to leave the page, and keeps it open if they choose to stay.`,
+          ),
+        ),
+      CLOSE_CONFIRM_TIMEOUT_MS,
+    );
+    try {
+      await Promise.race([closed.removed, timedOut]);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+    // Firefox also settles the removal when the user chooses to stay on the page.
+    const kept = await browser.tabs.get(tabId).then(
+      () => true,
+      () => false,
+    );
+    if (kept) {
+      throw new ToolError(
+        "close_declined",
+        `Tab ${tabId} is still open: its page asked the user to confirm leaving it, and the user chose to stay.`,
       );
     }
     const { tabs } = await tabsList(session);

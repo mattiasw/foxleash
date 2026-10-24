@@ -91,9 +91,10 @@ opens, also after your own click. When the agent session ends, Foxhand closes it
 group holds only blank tabs, so pages you may still be reading stay open.
 
 The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
-never closes the last tab of a window. `resize_window` resizes the whole window that holds the
-agent's group, your own tabs in it included, and first returns a maximized, minimized or
-full-screen window to its normal state.
+never closes the last tab of a window. When a tab's page asks you to confirm leaving it,
+`tab_close` tells the agent so, and Firefox closes the tab once you choose to leave the page.
+`resize_window` resizes the whole window that holds the agent's group, your own tabs in it
+included, and first returns a maximized, minimized or full-screen window to its normal state.
 
 The Foxhand button in the toolbar shows ON on the tabs an agent session can use; clicking it
 opens Foxhand's settings.

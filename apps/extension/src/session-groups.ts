@@ -9,13 +9,17 @@ export interface SessionGroups {
   /** Closes the session's group when it holds only blank tabs; otherwise leaves it. */
   endSession(session: string): Promise<void>;
   /**
-   * Removes the tab unless it is the last tab of its window, one close at a time across
-   * sessions together with endSession's. The tab and its window are read when its turn comes.
-   * `check` gets the tab as read then and runs right before the removal, with no await in
-   * between, and may throw to refuse it. Resolves false, removing nothing, for a window's last
-   * tab; a tab this already asked Firefox to remove counts as gone until Firefox removes it.
+   * Asks Firefox to remove the tab, one ask at a time across sessions together with
+   * endSession's. The tab and its window are read when its turn comes. `check` gets the tab as
+   * read then and runs right before the removal is asked for, with no await in between, and may
+   * throw to refuse it. Resolves false, asking nothing, for a window's last tab; a tab this
+   * already asked Firefox to remove counts as gone until Firefox removes it. Otherwise resolves
+   * once Firefox was asked, with `removed`, which settles when Firefox has removed the tab or
+   * refused to; a beforeunload prompt holds it until the user answers. While that removal has not
+   * settled, closing the tab again asks Firefox nothing and hands back the same `removed`.
+   * `removed` carries a handler, so a caller may stop waiting for it.
    */
-  closeTab(tabId: number, check: (tab: Tab) => void): Promise<boolean>;
+  closeTab(tabId: number, check: (tab: Tab) => void): Promise<false | { removed: Promise<void> }>;
   /**
    * True when the group is one this created for a session and has not forgotten; false for
    * undefined and -1.
@@ -42,6 +46,9 @@ export function createSessionGroups(
   // Tabs handed to tabs.remove that Firefox has not removed yet. A tab the user keeps with Stay
   // on its beforeunload prompt stays here, so later closes in its window refuse.
   const removing = new Set<number>();
+  // closeTab's removals Firefox has not settled yet. Asked again while the page's beforeunload
+  // prompt is open, Firefox closes the tab without waiting for the user's answer.
+  const unsettled = new Map<number, Promise<void>>();
   browser.tabs.onRemoved.addListener((tabId) => removing.delete(tabId));
 
   return { groupOf, ensureGroup, endSession, closeTab, isSessionGroup, sessionOf };
@@ -62,14 +69,20 @@ export function createSessionGroups(
   }
 
   function endSession(session: string): Promise<void> {
-    return serialize(session, () => {
-      const close = closing.catch(() => undefined).then(() => closeIfBlank(session));
-      closing = close;
-      return close;
+    return serialize(session, async () => {
+      const step = closing.catch(() => undefined).then(() => startClosingIfBlank(session));
+      closing = step;
+      const started = await step;
+      if (started === undefined) return;
+      await started.removed;
+      forget(session, started.groupId);
     });
   }
 
-  function closeTab(tabId: number, check: (tab: Tab) => void): Promise<boolean> {
+  function closeTab(
+    tabId: number,
+    check: (tab: Tab) => void,
+  ): Promise<false | { removed: Promise<void> }> {
     const close = closing
       .catch(() => undefined)
       .then(async () => {
@@ -81,8 +94,9 @@ export function createSessionGroups(
           return false;
         }
         check(tab);
-        await removeTabs([tabId]);
-        return true;
+        // Not awaited: a page's beforeunload prompt holds tabs.remove until the user answers, and
+        // `removing` already counts the tab as gone for the closes after this one.
+        return { removed: removeTab(tabId) };
       });
     closing = close;
     return close;
@@ -139,7 +153,9 @@ export function createSessionGroups(
     }
   }
 
-  async function closeIfBlank(session: string): Promise<void> {
+  async function startClosingIfBlank(
+    session: string,
+  ): Promise<{ removed: Promise<void>; groupId: number } | undefined> {
     const group = await groupOf(session);
     if (group === undefined) return;
     // One query for the whole window: the blank check and the empty-window check see one state.
@@ -153,11 +169,32 @@ export function createSessionGroups(
     if (!tabs.every((tab) => isBlank(tab, promptPage))) return;
     // Removing a window's last tabs closes the window, and closing the last window quits Firefox.
     if (!windowTabs.some((tab) => tab.groupId !== group.id && !removing.has(tab.id))) return;
-    await removeTabs(tabs.map((tab) => tab.id));
-    forget(session, group.id);
+    return { removed: removeTabs(tabs.map((tab) => tab.id)), groupId: group.id };
   }
 
-  async function removeTabs(tabIds: number[]): Promise<void> {
+  /** Asks Firefox to remove the tab, unless an earlier ask has not settled; returns that removal. */
+  function removeTab(tabId: number): Promise<void> {
+    const earlier = unsettled.get(tabId);
+    if (earlier !== undefined) return earlier;
+    const removal = removeTabs([tabId]);
+    unsettled.set(tabId, removal);
+    const settle = () => unsettled.delete(tabId);
+    removal.then(settle, settle);
+    return removal;
+  }
+
+  /**
+   * Records the tabs as being removed and asks Firefox to remove them, both before it returns.
+   * The promise settles once Firefox has removed them or refused to; it carries a handler, so a
+   * caller may stop waiting for it.
+   */
+  function removeTabs(tabIds: number[]): Promise<void> {
+    const removal = askFirefoxToRemove(tabIds);
+    removal.catch(() => undefined);
+    return removal;
+  }
+
+  async function askFirefoxToRemove(tabIds: number[]): Promise<void> {
     // An earlier removal that Firefox has not finished keeps its ids when this one fails.
     const added = tabIds.filter((id) => !removing.has(id));
     for (const id of added) removing.add(id);

@@ -1299,6 +1299,7 @@ describe("tab_close, tab_select and resize_window", () => {
     assert.ok(
       named("tab_close")?.description?.includes("refuses to close the last tab of a window"),
     );
+    assert.ok(named("tab_close")?.description?.includes("asks the user to confirm leaving it"));
     assert.ok(
       named("tab_select")?.description?.includes("The window is not brought to the front."),
     );

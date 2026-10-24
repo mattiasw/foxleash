@@ -247,7 +247,9 @@ describe("endSession", { timeout: 10000 }, () => {
     fake.browser.tabs.remove = async (tabIds) => {
       calls.push(tabIds);
     };
-    assert.equal(await groups.closeTab(page.id, () => {}), true);
+    const closed = await groups.closeTab(page.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
     await groups.endSession("s1");
     assert.deepEqual(calls, [[page.id]]);
     assert.equal(fake.tabs.has(blank.id), true);
@@ -255,10 +257,12 @@ describe("endSession", { timeout: 10000 }, () => {
 });
 
 describe("closeTab", { timeout: 10000 }, () => {
-  it("removes the tab and resolves true when its window has another tab", async () => {
+  it("removes the tab and resolves with the removal when its window has another tab", async () => {
     const { fake, groups, outside, open } = setup();
     const tab = await open("s1", { url: "https://example.com/" });
-    assert.equal(await groups.closeTab(tab.id, () => {}), true);
+    const closing = await groups.closeTab(tab.id, () => {});
+    assert.ok(closing !== false);
+    await closing.removed;
     assert.equal(fake.tabs.has(tab.id), false);
     assert.equal(fake.tabs.has(outside.id), true);
   });
@@ -285,14 +289,20 @@ describe("closeTab", { timeout: 10000 }, () => {
       groups.closeTab(first.id, () => {}),
       groups.closeTab(second.id, () => {}),
     ]);
-    assert.deepEqual(closed, [true, false]);
+    assert.deepEqual(
+      closed.map((close) => close !== false),
+      [true, false],
+    );
+    const [firstClosed] = closed;
+    assert.ok(firstClosed);
+    await firstClosed.removed;
     assert.deepEqual(
       [...fake.tabs.values()].filter((tab) => tab.windowId === 2).map((tab) => tab.id),
       [second.id],
     );
   });
 
-  it("waits for another session's end and sees the window as it left it", async () => {
+  it("refuses a window's last other tab at once while another session's end is still removing its blank tab", async () => {
     const { fake, groups, open } = setup();
     const blank = await open("s1", { url: "about:blank", windowId: 2 });
     const page = await open("s2", { url: "https://example.com/", windowId: 2 });
@@ -301,18 +311,16 @@ describe("closeTab", { timeout: 10000 }, () => {
     let removals = 0;
     fake.browser.tabs.remove = async (tabIds) => {
       removals += 1;
-      if (removals === 1) await held;
+      await held;
       return remove(tabIds);
     };
     const ending = groups.endSession("s1");
     for (let turn = 0; turn < 10 && removals === 0; turn += 1) await flush();
     assert.equal(removals, 1);
-    const closing = groups.closeTab(page.id, () => {});
-    await flush();
+    assert.equal(await groups.closeTab(page.id, () => {}), false);
     assert.equal(fake.tabs.has(page.id), true);
     release();
     await ending;
-    assert.equal(await closing, false);
     assert.equal(fake.tabs.has(blank.id), false);
     assert.equal(fake.tabs.has(page.id), true);
   });
@@ -323,23 +331,30 @@ describe("closeTab", { timeout: 10000 }, () => {
     const first = await open("s2", { url: "https://a.example/", windowId: 2 });
     const second = await open("s2", { url: "https://b.example/", windowId: 2 });
     await open("s2", { url: "https://c.example/", windowId: 2 });
-    const remove = fake.browser.tabs.remove;
+    const query = fake.browser.tabs.query;
     const { promise: held, resolve: release } = Promise.withResolvers<void>();
-    let removals = 0;
-    fake.browser.tabs.remove = async (tabIds) => {
-      removals += 1;
-      if (removals === 1) await held;
-      return remove(tabIds);
+    let queries = 0;
+    fake.browser.tabs.query = async (queryInfo) => {
+      queries += 1;
+      if (queries === 1) await held;
+      return query(queryInfo);
     };
     const ending = groups.endSession("s1");
-    for (let turn = 0; turn < 10 && removals === 0; turn += 1) await flush();
-    assert.equal(removals, 1);
+    for (let turn = 0; turn < 10 && queries === 0; turn += 1) await flush();
+    assert.equal(queries, 1);
+    const get = fake.browser.tabs.get;
+    let reads = 0;
+    fake.browser.tabs.get = (tabId) => {
+      reads += 1;
+      return get(tabId);
+    };
     let checked: number | undefined;
     const closingFirst = groups.closeTab(first.id, () => {});
     const closingSecond = groups.closeTab(second.id, (tab) => {
       checked = tab.groupId;
     });
     await flush();
+    assert.equal(reads, 0);
     const torn = fake.tabs.get(first.id);
     assert.ok(torn);
     torn.windowId = 3;
@@ -348,23 +363,26 @@ describe("closeTab", { timeout: 10000 }, () => {
     await ending;
     assert.equal(await closingFirst, false);
     assert.equal(fake.tabs.has(first.id), true);
-    assert.equal(await closingSecond, true);
+    const closedSecond = await closingSecond;
+    assert.ok(closedSecond !== false);
+    await closedSecond.removed;
     assert.equal(checked, -1);
     assert.equal(fake.tabs.has(blank.id), false);
   });
 
-  it("rejects when Firefox cannot remove the tab, and closes again later", async () => {
+  it("hands back a removal that rejects when Firefox cannot remove the tab, and closes again later", async () => {
     const { fake, groups, open } = setup();
     const tab = await open("s1", { url: "https://example.com/" });
     const remove = fake.browser.tabs.remove;
     const refusal = new Error("Invalid tab ID");
     fake.browser.tabs.remove = () => Promise.reject(refusal);
-    await assert.rejects(
-      groups.closeTab(tab.id, () => {}),
-      refusal,
-    );
+    const refused = await groups.closeTab(tab.id, () => {});
+    assert.ok(refused !== false);
+    await assert.rejects(refused.removed, refusal);
     fake.browser.tabs.remove = remove;
-    assert.equal(await groups.closeTab(tab.id, () => {}), true);
+    const closed = await groups.closeTab(tab.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
     assert.equal(fake.tabs.has(tab.id), false);
   });
 
@@ -379,7 +397,9 @@ describe("closeTab", { timeout: 10000 }, () => {
       (error: unknown) => error === refusal,
     );
     assert.equal(fake.tabs.has(tab.id), true);
-    assert.equal(await groups.closeTab(tab.id, () => {}), true);
+    const closed = await groups.closeTab(tab.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
     assert.equal(fake.tabs.has(tab.id), false);
   });
 
@@ -393,7 +413,10 @@ describe("closeTab", { timeout: 10000 }, () => {
       groups.closeTab(first.id, () => {}),
       groups.closeTab(second.id, () => {}),
     ]);
-    assert.deepEqual(closed, [true, false]);
+    assert.deepEqual(
+      closed.map((close) => close !== false),
+      [true, false],
+    );
     assert.equal(fake.tabs.has(second.id), true);
     fake.removeTab(first.id);
     assert.deepEqual(
@@ -408,12 +431,14 @@ describe("closeTab", { timeout: 10000 }, () => {
     const second = await open("s1", { url: "https://b.example/", windowId: 2 });
     const remove = fake.browser.tabs.remove;
     fake.browser.tabs.remove = async () => {};
-    assert.equal(await groups.closeTab(first.id, () => {}), true);
+    assert.ok((await groups.closeTab(first.id, () => {})) !== false);
     assert.equal(await groups.closeTab(second.id, () => {}), false);
     fake.removeTab(first.id);
     const third = await open("s1", { url: "https://c.example/", windowId: 2 });
     fake.browser.tabs.remove = remove;
-    assert.equal(await groups.closeTab(second.id, () => {}), true);
+    const closed = await groups.closeTab(second.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
     assert.deepEqual(
       [...fake.tabs.values()].filter((tab) => tab.windowId === 2).map((tab) => tab.id),
       [third.id],
@@ -427,12 +452,13 @@ describe("closeTab", { timeout: 10000 }, () => {
     const remove = fake.browser.tabs.remove;
     const refusal = new Error("Invalid tab ID");
     fake.browser.tabs.remove = () => Promise.reject(refusal);
-    await assert.rejects(
-      groups.closeTab(a.id, () => {}),
-      refusal,
-    );
+    const refused = await groups.closeTab(a.id, () => {});
+    assert.ok(refused !== false);
+    await assert.rejects(refused.removed, refusal);
     fake.browser.tabs.remove = remove;
-    assert.equal(await groups.closeTab(b.id, () => {}), true);
+    const closed = await groups.closeTab(b.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
     assert.equal(fake.tabs.has(b.id), false);
     assert.equal(fake.tabs.has(a.id), true);
     assert.equal(await groups.closeTab(a.id, () => {}), false);
@@ -443,15 +469,79 @@ describe("closeTab", { timeout: 10000 }, () => {
     const a = await open("s1", { url: "https://a.example/", windowId: 2 });
     const b = await open("s1", { url: "https://b.example/", windowId: 2 });
     fake.browser.tabs.remove = async () => {};
-    assert.equal(await groups.closeTab(a.id, () => {}), true);
+    assert.ok((await groups.closeTab(a.id, () => {})) !== false);
     const refusal = new Error("Cannot remove the tab");
     fake.browser.tabs.remove = () => Promise.reject(refusal);
-    await assert.rejects(
-      groups.closeTab(a.id, () => {}),
-      refusal,
-    );
+    const refused = await groups.closeTab(a.id, () => {});
+    assert.ok(refused !== false);
+    await assert.rejects(refused.removed, refusal);
     fake.browser.tabs.remove = async () => {};
     assert.equal(await groups.closeTab(b.id, () => {}), false);
+  });
+
+  it("closes a tab in another window and ends another session while one removal never settles", async () => {
+    const { fake, groups, open } = setup();
+    const stuck = await open("s1", { url: "https://a.example/", windowId: 2 });
+    await open("s1", { url: "https://b.example/", windowId: 2 });
+    const elsewhere = await open("s2", { url: "https://c.example/", windowId: 3 });
+    fake.openTab({ url: "https://user.example/", windowId: 3 });
+    const blank = await open("s3", { url: "about:blank", windowId: 4 });
+    fake.openTab({ url: "https://user.example/", windowId: 4 });
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = (tabIds) =>
+      tabIds.includes(stuck.id) ? new Promise<void>(() => {}) : remove(tabIds);
+    assert.ok((await groups.closeTab(stuck.id, () => {})) !== false);
+    const closed = await groups.closeTab(elsewhere.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
+    assert.equal(fake.tabs.has(elsewhere.id), false);
+    await groups.endSession("s3");
+    assert.equal(fake.tabs.has(blank.id), false);
+    assert.equal(fake.tabs.has(stuck.id), true);
+  });
+
+  it("clears a tab whose removal Firefox rejects after closeTab resolved, so its sibling still closes", async () => {
+    const { fake, groups, open } = setup();
+    const a = await open("s1", { url: "https://a.example/", windowId: 2 });
+    const b = await open("s1", { url: "https://b.example/", windowId: 2 });
+    const remove = fake.browser.tabs.remove;
+    const { promise: held, reject } = Promise.withResolvers<void>();
+    fake.browser.tabs.remove = () => held;
+    const handle = await groups.closeTab(a.id, () => {});
+    assert.ok(handle !== false);
+    assert.equal(await groups.closeTab(b.id, () => {}), false);
+    const refusal = new Error("Invalid tab ID");
+    reject(refusal);
+    await flush();
+    fake.browser.tabs.remove = remove;
+    const closed = await groups.closeTab(b.id, () => {});
+    assert.ok(closed !== false);
+    await closed.removed;
+    assert.equal(fake.tabs.has(b.id), false);
+    assert.equal(fake.tabs.has(a.id), true);
+    await assert.rejects(handle.removed, refusal);
+  });
+
+  it("asks Firefox nothing for a tab whose removal has not settled, and asks again once it has", async () => {
+    const { fake, groups, open } = setup();
+    const a = await open("s1", { url: "https://a.example/", windowId: 2 });
+    await open("s1", { url: "https://b.example/", windowId: 2 });
+    const { promise: held, resolve: stay } = Promise.withResolvers<void>();
+    const asked: number[][] = [];
+    fake.browser.tabs.remove = (tabIds) => {
+      asked.push(tabIds);
+      return held;
+    };
+    const first = await groups.closeTab(a.id, () => {});
+    const again = await groups.closeTab(a.id, () => {});
+    assert.ok(first !== false && again !== false);
+    assert.equal(again.removed, first.removed);
+    assert.deepEqual(asked, [[a.id]]);
+    stay();
+    await first.removed;
+    assert.ok((await groups.closeTab(a.id, () => {})) !== false);
+    assert.deepEqual(asked, [[a.id], [a.id]]);
+    assert.equal(fake.tabs.has(a.id), true);
   });
 });
 

@@ -23,6 +23,7 @@ import {
 import {
   BLANK_RELOAD_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
+  CLOSE_CONFIRM_TIMEOUT_MS,
   createHandlers,
   HISTORY_RELOAD_TIMEOUT_MS,
   HISTORY_REQUEST_TIMEOUT_MS,
@@ -2686,6 +2687,90 @@ describe("tab_close", { timeout: 10000 }, () => {
     const tab = await open("s1");
     assert.deepEqual(await call("s1", "tab_close", { tabId: tab.id }), { tabs: [] });
     assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("refuses with close_needs_confirm once CLOSE_CONFIRM_TIMEOUT_MS passes while Firefox holds the removal, and closes another session's tab meanwhile", async () => {
+    const { fake, timers, call, open } = setup();
+    const held = await open("s1");
+    await open("s1");
+    fake.currentWindowId = 3;
+    const other = await open("s2");
+    const otherKept = await open("s2");
+    const before = timers.pending();
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = (tabIds) =>
+      tabIds.includes(held.id) ? new Promise<void>(() => {}) : remove(tabIds);
+    let settled = false;
+    const closing = call("s1", "tab_close", { tabId: held.id });
+    const settle = () => {
+      settled = true;
+    };
+    closing.then(settle, settle);
+    await flush();
+    assert.deepEqual(await call("s2", "tab_close", { tabId: other.id }), { tabs: [otherKept] });
+    assert.equal(settled, false);
+    timers.advance(CLOSE_CONFIRM_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(settled, false);
+    timers.advance(1);
+    await assert.rejects(closing, {
+      code: "close_needs_confirm",
+      message: `Tab ${held.id}'s page asked the user to confirm leaving it. Firefox closes the tab when the user chooses to leave the page, and keeps it open if they choose to stay.`,
+    });
+    assert.equal(fake.tabs.has(held.id), true);
+    assert.equal(timers.pending(), before);
+  });
+
+  it("answers with Firefox's error when it refuses the removal within CLOSE_CONFIRM_TIMEOUT_MS", async () => {
+    const { fake, timers, call, open } = setup();
+    const first = await open("s1");
+    await open("s1");
+    const before = timers.pending();
+    const refusal = new Error("Invalid tab ID");
+    fake.browser.tabs.remove = () => Promise.reject(refusal);
+    await assert.rejects(
+      call("s1", "tab_close", { tabId: first.id }),
+      (error: unknown) => error === refusal,
+    );
+    assert.equal(timers.pending(), before);
+    assert.equal(fake.tabs.has(first.id), true);
+  });
+
+  it("refuses with close_declined when the user chooses to stay on the page", async () => {
+    const { fake, timers, call, open } = setup();
+    const kept = await open("s1");
+    await open("s1");
+    const before = timers.pending();
+    fake.browser.tabs.remove = async () => {};
+    await assert.rejects(call("s1", "tab_close", { tabId: kept.id }), {
+      code: "close_declined",
+      message: `Tab ${kept.id} is still open: its page asked the user to confirm leaving it, and the user chose to stay.`,
+    });
+    assert.equal(timers.pending(), before);
+    assert.equal(fake.tabs.has(kept.id), true);
+  });
+
+  it("leaves no rejection unhandled, and closes the sibling, when Firefox refuses the removal after the bound", async () => {
+    const { fake, timers, call, open } = setup();
+    const first = await open("s1");
+    const second = await open("s1");
+    const remove = fake.browser.tabs.remove;
+    const { promise: removal, reject } = Promise.withResolvers<void>();
+    fake.browser.tabs.remove = () => removal;
+    const closing = call("s1", "tab_close", { tabId: first.id });
+    await flush();
+    timers.advance(CLOSE_CONFIRM_TIMEOUT_MS);
+    await rejectsWith(closing, "close_needs_confirm");
+    reject(new Error("Invalid tab ID"));
+    await flush();
+    fake.browser.tabs.remove = remove;
+    const closed = await call("s1", "tab_close", { tabId: second.id });
+    assert.ok("tabs" in closed);
+    assert.deepEqual(
+      closed.tabs.map((tab) => tab.id),
+      [first.id],
+    );
+    assert.equal(fake.tabs.has(second.id), false);
   });
 });
 

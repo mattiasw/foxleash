@@ -109,3 +109,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Tabs your agent opens on a page of a site you approved no longer come back blank, or with a
   Forward button that leads to a blank page, when Firefox unloads them to save memory and you
   select them again.
+- Closing a tab whose page asks you to confirm leaving it no longer holds up your agent's other
+  tab closes and session ends until you answer. The agent learns within seconds that the page is
+  waiting for you, and no longer hears that the tab closed when you choose to stay on the page.

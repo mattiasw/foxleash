@@ -43,7 +43,7 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     { timeout: 60_000 },
   );
 
-  test("closing a window's two tabs at once keeps one while the first one's page asks to stay", async () => {
+  test("refuses a close the page asks to confirm, without holding other closes", async () => {
     const first = tabOf(
       await harness.ok(session, "tab_open", { url: fixtures.url("/before-unload") }),
     );
@@ -60,29 +60,56 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     );
     const prompt = await firefox.watchPrompt(context);
 
-    const closing = watch(harness.ok(session, "tab_close", { tabId: first.id }));
-    const refusing = watch(harness.refused(session, "tab_close", { tabId: second.id }));
-    const closes = Promise.allSettled([closing.call, refusing.call]);
+    const closing = watch(harness.refused(session, "tab_close", { tabId: first.id }));
 
     try {
       assert.equal(await prompt.opened(), "beforeunload");
     } catch (error: unknown) {
-      // tab_close reads the tab before it queues the close, so the second may have queued first.
-      throw new Error(
-        `${String(error)}; tab_close on the first tab is ${closing.state()}, on the second ${refusing.state()}`,
-        { cause: error },
-      );
+      throw new Error(`${String(error)}; tab_close on the first tab is ${closing.state()}`, {
+        cause: error,
+      });
     }
+
+    // Answered while the prompt is open: the first close does not hold the second.
+    assert.match(
+      await harness.refused(session, "tab_close", { tabId: second.id }),
+      /is the last tab in its window/,
+    );
+    assert.equal(closing.state(), "pending");
+    assert.match(await closing.call, /asked the user to confirm leaving it/);
+    // Asked again while its prompt is open, Firefox would close the tab without the user's answer.
+    assert.match(
+      await harness.refused(session, "tab_close", { tabId: first.id }),
+      /asked the user to confirm leaving it/,
+    );
 
     const shown = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
     assert.ok(shown.includes(first.id), `tabs_list lists ${JSON.stringify(shown)}`);
 
-    await prompt.answer(true);
+    // Another session's close and session end, still while the prompt is open.
+    const other = await harness.connect();
+    const page = tabOf(await harness.ok(other, "tab_open", { url: fixtures.url("/b") }));
+    const blank = tabOf(await harness.ok(other, "tab_open"));
+    const left = tabsOf(await harness.ok(other, "tab_close", { tabId: page.id }));
+    assert.deepEqual(
+      left.map((tab) => tab.id),
+      [blank.id],
+    );
+    await other.close();
+    await pollUntil(
+      async () => {
+        const text = await harness.refused(session, "navigate", {
+          tabId: blank.id,
+          action: "reload",
+        });
+        if (text.includes("does not exist")) return true;
+        throw new Error(text);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${blank.id} to close with its session`,
+    );
 
-    const [closed, refusal] = await closes;
-    if (closed.status === "rejected") assert.fail(String(closed.reason));
-    if (refusal.status === "rejected") assert.fail(String(refusal.reason));
-    assert.match(refusal.value, /is the last tab in its window/);
+    await prompt.answer(true);
 
     await pollUntil(
       async () => {
@@ -93,6 +120,53 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
       PAGE_TIMEOUT_MS,
       `tabs_list to list only tab ${second.id}`,
     );
+  });
+
+  test("closing a window's two tabs at once without a prompt closes one and keeps the other", async () => {
+    const c = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
+    const d = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    for (const tab of tabsOf(await harness.ok(session, "tabs_list"))) {
+      if (tab.id !== c.id && tab.id !== d.id) {
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+      }
+    }
+
+    const results = await Promise.all([
+      harness.call(session, "tab_close", { tabId: c.id }),
+      harness.call(session, "tab_close", { tabId: d.id }),
+    ]);
+    const refusals = results.filter((result) => result.isError);
+    assert.equal(refusals.length, 1, JSON.stringify(results));
+    assert.match(refusals[0]?.text ?? "", /is the last tab in its window/);
+
+    const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    assert.equal(ids.length, 1, `tabs_list lists ${JSON.stringify(ids)}`);
+    assert.ok(ids[0] === c.id || ids[0] === d.id, `tabs_list lists ${JSON.stringify(ids)}`);
+  });
+
+  // Last: Foxhand counts a tab the user kept as still being removed, so it refuses to close the
+  // other tabs of its window from then on.
+  test("refuses a close when the user chooses to stay on the page", async () => {
+    const kept = tabOf(
+      await harness.ok(session, "tab_open", { url: fixtures.url("/before-unload") }),
+    );
+    const context = await firefox.waitForContext(
+      (candidate) => candidate.url === fixtures.url("/before-unload"),
+      PAGE_TIMEOUT_MS,
+    );
+    const prompt = await firefox.watchPrompt(context);
+
+    const closing = watch(harness.refused(session, "tab_close", { tabId: kept.id }));
+    try {
+      assert.equal(await prompt.opened(), "beforeunload");
+    } catch (error: unknown) {
+      throw new Error(`${String(error)}; tab_close is ${closing.state()}`, { cause: error });
+    }
+    await prompt.answer(false);
+
+    assert.match(await closing.call, /the user chose to stay/);
+    const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    assert.ok(ids.includes(kept.id), `tabs_list lists ${JSON.stringify(ids)}`);
   });
 });
 
