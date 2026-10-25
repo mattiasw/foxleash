@@ -1883,6 +1883,19 @@ describe("listing", () => {
     assert.deepEqual(texts(listing(tree), "FAIL"), [missingCookies]);
   });
 
+  test("the Permissions section, each version's notes to reviewers, holds at most 3000 characters", () => {
+    const body = (text: string) =>
+      text.slice(text.indexOf("Why Foxhand"), text.indexOf("\n\n## Data collection and handling"));
+    const last = "- <all_urls>: works on any approved site.";
+    // One character, two UTF-16 code units.
+    const padded = (length: number) => (text: string) =>
+      text.replace(last, `${last} ${"🦊".repeat(length - [...body(text)].length - 1)}`);
+    assertClean(listing(withListing(firstReleaseTree(), padded(3000))));
+    assert.deepEqual(texts(listing(withListing(firstReleaseTree(), padded(3001))), "FAIL"), [
+      "the Permissions section of docs/amo/listing.md is 3001 characters, but AMO takes at most 3000 as a version's notes to reviewers: shorten it",
+    ]);
+  });
+
   test("a bullet outside the Permissions section explains no permission", () => {
     const tree = withListing(
       withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] }),

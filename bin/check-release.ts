@@ -108,6 +108,7 @@ const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxhand limits what a fooled agent can do:";
 const PERMISSIONS_HEADING = "## Permissions";
+const APPROVAL_NOTES_MAX = 3000;
 const DATA_HEADING = "## Data collection and handling";
 const PERMISSION_KEYS = [
   "permissions",
@@ -348,6 +349,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   if (listing !== undefined && manifest !== undefined) {
     checkPermissionsExplained(listing, manifest, findings);
   }
+  if (listing !== undefined) checkApprovalNotesLength(listing, findings);
   checkListingDrift(env, tag, manifest, findings);
 }
 
@@ -692,6 +694,26 @@ function sectionLines(
     section.push({ line: start + offset + 2, text });
   }
   return section;
+}
+
+/** The Permissions body is each version's approval_notes, which AMO caps in characters. */
+function checkApprovalNotesLength(listing: string, findings: Finding[]): void {
+  // A missing section is already a FAIL of checkPermissionsExplained.
+  const section = sectionLines(listing.split(/\r?\n/), PERMISSIONS_HEADING, []);
+  if (section === undefined) return;
+  const length = [
+    ...section
+      .map((line) => line.text)
+      .join("\n")
+      .trim(),
+  ].length;
+  if (length > APPROVAL_NOTES_MAX) {
+    findings.push(
+      fail(
+        `the Permissions section of ${LISTING} is ${length} characters, but AMO takes at most ${APPROVAL_NOTES_MAX} as a version's notes to reviewers: shorten it`,
+      ),
+    );
+  }
 }
 
 function checkListingDrift(
