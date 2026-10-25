@@ -144,7 +144,7 @@
         },
         {
           "file": "apps/extension/src/read-page.ts",
-          "contains": "!isProtected(element, page) ? [element.value]"
+          "contains": "BUTTON_INPUTS.has(element.type) &&\n      !isProtected(element, page) &&"
         },
         {
           "file": "apps/extension/src/read-page.ts",
