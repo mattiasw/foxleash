@@ -998,7 +998,11 @@ export function checkArtifacts(env: Env, version: string, unsigned: string | und
       signedHash !== undefined &&
       unsignedHash !== signedHash
     ) {
-      findings.push(fail(`${name} differs between the unsigned and the signed XPI`));
+      if (name === "manifest.json" && sameJson(unsignedBytes.get(name), signedBytes.get(name))) {
+        findings.push(info(`${name} differs only in its JSON formatting`));
+      } else {
+        findings.push(fail(`${name} differs between the unsigned and the signed XPI`));
+      }
     }
   }
 
@@ -1013,6 +1017,16 @@ export function checkArtifacts(env: Env, version: string, unsigned: string | und
     });
   }
   return findings;
+}
+
+/** AMO's signed manifest.json can lose its final newline; Firefox reads only the parsed JSON. */
+function sameJson(a: Buffer | undefined, b: Buffer | undefined): boolean {
+  if (a === undefined || b === undefined) return false;
+  try {
+    return isDeepStrictEqual(JSON.parse(a.toString("utf8")), JSON.parse(b.toString("utf8")));
+  } catch {
+    return false;
+  }
 }
 
 /** Runs one check; an exception becomes a FAIL naming the check, and the caller carries on. */

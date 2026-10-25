@@ -2759,6 +2759,19 @@ describe("artifacts", () => {
     });
   }
 
+  test("passes a signed manifest.json that differs only in its JSON formatting", () => {
+    const manifest = PAYLOAD["manifest.json"] ?? "";
+    const findings = checkArtifacts(
+      realEnv(release(PAYLOAD, { ...PAYLOAD, ...SIGNATURE, "manifest.json": manifest.trimEnd() })),
+      "1.0.0",
+      undefined,
+    );
+    assertClean(findings);
+    assert.ok(
+      texts(findings, "INFO").includes("manifest.json differs only in its JSON formatting"),
+    );
+  });
+
   const deviations: [string, Record<string, string>, Record<string, string>, RegExp][] = [
     [
       "a missing mozilla.rsa",
@@ -2789,6 +2802,16 @@ describe("artifacts", () => {
       PAYLOAD,
       { ...PAYLOAD, ...SIGNATURE, "meta-inf/x": "x" },
       /^meta-inf\/x is in the signed XPI but not in the unsigned one$/,
+    ],
+    [
+      "a manifest with other content",
+      PAYLOAD,
+      {
+        ...PAYLOAD,
+        ...SIGNATURE,
+        "manifest.json": json({ manifest_version: 3, version: "1.0.0", permissions: ["tabs"] }),
+      },
+      /^manifest\.json differs between the unsigned and the signed XPI$/,
     ],
     [
       "another manifest version",

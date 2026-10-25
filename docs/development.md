@@ -190,7 +190,9 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   that version.
 - `artifacts <version> [--unsigned <path>]`: the signed XPI in `web-ext-artifacts/` holds the
   signature files and exactly the files of the unsigned XPI (default
-  `artifacts/foxhand-<version>.xpi`), byte for byte, and its manifest has `<version>`.
+  `artifacts/foxhand-<version>.xpi`), byte for byte except `manifest.json`, which may differ
+  only in its JSON formatting (AMO's signed copy drops the final newline), and its manifest
+  has `<version>`.
 
 The version fields are the root and workspace `package.json` files and `package-lock.json`.
 The extension's built manifest takes its version from `apps/extension/package.json`; the
