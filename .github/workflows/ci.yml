@@ -25,6 +25,7 @@ jobs:
       - run: npm ci
       - run: npm run lint
       - run: npm run check:release -- changelog
+      - run: npm run check:release -- listing
       - name: Test integrity
         run: npm run check:test-integrity
         env:
