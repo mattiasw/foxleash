@@ -585,6 +585,27 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     ]);
   });
 
+  test("drag lets the page start the drag before the end gets its events", async () => {
+    const page = await open("/act-sortable", TITLES.actSortable);
+    const ref = refOf(page.tree, 'listitem "Item 1"');
+    const targetRef = refOf(page.tree, 'listitem "Item 3"');
+    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+      ref,
+      targetRef,
+      mode: "html5",
+      dropped: true,
+    });
+    assert.deepEqual(await evaluate(page, "window.order()"), [
+      "Item 2",
+      "Item 3",
+      "Item 1",
+      "Item 4",
+      "Item 5",
+      "Item 6",
+    ]);
+    assert.deepEqual(await evaluate(page, "window.log"), ["started", "dropped"]);
+  });
+
   test("drag to a point does not scroll to its start, which must be in view", async () => {
     const page = await open("/act-drag", TITLES.actDrag);
     const ref = refOf(page.tree, 'button "Far item"');

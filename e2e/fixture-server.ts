@@ -44,6 +44,7 @@ export const TITLES = {
   actModal: "Fixture act modal",
   actBodyScroll: "Fixture act body scroll",
   actDrag: "Fixture act drag",
+  actSortable: "Fixture act sortable",
   actBase: "Fixture act base",
   actEmbed: "Fixture act embed",
   input: "Fixture input",
@@ -571,6 +572,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, ACT_BODY_SCROLL_PAGE);
     } else if (path === "/act-drag") {
       sendHtml(response, ACT_DRAG_PAGE);
+    } else if (path === "/act-sortable") {
+      sendHtml(response, ACT_SORTABLE_PAGE);
     } else if (path === "/act-base") {
       // Relative links resolve against the other site.
       sendHtml(response, actBasePage(request.socket.localPort ?? 0));
@@ -2654,6 +2657,75 @@ for (const id of ["accept", "refuse"]) {
       if (type === "drop") window.dropped = event.dataTransfer.getData("text/plain");
     });
   }
+}
+</script>
+</body></html>
+`;
+
+// A list that reorders by HTML drag and drop as SortableJS does in Firefox: pressing an item makes
+// it draggable, dragstart starts the drag only in a later task, which also shrinks the dragged
+// item as a ghost class can, a drop or dragend before then cancels it, and once started a dragover
+// whose point lies on another item moves the dragged item into that item's place. window.order()
+// gives the items' order, window.log what the drag did.
+const ACT_SORTABLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.actSortable}</title>
+<style>
+body { margin: 0; font: 14px sans-serif; }
+#list { width: 200px; margin: 10px; }
+#list > div { height: 30px; border: 1px solid #ccc; }
+#list > .ghost { height: 6px; overflow: hidden; }
+</style></head>
+<body>
+<div id="list" role="list">
+<div role="listitem" aria-label="Item 1">Item 1</div>
+<div role="listitem" aria-label="Item 2">Item 2</div>
+<div role="listitem" aria-label="Item 3">Item 3</div>
+<div role="listitem" aria-label="Item 4">Item 4</div>
+<div role="listitem" aria-label="Item 5">Item 5</div>
+<div role="listitem" aria-label="Item 6">Item 6</div>
+</div>
+<script>
+const list = document.getElementById("list");
+window.log = [];
+window.order = () => Array.from(list.children, (item) => item.textContent);
+let dragged = null;
+let started = false;
+let pending = 0;
+list.addEventListener("pointerdown", (event) => {
+  dragged = event.target.closest('[role="listitem"]');
+  if (dragged !== null) dragged.draggable = true;
+});
+list.addEventListener("dragstart", () => {
+  pending = setTimeout(() => {
+    started = true;
+    dragged.classList.add("ghost");
+    window.log.push("started");
+  }, 0);
+});
+list.addEventListener("dragenter", (event) => event.preventDefault());
+list.addEventListener("dragover", (event) => {
+  event.preventDefault();
+  const over = event.target.closest('[role="listitem"]');
+  if (!started || over === null || over === dragged) return;
+  const box = over.getBoundingClientRect();
+  if (event.clientY < box.top || event.clientY > box.bottom) return;
+  const items = Array.from(list.children);
+  if (items.indexOf(dragged) < items.indexOf(over)) over.after(dragged);
+  else over.before(dragged);
+});
+document.addEventListener("drop", (event) => {
+  event.preventDefault();
+  end("dropped");
+});
+document.addEventListener("dragend", () => end("ended"));
+function end(how) {
+  if (dragged === null) return;
+  clearTimeout(pending);
+  dragged.draggable = false;
+  dragged.classList.remove("ghost");
+  window.log.push(started ? how : "cancelled");
+  dragged = null;
+  started = false;
 }
 </script>
 </body></html>

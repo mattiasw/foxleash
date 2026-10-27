@@ -12,6 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The agent is told that each newline in the text it types into an editable area, such as an
   email body, starts a new line, and to end an email's text with a newline, so a blank line
   stays between the text and the signature.
+- The agent is told that a drag's drop being accepted does not show that the page changed, and
+  to read the page afterwards to check.
 
 ### Fixed
 
@@ -22,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `screenshot` works on pages where another add-on, such as a password manager, shows a frame
   of its own, for example its menu in a login field. That frame and the other frames of the
   same page or frame show blank in the screenshot.
+- `drag` moves items in sortable lists built with libraries such as SortableJS. Before, such a
+  list stayed as it was although `drag` reported a drop.
 
 ## [0.1.0] - 2026-10-25
 

@@ -1,6 +1,6 @@
 # 0014: click, hover, scroll and drag send full synthetic pointer sequences from the content script
 
-**Status:** Accepted, 2026-10-20. Its rule that only http and https destinations are checked is superseded by [0018](0018-click-and-enter-refuse-destinations-outside-the-web.md), 2026-10-23.
+**Status:** Accepted, 2026-10-20. Its rule that only http and https destinations are checked is superseded by [0018](0018-click-and-enter-refuse-destinations-outside-the-web.md), 2026-10-23. Its HTML drag-and-drop sequence is superseded by [0032](0032-html-drag-sends-the-ends-events-in-a-later-task.md), 2026-10-27.
 
 ## Context
 

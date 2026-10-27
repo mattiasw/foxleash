@@ -23,6 +23,7 @@ import {
   visiblePoint,
   wheelScrolls,
 } from "./page-actions.ts";
+import { wait } from "./page-input-dom.ts";
 import { PageError } from "./page-messages.ts";
 import { focusedElement, isEditingHost } from "./read-page.ts";
 
@@ -64,6 +65,9 @@ const XLINK = "http://www.w3.org/1999/xlink";
 const FRAMES: ReadonlySet<string> = new Set(["iframe", "frame", "object", "embed"]);
 // HTML's rules for parsing integers: a tabindex Firefox ignores does not make a click focus.
 const TABINDEX = /^[\t\n\f\r ]*[-+]?[0-9]/;
+// Pages finish starting a drag in a later task (SortableJS: a setTimeout 0 after dragstart), as a
+// real drag's first dragover comes with a later mouse move.
+const DRAG_START_MS = 20;
 const LEFT = 0;
 const RIGHT = 2;
 
@@ -110,9 +114,10 @@ export function scroll(options: ScrollOptions, page: ActionPage): Result<"scroll
 
 /**
  * drag in the page: presses at the start, then emulates HTML drag and drop from a draggable
- * element, else moves the pointer to the end and releases it there.
+ * element, sending the end's events in a later task than dragstart, else moves the pointer to
+ * the end and releases it there.
  */
-export function drag(options: DragOptions, page: ActionPage): Result<"drag"> {
+export async function drag(options: DragOptions, page: ActionPage): Promise<Result<"drag">> {
   // Scrolling to the start would move an end given as a point of the tab as it shows now.
   const start = locate(
     options.ref === undefined ? { x: options.x, y: options.y } : { ref: options.ref },
@@ -129,14 +134,16 @@ export function drag(options: DragOptions, page: ActionPage): Result<"drag"> {
     ),
   );
   const refs = { ref: page.refs.refFor(start.hit), targetRef: page.refs.refFor(end.hit) };
+  const endBox = end.hit.getBoundingClientRect();
   moveTo(start.hit, start.point, page.pointer, 0);
   const mouse = sendPointer(start.hit, "pointerdown", pointerInit(start.point, LEFT, 1));
   const pressed = mouse && sendMouse(start.hit, "mousedown", mouseInit(start.point, LEFT, 1, 1));
   const source = pressed ? draggableFrom(start.hit) : undefined;
   if (source !== undefined) {
     moveTo(start.hit, start.point, page.pointer, 1);
-    const dropped = dragAndDrop(source, start, end);
-    if (dropped !== undefined) {
+    const transfer = startDrag(source, start);
+    if (transfer !== undefined) {
+      const dropped = await dropOnEnd(source, start, end, endBox, transfer);
       page.pointer.over = new WeakRef(end.hit);
       return { ...refs, mode: "html5", dropped };
     }
@@ -532,10 +539,10 @@ function draggableFrom(hit: Element): HTMLElement | undefined {
 }
 
 /**
- * HTML drag and drop from `source` at the start to the end: whether the end accepted the drop,
- * or undefined when no drag starts: the page cancelled dragstart, or broke its DataTransfer.
+ * Starts HTML drag and drop from `source` at the start: the drag's DataTransfer, or undefined
+ * when no drag starts: the page cancelled dragstart, or broke its DataTransfer.
  */
-function dragAndDrop(source: HTMLElement, start: Located, end: Located): boolean | undefined {
+function startDrag(source: HTMLElement, start: Located): DataTransfer | undefined {
   const transfer = pageTransfer();
   if (transfer === undefined || !sendDrag(source, "dragstart", start.point, transfer)) {
     return undefined;
@@ -545,12 +552,7 @@ function dragAndDrop(source: HTMLElement, start: Located, end: Located): boolean
     ...pointerInit(start.point, -1, 0),
     cancelable: false,
   });
-  sendDrag(source, "drag", start.point, transfer);
-  sendDrag(end.hit, "dragenter", end.point, transfer);
-  const accepted = !sendDrag(end.hit, "dragover", end.point, transfer);
-  sendDrag(end.hit, accepted ? "drop" : "dragleave", end.point, transfer);
-  sendDrag(source, "dragend", start.point, transfer);
-  return accepted;
+  return transfer;
 }
 
 /** A DataTransfer of the page's realm, unless the page replaced the constructor with a throwing one. */
@@ -561,6 +563,37 @@ function pageTransfer(): DataTransfer | undefined {
   } catch {
     return undefined;
   }
+}
+
+/**
+ * The rest of a started drag, after a pause in which the page can start it: drag, then the end's
+ * events. Whether the end accepted the drop.
+ */
+async function dropOnEnd(
+  source: HTMLElement,
+  start: Located,
+  end: Located,
+  endBox: DOMRect,
+  transfer: DataTransfer,
+): Promise<boolean> {
+  await wait(DRAG_START_MS);
+  const point = movedPoint(end, endBox);
+  sendDrag(source, "drag", start.point, transfer);
+  sendDrag(end.hit, "dragenter", point, transfer);
+  const accepted = !sendDrag(end.hit, "dragover", point, transfer);
+  sendDrag(end.hit, accepted ? "drop" : "dragleave", point, transfer);
+  sendDrag(source, "dragend", start.point, transfer);
+  return accepted;
+}
+
+/**
+ * The end's point moved as far as its element moved from `before`, so the events stay on it when
+ * the page changed its layout; the point as located when the element has no box left.
+ */
+function movedPoint(end: Located, before: DOMRect): Point {
+  if (end.hit.getClientRects().length === 0) return end.point;
+  const after = end.hit.getBoundingClientRect();
+  return { x: end.point.x + after.left - before.left, y: end.point.y + after.top - before.top };
 }
 
 /** Scrolls the element into view, unless all of it is in view already. */

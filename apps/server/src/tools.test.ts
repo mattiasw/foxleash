@@ -231,7 +231,9 @@ describe("tools", () => {
       drag: {
         properties: ["tabId", "ref", "x", "y", "targetRef", "targetX", "targetY"],
         words: [
-          "dragstart, pointercancel, drag, dragenter and dragover",
+          "dragstart and pointercancel, then, after a pause in which the page can start the drag",
+          "drag on the start element and dragenter and dragover on the end",
+          "dropped does not show that the page changed, so read the page afterwards",
           "when the page cancels dragstart, it moves the pointer to the end in 5 steps",
           "drag never asks",
         ],
