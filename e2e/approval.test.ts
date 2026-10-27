@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
@@ -287,6 +288,43 @@ describe("the approval prompt, in real Firefox", () => {
     assert.equal(site.hits("/a"), hits);
     assert.deepEqual(tabsOf(await harness.ok(session, "tabs_list")), []);
     await session.close();
+  });
+
+  test("an approval prompt's tab Firefox unloaded comes back with only its page in its history", async () => {
+    const session = await connected();
+    try {
+      // The query only makes the URL unique.
+      const url = site.url("/a?prompt-unloaded");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url }));
+      const prompt = await harness.promptContext(existing);
+      await harness.waitForArmed(prompt);
+      await firefox.click(prompt, ANSWER.once);
+      const opened = tabOf(await opening);
+      assert.equal(opened.url, url);
+      assert.equal(opened.active, true);
+      assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+      // Firefox does not unload the selected tab.
+      await harness.ok(session, "tab_open", { url: site.url("/b") });
+      await firefox.discardTab(url);
+      await harness.ok(session, "tab_select", { tabId: opened.id });
+      await pollUntil(
+        async () => {
+          const history = await firefox.sessionHistory(url);
+          if (history.entries[history.index - 1] !== url) {
+            throw new Error(`the history is ${JSON.stringify(history)}`);
+          }
+          return history;
+        },
+        5000,
+        `${url} as the current entry`,
+      );
+      // Read again as late as the stray about:blank entry was seen: 1.5 s after the select.
+      await sleep(1500);
+      assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+    } finally {
+      await session.close();
+    }
   });
 
   async function connected(): Promise<Session> {

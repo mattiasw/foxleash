@@ -1,10 +1,4 @@
-import type {
-  BrowserApi,
-  NavigationDetails,
-  Tab,
-  TabUpdatedListener,
-  Timers,
-} from "./browser-api.ts";
+import type { BrowserApi, Tab, TabUpdatedListener, Timers } from "./browser-api.ts";
 
 /** How long a navigation may take to start loading before the tab counts as loaded. */
 export const LOAD_GRACE_MS = 1000;
@@ -102,59 +96,4 @@ export function waitForLoad<Handle>(
       if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
     }
   });
-}
-
-/** How long tab_open waits for a new tab's own about:blank load to commit (measured: < 0.1 s). */
-export const BLANK_COMMIT_TIMEOUT_MS = 1000;
-
-/** What `watchBlankCommits` returns. */
-export interface BlankCommits {
-  /**
-   * Resolves once the tab's top frame has committed about:blank, or after `timeoutMs`. One call
-   * per watcher.
-   */
-  committed(tabId: number, timeoutMs?: number): Promise<void>;
-  /** Removes the listener and settles a `committed` call still pending, clearing its timer. */
-  stop(): void;
-}
-
-/**
- * Notes every tab whose top frame commits about:blank, from now until `stop`. Firefox loads
- * about:blank into a tab that `tabs.create` opens on it, and a load started in the tab before that
- * load commits can see it commit after its own page, which leaves an about:blank history entry
- * after the page as the current one. The tab's `status: complete` comes before that commit.
- */
-export function watchBlankCommits<Handle>(
-  browser: BrowserApi,
-  timers: Timers<Handle>,
-): BlankCommits {
-  const committedTabs = new Set<number>();
-  let pending: { tabId: number; timer: Handle; resolve: () => void } | undefined;
-
-  const listener = (details: NavigationDetails) => {
-    if (details.frameId !== 0 || details.url !== "about:blank") return;
-    committedTabs.add(details.tabId);
-    if (pending?.tabId === details.tabId) settle();
-  };
-  browser.webNavigation.onCommitted.addListener(listener);
-
-  return {
-    committed: (tabId, timeoutMs = BLANK_COMMIT_TIMEOUT_MS) => {
-      if (committedTabs.has(tabId)) return Promise.resolve();
-      const { promise, resolve } = Promise.withResolvers<void>();
-      pending = { tabId, timer: timers.setTimeout(settle, timeoutMs), resolve };
-      return promise;
-    },
-    stop: () => {
-      browser.webNavigation.onCommitted.removeListener(listener);
-      settle();
-    },
-  };
-
-  function settle(): void {
-    if (pending === undefined) return;
-    timers.clearTimeout(pending.timer);
-    pending.resolve();
-    pending = undefined;
-  }
 }

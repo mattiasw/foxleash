@@ -324,8 +324,9 @@ describe("ask", () => {
   it("loads a prompt page into the tab, brings it to the front and draws attention", async () => {
     const { fake, access, tab, ask } = setup();
     fake.openTab({ active: true });
-    const { answer, promptUrl } = await ask();
+    const { approval, answer, promptUrl } = await ask();
     assert.match(promptUrl, PROMPT_URL);
+    assert.equal(approval.promptInTab, true);
     assert.deepEqual(fake.tabUpdates, [{ tabId: tab.id, url: promptUrl, active: true }]);
     assert.equal(fake.tabs.get(tab.id)?.active, true);
     assert.deepEqual(fake.windowUpdates, [{ windowId: 1, drawAttention: true }]);
@@ -345,6 +346,95 @@ describe("ask", () => {
     const first = await ask("s1");
     const second = await ask("s2", "https://a.example/page", other.id);
     assert.notEqual(first.promptUrl, second.promptUrl);
+  });
+
+  it("makes a new prompt URL for a tab to be created on, recording nothing", () => {
+    const { fake, access } = setup();
+    const first = access.newPromptUrl();
+    const second = access.newPromptUrl();
+    assert.match(first, PROMPT_URL);
+    assert.ok(first.startsWith(`${fake.browser.runtime.getURL("approve.html")}?id=`));
+    assert.match(second, PROMPT_URL);
+    assert.notEqual(first, second);
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual(fake.tabUpdates, []);
+  });
+
+  it("loads the prompt in place of the entry of a tab created unloaded on its URL", async () => {
+    const { fake, access } = setup();
+    const promptUrl = access.newPromptUrl();
+    const created = await fake.browser.tabs.create({
+      url: promptUrl,
+      active: false,
+      discarded: true,
+    });
+    const approval = await access.ask("s1", "https://a.example/page", created.id, promptUrl);
+    assert.equal(approval.promptInTab, true);
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: created.id, url: promptUrl, active: true, loadReplace: true },
+    ]);
+    const tab = fake.tabs.get(created.id);
+    assert.equal(tab?.active, true);
+    assert.equal(tab?.discarded, false);
+    assert.deepEqual(tab?.history, [promptUrl]);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: 1, drawAttention: true }]);
+    assert.deepEqual(access.openPrompt("s1"), {
+      tabId: created.id,
+      site: "https://a.example",
+      url: "https://a.example/page",
+      waiting: true,
+    });
+    const answer = track(approval.answer);
+    const page = connect(fake, created.id, promptUrl);
+    page.deliver({ type: "ready" });
+    assert.deepEqual(page.posted, [
+      { type: "prompt", site: "https://a.example", url: "https://a.example/page" },
+    ]);
+    page.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("ends a page that connected from the prompt URL before the prompt, and attaches it after", async () => {
+    const { fake, access } = setup();
+    const promptUrl = access.newPromptUrl();
+    const created = await fake.browser.tabs.create({
+      url: promptUrl,
+      active: false,
+      discarded: true,
+    });
+    const early = connect(fake, created.id, promptUrl);
+    assert.deepEqual(early.posted, [{ type: "ended" }]);
+    assert.equal(early.disconnected, true);
+    await access.ask("s1", "https://a.example/page", created.id, promptUrl);
+    const reloaded = connect(fake, created.id, promptUrl);
+    reloaded.deliver({ type: "ready" });
+    assert.deepEqual(reloaded.posted, [
+      { type: "prompt", site: "https://a.example", url: "https://a.example/page" },
+    ]);
+    assert.equal(reloaded.disconnected, false);
+  });
+
+  it("shows one prompt of two parallel requests on tabs created unloaded on their prompts", async () => {
+    const { fake, access } = setup();
+    const urls = [access.newPromptUrl(), access.newPromptUrl()];
+    const [first, second] = await Promise.all(
+      urls.map((url) => fake.browser.tabs.create({ url, active: false, discarded: true })),
+    );
+    assert.ok(first && second);
+    const results = await Promise.allSettled([
+      access.ask("s1", "https://a.example/", first.id, urls[0]),
+      access.ask("s1", "https://b.example/", second.id, urls[1]),
+    ]);
+    assert.equal(results[0].status, "fulfilled");
+    assert.ok(results[1].status === "rejected");
+    assert.ok(results[1].reason instanceof ToolError);
+    assert.equal(results[1].reason.code, "approval_pending");
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: first.id, url: urls[0], active: true, loadReplace: true },
+    ]);
+    assert.equal(fake.tabs.get(second.id)?.discarded, true);
+    assert.equal(access.openPrompt("s1")?.tabId, first.id);
   });
 
   it("reports the prompt shown once it asked Firefox to draw attention", async () => {
@@ -418,6 +508,7 @@ describe("ask", () => {
     await grantSite(fake.browser, "https://a.example");
     const approval = await access.ask("s1", "https://a.example/", tab.id);
     await approval.answer;
+    assert.equal(approval.promptInTab, false);
     assert.deepEqual(fake.tabUpdates, []);
     assert.equal(access.openPrompt("s1"), undefined);
   });
@@ -801,6 +892,7 @@ describe("waiting for the answer", () => {
     const updates = fake.tabUpdates.length;
     fake.windowUpdates.length = 0;
     const joined = await ask("s1", "https://a.example/other", other.id);
+    assert.equal(joined.approval.promptInTab, false);
     assert.equal(fake.tabUpdates.length, updates);
     assert.equal(fake.tabs.get(tab.id)?.active, true);
     assert.deepEqual(fake.windowUpdates, [{ windowId: 1, drawAttention: true }]);
@@ -822,6 +914,7 @@ describe("waiting for the answer", () => {
     const page = connect(fake, tab.id);
     timers.advance(APPROVAL_WAIT_MS);
     const joined = await ask("s1", "https://a.example/page");
+    assert.equal(joined.approval.promptInTab, true);
     page.deliver({ type: "answer", answer: "no" });
     await flush();
     assertRejected(joined.answer, "site_refused");
@@ -853,6 +946,7 @@ describe("waiting for the answer", () => {
     const elsewhere = await ask("s1", "https://a.example/page", other.id);
     await flush();
     assert.equal(elsewhere.answer.state, "resolved");
+    assert.equal(elsewhere.approval.promptInTab, false);
   });
 
   it("refuses another site, or a second waiting request, on the prompt's tab", async () => {

@@ -69,7 +69,7 @@ import {
 } from "./site-access.ts";
 import type { Uploads } from "./uploads.ts";
 import { waitForNavigation, waitForPage } from "./wait-for.ts";
-import { waitForLoad, watchBlankCommits } from "./wait-for-load.ts";
+import { waitForLoad } from "./wait-for-load.ts";
 
 /** A failure the caller should see: `code` is a protocol token, `message` one plain sentence. */
 export class ToolError extends Error {
@@ -241,38 +241,16 @@ export function createHandlers<Handle>({
     if (url !== undefined && decision?.decision === "allowed") {
       return { tab: await openOnPage(session, url, group?.windowId) };
     }
-    const blank = url === undefined ? undefined : watchBlankCommits(browser, timers);
-    let tab: Tab;
-    try {
-      // Opened blank and grouped first, so the prompt, and after approval the page, load only in
-      // the session's group.
-      tab = await browser.tabs.create(
-        group === undefined
-          ? { url: "about:blank", active: true }
-          : { url: "about:blank", active: true, windowId: group.windowId },
-      );
-      await groups.ensureGroup(session, tab);
-      // A load started before Firefox's own about:blank load in the tab commits can end up with
-      // that commit after its page in the tab's history.
-      await blank?.committed(tab.id);
-    } finally {
-      blank?.stop();
-    }
-    if (url === undefined) {
-      const current = await browser.tabs.get(tab.id);
-      const view = await access.view(session);
-      return { tab: view.tabInfo(current) };
-    }
-    let approval: Approval;
-    try {
-      approval = await access.ask(session, url, tab.id);
-    } catch (error) {
-      // Nothing was shown in the tab, so it would only be left blank.
-      await removeNewTab(tab.id);
-      throw error;
-    }
-    await approval.answer;
-    return { tab: await loadAfterAnswer(session, tab.id, url, { kind: "url", url }) };
+    if (url !== undefined) return { tab: await openOnPrompt(session, url, group?.windowId) };
+    const tab = await browser.tabs.create(
+      group === undefined
+        ? { url: "about:blank", active: true }
+        : { url: "about:blank", active: true, windowId: group.windowId },
+    );
+    await groups.ensureGroup(session, tab);
+    const current = await browser.tabs.get(tab.id);
+    const view = await access.view(session);
+    return { tab: view.tabInfo(current) };
   }
 
   /**
@@ -296,7 +274,7 @@ export function createHandlers<Handle>({
       await groups.ensureGroup(session, tab);
     } catch (error) {
       // Selected outside the group, it would load the page there.
-      await removeNewTab(tab.id);
+      await removeNewTab(session, tab.id);
       throw error;
     }
     await waitForLoad(browser, timers, tab.id, url, () =>
@@ -308,11 +286,55 @@ export function createHandlers<Handle>({
   }
 
   /**
-   * Removes a tab tab_open created and gave up on, in turn with other closes, and leaves it when
-   * it is its window's last tab. Never rejects: tab_open reports the error that made it give up.
+   * Created unloaded on its prompt page, as `openOnPage`'s tab is on its page, so Firefox's unload
+   * and restore add no about:blank entry; grouped before the prompt loads. A tab the prompt was
+   * not shown in (its site allowed meanwhile) loads the page and is then selected, as
+   * `openOnPage`'s is.
    */
-  async function removeNewTab(tabId: number): Promise<void> {
-    const closed = await groups.closeTab(tabId, () => {}).catch(() => undefined);
+  async function openOnPrompt(
+    session: string,
+    url: string,
+    windowId: number | undefined,
+  ): Promise<TabInfo> {
+    const promptUrl = access.newPromptUrl();
+    const tab = await browser.tabs.create(
+      windowId === undefined
+        ? { url: promptUrl, active: false, discarded: true }
+        : { url: promptUrl, active: false, discarded: true, windowId },
+    );
+    let approval: Approval;
+    try {
+      await groups.ensureGroup(session, tab);
+      approval = await access.ask(session, url, tab.id, promptUrl);
+    } catch (error) {
+      // Nothing was shown in it; selected outside the group, it would load there.
+      await removeNewTab(session, tab.id);
+      throw error;
+    }
+    let loaded: TabInfo;
+    try {
+      await approval.answer;
+      loaded = await loadAfterAnswer(session, tab.id, url, { kind: "url", url });
+    } catch (error) {
+      // A tab the prompt was never shown in holds nothing the user saw.
+      if (!approval.promptInTab) await removeNewTab(session, tab.id);
+      throw error;
+    }
+    if (approval.promptInTab) return loaded;
+    const selected = await browser.tabs.update(tab.id, { active: true });
+    const view = await access.view(session);
+    return view.tabInfo(selected);
+  }
+
+  /**
+   * Removes a tab tab_open created and gave up on, in turn with other closes, and leaves it when
+   * it is its window's last tab or shows the session's open prompt, which a parallel request may
+   * have shown in it. Never rejects: tab_open reports the error that made it give up.
+   */
+  async function removeNewTab(session: string, tabId: number): Promise<void> {
+    const closed = await groups
+      .closeTab(tabId, () => keepPrompt(session, tabId))
+      .catch(() => undefined);
     if (closed) await closed.removed.catch(() => {});
   }
 
@@ -1006,10 +1028,11 @@ export function createHandlers<Handle>({
     url: string,
     target: NavigationTarget,
   ): Promise<TabInfo> {
+    const view = await access.view(session);
     const group = await groups.groupOf(session);
     const tab = await existingTab(tabId);
+    // No await from here to the load, so the tab cannot leave the group in between.
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
-    const view = await access.view(session);
     const site = siteOf(url);
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;

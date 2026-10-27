@@ -152,6 +152,12 @@ describe("tabs in real Firefox", () => {
     }
   });
 
+  // Firefox 156 gives a tab that started on about:blank an about:blank entry after its page when
+  // it restores it, and no extension API measured avoids it (ADR 0030).
+  test.todo(
+    "a tab_open tab without a url that navigate loaded a page into comes back with only its page in its history",
+  );
+
   test("tab_open loads a page again that the cache holds", async () => {
     const url = fixtures.url("/counter-no-cache");
     const first = tabOf(await harness.ok(session, "tab_open", { url }));

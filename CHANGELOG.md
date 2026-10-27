@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- A tab in which Foxhand asked you to approve a site no longer gets a Forward button that
+  leads to a blank page after Firefox unloads it to save memory and you select it again.
+
 ## [0.1.0] - 2026-10-25
 
 ### Added

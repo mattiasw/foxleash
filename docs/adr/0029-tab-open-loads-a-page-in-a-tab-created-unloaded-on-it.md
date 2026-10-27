@@ -1,6 +1,8 @@
 # 0029: `tab_open` loads a page in a tab created unloaded on it, grouped before it loads
 
-**Status:** Accepted, 2026-10-24.
+**Status:** Accepted, 2026-10-24. Its consequence that the tab for an approval prompt still
+starts on `about:blank` is superseded by
+[0030](0030-approval-prompt-tab-created-unloaded-on-the-prompt.md), 2026-10-27.
 
 ## Context
 

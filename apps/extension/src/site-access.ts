@@ -37,6 +37,11 @@ export type Decision =
 export interface Approval {
   /** Resolves when the site may load; rejects with the answer's ToolError. Never unhandled. */
   answer: Promise<void>;
+  /**
+   * Whether the prompt this approval waits on is shown in the asked tab. False when the site was
+   * allowed meanwhile or the request waits on a prompt in another tab.
+   */
+  promptInTab: boolean;
 }
 
 export interface OpenPrompt {
@@ -69,8 +74,12 @@ export interface SiteAccess {
   /**
    * Asks the user in `tabId` whether the session may load `url`'s site, or joins the session's
    * open prompt for that site. Rejects when it shows nothing; resolves once the prompt is shown.
+   * With `promptUrl` (from `newPromptUrl`), the tab was created unloaded on that URL, and the
+   * prompt is loaded in place of the tab's one history entry.
    */
-  ask(session: string, url: string, tabId: number): Promise<Approval>;
+  ask(session: string, url: string, tabId: number, promptUrl?: string): Promise<Approval>;
+  /** A new, unique URL for a prompt page, for a tab created on it before `ask` shows it there. */
+  newPromptUrl(): string;
   openPrompt(session: string): OpenPrompt | undefined;
   /** The URL the session's answered prompt asked about, while `tab` still shows that prompt. */
   askedUrl(session: string, tab: Tab): string | undefined;
@@ -171,7 +180,17 @@ export function createSiteAccess<Handle>({
     }
   });
 
-  return { view, check, ask, openPrompt, askedUrl, endSession, sessionAnswers, forget };
+  return {
+    view,
+    check,
+    ask,
+    newPromptUrl,
+    openPrompt,
+    askedUrl,
+    endSession,
+    sessionAnswers,
+    forget,
+  };
 
   async function view(session: string): Promise<SiteView> {
     const settings = await readSettings(browser);
@@ -215,7 +234,12 @@ export function createSiteAccess<Handle>({
     return { decision: "ask" };
   }
 
-  async function ask(session: string, url: string, tabId: number): Promise<Approval> {
+  async function ask(
+    session: string,
+    url: string,
+    tabId: number,
+    promptUrl?: string,
+  ): Promise<Approval> {
     const site = webSite(url);
     const current = await view(session);
     // No await from here until the prompt is recorded, so parallel requests see one prompt.
@@ -223,10 +247,10 @@ export function createSiteAccess<Handle>({
     const open = prompts.get(session);
     // Before the approved check: Foxhand must not navigate away from its own live prompt.
     if (open?.tabId === tabId) return join(joinable(open, site), tabId);
-    if (current.allowed(url)) return { answer: Promise.resolve() };
+    if (current.allowed(url)) return { answer: Promise.resolve(), promptInTab: false };
     refuseIfAnswered(session, site);
     if (open !== undefined) return join(joinable(open, site), tabId);
-    return show(session, site, url, tabId);
+    return show(session, site, url, tabId, promptUrl);
   }
 
   function openPrompt(session: string): OpenPrompt | undefined {
@@ -329,7 +353,7 @@ export function createSiteAccess<Handle>({
       const tab = await browser.tabs.get(prompt.tabId);
       await browser.windows.update(tab.windowId, { drawAttention: true });
     } catch {}
-    return { answer };
+    return { answer, promptInTab: prompt.tabId === tabId };
   }
 
   async function show(
@@ -337,13 +361,14 @@ export function createSiteAccess<Handle>({
     site: string,
     url: string,
     tabId: number,
+    promptUrl: string | undefined,
   ): Promise<Approval> {
     const prompt: Prompt<Handle> = {
       session,
       site,
       url,
       tabId,
-      promptUrl: `${browser.runtime.getURL(PROMPT_PAGE)}?id=${crypto.randomUUID()}`,
+      promptUrl: promptUrl ?? newPromptUrl(),
       committed: false,
       port: undefined,
       seen: false,
@@ -354,7 +379,14 @@ export function createSiteAccess<Handle>({
     const answer = wait(prompt, tabId);
     let tab: Tab;
     try {
-      tab = await browser.tabs.update(tabId, { url: prompt.promptUrl, active: true });
+      tab = await browser.tabs.update(
+        tabId,
+        promptUrl === undefined
+          ? { url: prompt.promptUrl, active: true }
+          : // Loaded rather than only selected: a prompt page the user selected before the
+            // prompt was recorded loads again and connects.
+            { url: prompt.promptUrl, active: true, loadReplace: true },
+      );
     } catch (error) {
       if (prompts.get(session) === prompt) {
         prompts.delete(session);
@@ -365,7 +397,11 @@ export function createSiteAccess<Handle>({
     try {
       await browser.windows.update(tab.windowId, { drawAttention: true });
     } catch {}
-    return { answer };
+    return { answer, promptInTab: true };
+  }
+
+  function newPromptUrl(): string {
+    return `${browser.runtime.getURL(PROMPT_PAGE)}?id=${crypto.randomUUID()}`;
   }
 
   function wait(prompt: Prompt<Handle>, tabId: number): Promise<void> {
