@@ -1016,9 +1016,15 @@ function nonEmpty(text: string): string | undefined {
 /**
  * The text inside `start`, as the user sees it unless `withHidden`, cut a little past the
  * longest name. It never reads into a form control. `startState`, when given, is the state of
- * the text directly inside `start`, else it comes from `start`'s own style.
+ * the text directly inside `start`, else it comes from `start`'s own style. Unless
+ * `withLabels` is false, a descendant's `aria-label` stands for its content, as in a name.
  */
-function collectText(start: Element, withHidden: boolean, startState?: TextState): string {
+function collectText(
+  start: Element,
+  withHidden: boolean,
+  startState?: TextState,
+  withLabels = true,
+): string {
   if (start.localName === "select" || CHILDLESS.has(start.localName)) return "";
   const buffer = createTextBuffer();
   let state = startState;
@@ -1064,8 +1070,9 @@ function collectText(start: Element, withHidden: boolean, startState?: TextState
           style.contentVisibility !== "hidden" && (style.display !== "contents" || parentBoxed);
         const visible = style.visibility === "visible" && boxed;
         const shown = withHidden || visible;
-        // As in accname, a descendant's own label or an image's alt stands for its content.
-        const alternative = shown ? alternativeOf(element) : "";
+        // As in accname, a descendant's own label (when `withLabels`) or an image's alt stands
+        // for its content.
+        const alternative = shown ? alternativeOf(element, withLabels) : "";
         if (alternative !== "") {
           buffer.add(` ${alternative} `);
           return false;
@@ -1098,9 +1105,9 @@ function collectText(start: Element, withHidden: boolean, startState?: TextState
   return buffer.text();
 }
 
-/** An element's `aria-label`, or an image's `alt`; empty when it has neither. */
-function alternativeOf(element: Element): string {
-  const label = element.getAttribute("aria-label")?.trim() ?? "";
+/** An element's `aria-label` when `withLabels`, or an image's `alt`; empty when it has neither. */
+function alternativeOf(element: Element, withLabels: boolean): string {
+  const label = withLabels ? (element.getAttribute("aria-label")?.trim() ?? "") : "";
   if (label !== "" || element.localName !== "img") return label;
   return element.getAttribute("alt")?.trim() ?? "";
 }
@@ -1181,8 +1188,9 @@ function headingLevel(element: Element): number {
 }
 
 /**
- * The value a field shows, or that it is protected; undefined for anything else, and no value
- * for a file field or when `state` says the user cannot see the field.
+ * The value a field shows, the text an editable area shows, or that a field is protected;
+ * undefined for anything else, and no value for a file field or when `state` says the user
+ * cannot see the field or area.
  */
 function fieldOf(
   element: Element,
@@ -1210,6 +1218,11 @@ function fieldOf(
           .map((option) => paintedLabel(option))
       : selected.map((option) => option.label || option.text);
     return { value: labels.join(", ") };
+  }
+  if (isEditingHost(element)) {
+    if (state !== undefined && !state.visible) return undefined;
+    // The text the user sees: a descendant's aria-label does not stand for its content.
+    return { value: collectText(element, false, state, false) };
   }
   return undefined;
 }

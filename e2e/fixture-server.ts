@@ -14,6 +14,7 @@ export const TITLES = {
   readLarge: "Fixture read large",
   readRefs: "Fixture read refs",
   readRefHidden: "Fixture read ref hidden",
+  readEditable: "Fixture read editable",
   textMain: "Fixture text main",
   textRoleMain: "Fixture text role main",
   textArticle: "Fixture text article",
@@ -226,6 +227,11 @@ export const READ_HIDDEN = {
   buttonValueContentVisibility: "hidden-button-value-content-visibility-Ct8",
   listBoxSelectedDisplay: "hidden-listbox-selected-display-Du9",
   listBoxSelectedGroup: "hidden-listbox-selected-group-Ev1",
+  editableVisibility: "hidden-editable-visibility-Fs2",
+  editableDisplay: "hidden-editable-display-Gt3",
+  editableContentVisibility: "hidden-editable-content-visibility-Hu4",
+  editableLabel: "hidden-editable-label-Iv5",
+  editablePassword: "hidden-editable-password-Jw6",
 } as const;
 
 /**
@@ -358,6 +364,8 @@ export const READ_OPEN_DETAILS = {
 } as const;
 /** The number of items on the large page, enough for a tree over 50,000 characters. */
 export const READ_LARGE_ITEMS = 2000;
+/** The text of the read-editable page's long editable area, past the 200-character value cut. */
+export const READ_EDITABLE_LONG = "0123456789".repeat(30);
 
 /** Page text the probe page holds, which no probe report may contain. */
 export const PROBE_SECRET = "fixture-secret-7Q2xZ9kL";
@@ -428,6 +436,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, READ_REFS_PAGE);
     } else if (path === "/read-ref-hidden") {
       sendHtml(response, READ_REF_HIDDEN_PAGE);
+    } else if (path === "/read-editable") {
+      sendHtml(response, READ_EDITABLE_PAGE);
     } else if (path === "/text-main") {
       sendHtml(response, TEXT_MAIN_PAGE);
     } else if (path === "/text-role-main") {
@@ -1131,13 +1141,13 @@ const READ_REFS_PAGE = `<!doctype html>
 // plain div, an open details, a slot, a slot showing its fallback, an object without data, an
 // embed without a source, a foreignObject), buttons and options named from their content (one
 // button the test moves into a canvas, an SVG one into defs, an option into a div in its select
-// and one into an hr in its select), fields, fieldsets, a figure and a table whose name sources
-// or values the test changes and hides, button inputs whose value the test changes and hides, ones
-// whose legend, figcaption, caption or label is hidden from the start, a visibility: hidden
-// drop-down and list boxes with a visible option, a list box with hidden selected options, a
-// selected option with a hidden child and a labelled one, drop-downs whose selected option or its
-// child is hidden or whose label attribute is empty, fields with their own content-visibility:
-// hidden, and custom elements with open shadow roots.
+// and one into an hr in its select), fields, editable areas, fieldsets, a figure and a table
+// whose name sources or values the test changes and hides, button inputs whose value the test
+// changes and hides, ones whose legend, figcaption, caption or label is hidden from the start, a
+// visibility: hidden drop-down and list boxes with a visible option, a list box with hidden
+// selected options, a selected option with a hidden child and a labelled one, drop-downs whose
+// selected option or its child is hidden or whose label attribute is empty, fields with their own
+// content-visibility: hidden, and custom elements with open shadow roots.
 const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.readRefHidden}</title>
 <style>
@@ -1230,6 +1240,8 @@ const READ_REF_HIDDEN_PAGE = `<!doctype html>
 <select id="select-value-hidden" aria-label="Hidden value pick"><option id="option-value-hidden">Eleven</option><option>Twelve</option></select>
 <input id="input-password-hidden" type="password" aria-label="Hidden password field">
 <input id="input-value-shown" aria-label="Shown value" value="Start">
+<div id="editable-wrap-hidden"><div id="editable-value-hidden" contenteditable="true" aria-label="Hidden editable">Start</div></div>
+<div id="editable-value-shown" contenteditable="true" aria-label="Shown editable">Start</div>
 <input type="submit" id="input-button-hidden" value="Send hidden">
 <input type="submit" id="input-button-invisible" value="Send invisible">
 <input type="submit" id="input-button-shown" value="Send shown">
@@ -1275,6 +1287,22 @@ for (const [name, html] of [
   });
 }
 </script>
+</body></html>
+`;
+
+// Editable areas: one with an explicit textbox role and its text in blocks, one longer than the
+// value cut, one with hidden and labelled parts, one with content-visibility: hidden, an empty
+// one, one holding an editable element with its own textbox role, and one holding form fields.
+const READ_EDITABLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.readEditable}</title></head>
+<body>
+<div id="message" role="textbox" contenteditable="true" aria-label="Message Body"><div>Hello Ann,</div><div>See you <b>soon</b>.</div></div>
+<div id="long" contenteditable="true" aria-label="Long">${READ_EDITABLE_LONG}</div>
+<div id="partly" contenteditable="true" aria-label="Partly hidden">Shown part <span aria-label="${READ_HIDDEN.editableLabel}">with a label</span><span style="visibility: hidden"> ${READ_HIDDEN.editableVisibility}</span><span style="display: none"> ${READ_HIDDEN.editableDisplay}</span></div>
+<div id="content-hidden" contenteditable="true" aria-label="Content hidden editable" style="content-visibility: hidden">${READ_HIDDEN.editableContentVisibility}</div>
+<div id="empty" contenteditable="true" aria-label="Empty"></div>
+<div id="outer" contenteditable="true" aria-label="Outer">Outer text <span role="textbox" title="Inner">inner text</span></div>
+<div id="fields" contenteditable="true" aria-label="With fields">Note <input aria-label="Inner field" value="Field text"><input type="password" aria-label="Inner password" value="${READ_HIDDEN.editablePassword}"><textarea aria-label="Inner area">Area text</textarea><select aria-label="Inner pick"><option>Pick text</option></select></div>
 </body></html>
 `;
 

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A tab in which Foxhand asked you to approve a site no longer gets a Forward button that
   leads to a blank page after Firefox unloads it to save memory and you select it again.
+- `read_page` shows the text in an editable area, such as an email's message body, as its
+  value, as it does for a text field, also when the agent reads only the interactive elements.
 
 ## [0.1.0] - 2026-10-25
 

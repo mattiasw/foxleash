@@ -5,6 +5,7 @@ import {
   AUTOFILL_CARD,
   AUTOFILL_LOGIN,
   type FixtureServer,
+  READ_EDITABLE_LONG,
   READ_HIDDEN,
   READ_LARGE_ITEMS,
   READ_OPEN_DETAILS,
@@ -188,6 +189,48 @@ describe("read_page in real Firefox", () => {
     const { tree, texts } = await read(tabId);
     assertNoSecrets(texts, [READ_SECRETS.toggled]);
     assertLines(tree, ['    textbox "Toggled password" [*] protected filled']);
+  });
+
+  test("an editable area's line shows the text the user sees in it as its value", async () => {
+    const tabId = await open("/read-editable", TITLES.readEditable);
+    const hidden = [
+      READ_HIDDEN.editableVisibility,
+      READ_HIDDEN.editableDisplay,
+      READ_HIDDEN.editableContentVisibility,
+      READ_HIDDEN.editableLabel,
+      READ_HIDDEN.editablePassword,
+    ];
+    const message = 'textbox "Message Body" [*] value="Hello Ann, See you soon."';
+    const outer = 'textbox "Outer" [*] value="Outer text inner text"';
+    // Only the editing host has a value, not an editable element inside it.
+    const inner = '  textbox "Inner" [*]';
+    const fields = [
+      message,
+      `textbox "Long" [*] value="${READ_EDITABLE_LONG.slice(0, 200)}…"`,
+      'textbox "Partly hidden" [*] value="Shown part with a label"',
+      'textbox "Content hidden editable" [*]',
+      'textbox "Empty" [*]',
+      outer,
+      inner,
+      // A form field's value never becomes part of an editable area's.
+      'textbox "With fields" [*] value="Note"',
+    ];
+    const interactive = await read(tabId, { filter: "interactive" });
+    assertNoSecrets(interactive.texts, hidden);
+    assertLines(interactive.tree, fields);
+    const found = lines(withoutRefs(interactive.tree));
+    assert.equal(found[found.indexOf(outer) + 1], inner, interactive.tree);
+    // Filter all keeps the text lines under an editable area.
+    const all = await read(tabId);
+    assertNoSecrets(all.texts, hidden);
+    assertLines(all.tree, fields);
+    const allFound = lines(withoutRefs(all.tree));
+    const at = allFound.indexOf(message);
+    assert.deepEqual(
+      allFound.slice(at + 1, at + 3),
+      ['  text "Hello Ann,"', '  text "See you soon."'],
+      all.tree,
+    );
   });
 
   test("landmarks nest, with their headings and text", async () => {
@@ -889,6 +932,21 @@ describe("read_page in real Firefox", () => {
           document.getElementById("textarea-value-hidden").style.display = "none";`,
         first: (ref: string) => `textbox "Hidden area" [${ref}]`,
         secret: true,
+      },
+      {
+        id: "editable-Io2",
+        line: 'textbox "Hidden editable"',
+        change: `document.getElementById("editable-value-hidden").textContent = token;
+          document.getElementById("editable-wrap-hidden").style.display = "none";`,
+        first: (ref: string) => `textbox "Hidden editable" [${ref}]`,
+        secret: true,
+      },
+      {
+        id: "shown-editable-Jp3",
+        line: 'textbox "Shown editable"',
+        change: `document.getElementById("editable-value-shown").textContent = token;`,
+        first: (ref: string, token: string) => `textbox "Shown editable" [${ref}] value="${token}"`,
+        secret: false,
       },
       {
         id: "select-Al3",
