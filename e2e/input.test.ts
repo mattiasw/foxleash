@@ -123,6 +123,60 @@ describe("type and press_key in real Firefox", () => {
     );
   });
 
+  test("type makes each newline a line in an editable area, so a newline at the end leaves a blank line above a signature", async () => {
+    // A field first, as in a compose window: the caret leaves the area, so the text goes on
+    // its empty first line.
+    assert.equal((await type(input, 'textbox "Subject"', "Hi")).outcome, "typed");
+    assert.deepEqual(
+      await type(input, 'textbox "Compose lines"', "Hi Ann,\n\nThanks.\n"),
+      typed("exec_command"),
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-signature").textContent'),
+      "-- Signature",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").lastElementChild.id'),
+      "compose-lines-signature",
+    );
+    // A <br> at the end of a block is in the DOM and in innerText but not rendered, so the
+    // blank lines are measured.
+    const gaps = record(
+      await evaluate(
+        input,
+        `(() => {
+          const host = document.getElementById("compose-lines");
+          const signature = document.getElementById("compose-lines-signature").getBoundingClientRect();
+          const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+          const boxes = {};
+          for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            boxes[node.data] = range.getBoundingClientRect();
+          }
+          const hi = boxes["Hi Ann,"];
+          const thanks = boxes["Thanks."];
+          return {
+            line: signature.height,
+            between: hi && thanks ? thanks.top - hi.bottom : null,
+            above: thanks ? signature.top - thanks.bottom : null,
+          };
+        })()`,
+      ),
+    );
+    const { line, between, above } = gaps;
+    const seen = JSON.stringify(gaps);
+    assert.ok(typeof line === "number" && line > 0, seen);
+    assert.ok(typeof between === "number", seen);
+    assert.ok(typeof above === "number", seen);
+    assert.ok(Math.abs(between - line) < line / 2, `one empty line between the lines: ${seen}`);
+    assert.ok(Math.abs(above - line) < line / 2, `one empty line above the signature: ${seen}`);
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").innerText'),
+      "Hi Ann,\n\nThanks.\n\n\n-- Signature",
+    );
+  });
+
   test("type keeps a selection the page made in an editable area and adds the text after it", async () => {
     await evaluate(
       input,

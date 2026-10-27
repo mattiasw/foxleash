@@ -429,6 +429,8 @@ describe("tools", () => {
           "No key events are sent",
           "sent_unconfirmed when the editor cannot be read back (such as the body of a Google Docs document)",
           "exec_command, native_setter or beforeinput_dom",
+          "In an editable area each newline in the text becomes a line break, not a new paragraph, except with method beforeinput_dom",
+          "so end the text with a newline to keep a blank line before the signature",
           "the call fails with no_effect",
           "A field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it.",
           "Other frames are not entered.",
@@ -466,6 +468,12 @@ describe("tools", () => {
         assert.ok(tool?.description?.includes(phrase), `${name}: ${phrase}`);
       }
     }
+    const type = tools.find((listed) => listed.name === "type");
+    assert.ok(
+      String(record(type?.inputSchema.properties?.text).description).includes(
+        "a newline starts a new line in a textarea, and in an editable area unless the method is beforeinput_dom",
+      ),
+    );
   });
 
   it("passes type and press_key only the arguments given", LIMIT, async () => {

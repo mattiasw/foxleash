@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The agent is told that each newline in the text it types into an editable area, such as an
+  email body, starts a new line, and to end an email's text with a newline, so a blank line
+  stays between the text and the signature.
+
 ### Fixed
 
 - A tab in which Foxhand asked you to approve a site no longer gets a Forward button that

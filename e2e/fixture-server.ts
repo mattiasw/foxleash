@@ -2228,6 +2228,7 @@ function inputPage(port: number): string {
 <input id="subject" aria-label="Subject">
 <div id="compose" contenteditable="true" aria-label="Compose"><div id="compose-top"><br></div><div id="signature">-- Signature</div></div>
 <div id="reply" contenteditable="true" aria-label="Reply"><div id="greeting">Hi Ann,</div><div id="reply-line"><br></div><div id="reply-signature">-- Signature</div></div>
+<div id="compose-lines" contenteditable="true" aria-label="Compose lines"><div id="compose-lines-top"><br></div><div id="compose-lines-signature">-- Signature</div></div>
 <div id="selected" contenteditable="true" aria-label="Selected">Hello world, bye</div>
 <div id="island-host" contenteditable="true" aria-label="Island"><span id="island" contenteditable="false">Fixed</span> text</div>
 <div id="shadow-host"></div>
