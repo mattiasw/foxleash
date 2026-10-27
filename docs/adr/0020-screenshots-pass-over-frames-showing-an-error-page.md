@@ -1,7 +1,9 @@
 # 0020: Screenshots pass over a frame that Firefox reported as showing its error page
 
 **Status:** Accepted, 2026-10-23. Supersedes 0013's rule that a frame refusing the sheet refuses
-the screenshot.
+the screenshot. Its rule that every other refusal refuses the screenshot is superseded for another
+add-on's frames, and the frames inside them, by
+[0031](0031-screenshots-hide-every-frame-beside-another-add-ons-frame.md), 2026-10-27.
 
 ## Context
 

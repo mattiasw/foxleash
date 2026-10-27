@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   leads to a blank page after Firefox unloads it to save memory and you select it again.
 - `read_page` shows the text in an editable area, such as an email's message body, as its
   value, as it does for a text field, also when the agent reads only the interactive elements.
+- `screenshot` works on pages where another add-on, such as a password manager, shows a frame
+  of its own, for example its menu in a login field. That frame and the other frames of the
+  same page or frame show blank in the screenshot.
 
 ## [0.1.0] - 2026-10-25
 

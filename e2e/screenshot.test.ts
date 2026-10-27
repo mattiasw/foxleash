@@ -3,6 +3,7 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, rm, stat } from "node:fs/pro
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { inflateSync } from "node:zlib";
 import { SCREENSHOT_NOTE } from "../apps/server/src/tools.ts";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
@@ -11,10 +12,17 @@ import {
   AUTOFILL_COLOURS,
   AUTOFILL_LOGIN,
   CARD_AUTOFILL_COLOURS,
+  COPY_OFFSET,
   type FixtureServer,
+  SHOT_ADDON_COLOURS,
   SHOT_BOX,
   SHOT_COLOURS,
   SHOT_FIELD_COLOURS,
+  SHOT_FOREIGN_SLOTS,
+  SHOT_HOSTILE_SLOTS,
+  SHOT_NESTED,
+  SHOT_PAGE_FRAME_COLOUR,
+  type ShotSlot,
   startFixtureServer,
   TITLES,
 } from "./fixture-server.ts";
@@ -32,6 +40,12 @@ import {
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const BOX_REF = /button "Shot box" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
 const CARD_REF = /textbox "Card number" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
+const COVER_REF = /button "Frame cover" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
+// An add-on that shows a frame of its own page where a page asks for one, as a password manager
+// shows its menu.
+const OTHER_EXTENSION = fileURLToPath(new URL("./other-extension", import.meta.url));
+// How long the other add-on's frames may take to load after the page's load event.
+const ADDON_FRAMES_MS = 10_000;
 const PROTECTED = SHOT_FIELD_COLOURS.protected;
 const FIELD_BORDER = [128, 128, 128] as const;
 // Enough pixels to tell a field's text was drawn.
@@ -66,6 +80,7 @@ describe("screenshot in real Firefox", () => {
   let work = "";
   let shotTab = -1;
   let fieldsTab = -1;
+  let foreignTab = -1;
 
   before(
     async () => {
@@ -76,6 +91,7 @@ describe("screenshot in real Firefox", () => {
       harness.install();
       fixtures = await startFixtureServer();
       firefox = await harness.startFirefox(EXTENSION_DIST);
+      await firefox.installExtension(OTHER_EXTENSION);
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
@@ -417,6 +433,73 @@ describe("screenshot in real Firefox", () => {
     assertDrawn(png, CARD_AUTOFILL_COLOURS.plain, "plain");
   });
 
+  test("a page holding another add-on's frame is captured with every frame of its document blank", async () => {
+    foreignTab = await open(session, "/shot-foreign-frames", TITLES.shotForeignFrames);
+    const context = await contextOf(fixtures.url("/shot-foreign-frames"));
+    await addonFramesDrawn(context, [centre(SHOT_FOREIGN_SLOTS.shadow)]);
+    const png = await shotOf({ tabId: foreignTab });
+    assertAddonHidden(png);
+    assertNone(png, PROTECTED, "protected");
+    assertDrawn(png, SHOT_FIELD_COLOURS.top, "top");
+    // The page's own frame is in the same document, so it is hidden too.
+    assertNone(png, SHOT_PAGE_FRAME_COLOUR, "page frame");
+    // What lies behind the hidden frame is drawn.
+    const [x, y] = centre(SHOT_FOREIGN_SLOTS.shadow);
+    assertColour(png, x, y, SHOT_COLOURS.box);
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(
+          context,
+          'getComputedStyle(document.getElementById("page-frame")).visibility',
+        )) === "visible"
+          ? true
+          : undefined,
+      SHEET_REMOVAL_MS,
+      "the page's own frame shown again",
+    );
+  });
+
+  test("a ref screenshot of an element under another add-on's frame is captured with the frame blank", async () => {
+    const context = await contextOf(fixtures.url("/shot-foreign-frames"));
+    await addonFramesDrawn(context, [centre(SHOT_FOREIGN_SLOTS.shadow)]);
+    const read = await harness.call(session, "read_page", { tabId: foreignTab });
+    assert.equal(read.isError, false, read.text);
+    const tree = untrustedContent(read.text) ?? "";
+    const ref = COVER_REF.exec(tree)?.[1];
+    assert.ok(ref !== undefined, `no ref for the frame cover in:\n${tree}`);
+    const png = await shotOf({ tabId: foreignTab, ref });
+    assertAddonHidden(png);
+    assertDrawn(png, SHOT_COLOURS.box, "frame cover");
+  });
+
+  test("another add-on's frames stay hidden against the page's transitions, animations and filters", async () => {
+    const tabId = await open(session, "/shot-foreign-frames-hostile", TITLES.shotForeignHostile);
+    const context = await contextOf(fixtures.url("/shot-foreign-frames-hostile"));
+    const [x, y] = centre(SHOT_HOSTILE_SLOTS.shadow);
+    // The filter's copy of the frame in the closed shadow root, without Foxhand.
+    await addonFramesDrawn(context, [
+      ...Object.values(SHOT_HOSTILE_SLOTS).map(centre),
+      [x, y + COPY_OFFSET],
+    ]);
+    const png = await shotOf({ tabId });
+    assertAddonHidden(png);
+    assertNone(png, SHOT_PAGE_FRAME_COLOUR, "page frame");
+    assertNone(png, PROTECTED, "protected");
+  });
+
+  test("another add-on's frame in a subframe hides only that subframe's frames", async () => {
+    const tabId = await open(session, "/shot-foreign-nested", TITLES.shotForeignNested);
+    const context = await contextOf(fixtures.url("/shot-foreign-nested"));
+    const [x, y] = centre(SHOT_NESTED.slot);
+    await addonFramesDrawn(context, [[SHOT_NESTED.inner.left + x, SHOT_NESTED.inner.top + y]]);
+    const png = await shotOf({ tabId });
+    assertAddonHidden(png);
+    assertNone(png, PROTECTED, "protected");
+    // The top document's frames, the subframe itself and its fields are drawn.
+    assertDrawn(png, SHOT_PAGE_FRAME_COLOUR, "page frame");
+    assertDrawn(png, SHOT_FIELD_COLOURS.frame, "frame");
+  });
+
   async function shotOf(args: Record<string, unknown>): Promise<Png> {
     const result = await harness.call(session, "screenshot", args);
     assert.equal(result.isError, false, result.text);
@@ -434,7 +517,36 @@ describe("screenshot in real Firefox", () => {
     assert.ok(found !== undefined, `no tab shows ${url}`);
     return found.context;
   }
+
+  /**
+   * Waits until Firefox, capturing without Foxhand, draws the other add-on's frame at each point
+   * and the page's own frame, so the frames have loaded and the page shows them.
+   */
+  async function addonFramesDrawn(
+    context: string,
+    points: readonly (readonly [number, number])[],
+  ): Promise<void> {
+    await pollUntil(
+      async () => {
+        const png = decodePng(await firefox.captureViewport(context));
+        for (const [x, y] of points) assertColour(png, x, y, SHOT_ADDON_COLOURS.frame);
+        assertDrawn(png, SHOT_PAGE_FRAME_COLOUR, "page frame");
+        return true;
+      },
+      ADDON_FRAMES_MS,
+      "the other add-on's frames",
+    );
+  }
 });
+
+function centre({ left, top, width, height }: ShotSlot): [number, number] {
+  return [Math.floor(left + width / 2), Math.floor(top + height / 2)];
+}
+
+function assertAddonHidden(png: Png): void {
+  assertNone(png, SHOT_ADDON_COLOURS.frame, "other add-on's frame");
+  assertNone(png, SHOT_ADDON_COLOURS.text, "other add-on's text");
+}
 
 function onlyImage(result: ToolResult): Png {
   assert.equal(result.images.length, 1, JSON.stringify(result.texts));

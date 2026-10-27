@@ -30,6 +30,7 @@ import type {
 import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
 import { type Downloads, downloadNameProblem } from "./downloads.ts";
+import { foreignFramePlan } from "./foreign-frames.ts";
 import { watchFrameErrors } from "./frame-errors.ts";
 import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
 import {
@@ -50,6 +51,7 @@ import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
+  FRAME_HIDE_CSS,
   INPUT_MASK_CSS,
   pngData,
   revealedReply,
@@ -756,9 +758,11 @@ export function createHandlers<Handle>({
   /**
    * Captures the tab with the text of protected fields hidden in every frame, and of every input
    * of the top document when `revealed`. One insertion per frame, since Firefox skips a frame it
-   * will not enter without an error when given all frames at once. A frame refusing the sheet
-   * refuses the screenshot, unless Firefox reported the frame's current document as its error
-   * page, which shows nothing of the page.
+   * will not enter without an error when given all frames at once. A document holding another
+   * add-on's frame, which no add-on can enter, also takes a sheet that keeps all its frames
+   * unpainted (ADR 0031). A frame refusing the sheet refuses the screenshot, unless Firefox
+   * reported the frame's current document as its error page, which shows nothing of the page, or
+   * the frame is, or lies inside, another add-on's frame, so hidden.
    */
   async function maskedCapture(
     tabId: number,
@@ -775,7 +779,11 @@ export function createHandlers<Handle>({
     // Firefox shares one sheet between insertions of the same text, so each screenshot marks its
     // own, also across restarts of the background page.
     const marker = `/* ${crypto.randomUUID()} */\n`;
-    const inserted: { mask: CssInjection; frame: FrameDetails; insert: Promise<void> }[] = [];
+    const inserted: {
+      mask: CssInjection;
+      excusable: FrameDetails | undefined;
+      insert: Promise<void>;
+    }[] = [];
     try {
       const frames = await Promise.race([browser.webNavigation.getAllFrames({ tabId }), timedOut]);
       // The screenshot answered already: nothing more goes into the page, nothing is captured.
@@ -784,13 +792,19 @@ export function createHandlers<Handle>({
       if (frames === null || top === undefined) {
         throw screenshotFailedError(tabId);
       }
-      for (const { mask, frame } of masksFor(tabId, frames, top, revealed, marker)) {
-        inserted.push({ mask, frame, insert: browser.scripting.insertCSS(mask) });
+      const plan = foreignFramePlan(frames, browser.runtime.getURL(""));
+      if (plan === undefined) throw screenshotFailedError(tabId);
+      const sheets = masksFor(tabId, frames, revealed, plan.hideIn, marker);
+      for (const { mask, excusable } of sheets) {
+        inserted.push({ mask, excusable, insert: browser.scripting.insertCSS(mask) });
       }
-      const taken = inserted.map(({ frame, insert }) =>
+      const taken = inserted.map(({ excusable, insert }) =>
         insert.catch((error: unknown) => {
+          if (excusable === undefined) throw error;
+          // Another add-on's frame, or one inside it: the hiding sheet keeps it unpainted.
+          if (plan.hidden.has(excusable.frameId)) return;
           // Firefox's error page takes no sheet and holds no field of the page.
-          if (frame.frameId !== 0 && frameErrors.showsErrorPage(tabId, frame)) return;
+          if (frameErrors.showsErrorPage(tabId, excusable)) return;
           throw error;
         }),
       );
@@ -1367,16 +1381,17 @@ function screenshotFailedError(tabId: number): ToolError {
 }
 
 /**
- * The sheets of one screenshot, each with the listed frame it goes into: the field mask in every
- * frame, the input mask in the top one.
+ * The sheets of one screenshot: the field mask in every frame, the input mask in the top one, and
+ * the frame hiding sheet in each of `hideIn`. A subframe's field mask carries the listed frame,
+ * whose refusal of it may be passed over; a refusal of any other sheet refuses the screenshot.
  */
 function masksFor(
   tabId: number,
   frames: FrameDetails[],
-  top: FrameDetails,
   revealed: boolean,
+  hideIn: number[],
   marker: string,
-): { mask: CssInjection; frame: FrameDetails }[] {
+): { mask: CssInjection; excusable: FrameDetails | undefined }[] {
   const masks = frames.map((frame) => {
     const { frameId } = frame;
     const mask: CssInjection = {
@@ -1384,7 +1399,7 @@ function masksFor(
       css: FIELD_MASK_CSS + marker,
       origin: "USER",
     };
-    return { mask, frame };
+    return { mask, excusable: frameId === 0 ? undefined : frame };
   });
   if (revealed) {
     const mask: CssInjection = {
@@ -1392,7 +1407,15 @@ function masksFor(
       css: INPUT_MASK_CSS + marker,
       origin: "USER",
     };
-    masks.push({ mask, frame: top });
+    masks.push({ mask, excusable: undefined });
+  }
+  for (const frameId of hideIn) {
+    const mask: CssInjection = {
+      target: { tabId, frameIds: [frameId] },
+      css: FRAME_HIDE_CSS + marker,
+      origin: "USER",
+    };
+    masks.push({ mask, excusable: undefined });
   }
   return masks;
 }

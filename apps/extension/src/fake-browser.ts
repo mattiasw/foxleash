@@ -69,14 +69,21 @@ export interface FakeBrowser {
   cssCalls: CssCall[];
   /**
    * What `webNavigation.getAllFrames` answers for the tab, or null when discarded. A frame id `n`
-   * lists `{ frameId: n, documentId: "document-<tabId>-<n>" }`; an object is listed as given.
-   * Without it, the tab lists its top frame only.
+   * lists `{ frameId: n, documentId: "document-<tabId>-<n>", parentFrameId }`, the parent -1 for
+   * frame 0 and 0 for any other; an object is listed as given. Without it, the tab lists its top
+   * frame only.
    */
   setFrames(tabId: number, frames: readonly (number | FrameDetails)[] | null): void;
-  /** Makes the next `scripting.insertCSS` into that frame reject with `error`, once. */
-  failInsertCSS(frameId: number, error: unknown): void;
-  /** Leaves the next `scripting.insertCSS` pending until `release` runs. */
-  holdNextInsertCSS(): () => void;
+  /**
+   * Makes the next `scripting.insertCSS` into that frame reject with `error`, once; with `css`,
+   * the next one into that frame whose css starts with it.
+   */
+  failInsertCSS(frameId: number, error: unknown, css?: string): void;
+  /**
+   * Leaves the next `scripting.insertCSS` pending until `release` runs; with `css`, the next one
+   * whose css starts with it.
+   */
+  holdNextInsertCSS(css?: string): () => void;
   /** Leaves the next `scripting.removeCSS` pending until `release` runs. */
   holdNextRemoveCSS(): () => void;
   /** Makes the next `scripting.removeCSS` reject with `error`, once. */
@@ -302,8 +309,8 @@ export function createFakeBrowser(): FakeBrowser {
   let captureFailure: { error: unknown } | undefined;
   let captureHold: Promise<void> | undefined;
   const frames = new Map<number, FrameDetails[] | null>();
-  const insertFailures = new Map<number, unknown>();
-  let insertHold: Promise<void> | undefined;
+  const insertFailures = new Map<number, { error: unknown; css: string }>();
+  let insertHold: { promise: Promise<void>; css: string } | undefined;
   let removeHold: Promise<void> | undefined;
   let removeFailure: { error: unknown } | undefined;
   const onCommitted = createEvent<(details: NavigationDetails) => void>();
@@ -605,12 +612,12 @@ export function createFakeBrowser(): FakeBrowser {
             ),
       );
     },
-    failInsertCSS: (frameId, error) => {
-      insertFailures.set(frameId, error);
+    failInsertCSS: (frameId, error, css = "") => {
+      insertFailures.set(frameId, { error, css });
     },
-    holdNextInsertCSS: () => {
+    holdNextInsertCSS: (css = "") => {
       const { promise, resolve } = Promise.withResolvers<void>();
-      insertHold = promise;
+      insertHold = { promise, css };
       return () => resolve();
     },
     holdNextRemoveCSS: () => {
@@ -826,13 +833,14 @@ export function createFakeBrowser(): FakeBrowser {
 
   async function insertCSS(injection: CssInjection): Promise<void> {
     fake.cssCalls.push(cssCall("insertCSS", injection));
-    const hold = insertHold;
-    insertHold = undefined;
+    const held = insertHold !== undefined && injection.css.startsWith(insertHold.css);
+    const hold = held ? insertHold?.promise : undefined;
+    if (held) insertHold = undefined;
     for (const frameId of injection.target.frameIds) {
-      if (!insertFailures.has(frameId)) continue;
-      const error = insertFailures.get(frameId);
+      const failure = insertFailures.get(frameId);
+      if (failure === undefined || !injection.css.startsWith(failure.css)) continue;
       insertFailures.delete(frameId);
-      throw error;
+      throw failure.error;
     }
     await hold;
   }
@@ -980,7 +988,11 @@ function cssCall(method: CssCall["method"], { target, css, origin }: CssInjectio
 }
 
 function frameOf(tabId: number, frameId: number): FrameDetails {
-  return { frameId, documentId: `document-${tabId}-${frameId}` };
+  return {
+    frameId,
+    documentId: `document-${tabId}-${frameId}`,
+    parentFrameId: frameId === 0 ? -1 : 0,
+  };
 }
 
 function createEvent<Listener>(): BrowserEvent<Listener> & { listeners: Set<Listener> } {

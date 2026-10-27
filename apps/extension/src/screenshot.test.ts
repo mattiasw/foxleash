@@ -4,6 +4,7 @@ import { CREDENTIAL_TOKENS } from "./page-tree.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
+  FRAME_HIDE_CSS,
   INPUT_MASK_CSS,
   MAX_SCREENSHOT_CHARS,
   MAX_VIEWPORT_SIDE,
@@ -236,8 +237,21 @@ describe("the mask style sheets", () => {
     ]);
   });
 
+  it("hides every element that embeds a frame in the frame hiding sheet", () => {
+    assert.deepEqual(rulesOf(FRAME_HIDE_CSS), [
+      {
+        selectors: ["iframe", "frame", "object", "embed", "browser", "editor"],
+        declarations: [
+          "visibility: hidden !important",
+          "opacity: 0 !important",
+          "transition: none !important",
+        ],
+      },
+    ]);
+  });
+
   it("marks every declaration important, so the page's own styles cannot win", () => {
-    for (const css of [FIELD_MASK_CSS, INPUT_MASK_CSS]) {
+    for (const css of [FIELD_MASK_CSS, INPUT_MASK_CSS, FRAME_HIDE_CSS]) {
       for (const { declarations } of rulesOf(css)) {
         assert.ok(declarations.every((declaration) => declaration.endsWith(" !important")));
       }

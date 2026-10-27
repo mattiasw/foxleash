@@ -31,6 +31,11 @@ export const TITLES = {
   shotFields: "Fixture shot fields",
   shotPdfFrame: "Fixture shot PDF frame",
   shotErrorFrames: "Fixture shot error frames",
+  shotForeignFrames: "Fixture shot foreign frames",
+  shotForeignHostile: "Fixture shot foreign hostile",
+  shotForeignNested: "Fixture shot foreign nested",
+  shotForeignInner: "Fixture shot foreign inner",
+  shotForeignPageFrame: "Fixture shot foreign page frame",
   upload: "Fixture upload",
   act: "Fixture act",
   actLinks: "Fixture act links",
@@ -124,6 +129,48 @@ export const SHOT_FIELD_COLOURS = {
   data: [112, 48, 160],
   selection: [255, 120, 0],
 } as const;
+
+/** The test add-on's frame page, e2e/other-extension/frame.html, which hardcodes these colours. */
+export const SHOT_ADDON_COLOURS = {
+  frame: [255, 0, 255],
+  text: [0, 255, 255],
+} as const;
+
+/** The colour of the shot-foreign pages' own frame, which nothing else there uses. */
+export const SHOT_PAGE_FRAME_COLOUR = [0, 160, 0] as const;
+
+/** A box in CSS px, relative to its document. */
+export interface ShotSlot {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * Where the test add-on puts its frames in the shot-foreign-frames page: one in a closed shadow
+ * root, on the frame cover button, which holds it.
+ */
+export const SHOT_FOREIGN_SLOTS = {
+  shadow: { left: 360, top: 28, width: 160, height: 100 },
+} as const satisfies Record<string, ShotSlot>;
+/** The frame cover button of the shot-foreign-frames page. */
+export const SHOT_FOREIGN_COVER: ShotSlot = { left: 340, top: 8, width: 200, height: 140 };
+
+/** Where the test add-on puts its frames in the hostile page, by what each slot is for. */
+export const SHOT_HOSTILE_SLOTS = {
+  shadow: { left: 340, top: 8, width: 70, height: 45 },
+  transition: { left: 420, top: 8, width: 70, height: 45 },
+  animation: { left: 500, top: 8, width: 70, height: 45 },
+} as const satisfies Record<string, ShotSlot>;
+/** How far down the hostile page's SVG filter draws a copy of everything in it, in CSS px. */
+export const COPY_OFFSET = 200;
+
+/** The shot-foreign-inner frame in the nested page, and the add-on's slot inside that frame. */
+export const SHOT_NESTED = {
+  inner: { left: 8, top: 60, width: 340, height: 220 },
+  slot: { left: 10, top: 10, width: 120, height: 60 },
+} as const satisfies Record<string, ShotSlot>;
 
 /** The text colours of the autofill page: the login name field's fill colour, and a plain field's. */
 export const AUTOFILL_COLOURS = {
@@ -475,6 +522,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, shotErrorFramesPage(closedPort));
     } else if (path === "/shot-xfo-frame") {
       sendHtml(response, SHOT_XFO_FRAME_PAGE, { "X-Frame-Options": "DENY" });
+    } else if (path === "/shot-foreign-frames") {
+      sendHtml(response, SHOT_FOREIGN_FRAMES_PAGE);
+    } else if (path === "/shot-foreign-frames-hostile") {
+      sendHtml(response, SHOT_FOREIGN_HOSTILE_PAGE);
+    } else if (path === "/shot-foreign-nested") {
+      sendHtml(response, SHOT_FOREIGN_NESTED_PAGE);
+    } else if (path === "/shot-foreign-inner") {
+      sendHtml(response, SHOT_FOREIGN_INNER_PAGE);
+    } else if (path === "/shot-foreign-page-frame") {
+      sendHtml(response, SHOT_FOREIGN_PAGE_FRAME_PAGE);
     } else if (path === "/shot.pdf") {
       response.writeHead(200, { "Content-Type": "application/pdf", "Cache-Control": "no-store" });
       response.end(minimalPdf());
@@ -1783,6 +1840,100 @@ const SHOT_XFO_FRAME_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Shot XFO frame</title></head>
 <body><p>Not shown in a frame.</p></body></html>
 `;
+
+// The shot-foreign pages: the test add-on in e2e/other-extension fills each data-addon-slot
+// element with a frame of its own page. Everything is placed absolutely in the first 600 x 450 px.
+const SHOT_FOREIGN_STYLE = `${SHOT_FIELD_STYLE}
+.at { position: absolute; }
+#card { left: 8px; top: 8px; }
+#plain { left: 8px; top: 58px; color: ${rgb(SHOT_FIELD_COLOURS.top)}; }
+#page-frame { display: block; left: 8px; top: 120px; width: 120px; height: 80px; border: 0; margin: 0; }
+[data-addon-slot] { z-index: 1; }
+`;
+
+const SHOT_FOREIGN_FIELDS = `<input id="card" class="at protected" autocomplete="cc-number" value="4111 1111 1111 1111" aria-label="Card number">
+<input id="plain" class="at" value="MMMM WWWW" aria-label="Plain">
+<iframe id="page-frame" class="at" title="Page frame" src="/shot-foreign-page-frame"></iframe>`;
+
+// A solid button below the add-on's frame, with same-coloured text, so what lies behind the
+// hidden frame is known and read_page names it.
+const SHOT_FOREIGN_FRAMES_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotForeignFrames}</title>
+<style>${SHOT_FOREIGN_STYLE}
+#frame-cover {
+  appearance: none; ${at(SHOT_FOREIGN_COVER)}; z-index: 0; box-sizing: border-box;
+  margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none;
+  background: ${rgb(SHOT_COLOURS.box)}; color: ${rgb(SHOT_COLOURS.box)};
+}
+</style></head>
+<body>${SHOT_FOREIGN_FIELDS}
+<button id="frame-cover" class="at" type="button">Frame cover</button>
+<div class="at" data-addon-slot="shadow" style="${at(SHOT_FOREIGN_SLOTS.shadow)}"></div>
+</body></html>
+`;
+
+// Page styles aimed at showing the add-on's frames despite the hiding sheet: a long transition,
+// an animation that keeps them shown (on another frame, so it cannot hide a missing transition
+// override), and an SVG filter on the body that draws a copy of everything COPY_OFFSET px lower.
+const SHOT_FOREIGN_HOSTILE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotForeignHostile}</title>
+<style>${SHOT_FOREIGN_STYLE}
+html { background: white; }
+body { position: relative; width: 600px; height: 450px; background: transparent; filter: url(#copy); }
+#slot-transition > iframe { transition: all 60s; }
+#slot-animation > iframe, #page-frame {
+  will-change: opacity, visibility; animation: keep-shown 1s infinite;
+}
+@keyframes keep-shown { from, to { visibility: visible; opacity: 1; } }
+</style></head>
+<body>${SHOT_FOREIGN_FIELDS}
+<div class="at" data-addon-slot="shadow" style="${at(SHOT_HOSTILE_SLOTS.shadow)}"></div>
+<div id="slot-transition" class="at" data-addon-slot="iframe" style="${at(SHOT_HOSTILE_SLOTS.transition)}"></div>
+<div id="slot-animation" class="at" data-addon-slot="iframe" style="${at(SHOT_HOSTILE_SLOTS.animation)}"></div>
+<svg width="0" height="0" style="position: absolute"><filter id="copy" filterUnits="userSpaceOnUse" x="0" y="0" width="1000" height="1000" color-interpolation-filters="sRGB">
+<feOffset in="SourceGraphic" dx="0" dy="${COPY_OFFSET}" result="copy"/>
+<feMerge><feMergeNode in="copy"/><feMergeNode in="SourceGraphic"/></feMerge>
+</filter></svg>
+</body></html>
+`;
+
+// The add-on's frame in a subframe; the top document holds that subframe and the page's frame.
+const SHOT_FOREIGN_NESTED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotForeignNested}</title>
+<style>${SHOT_FOREIGN_STYLE}
+#plain { top: 8px; }
+#inner { display: block; ${at(SHOT_NESTED.inner)}; border: 0; margin: 0; }
+#page-frame { left: 360px; top: 60px; width: 200px; height: 150px; }
+</style></head>
+<body><input id="plain" class="at" value="MMMM WWWW" aria-label="Plain">
+<iframe id="inner" class="at" title="Inner frame" src="/shot-foreign-inner"></iframe>
+<iframe id="page-frame" class="at" title="Page frame" src="/shot-foreign-page-frame"></iframe>
+</body></html>
+`;
+
+const SHOT_FOREIGN_INNER_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotForeignInner}</title>
+<style>${SHOT_FIELD_STYLE}
+.at { position: absolute; }
+#inner-plain { left: 10px; top: 80px; color: ${rgb(SHOT_FIELD_COLOURS.frame)}; }
+#inner-card { left: 10px; top: 130px; }
+</style></head>
+<body><div class="at" data-addon-slot="shadow" style="${at(SHOT_NESTED.slot)}"></div>
+<input id="inner-plain" class="at" value="MMMM WWWW" aria-label="Inner plain">
+<input id="inner-card" class="at protected" autocomplete="cc-number" value="5555 5555 5555 4444" aria-label="Inner card number">
+</body></html>
+`;
+
+const SHOT_FOREIGN_PAGE_FRAME_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.shotForeignPageFrame}</title>
+<style>html, body { margin: 0; height: 100%; background: ${rgb(SHOT_PAGE_FRAME_COLOUR)}; }</style></head>
+<body></body></html>
+`;
+
+/** A box as CSS declarations for an absolutely placed element. */
+function at({ left, top, width, height }: ShotSlot): string {
+  return `left: ${left}px; top: ${top}px; width: ${width}px; height: ${height}px`;
+}
 
 /** What /download/receipt.pdf serves. */
 export function receiptPdf(): string {

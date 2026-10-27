@@ -8,7 +8,9 @@ screenshot is superseded by [0020](0020-screenshots-pass-over-frames-showing-an-
 [0021](0021-autofilled-fields-are-protected.md), 2026-10-23. Its wording that the remembered
 password fields are the ones read_page saw is superseded by
 [0022](0022-page-requests-remember-password-fields.md), 2026-10-23: they are the ones any page
-request saw.
+request saw. Its rule that a frame refusing the sheet refuses the screenshot is superseded for
+another add-on's frames, and the frames inside them, by
+[0031](0031-screenshots-hide-every-frame-beside-another-add-ons-frame.md), 2026-10-27.
 
 ## Context
 

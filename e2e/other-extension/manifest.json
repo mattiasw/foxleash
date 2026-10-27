@@ -1,0 +1,15 @@
+{
+  "manifest_version": 2,
+  "name": "Other frame add-on",
+  "version": "1.0",
+  "description": "Shows a frame of its own page in fixture pages, as a password manager shows its menu.",
+  "browser_specific_settings": { "gecko": { "id": "other-frame@example.org" } },
+  "web_accessible_resources": ["frame.html"],
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/shot-foreign*"],
+      "js": ["content.js"],
+      "all_frames": true
+    }
+  ]
+}

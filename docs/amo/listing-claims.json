@@ -172,7 +172,7 @@
       ]
     },
     {
-      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxhand adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxhand takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame.",
+      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxhand adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxhand takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame, or is a frame of another add-on, such as a password manager's menu, or lies inside one. While it takes a screenshot of a page with such a frame, Foxhand hides that frame and every other frame of the page or frame that holds it, so none of their content is in the screenshot.",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
         {
@@ -189,7 +189,23 @@
         },
         {
           "file": "apps/extension/src/handlers.ts",
-          "contains": "frameErrors.showsErrorPage(tabId, frame)"
+          "contains": "frameErrors.showsErrorPage(tabId, excusable)"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "if (plan.hidden.has(excusable.frameId)) return;"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "css: FRAME_HIDE_CSS + marker"
+        },
+        {
+          "file": "apps/extension/src/foreign-frames.ts",
+          "contains": "url?.protocol === \"moz-extension:\""
+        },
+        {
+          "file": "apps/extension/src/screenshot.ts",
+          "contains": "visibility: hidden !important"
         },
         {
           "file": "apps/extension/src/frame-errors.ts",

@@ -8,7 +8,7 @@ import {
   type Result,
   type TabInfo,
 } from "@foxhand/protocol";
-import type { RequestDetails, Tab, TabChangeInfo } from "./browser-api.ts";
+import type { FrameDetails, RequestDetails, Tab, TabChangeInfo } from "./browser-api.ts";
 import {
   type CssCall,
   createFakeBrowser,
@@ -35,7 +35,7 @@ import {
 import type { NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
-import { FIELD_MASK_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
+import { FIELD_MASK_CSS, FRAME_HIDE_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
 import {
@@ -4623,6 +4623,283 @@ describe("screenshot", { timeout: 10000 }, () => {
       release();
       await flush();
       assert.deepEqual(fake.cssCalls.slice(3), [{ ...held, method: "removeCSS" }]);
+    });
+  });
+
+  describe("another add-on's frame", () => {
+    const ADDON = "moz-extension://0b5e2f4c-1d2e-4f3a-9b8c-7d6e5f4a3b2c/infield.html";
+    const MISSING = new Error("Missing host permission for the tab or frames");
+    const FAILED = "https://b.example/frame";
+    const ERROR_PAGE = "about:neterror?e=xfoBlocked&u=https%3A//b.example/frame&c=UTF-8&d=x";
+    const SUBFRAME: FrameDetails = {
+      frameId: 5,
+      documentId: "page",
+      url: "https://b.example/",
+      parentFrameId: 0,
+    };
+
+    function addonFrame(frameId: number, parentFrameId: number): FrameDetails {
+      return { frameId, documentId: `addon-${frameId}`, url: ADDON, parentFrameId };
+    }
+
+    /** Exactly these sheets went in, in this order, each with the screenshot's marker, and each was removed. */
+    function assertSheets(
+      calls: CssCall[],
+      tabId: number,
+      sheets: readonly (readonly [number, string])[],
+    ): void {
+      const inserts = calls.filter((css) => css.method === "insertCSS");
+      const marker = inserts[0]?.css.slice(FIELD_MASK_CSS.length) ?? "";
+      assert.match(marker, /^\/\* [0-9a-f-]{36} \*\/\n$/);
+      assert.deepEqual(
+        inserts,
+        sheets.map(([frameId, css]) => ({
+          method: "insertCSS",
+          tabId,
+          frameIds: [frameId],
+          css: css + marker,
+          origin: "USER",
+        })),
+      );
+      const removals = calls.slice(inserts.length);
+      assert.deepEqual(
+        removals.map((css) => JSON.stringify(css)).sort(),
+        inserts.map((css) => JSON.stringify({ ...css, method: "removeCSS" })).sort(),
+      );
+    }
+
+    /** Whether each insertion, in call order, was taken or refused, once it settles. */
+    function insertOutcomes(fake: FakeBrowser): string[] {
+      const outcomes: string[] = [];
+      const insertCSS = fake.browser.scripting.insertCSS;
+      fake.browser.scripting.insertCSS = (injection) => {
+        const index = outcomes.push("pending") - 1;
+        const insert = insertCSS(injection);
+        insert.then(
+          () => {
+            outcomes[index] = "taken";
+          },
+          () => {
+            outcomes[index] = "refused";
+          },
+        );
+        return insert;
+      };
+      return outcomes;
+    }
+
+    async function refused({ fake, call }: ReturnType<typeof setup>, tabId: number) {
+      await assert.rejects(call("s1", "screenshot", { tabId }), {
+        code: "screenshot_failed",
+        message: `Firefox could not take a screenshot of tab ${tabId}.`,
+      });
+      await flush();
+      assert.deepEqual(fake.captures, []);
+    }
+
+    it("is captured with its document's frames hidden when it refuses the sheet", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 0), SUBFRAME]);
+      fake.failInsertCSS(7, MISSING);
+      const release = fake.holdNextCapture();
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      assert.equal(fake.captures.length, 1);
+      const atCapture = structuredClone(fake.cssCalls);
+      release();
+      assert.deepEqual(await shot, { data: PNG });
+      await flush();
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [5, FIELD_MASK_CSS],
+        [0, FRAME_HIDE_CSS],
+      ]);
+      // Every sheet was in before the capture, and none was removed before it.
+      assert.deepEqual(atCapture, fake.cssCalls.slice(0, 4));
+    });
+
+    it("passes over a page frame inside it that refuses the sheet", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 0), { ...SUBFRAME, frameId: 8, parentFrameId: 7 }]);
+      fake.failInsertCSS(7, MISSING);
+      fake.failInsertCSS(8, MISSING);
+      assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+      await flush();
+      assert.equal(fake.captures.length, 1);
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [8, FIELD_MASK_CSS],
+        [0, FRAME_HIDE_CSS],
+      ]);
+    });
+
+    it("hides the frames of a subframe that holds it in that subframe only", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      // A frame id listed as a number hangs from the top frame.
+      fake.setFrames(tab.id, [0, 5, addonFrame(7, 5)]);
+      fake.failInsertCSS(7, MISSING);
+      assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+      await flush();
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [5, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [5, FRAME_HIDE_CSS],
+      ]);
+    });
+
+    it("refuses when the frame hiding sheet does not go in", async () => {
+      const context = setup();
+      const { fake, grant, open } = context;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 0)]);
+      fake.failInsertCSS(0, MISSING, FRAME_HIDE_CSS);
+      fake.failInsertCSS(7, MISSING);
+      const outcomes = insertOutcomes(fake);
+      await refused(context, tab.id);
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [0, FRAME_HIDE_CSS],
+      ]);
+      assert.deepEqual(outcomes, ["taken", "refused", "refused"]);
+    });
+
+    it("refuses when the frame hiding sheet does not go into a subframe showing an error page", async () => {
+      const context = setup();
+      const { fake, grant, open } = context;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const failed = { frameId: 5, documentId: "err", url: FAILED, parentFrameId: 0 };
+      fake.setFrames(tab.id, [0, failed, addonFrame(7, 5)]);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 5, documentId: "err", url: ERROR_PAGE });
+      fake.failInsertCSS(5, MISSING, FRAME_HIDE_CSS);
+      fake.failInsertCSS(7, MISSING);
+      const outcomes = insertOutcomes(fake);
+      await refused(context, tab.id);
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [5, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [5, FRAME_HIDE_CSS],
+      ]);
+      // Only the hiding sheet was refused in the frame showing its error page.
+      assert.deepEqual(outcomes, ["taken", "taken", "refused", "refused"]);
+    });
+
+    it("still refuses a web page frame beside it that refuses the sheet", async () => {
+      const context = setup();
+      const { fake, grant, open } = context;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 0), SUBFRAME]);
+      fake.failInsertCSS(7, MISSING);
+      fake.failInsertCSS(5, MISSING);
+      await refused(context, tab.id);
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [5, FIELD_MASK_CSS],
+        [0, FRAME_HIDE_CSS],
+      ]);
+    });
+
+    it("still refuses a frame of Foxhand's own pages that refuses the sheet, hiding nothing", async () => {
+      const context = setup();
+      const { fake, grant, open } = context;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const own = fake.browser.runtime.getURL("prompt.html");
+      fake.setFrames(tab.id, [0, { frameId: 7, documentId: "own", url: own, parentFrameId: 0 }]);
+      fake.failInsertCSS(7, MISSING);
+      await refused(context, tab.id);
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+      ]);
+    });
+
+    it("hides nothing in a page with only web page frames", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, SUBFRAME, { ...SUBFRAME, frameId: 6, parentFrameId: 5 }]);
+      assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+      await flush();
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [5, FIELD_MASK_CSS],
+        [6, FIELD_MASK_CSS],
+      ]);
+    });
+
+    it("refuses, inserting nothing, when its parent is not listed", async () => {
+      const context = setup();
+      const { fake, grant, open } = context;
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 4)]);
+      await refused(context, tab.id);
+      assert.deepEqual(fake.cssCalls, []);
+    });
+
+    it("passes over an error page frame beside it too", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const failed = { frameId: 9, documentId: "err", url: FAILED, parentFrameId: 0 };
+      fake.setFrames(tab.id, [0, failed, addonFrame(7, 0)]);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 9, documentId: "err", url: ERROR_PAGE });
+      fake.failInsertCSS(9, MISSING);
+      fake.failInsertCSS(7, MISSING);
+      assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
+      await flush();
+      assertSheets(fake.cssCalls, tab.id, [
+        [0, FIELD_MASK_CSS],
+        [9, FIELD_MASK_CSS],
+        [7, FIELD_MASK_CSS],
+        [0, FRAME_HIDE_CSS],
+      ]);
+    });
+
+    it("times out when the frame hiding sheet never goes in", async () => {
+      const { fake, call, open, grant, timers } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.setFrames(tab.id, [0, addonFrame(7, 0)]);
+      fake.failInsertCSS(7, MISSING);
+      const release = fake.holdNextInsertCSS(FRAME_HIDE_CSS);
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      timers.advance(CAPTURE_TIMEOUT_MS);
+      await assert.rejects(shot, {
+        code: "page_timeout",
+        message: `Firefox did not take the screenshot of tab ${tab.id} in time; try again.`,
+      });
+      await flush();
+      assert.deepEqual(fake.captures, []);
+      const [top, addon, hide] = fake.cssCalls;
+      assert.ok(hide?.css.startsWith(FRAME_HIDE_CSS));
+      // Every sheet but the held one is gone; that one goes once it settles.
+      assert.deepEqual(
+        fake.cssCalls
+          .slice(3)
+          .map((css) => JSON.stringify(css))
+          .sort(),
+        [top, addon].map((css) => JSON.stringify({ ...css, method: "removeCSS" })).sort(),
+      );
+      release();
+      await flush();
+      assert.deepEqual(fake.cssCalls.slice(5), [{ ...hide, method: "removeCSS" }]);
     });
   });
 

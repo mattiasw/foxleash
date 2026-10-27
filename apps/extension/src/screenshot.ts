@@ -55,6 +55,13 @@ const SNAPSHOT_RULE =
 export const FIELD_MASK_CSS = maskCss(FIELD_SELECTORS) + SNAPSHOT_RULE;
 /** The style sheet that hides the text of every input in the top document of a screenshot. */
 export const INPUT_MASK_CSS = maskCss(["input"]);
+/**
+ * The style sheet that keeps every frame of a document unpainted (ADR 0031), for a document that
+ * holds another add-on's frame. Visibility and opacity change no layout; a page's transition
+ * would beat the important declarations, so it is switched off.
+ */
+export const FRAME_HIDE_CSS =
+  "iframe, frame, object, embed, browser, editor { visibility: hidden !important; opacity: 0 !important; transition: none !important; }\n";
 
 const PNG_PREFIX = "data:image/png;base64,";
 /** Base64 text; exact only together with a `length % 4` check. */

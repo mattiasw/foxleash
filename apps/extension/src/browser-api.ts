@@ -223,6 +223,8 @@ export interface FrameDetails {
   documentId?: string;
   /** The address the frame shows; for Firefox's error page, the URL that failed. */
   url?: string;
+  /** The parent frame's id, -1 for the top frame. */
+  parentFrameId?: number;
 }
 
 /** The details of `webNavigation.onDOMContentLoaded`, as far as the extension reads them. */
