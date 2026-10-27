@@ -29,14 +29,18 @@
 // nearest enclosing statement, or the import declaration) with the body of every function inside
 // that unit that does not hold the marker replaced by a fixed placeholder (but a function in the
 // marker's own condition: its key's value, or the first argument of its call), the marker's
-// position in that text marked, the text of each statement around the unit with every function body
-// in it replaced the same way (the test and describe calls holding it, with their titles), and
-// every run of whitespace read as one space. Head markers are matched against the base file's keys
-// as a multiset, in document order; an unmatched one is refused. So a marker left as it was is
-// allowed wherever it moves among its siblings, editing a test body, adding a blank line or
-// re-indenting leaves a legacy skip alone, a `this.skip();` moved into another test, any other edit
-// inside the unit (a comment, an argument, the condition) or a renamed test or describe around it
-// makes the marker new, and a second identical marker is new.
+// position in that text marked, the text of each statement around the unit with every function
+// body in it replaced the same way (the test and describe calls holding it, with their titles),
+// and every run of whitespace read as one space. A test need not be a statement (a table entry,
+// a tuple of a table, a class method or field, a property of a mocha exports object), so in each
+// array, object literal or class body between the unit and such a statement only the element
+// holding the unit and the elements that hold no function are written, in order. Head markers
+// are matched against the base file's keys as a multiset, in document order; an unmatched one is
+// refused. So a marker left as it was is allowed wherever it moves among its siblings, editing a
+// test body, adding a blank line or re-indenting, or adding, removing or editing another test
+// beside it leaves a legacy skip alone, a `this.skip();` moved into another test, any other edit
+// inside the unit (a comment, an argument, the condition) or a renamed test or describe around
+// it makes the marker new, and a second identical marker is new.
 //
 // Vocabulary. ROOTS are the test receivers: test, describe, it, suite, context, specify and
 // Jest/Vitest's concurrent. A chain is ROOTED when, walking down the object side of the member
@@ -87,8 +91,19 @@
 //      `test?.["skip"](isCI, r)`, `test.info().skip(isCI, r)`, `test.describe.skip(...)`.
 //   4. A bare `.skip()` or `.todo()` with no argument on any receiver (`this.skip()` in a
 //      mocha-style body, node:test's `t.todo()`): a failure after it no longer fails the run
-//      (measured, node 24.18). `t.skip("reason")` and `t.todo("later")` stay allowed: a runtime
-//      call, usually under an `if`.
+//      (measured, node 24.18). And (rule `contextSkip`) `.skip` or `.todo` called on a TEST
+//      CONTEXT whatever the arguments: `this`, the name `t` (but a `t` that only rule 11 binds,
+//      to node:test, is a ROOT: `t.todo("planned")` stays allowed), or a name that is the first
+//      parameter of a function passed to a test call (as rule 8 reads one, `t.test(` included, or
+//      a call of a name rule 11 makes a ROOT, `check(`) or to a hook (before, beforeEach, after,
+//      afterEach, beforeAll, afterAll; bare or as a member), also through `.call` / `.apply` /
+//      `.bind` or a comma expression as rule 3 reads a call.
+//      After node:test's `t.skip("reason")` or `t.todo("later")` the body runs on but a failure
+//      no longer fails the run (measured, node 24.18.1: a throwing body exits 0), and mocha's
+//      `this.skip` (Cypress 16's included) ignores its argument, so a reason makes neither
+//      conditional; an enclosing `if` is not read. The conditional form is the option:
+//      node:test's `test("x", { skip: cond }, fn)`, Playwright's `test.skip(cond, "r")`,
+//      Vitest's `test.skipIf(cond)`.
 //   5. `.todo` on a ROOTED chain holding anything but one name: allowed only when called directly
 //      with exactly one argument that is a string, or a template whose substitutions are each a
 //      name or a member path of names, and nothing chained after it. node:test runs a todo's body
@@ -125,13 +140,14 @@
 //      refused when L is `true` or a string; `fails` when L is `true` (test data has string-typed
 //      `fails:` fields); `todo` / `expectFailure` (no pagination keys; Biome puts a long call's
 //      options on lines of their own) when L, after any run of `!`, `~`, `+`, `-` and parentheses,
-//      is `true`, a string, a number, Infinity or a function, or is any literal behind at least one
-//      of that run, or the whole value is an array or object literal, and always as a method or
-//      accessor (`{ todo() {} }`: a function, which node:test reads as true); `expectFailure` also
-//      when the whole value is a regex literal or an error class; and every key but `fails` when
-//      the whole value is `null` or `NaN` (node:test skips and todos for both, measured, node
-//      24.18). `{ skip: 10 }`, `{ skip: -1 }`, `todo: false`, `{ skip: null ?? x }`, `fails: null`
-//      and `fails: "no hook"` stay allowed.
+//      is `true`, a string, a number, Infinity or a function, or is any literal behind at least
+//      one of that run, or the whole value is an array or object literal, and always as a method
+//      or getter (`{ todo() {} }`: a function, which node:test reads as true; a setter alone
+//      reads as undefined); `expectFailure` also when the whole value is a regex literal or an
+//      error class; and `skip`, `todo` and `expectFailure` when the whole value is `null` or
+//      `NaN` (node:test skips and todos for both, measured, node 24.18; `only` focuses for
+//      neither). `{ skip: 10 }`, `{ skip: -1 }`, `todo: false`, `{ skip: null ?? x }`,
+//      `only: null`, `fails: null` and `fails: "no hook"` stay allowed.
 //  10. Playwright's `annotation` key, in any object literal of any file, whose value is an object
 //      with a `type` of "skip", "fixme" or "fail", or an array holding one: skip and fixme set the
 //      test's expected status to skipped and fail inverts its verdict (measured, Playwright
@@ -149,10 +165,21 @@
 //      renamed or not) of those names from a test function: a ROOTED chain whose last step is a
 //      ROOT, a test modifier (rule 2's list), a computed key that is no literal or a LINK call
 //      (`const { skip } = test`, `const { only: o } = describe`, `const { skip } = test.describe`,
-//      `= nt.test`, `= test[kind]`, `= test.extend({})`). A destructure of anything else is data
-//      (`const { skip } = query`, `const { skip, take } = context.args`); a ROOT read off a name
-//      counts (`const { skip } = req.context` is refused: the strict side), and so does a
+//      `= nt.test`, `= test[kind]`, `= test.extend({})`), and a nested one under a ROOT's key
+//      (`const { test: { skip } } = require("node:test")`). A destructure of anything else is
+//      data (`const { skip } = query`, `const { skip, take } = context.args`); a ROOT read off a
+//      name counts (`const { skip } = req.context` is refused: the strict side), and so does a
 //      destructure whose call rule 3 would allow in a Playwright spec (`skip(isCI, "r")`).
+//      Every name a file binds to node:test or to its test functions is a ROOT in that file, for
+//      rules 3, 4, 5, 6 and this one: a default or namespace import (`import nt from "node:test"`,
+//      `import * as nt from "node:test"`, then `nt.skip(`; an import or a destructure counts the
+//      key `default` as `test`), a renamed one
+//      (`import { test as check } from "node:test"`, then `check.skip(` or
+//      `const { skip } = check`), `const nt = require("node:test")` or `= await import(...)`, a
+//      name assigned one (`nt = require("node:test")`), and
+//      `const { test: check } = require("node:test")` or the rest of such a destructure; so is a
+//      `require("node:test")` or `import("node:test")` itself
+//      (`(await import("node:test")).skip(`).
 //
 // A PLAYWRIGHT SPEC is a file whose head imports `@playwright/test` itself at the top level: an
 // import that is not type-only and binds at least one value, or a `require("@playwright/test")`.
@@ -201,22 +228,37 @@
 // goes on.
 //
 // Accepted residuals: a marker reached through an alias (`const s = test.skip; s("x", fn)`,
-// `const focus = test.only`), a test function or node:test's module under a name that is no ROOT
-// (`import * as nt from "node:test"; nt.skip(`, `import tst from "node:test"; tst.skip(`,
-// `import { test as t } from "node:test"; const { skip } = t`,
-// `const { skip } = require("node:test").test`), a destructure that is no variable declaration
-// (a parameter `({ skip }) =>`, an assignment `({ skip } = test)`) or is nested
-// (`const { test: { skip } } = require("node:test")`), a test function's member this check does
-// not list (`const { only } = test.describe.serial`), a marker re-exported through a local
-// module (`export { skip } from "node:test"` in a helper the test imports), node:test loaded
-// other than by `import`, `require(` or `import(` (`process.getBuiltinModule("node:test")`,
-// `module.require(`, `createRequire(import.meta.url)("node:test")`), a condition that is
-// always true but that the folder cannot see (`test.skip(isCI === isCI, r)`), a skipped test
-// whose body is passed by name (`test.skip(title, body)`, which reads like
-// `test.skip(cond, REASON)`), Playwright's fixture under a name other than `testInfo`, an options
-// object on a call this check does not take for a test call (`test.concurrent(`,
-// `test.sequential(`), and an option value that is no constant but never false
-// (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`). AGENTS.md forbids them all the same.
+// `const focus = test.only`), a test function under a name no import or require of node:test
+// binds (`const check = test; check.skip(`, `const check = require("node:test").test`), a
+// destructure that is no variable declaration (a parameter `({ skip }) =>`, an assignment
+// `({ skip } = test)`), a test function's member this
+// check does not list (`const { only } = test.describe.serial`), a marker re-exported through a
+// local module (`export { skip } from "node:test"` in a helper the test imports), node:test
+// loaded other than by `import`, `require(` or `import(` (`process.getBuiltinModule("node:test")`,
+// `module.require(`, `createRequire(import.meta.url)("node:test")`, TypeScript's
+// `import nt = require("node:test")`), a renamed test function's
+// options object (`check("x", { skip: true }, fn)` is judged by rule 9, not rule 8), a condition
+// that is always true but that the folder cannot see
+// (`test.skip(isCI === isCI, r)`), a skipped test whose body is passed by name
+// (`test.skip(title, body)`, which reads like `test.skip(cond, REASON)`), Playwright's fixture
+// under a name other than `testInfo`, an options object on a call this check does not take for a
+// test call (`test.concurrent(`, `test.sequential(`), an option value that is no constant
+// but never false (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`), a test context rule 4
+// cannot see (an alias, `const self = this; self.skip("r")`; a member named `t`,
+// `ctx.t.skip("r")`; a context passed to a helper under a name other than `t`; a context named
+// other than `t` in a test body that is no inline argument of the test call: passed by name,
+// `test("x", run)`, held in a table entry, `{ fn(ctx) {…} }`, or wrapped, `withDb((ctx) => …)`),
+// and a legacy marker moved between tests that a concise arrow body holds with no statement between
+// (`describe("s", () => [{ fn(t) {…} }, …])`: the statement around them elides that body whole)
+// or that are bare functions in an array (`[(t) => {…}, (t) => {…}]`: nothing names them).
+// AGENTS.md forbids them all the same. The other way, rule 4 refuses a `skip` or `todo` method on
+// `this` or on a name `t` that is no test context (`this.skip(10)` in a cursor class,
+// `const t = db.find({}); t.skip(10);`), as its bare `.skip()` does on any receiver: rename the
+// variable. And a legacy marker is new when an element beside its test that holds no function
+// is edited (`{ name: "b" }` in a table, a class field), when its unit holds its sibling tests
+// (`fn: (t) => t.skip()` as a concise body makes the whole table its unit), and when an untitled
+// test or suite is edited (`describe.skip(() => {…})`: its body is the call's first argument,
+// kept as the marker's condition).
 //
 // The check never runs the code it reads: the folder walks literal nodes only, git runs with an
 // argument array (blob ids, never a shell string), and every error fails closed.
@@ -231,9 +273,11 @@ import type {
   CallExpression,
   FunctionExpression,
   ImportDeclaration,
+  ImportSpecifier,
   MemberExpression,
   Node,
   ObjectExpression,
+  ObjectPattern,
   OptionalCallExpression,
   OptionalMemberExpression,
   Program,
@@ -253,6 +297,7 @@ const PREFIXED = new Set([
   "expectFailure",
 ]);
 const TEST_CALLS = new Set(["test", "it", "describe", "suite", "context", "specify"]);
+const HOOKS = new Set(["before", "beforeEach", "after", "afterEach", "beforeAll", "afterAll"]);
 const ANY_RECEIVER = new Set(["only", "fixme", "expectFailure"]);
 const ROOTED_SKIPS = new Set(["skip", "fail", "fails", "failing"]);
 const BINDING_MARKERS = new Set([...ANY_RECEIVER, ...ROOTED_SKIPS, "todo"]);
@@ -300,8 +345,8 @@ const ELIDED = "{…}";
 export interface Marker {
   /** The 1-based line of the marker itself. */
   line: number;
-  /** Which rule refused it (focus, prefixed, skip, bare, todo, skipIf, runIf, testInfo, option,
-   * data, annotation, import, destructure). */
+  /** Which rule refused it (focus, prefixed, skip, bare, contextSkip, todo, skipIf, runIf,
+   * testInfo, option, data, annotation, import, destructure). */
   rule: string;
   /** The unit's lines as written, shortened past 6 lines (see the header). */
   lines: string[];
@@ -337,6 +382,8 @@ interface Analysis {
   lineStarts: number[];
   parents: Map<Node, Node>;
   found: Found[];
+  /** ROOTS and the names this file binds to node:test or its test functions (rule 11). */
+  roots: ReadonlySet<string>;
 }
 
 function startOf(node: Node): number {
@@ -446,11 +493,12 @@ function isCalled(node: Node, parents: Map<Node, Node>, members?: ReadonlySet<st
   return false;
 }
 
-/** Whether an expression is a chain rooted at a test receiver (see the header). */
-function isRooted(node: Node): boolean {
+/** Whether an expression is a chain rooted at a test receiver (see the header). roots is ROOTS
+ * and the file's own names for node:test and its test functions. */
+function isRooted(node: Node, roots: ReadonlySet<string>): boolean {
   let cur = unwrapAll(node);
   for (;;) {
-    if (cur.type === "Identifier") return ROOTS.has(cur.name);
+    if (cur.type === "Identifier") return roots.has(cur.name);
     if (isMember(cur)) {
       const object = unwrapAll(cur.object);
       // A receiver read off a name: a namespace import or a global (`nt.test`, `globalThis.it`).
@@ -458,6 +506,7 @@ function isRooted(node: Node): boolean {
       cur = object;
       continue;
     }
+    if (loads(cur, "node:test")) return true;
     const callee = isCall(cur) ? unwrapAll(cur.callee) : null;
     if (callee === null || !isMember(callee) || !LINKS.has(memberName(callee) ?? "")) return false;
     cur = unwrapAll(callee.object);
@@ -844,7 +893,7 @@ function refusedOptionValue(value: Node, key: string): boolean {
 
 /** Rule 9: whether an option key's value in any other object literal is refused. */
 function refusedDataValue(value: Node, key: string): boolean {
-  if (key !== "fails" && isNullOrNaN(unwrapAll(value))) return true;
+  if (key !== "fails" && key !== "only" && isNullOrNaN(unwrapAll(value))) return true;
   if (key === "skip" || key === "only" || key === "fails") {
     const { node } = leftmost(value, false);
     return isTrueNode(node) || (key !== "fails" && isStringNode(node));
@@ -1001,11 +1050,55 @@ function isNamePath(node: Node): boolean {
   return cur.type === "Identifier";
 }
 
+/** Rule 4: whether a function is an argument of a test call, of a call of one of the file's
+ * roots or of a hook, through wrappers. */
+function isTestCallback(fn: Node, parents: Map<Node, Node>, roots: ReadonlySet<string>): boolean {
+  let cur = fn;
+  let parent = parents.get(cur);
+  while (parent !== undefined && wrapped(parent) === cur) {
+    cur = parent;
+    parent = parents.get(cur);
+  }
+  // A function that is the call's callee is never a test call's or a hook's own name.
+  if (parent === undefined || !isCall(parent)) return false;
+  if (isTestCall(parent)) return true;
+  const callee = unwrapAll(parent.callee);
+  if (callee.type === "Identifier") return HOOKS.has(callee.name) || roots.has(callee.name);
+  return isMember(callee) && HOOKS.has(memberName(callee) ?? "");
+}
+
+/** Rule 4: whether a receiver is a test context (see the header). A name is bound by the nearest
+ * function having a parameter so named; it is a context when that is the function's first
+ * parameter and the function is a test call's or a hook's callback. */
+function isTestContext(object: Node, analysis: Analysis): boolean {
+  const { parents, roots } = analysis;
+  const receiver = unwrapAll(object);
+  if (receiver.type === "ThisExpression") return true;
+  if (receiver.type !== "Identifier") return false;
+  for (let cur = parents.get(receiver); cur !== undefined; cur = parents.get(cur)) {
+    if (!("params" in cur)) continue;
+    // A TypeScript `this` parameter is no argument.
+    const index = cur.params
+      .filter((param) => paramName(param) !== "this")
+      .findIndex((param) => paramName(param) === receiver.name);
+    if (index === -1) continue;
+    return receiver.name === "t" || (index === 0 && isTestCallback(cur, parents, roots));
+  }
+  // A `t` the file binds to node:test or a test function is judged by rules 3 and 5.
+  return receiver.name === "t" && !roots.has("t");
+}
+
+/** The name a parameter binds when it is a name, with or without a default value, else null. */
+function paramName(param: Node): string | null {
+  const binding = param.type === "AssignmentPattern" ? param.left : param;
+  return binding.type === "Identifier" ? binding.name : null;
+}
+
 /** Rules 1 to 7 on a member access. */
 function judgeMember(member: Member, analysis: Analysis, playwright: boolean): void {
   const name = memberName(member);
   if (name === null) return;
-  const { parents, found } = analysis;
+  const { parents, found, roots } = analysis;
   const anchor = member.property;
   if (ANY_RECEIVER.has(name) && isCalled(member, parents)) {
     found.push({ anchor, rule: "focus", name });
@@ -1018,13 +1111,22 @@ function judgeMember(member: Member, analysis: Analysis, playwright: boolean): v
   ) {
     found.push({ anchor, rule: "prefixed", name });
   }
-  if (ROOTED_SKIPS.has(name) && isCalled(member, parents) && isRooted(member.object)) {
+  if (ROOTED_SKIPS.has(name) && isCalled(member, parents) && isRooted(member.object, roots)) {
     if (!playwright || !isConditionalSkip(member, parents)) {
       found.push({ anchor, rule: "skip", name });
     }
   }
-  if (name === "todo" && isCalled(member, parents) && isRooted(member.object)) {
+  if (name === "todo" && isCalled(member, parents) && isRooted(member.object, roots)) {
     if (!isPlannedTodo(member, parents)) found.push({ anchor, rule: "todo", name });
+  }
+  // A bare `this.skip()` is also rule 4's bare marker, pushed first (calls are judged before
+  // members), so it is listed as bare.
+  if (
+    (name === "skip" || name === "todo") &&
+    isCalled(member, parents) &&
+    isTestContext(member.object, analysis)
+  ) {
+    found.push({ anchor, rule: "contextSkip", name });
   }
 }
 
@@ -1040,7 +1142,7 @@ function judgeCall(call: Call, analysis: Analysis, judged: Set<Node>): void {
   if ((name === "skip" || name === "todo") && args.length === 0) {
     found.push({ anchor, rule: "bare", name });
   }
-  if ((name === "skipIf" || name === "runIf") && isRooted(member.object)) {
+  if ((name === "skipIf" || name === "runIf") && isRooted(member.object, analysis.roots)) {
     const constant = name === "skipIf" ? constantSkipIf(args[0]) : constantRunIf(args[0]);
     if (constant) found.push({ anchor, rule: name, name });
   }
@@ -1058,7 +1160,7 @@ function judgeCall(call: Call, analysis: Analysis, judged: Set<Node>): void {
 /** Rules 9 and 10 on an object literal. */
 function judgeObject(object: ObjectExpression, found: Found[], judged: Set<Node>): void {
   for (const property of object.properties) {
-    if (property.type === "ObjectMethod") {
+    if (property.type === "ObjectMethod" && property.kind !== "set") {
       const key = keyName(property);
       if ((key === "todo" || key === "expectFailure") && !judged.has(object)) {
         found.push({ anchor: property.key, rule: "data", name: key });
@@ -1084,34 +1186,86 @@ function judgeImport(node: ImportDeclaration, found: Found[]): void {
   for (const specifier of node.specifiers) {
     if (specifier.type !== "ImportSpecifier") continue;
     if (specifier.importKind === "type" || specifier.importKind === "typeof") continue;
-    const { imported } = specifier;
-    const name = imported.type === "Identifier" ? imported.name : imported.value;
+    const name = importedName(specifier);
     if (BINDING_MARKERS.has(name)) found.push({ anchor: specifier, rule: "import", name });
   }
 }
 
+function importedName(specifier: ImportSpecifier): string {
+  const { imported } = specifier;
+  return imported.type === "Identifier" ? imported.name : imported.value;
+}
+
 /** Rule 11 on a variable declarator: a destructure of node:test's require or import, or of a test
  * function. */
-function judgeRequire(node: VariableDeclarator, found: Found[]): void {
+function judgeRequire(node: VariableDeclarator, found: Found[], roots: ReadonlySet<string>): void {
   if (node.id.type !== "ObjectPattern" || node.init == null) return;
   const imported = loads(node.init, "node:test");
-  if (!imported && !isTestFunction(node.init)) return;
-  const rule = imported ? "import" : "destructure";
-  for (const property of node.id.properties) {
+  if (!imported && !isTestFunction(node.init, roots)) return;
+  judgePattern(node.id, imported ? "import" : "destructure", found);
+}
+
+/** Rule 11 over a destructuring pattern: each marker's name, and the names a pattern nested under
+ * a ROOT's key pulls out. */
+function judgePattern(pattern: ObjectPattern, rule: string, found: Found[]): void {
+  for (const property of pattern.properties) {
     const name = keyName(property) ?? "";
     if (BINDING_MARKERS.has(name)) found.push({ anchor: property, rule, name });
+    else if (isRootKey(name) && property.type === "ObjectProperty") {
+      const value =
+        property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+      if (value.type === "ObjectPattern") judgePattern(value, rule, found);
+    }
   }
 }
 
 /** Rule 11: whether a destructured value is a test function: a ROOTED chain whose last step is a
  * ROOT, a test modifier, a computed key that is no literal or a LINK call, not data read off one
  * (`context.args`). */
-function isTestFunction(value: Node): boolean {
+function isTestFunction(value: Node, roots: ReadonlySet<string>): boolean {
   const node = unwrapAll(value);
-  if (!isRooted(node)) return false;
+  if (!isRooted(node, roots)) return false;
   if (!isMember(node)) return true;
   const name = memberName(node);
-  return name === null || ROOTS.has(name) || MODIFIERS.has(name);
+  return name === null || isRootKey(name) || MODIFIERS.has(name);
+}
+
+/** Rule 11: whether a name read off node:test or a test function is a test function: a ROOT, or
+ * `default` (node:test's default export is `test`). */
+function isRootKey(name: string): boolean {
+  return ROOTS.has(name) || name === "default";
+}
+
+/** Rule 11: ROOTS and the names a file binds to node:test or to one of its test functions (see
+ * the header). */
+function rootsOf(all: Node[]): Set<string> {
+  const roots = new Set(ROOTS);
+  for (const node of all) {
+    if (node.type === "ImportDeclaration") {
+      if (node.source.value !== "node:test") continue;
+      if (node.importKind === "type" || node.importKind === "typeof") continue;
+      for (const specifier of node.specifiers) {
+        if (specifier.type !== "ImportSpecifier") roots.add(specifier.local.name);
+        else if (isRootKey(importedName(specifier))) roots.add(specifier.local.name);
+      }
+    } else if (node.type === "VariableDeclarator" && node.init != null) {
+      if (!loads(node.init, "node:test")) continue;
+      if (node.id.type === "Identifier") roots.add(node.id.name);
+      if (node.id.type !== "ObjectPattern") continue;
+      for (const property of node.id.properties) {
+        if (property.type === "RestElement") {
+          if (property.argument.type === "Identifier") roots.add(property.argument.name);
+        } else if (isRootKey(keyName(property) ?? "")) {
+          const value =
+            property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+          if (value.type === "Identifier") roots.add(value.name);
+        }
+      }
+    } else if (node.type === "AssignmentExpression" && node.left.type === "Identifier") {
+      if (loads(node.right, "node:test")) roots.add(node.left.name);
+    }
+  }
+  return roots;
 }
 
 // TypeScript's decorators as `experimentalDecorators` writes them, parameter decorators included
@@ -1205,6 +1359,7 @@ function analyse(text: string, fileName: string): Analysis {
     lineStarts: lineStartsOf(text),
     parents: new Map(),
     found: [],
+    roots: ROOTS,
   };
   const playwright = program.body.some(importsPlaywright);
   // Every test call's options objects are judged by rule 8 first, so rule 9 can leave them out.
@@ -1217,6 +1372,7 @@ function analyse(text: string, fileName: string): Analysis {
       stack.push(child);
     }
   }
+  analysis.roots = rootsOf(all);
   const judged = new Set<Node>();
   for (const node of all) {
     if (isCall(node)) judgeCall(node, analysis, judged);
@@ -1229,7 +1385,7 @@ function analyse(text: string, fileName: string): Analysis {
       }
     } else if (node.type === "ObjectExpression") judgeObject(node, analysis.found, judged);
     else if (node.type === "ImportDeclaration") judgeImport(node, analysis.found);
-    else if (node.type === "VariableDeclarator") judgeRequire(node, analysis.found);
+    else if (node.type === "VariableDeclarator") judgeRequire(node, analysis.found, analysis.roots);
   }
   analysis.found.sort((a, b) => startOf(a.anchor) - startOf(b.anchor));
   return analysis;
@@ -1291,19 +1447,65 @@ function cutText(node: Node, cuts: Array<[number, number, string]>, analysis: An
   return text + analysis.text.slice(at, endOf(node));
 }
 
+/** The elements of an array, object or class body, or null for any other node. */
+function elementsOf(node: Node): Node[] | null {
+  if (node.type === "ArrayExpression") return node.elements.filter((e) => e !== null);
+  if (node.type === "ObjectExpression") return node.properties;
+  if (node.type === "ClassBody") return node.body;
+  return null;
+}
+
+/** Whether a node is or holds a function (a test's body: another test, a hook, a helper). */
+function holdsFunction(node: Node): boolean {
+  const stack: Node[] = [node];
+  for (let cur = stack.pop(); cur !== undefined; cur = stack.pop()) {
+    if (isFunctionLike(cur)) return true;
+    stack.push(...childrenOf(cur));
+  }
+  return false;
+}
+
 /** The statements around a unit, outermost last, each with every function body in it elided
  * (its own too): which test and which describe a marker sits in is part of its identity, so a
- * `this.skip();` moved from a skipped test into a running one is new. */
+ * `this.skip();` moved from a skipped test into a running one is new. A test need not be a
+ * statement (a table entry, a class method, a property of a mocha exports object), so in each
+ * array, object or class body on the way up only the element on the way and the elements that
+ * hold no function are written (in order, joined by a fixed separator): the test's own key or
+ * title stays in, and a sibling test added, removed or edited leaves the marker alone. */
 function contextOf(unit: Node, analysis: Analysis): string {
   const parts: string[] = [];
+  // Each array, object or class body on the way up since the last function, with its element on
+  // the way. A function's body is elided in every statement around it, and the containers in it
+  // with it, so they are dropped there.
+  const containers: Array<[Node, Node]> = [];
+  let child = unit;
   for (let cur = analysis.parents.get(unit); cur !== undefined; cur = analysis.parents.get(cur)) {
+    if (isFunctionLike(cur)) containers.length = 0;
+    if (elementsOf(cur) !== null) containers.push([cur, child]);
+    child = cur;
     if (cur.type === "BlockStatement" || !/(?:Statement|Declaration)$/.test(cur.type)) continue;
+    // The text between the elements kept, the delimiters' insides at both ends included.
+    const gaps: Array<[number, number, string]> = [];
+    for (const [container, onTheWay] of containers) {
+      const kept = (elementsOf(container) ?? []).filter(
+        (element) => element === onTheWay || !holdsFunction(element),
+      );
+      let at = startOf(container) + 1;
+      for (const element of kept) {
+        gaps.push([at, startOf(element), "\u0002"]);
+        at = endOf(element);
+      }
+      gaps.push([at, endOf(container) - 1, "\u0002"]);
+    }
     const bodies =
       isFunctionLike(cur) && "body" in cur && isNode(cur.body)
         ? [[startOf(cur.body), endOf(cur.body)] as [number, number]]
         : elidedBodies(cur, -1);
-    const cuts = bodies.map(([start, end]): [number, number, string] => [start, end, ELIDED]);
-    parts.push(cutText(cur, cuts, analysis));
+    // A body in an element left out goes with it.
+    const cuts = bodies
+      .filter(([start, end]) => !gaps.some(([from, to]) => start >= from && end <= to))
+      .map(([start, end]): [number, number, string] => [start, end, ELIDED]);
+    parts.push(cutText(cur, [...cuts, ...gaps], analysis));
   }
   return parts.join("\u0000");
 }

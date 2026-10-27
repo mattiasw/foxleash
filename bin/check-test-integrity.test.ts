@@ -1163,6 +1163,34 @@ describe("check-test-integrity.sh on tables of test files", () => {
     ["a bare skip on this", `test("t", function () {\n  ${m("this.", "skip()")};\n  run();\n});\n`],
     ["a bare skip on the test context", `test("t", (t) => {\n  ${m("t.", "skip()")};\n});\n`],
     [
+      "a skip on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a skip on the test context below a trailing comment holding a quote",
+      `test("t", (t) => {\n  t // don't run on CI\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a skip on the test context below a block comment over two lines",
+      `test("t", (t) => {\n  t /${m("* no Firefox")}\n     here ${m("*", "/")}\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "an optional skip on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "skip?.(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "a todo on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "todo(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "an optional todo on the test context in a test body",
+      `test("t", (t) => {\n  ${m("t.", "todo?.(")}"needs Firefox");\n});\n`,
+    ],
+    [
+      "node:test's in-body todo with a reason",
+      `test("t", (t) => {\n  ${m("t.", "todo(")}"later");\n});\n`,
+    ],
+    [
       "a bare skip with a space before the dot",
       `test("t", function () {\n  ${m("this .", "skip()")};\n});\n`,
     ],
@@ -2053,16 +2081,12 @@ describe("check-test-integrity.sh on tables of test files", () => {
 
   const allowed: Array<[string, string]> = [
     [
-      "a skip on the test context in a test body",
-      `test("t", (t) => {\n  ${m("t.", "skip(")}"needs Firefox");\n});\n`,
+      "a cursor skip below a trailing comment holding a quote",
+      `test("t", async () => {\n  const rows = await cursor // don't page on CI\n    ${m(".", "skip(")}10);\n  assert.ok(rows);\n});\n`,
     ],
     [
-      "a skip on the test context below a trailing comment holding a quote",
-      `test("t", (t) => {\n  t // don't run on CI\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
-    ],
-    [
-      "a skip on the test context below a block comment over two lines",
-      `test("t", (t) => {\n  t /${m("* no Firefox")}\n     here ${m("*", "/")}\n    ${m(".", "skip(")}"needs Firefox");\n});\n`,
+      "a cursor skip below a block comment over two lines",
+      `test("t", async () => {\n  const rows = await cursor /${m("* page")}\n     here ${m("*", "/")}\n    ${m(".", "skip(")}10);\n  assert.ok(rows);\n});\n`,
     ],
     [
       "a locator chain split by a block comment over two lines",
@@ -2084,10 +2108,6 @@ describe("check-test-integrity.sh on tables of test files", () => {
     [
       "a conditional skip option on an optional test call",
       'test?.("t", { skip: !process.env.X }, () => {\n  run();\n});\n',
-    ],
-    [
-      "an optional skip on the test context in a test body",
-      `test("t", (t) => {\n  ${m("t.", "skip?.(")}"needs Firefox");\n});\n`,
     ],
     ["a false skip option", 'test("t", { skip: false }, () => {\n  run();\n});\n'],
     ["a parenthesised condition", 'test("t", { skip: (isCI) }, () => {\n  run();\n});\n'],
@@ -2174,14 +2194,6 @@ describe("check-test-integrity.sh on tables of test files", () => {
       "a bodiless todo with a trailing comment",
       `${m("test.", "todo(")}"planned"); // trailing comment\n`,
     ],
-    [
-      "a todo on the test context in a test body",
-      `test("t", (t) => {\n  ${m("t.", "todo(")}"needs Firefox");\n});\n`,
-    ],
-    [
-      "an optional todo on the test context in a test body",
-      `test("t", (t) => {\n  ${m("t.", "todo?.(")}"needs Firefox");\n});\n`,
-    ],
     ["a conditional todo option", 'test("t", { todo: !process.env.X }, () => {\n  run();\n});\n'],
     ["a false todo option", 'test("t", { todo: false }, () => {\n  run();\n});\n'],
     ["a parenthesised todo condition", 'test("t", { todo: (isCI) }, () => {\n  run();\n});\n'],
@@ -2238,10 +2250,6 @@ describe("check-test-integrity.sh on tables of test files", () => {
     ["a todo with one quoted name", `${m("test.", "todo(")}"title");\n`],
     ["a todo whose name holds a comma", `${m("test.", "todo(")}"a, b");\n`],
     ["a todo whose template name holds a member path", m("test.", "todo(", "`a $", "{b.c}`);\n")],
-    [
-      "node:test's in-body todo with a reason",
-      `test("t", (t) => {\n  ${m("t.", "todo(")}"later");\n});\n`,
-    ],
     [
       "an option skip whose value starts with an array",
       `test("t", { ${m("skip", ': ["darwin"].includes(process.platform)')} }, () => {\n  work();\n});\n`,
@@ -3945,6 +3953,32 @@ describe("check-test-integrity.sh on node:test files and Playwright specs", () =
       "node:test's bare in-body todo",
       `test("t", (t) => {\n  ${m("t.", "todo()")};\n  throw new Error("x");\n});\n`,
     ],
+    // A reason makes no runtime skip conditional: node:test runs the body on and ignores its
+    // failure, mocha's this.skip ignores the argument.
+    [
+      "node:test's in-body optional-call skip with a reason",
+      `test("t", (t) => {\n  ${m("t.", "skip?.(")}"no database");\n});\n`,
+    ],
+    [
+      "node:test's in-body skip with a reason",
+      `test("t", (t) => {\n  ${m("t.", "skip(")}"no database");\n});\n`,
+    ],
+    [
+      "node:test's in-body todo with a reason",
+      `test("t", (t) => {\n  ${m("t.", "todo(")}"later");\n});\n`,
+    ],
+    [
+      "an in-body skip with a reason on a context under another name",
+      `test("t", (ctx) => {\n  ${m("ctx.", "skip(")}"wip");\n  throw new Error("x");\n});\n`,
+    ],
+    [
+      "a mocha in-body skip with a reason",
+      `it("t", function () {\n  ${m("this.", "skip(")}"flaky");\n});\n`,
+    ],
+    [
+      "node:test's in-body skip with a reason before a throw",
+      `test("x", (t) => {\n  ${m("t.", "skip(")}"wip");\n  throw new Error("x");\n});\n`,
+    ],
     ["Jest's failing", `${m("test.", "failing(")}"t", fn);\n`],
     ["Vitest's fails via it", `${m("it.", "fails(")}"t", fn);\n`],
     ["Vitest's fails on a concurrent link", `${m("test.concurrent.", "fails(")}"t", fn);\n`],
@@ -5237,10 +5271,6 @@ describe("check-test-integrity.sh on node:test files and Playwright specs", () =
       `test("t", () => {\n  assert.equal(name, "${m("pytest.mark.", "skip")}");\n});\n`,
     ],
     [
-      "node:test's in-body optional-call skip with a reason",
-      `test("t", (t) => {\n  ${m("t.", "skip?.(")}"no database");\n});\n`,
-    ],
-    [
       "a database cursor skip on AVA's t.context",
       `test("t", async (t) => {\n  const rows = await t.context.db.find({})${m(".", "skip(")}10).toArray();\n  assert.ok(rows);\n});\n`,
     ],
@@ -5281,10 +5311,6 @@ describe("check-test-integrity.sh on node:test files and Playwright specs", () =
       `test("t", () => {\n  if (filters.${m("only", " <= 1")} && total > (offset ?? 0)) {\n    run();\n  }\n});\n`,
     ],
     [
-      "node:test's in-body skip with a reason",
-      `test("t", (t) => {\n  ${m("t.", "skip(")}"no database");\n});\n`,
-    ],
-    [
       "the empty placeholder with a string reason",
       `test("store (set DATABASE_URL to run)", { ${m("skip", ': "no database"')} }, () => {});\n`,
     ],
@@ -5319,10 +5345,6 @@ describe("check-test-integrity.sh on node:test files and Playwright specs", () =
     ["a todo with one quoted name", `${m("test.", "todo(")}"title");\n`],
     ["a todo whose name holds a comma", `${m("test.", "todo(")}"a, b");\n`],
     ["a todo whose template name holds a member path", m("test.", "todo(", "`a $", "{b.c}`);\n")],
-    [
-      "node:test's in-body todo with a reason",
-      `test("t", (t) => {\n  ${m("t.", "todo(")}"later");\n});\n`,
-    ],
     [
       "a skipIf whose argument starts with an array",
       `${m("test.skipIf(", '["linux"].includes(process.platform))(')}"t", fn);\n`,

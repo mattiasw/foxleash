@@ -108,7 +108,7 @@ case $JS_STATUS in
     {
       echo "check-test-integrity: focus, skip or todo markers added:"
       printf '%s\n' "$JS_LINES"
-      echo "check-test-integrity: allowed: { skip: !process.env.X }, t.skip(\"reason\"), test.todo(\"name\") with no body, and an empty env-gated placeholder test with a skip option, test(\"... (set X to run)\", { skip: true }, () => {})."
+      echo "check-test-integrity: allowed: { skip: !process.env.X } or another condition as a test's option, test(\"x\", { skip: cond }, fn); test.todo(\"name\") with no body; and an empty env-gated placeholder test with a skip option, test(\"... (set X to run)\", { skip: true }, () => {})."
       echo "check-test-integrity: each marker is listed as <file>:<line>: with the statement that holds it; the rules are in the header of bin/check-test-markers.ts."
     } >&2
     exit 1
