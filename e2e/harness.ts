@@ -74,6 +74,8 @@ export interface Session {
   close(): Promise<void>;
 }
 
+type StartOptions = Pick<LaunchOptions, "holdBeforeUnloadPrompts" | "restoreSession">;
+
 export interface Harness {
   root: string;
   run: string;
@@ -82,10 +84,14 @@ export interface Harness {
   env: Record<string, string>;
   /** Installs the native host into the temp home only (`install --no-claude --no-extension`). */
   install(): void;
-  startFirefox(
-    extensionDir: string,
-    options?: Pick<LaunchOptions, "holdBeforeUnloadPrompts">,
-  ): Promise<Firefox>;
+  startFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
+  /**
+   * Quits the Firefox started last and starts Firefox again on the same profile, installing the
+   * extension again. Seed settings and connect a new session afterwards: sessions end with the
+   * Firefox that quit, and whether storage.local carries over is not checked. The quit Firefox's
+   * output stays in the diagnostics.
+   */
+  restartFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
   /**
    * Writes `entries` into the extension's storage.local from its settings page, in the Firefox
    * started last. The only way tests write settings: the extension has no test hook.
@@ -200,6 +206,39 @@ export function createHarness(): Harness {
     }
   }
 
+  async function startFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox> {
+    assertOpen();
+    assert.ok(
+      existsSync(join(extensionDir, "manifest.json")),
+      `${extensionDir} holds no built extension: run npm run build`,
+    );
+    const binary = await ensureFirefox();
+    assertOpen();
+    const firefox = await launchFirefox({
+      binary,
+      profileDir: profile,
+      env,
+      downloadDir: downloads,
+      ...options,
+    });
+    if (closed) {
+      // close() ran while Firefox started and could not reach it.
+      await firefox.close();
+      assertOpen();
+    }
+    firefoxes.push(firefox);
+    let id: string;
+    try {
+      id = await firefox.installExtension(extensionDir);
+    } catch (error: unknown) {
+      throw new Error(`installing ${extensionDir} failed: ${messageOf(error)}${diagnostics()}`, {
+        cause: error,
+      });
+    }
+    assert.equal(id, EXTENSION_ID, `Firefox installed the extension as ${id}${diagnostics()}`);
+    return firefox;
+  }
+
   return {
     root,
     run,
@@ -224,37 +263,18 @@ export function createHarness(): Harness {
       );
     },
 
-    async startFirefox(extensionDir, options) {
+    startFirefox,
+
+    async restartFirefox(extensionDir, options) {
       assertOpen();
-      assert.ok(
-        existsSync(join(extensionDir, "manifest.json")),
-        `${extensionDir} holds no built extension: run npm run build`,
-      );
-      const binary = await ensureFirefox();
-      assertOpen();
-      const firefox = await launchFirefox({
-        binary,
-        profileDir: profile,
-        env,
-        downloadDir: downloads,
-        ...options,
-      });
-      if (closed) {
-        // close() ran while Firefox started and could not reach it.
-        await firefox.close();
-        assertOpen();
-      }
-      firefoxes.push(firefox);
-      let id: string;
       try {
-        id = await firefox.installExtension(extensionDir);
+        await currentFirefox().quit();
       } catch (error: unknown) {
-        throw new Error(`installing ${extensionDir} failed: ${messageOf(error)}${diagnostics()}`, {
+        throw new Error(`quitting Firefox failed: ${messageOf(error)}${diagnostics()}`, {
           cause: error,
         });
       }
-      assert.equal(id, EXTENSION_ID, `Firefox installed the extension as ${id}${diagnostics()}`);
-      return firefox;
+      return startFirefox(extensionDir, options);
     },
 
     async seedSettings(entries) {

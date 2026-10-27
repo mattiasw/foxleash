@@ -310,12 +310,12 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   page or go back or forward; after the agent goes back or forward to a page that a form sent
   with POST or that holds a frame a form sent with POST, or to a page on a site you had not
   approved and then approve; in a frame, after the agent goes back or forward and only that
-  frame changes; and after a tab that was unloaded, by you or by Firefox to save memory, is
-  loaded again. Possibly also after Firefox restores your windows and tabs when it starts
-  again; after the agent goes back or forward and the page delays that, or Firefox delays
-  telling Foxhand about the page's request, by more than a second, or the computer's clock is
-  set back meanwhile; and to another tool call that reads the page while the agent goes back or
-  forward to it.
+  frame changes; after a tab that was unloaded, by you or by Firefox to save memory, is loaded
+  again; and after Firefox restores your windows and tabs when it starts again. Possibly also
+  after you reopen a tab or window you closed; after the agent goes back or forward and the
+  page delays that, or Firefox delays telling Foxhand about the page's request, by more than a
+  second, or the computer's clock is set back meanwhile; and to another tool call that reads
+  the page while the agent goes back or forward to it.
   Screenshots hide the text of these fields, also in frames from other sites, with a style
   sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a frame does not take
   it, such as a PDF in a frame. There are two exceptions: a frame showing Firefox's error page

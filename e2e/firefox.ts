@@ -164,6 +164,21 @@ return Promise.all(
   const [{ entries, index }] = held;
   return { index, entries: entries.map((entry) => entry.url) };
 });`;
+// Collects every loaded tab's whole history and state into the session store, in every window, so
+// a quit right after writes them all to the session file. An unloaded tab has no frame loader.
+const FLUSH_ALL_TABS = `const { TabStateFlusher } = ChromeUtils.importESModule(
+  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
+);
+const flushes = [];
+for (const window of Services.wm.getEnumerator("navigator:browser")) {
+  for (const tab of window.gBrowser.tabs) {
+    if (!tab.linkedBrowser.frameLoader) continue;
+    tab.linkedBrowser.frameLoader.requestSHistoryUpdate();
+    flushes.push(TabStateFlusher.flush(tab.linkedBrowser));
+  }
+}
+return Promise.all(flushes).then(() => null);`;
+const SAVED_LOGINS = "return Services.logins.getAllLogins().then((logins) => logins.length);";
 
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
@@ -222,6 +237,8 @@ export interface Firefox {
   saveLogin(origin: string, username: string, password: string): Promise<void>;
   /** Removes every saved login. */
   removeLogins(): Promise<void>;
+  /** How many logins Firefox has saved. */
+  savedLogins(): Promise<number>;
   /**
    * Fills `card` into the card form of the tab's page as Firefox's form autofill does when the
    * user picks a saved card from the card number field's pop-up. It first focuses that field,
@@ -252,6 +269,18 @@ export interface Firefox {
     timeoutMs: number,
   ): Promise<string>;
   output(): FirefoxOutput;
+  /**
+   * Flushes every loaded tab's state into the session store, quits Firefox as File > Quit does,
+   * and resolves once Firefox has exited with code 0, so the session store has written its file.
+   * Firefox's process group is killed afterwards either way (the lifetime watchdog is still in
+   * it). Rejects when Firefox refuses to quit, does not exit within the deadline, or exits with
+   * another code or a signal, and at once when Firefox was already quit or closed.
+   */
+  quit(): Promise<void>;
+  /**
+   * Kills Firefox's process group. After `quit()`, only waits for the quit's teardown, without
+   * its error and without signalling the group again.
+   */
   close(): Promise<void>;
 }
 
@@ -281,6 +310,11 @@ export interface LaunchOptions {
    * accepting it at once, and shows it without a click on the page first.
    */
   holdBeforeUnloadPrompts?: boolean;
+  /**
+   * Starts with the windows and tabs of the last session, as Firefox's "Open previous windows
+   * and tabs" setting does.
+   */
+  restoreSession?: boolean;
 }
 
 /**
@@ -297,8 +331,12 @@ export async function launchFirefox({
   downloadDir,
   lifetimeSeconds = FIREFOX_LIFETIME_SECONDS,
   holdBeforeUnloadPrompts = false,
+  restoreSession = false,
 }: LaunchOptions): Promise<Firefox> {
-  writeFileSync(join(profileDir, "user.js"), buildUserJs(downloadDir, holdBeforeUnloadPrompts));
+  writeFileSync(
+    join(profileDir, "user.js"),
+    buildUserJs(downloadDir, holdBeforeUnloadPrompts, restoreSession),
+  );
   const child = spawn(
     "sh",
     [
@@ -335,6 +373,11 @@ export async function launchFirefox({
   child.stderr?.on("data", (chunk: string) => stderrTail.push(chunk));
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
+  });
+  // 'exit', not 'close', for the exit status: 'close' waits until every process holding Firefox's
+  // output pipes has exited, and its content processes inherit them.
+  const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) => {
+    child.once("exit", (code, signal) => resolve({ code, signal }));
   });
 
   function output(): FirefoxOutput {
@@ -452,7 +495,59 @@ export async function launchFirefox({
     }
   }
 
+  async function quitAndTearDown(): Promise<void> {
+    let failure: unknown;
+    try {
+      await withDeadline(quitGracefully(), HELPER_TIMEOUT_MS, "Firefox to quit");
+    } catch (error: unknown) {
+      failure = error;
+    }
+    try {
+      await tearDown();
+    } catch (error: unknown) {
+      failure ??= error;
+    }
+    if (failure !== undefined) {
+      throw new Error(
+        `Firefox did not quit cleanly: ${messageOf(failure)}${describeOutput(output())}`,
+        {
+          cause: failure,
+        },
+      );
+    }
+  }
+
+  // Not ExecuteScript with Services.startup.quit: the script's reply races the shutdown.
+  // Marionette answers Quit once the quit-application topic fires, and turns a quit that something
+  // cancelled into a forced one, which it reports.
+  async function quitGracefully(): Promise<void> {
+    await chrome(FLUSH_ALL_TABS, []);
+    const reply = await input.send("Marionette:Quit", { flags: ["eAttemptQuit"] });
+    if (!isRecord(reply) || reply.cause !== "shutdown" || reply.forced !== false) {
+      throw new Error(`Marionette:Quit returned ${JSON.stringify(reply)}`);
+    }
+    const { code, signal } = await exited;
+    if (code !== 0 || signal !== null) {
+      throw new Error(`Firefox exited with code ${code}, signal ${signal}`);
+    }
+  }
+
+  // Also after a quit: Firefox's content processes can outlive it, and the watchdog would.
+  async function tearDown(): Promise<void> {
+    try {
+      killGroupSync(child);
+      await withDeadline(closed, CLOSE_TIMEOUT_MS, "Firefox to exit after the group kill");
+    } finally {
+      untrack(child);
+      session.close();
+      input.close();
+    }
+  }
+
   let closing: Promise<void> | undefined;
+  // Set by quit(). Once the group is gone its id can lead another group, so close() must not
+  // signal it again.
+  let quitting: Promise<void> | undefined;
   return {
     async installExtension(path) {
       const result = await session.send("webExtension.install", {
@@ -573,6 +668,19 @@ export async function launchFirefox({
     removeLogins() {
       return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
     },
+    savedLogins() {
+      return withDeadline(
+        chromeResponse(SAVED_LOGINS, []).then((response) => {
+          const count = isRecord(response) ? response.value : undefined;
+          if (typeof count !== "number") {
+            throw new Error(`savedLogins returned ${JSON.stringify(response)}`);
+          }
+          return count;
+        }),
+        HELPER_TIMEOUT_MS,
+        "savedLogins",
+      );
+    },
     fillCreditCard(context, numberSelector, card) {
       return withDeadline(
         (async () => {
@@ -651,17 +759,15 @@ export async function launchFirefox({
       );
     },
     output,
+    quit() {
+      if (closing !== undefined) return Promise.reject(new Error("Firefox is already closed"));
+      closing = quitAndTearDown();
+      quitting = closing.catch(() => {});
+      return closing;
+    },
     close() {
-      closing ??= (async () => {
-        killGroupSync(child);
-        try {
-          await withDeadline(closed, CLOSE_TIMEOUT_MS, "Firefox to exit after the group kill");
-        } finally {
-          untrack(child);
-          session.close();
-          input.close();
-        }
-      })();
+      if (quitting !== undefined) return quitting;
+      closing ??= tearDown();
       return closing;
     },
   };
@@ -675,14 +781,28 @@ function browsingContextOf(entry: unknown): BrowsingContext {
 }
 
 /** The throwaway profile's user.js. Every pref carries its reason. */
-function buildUserJs(downloadDir: string, holdBeforeUnloadPrompts: boolean): string {
+function buildUserJs(
+  downloadDir: string,
+  holdBeforeUnloadPrompts: boolean,
+  restoreSession: boolean,
+): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
+    restoreSession
+      ? [
+          "browser.startup.page",
+          3,
+          "Open the last session's windows and tabs at startup, as the 'Open previous windows and tabs' setting does, for a test that restarts Firefox.",
+        ]
+      : [
+          "browser.startup.page",
+          0,
+          "Start blank: the default about:home is a privileged page that fetches remote content.",
+        ],
     [
-      "browser.startup.page",
-      0,
-      "Start blank: the default about:home is a privileged page that fetches remote content.",
+      "browser.startup.homepage",
+      "about:blank",
+      "A blank home page, which a start with no session to restore opens: the default about:home is a privileged page that fetches remote content.",
     ],
-    ["browser.startup.homepage", "about:blank", "Same reason."],
     [
       "dom.disable_open_during_load",
       true,

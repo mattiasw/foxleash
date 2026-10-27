@@ -91,6 +91,15 @@ accepting them at once, and lets them show without a click on the page first. Th
 for the prompt and answers it with `firefox.watchPrompt`, which uses BiDi's
 `browsingContext.userPromptOpened` event and `browsingContext.handleUserPrompt`.
 
+A test that restarts Firefox starts it with
+`harness.startFirefox(EXTENSION_DIST, { restoreSession: true })`, which sets
+`browser.startup.page` to 3 so Firefox opens the last session's windows and tabs, and restarts
+it with `harness.restartFirefox(EXTENSION_DIST, { restoreSession: true })`. That calls
+`firefox.quit()`, which flushes each loaded tab's state into the session store and quits as
+File > Quit does, then starts Firefox on the same profile and installs the extension again.
+After a restart the test seeds its settings and connects a new MCP session: sessions end with
+the Firefox that quit, and whether the settings survive is not checked.
+
 The approval prompt's buttons answer only a second after its page is both visible and
 focused, so `harness.waitForArmed` first brings the prompt's tab to the front with
 `firefox.activate`, which sends the same Marionette `WebDriver:SwitchToWindow` that
