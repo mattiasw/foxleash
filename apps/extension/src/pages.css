@@ -46,6 +46,20 @@ label {
   display: block;
 }
 
+fieldset {
+  margin: 0;
+  min-width: 0;
+}
+
+input[type="text"] {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 44px;
+  margin-block: 0.25rem;
+  font: inherit;
+}
+
 textarea {
   display: block;
   box-sizing: border-box;
@@ -66,6 +80,10 @@ textarea {
   display: flex;
   flex-wrap: wrap;
   gap: 0.5rem;
+}
+
+li .actions {
+  flex-shrink: 0;
 }
 
 :focus-visible {

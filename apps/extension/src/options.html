@@ -35,6 +35,50 @@
         </div>
         <p id="blocklist-status" role="status" aria-live="polite"></p>
       </section>
+      <section aria-labelledby="recipes-heading">
+        <h2 id="recipes-heading" tabindex="-1">Recipes</h2>
+        <p>A recipe is a task's steps written down, with the sites it uses. You write, edit and
+          delete recipes here, and Foxhand keeps them on this computer.</p>
+        <ul id="recipes" hidden></ul>
+        <p id="recipes-empty" hidden>No recipes are saved.</p>
+        <div class="actions">
+          <button type="button" id="recipe-add">Add a recipe</button>
+        </div>
+        <fieldset id="recipe-editor" aria-labelledby="recipe-editor-heading" hidden>
+          <h3 id="recipe-editor-heading" tabindex="-1">New recipe</h3>
+          <label for="recipe-name">Name</label>
+          <input type="text" id="recipe-name" autocomplete="off" aria-required="true"
+            aria-describedby="recipe-name-help recipe-name-errors">
+          <p id="recipe-name-help">One line of at most 100 characters; no two recipes share a
+            name.</p>
+          <ul id="recipe-name-errors" class="errors" hidden></ul>
+          <label for="recipe-description">Description</label>
+          <input type="text" id="recipe-description" autocomplete="off" aria-required="true"
+            aria-describedby="recipe-description-help recipe-description-errors">
+          <p id="recipe-description-help">One line of at most 200 characters saying what the
+            recipe does.</p>
+          <ul id="recipe-description-errors" class="errors" hidden></ul>
+          <label for="recipe-sites">Sites</label>
+          <textarea id="recipe-sites" rows="4" spellcheck="false" autocomplete="off"
+            autocapitalize="off" aria-required="true"
+            aria-describedby="recipe-sites-help recipe-sites-errors"></textarea>
+          <p id="recipe-sites-help">One site per line, such as https://example.com; a full address
+            is reduced to its site.</p>
+          <ul id="recipe-sites-errors" class="errors" hidden></ul>
+          <label for="recipe-steps">Steps</label>
+          <textarea id="recipe-steps" rows="12" aria-required="true"
+            aria-describedby="recipe-steps-help recipe-steps-errors"></textarea>
+          <p id="recipe-steps-help">The task's steps in your own words, at most 20,000
+            characters.</p>
+          <ul id="recipe-steps-errors" class="errors" hidden></ul>
+          <div class="actions">
+            <button type="button" id="recipe-save">Save</button>
+            <button type="button" id="recipe-cancel">Cancel</button>
+          </div>
+        </fieldset>
+        <p id="recipes-status" role="status" aria-live="polite"></p>
+        <button type="button" id="recipe-undo" hidden>Undo</button>
+      </section>
     </main>
     <script src="options.js"></script>
   </body>

@@ -6,6 +6,9 @@ import { normalizeDomain, siteOf } from "./site.ts";
 /** A site allowed always is stored as `site:<site>` holding `{ grantedAt }`, one key per site. */
 export const SITE_KEY_PREFIX = "site:";
 
+/** A recipe is stored as `recipe:<name>`; recipes.ts reads and writes them. */
+export const RECIPE_KEY_PREFIX = "recipe:";
+
 const BLOCKLIST_KEY = "blocklist";
 
 export type SettingsBrowser = Pick<BrowserApi, "storage">;
@@ -18,8 +21,8 @@ export interface Settings {
 }
 
 /**
- * Reads the site grants and the blocklist, ignoring (and warning about) every other key and every
- * malformed one.
+ * Reads the site grants and the blocklist, ignoring recipes, and ignoring (and warning about) every
+ * other key and every malformed one.
  */
 export async function readSettings(browser: SettingsBrowser): Promise<Settings> {
   const items = await browser.storage.local.get(null);
@@ -30,6 +33,7 @@ export async function readSettings(browser: SettingsBrowser): Promise<Settings> 
       blocklist = storedBlocklist(items[key]);
       continue;
     }
+    if (key.startsWith(RECIPE_KEY_PREFIX)) continue;
     const site = grantedSite(key, items[key]);
     if (site === undefined) warn({ event: "ignored_setting", key });
     else sites.push(site);

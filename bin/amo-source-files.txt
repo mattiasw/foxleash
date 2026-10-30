@@ -44,6 +44,7 @@ apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts
 apps/extension/src/read-page.ts
+apps/extension/src/recipes.ts
 apps/extension/src/screenshot.ts
 apps/extension/src/session-groups.ts
 apps/extension/src/settings.ts

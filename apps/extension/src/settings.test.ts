@@ -83,6 +83,28 @@ describe("readSettings", () => {
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "__proto__" }]);
   });
 
+  it("skips recipes, valid or malformed, without a warning", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      "recipe:Pay invoices": {
+        name: "Pay invoices",
+        description: "Pays the invoices",
+        sites: ["https://b.example"],
+        steps: "Pay each one.",
+        savedAt: "2026-01-02T03:04:05.000Z",
+      },
+      "recipe:https://c.example": GRANT,
+      "recipe:": "malformed",
+      blocklist: ["paypal.com"],
+      "site:https://a.example": GRANT,
+    });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://a.example"],
+      blocklist: ["paypal.com"],
+    });
+    assert.deepEqual(warnings(), []);
+  });
+
   it("never reads grantedAt from Object.prototype", async (t) => {
     const { fake, warnings } = setup(t);
     const prototype: Record<string, unknown> = Object.prototype as Record<string, unknown>;

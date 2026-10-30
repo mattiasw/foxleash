@@ -80,7 +80,9 @@ The extension's settings page in the Firefox add-ons manager lists the sites you
 always, each with a Revoke button. It also lists the sites you allowed or refused for each
 running agent session, and the prompts you closed without an answer, each with a Forget
 button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
-in memory until the session ends. The settings page is also where you edit the blocklist.
+in memory until the session ends. The settings page is also where you edit the blocklist,
+and where you write, edit and delete recipes: a task's steps written down with the sites it
+uses, kept in Firefox on this computer.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.

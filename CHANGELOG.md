@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A Recipes section on the settings page, where you write, edit and delete recipes: a task's
+  steps written down with the sites it uses. A deleted recipe can be restored with Undo.
+
 ### Removed
 
 - Support for Firefox 140 and 141, including Firefox ESR 140, which Mozilla no longer

@@ -144,6 +144,35 @@ export const MAX_WAIT_FOR_TEXT = 1_000;
 export const MIN_WINDOW_SIZE = 100;
 export const MAX_WINDOW_SIZE = 10_000;
 
+/** A recipe as the user keeps it: written steps for a task, with the sites it uses. */
+export interface RecipeFields {
+  name: string;
+  description: string;
+  /** Sites as siteOf gives them (ADR 0007), no duplicates. */
+  sites: string[];
+  steps: string;
+}
+
+export interface Recipe extends RecipeFields {
+  /** ISO 8601, when the user saved it. */
+  savedAt: string;
+}
+
+export type RecipeSummary = Omit<Recipe, "steps">;
+
+// The recipe lengths count code points. A schema that bounds the same fields in UTF-16 units must
+// allow twice these and leave the exact bound to the extension's checkRecipe.
+/** A recipe name's most characters. */
+export const MAX_RECIPE_NAME = 100;
+/** A recipe description's most characters. */
+export const MAX_RECIPE_DESCRIPTION = 200;
+/** The most sites one recipe lists. */
+export const MAX_RECIPE_SITES = 20;
+/** A recipe's steps' most characters. */
+export const MAX_RECIPE_STEPS = 20_000;
+/** The most recipes storage keeps. */
+export const MAX_RECIPES = 100;
+
 /** type's longest text, in UTF-16 units. */
 export const MAX_TYPE_CHARS = 50_000;
 

@@ -166,6 +166,26 @@ describe("live documents", { timeout: 10000 }, () => {
     ]);
   });
 
+  it("rechecks nothing at a change of recipes only, and rechecks at a mixed change", async (t) => {
+    const warned = quiet(t);
+    const { fake, documents, liveTab } = setup({});
+    const tab = await liveTab();
+    const get = t.mock.method(fake.browser.storage.local, "get");
+    await fake.browser.storage.local.set({ "recipe:a": {}, "recipe:b": {} });
+    await fake.browser.storage.local.remove("recipe:a");
+    await flush();
+    assert.equal(get.mock.callCount(), 0);
+    assert.ok(documents.live(tab.id) !== undefined);
+
+    await fake.browser.storage.local.set({ "recipe:c": {}, [`site:${SITE}`]: null });
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(warned(), [
+      { event: "ignored_setting", key: `site:${SITE}` },
+      { event: "test_failed", tabId: tab.id, reason: "refused", code: "site_not_approved" },
+    ]);
+  });
+
   it("logs no drop at a new commit, a close or a withdrawal", async (t) => {
     const warned = quiet(t);
     const { fake, documents, liveTab } = setup({});

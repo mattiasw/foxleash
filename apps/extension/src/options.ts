@@ -1,5 +1,13 @@
+import { MAX_RECIPES, type Recipe, type RecipeFields } from "@foxhand/protocol";
 import type { BrowserApi } from "./browser-api.ts";
 import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
+import {
+  checkRecipe,
+  deleteRecipe,
+  type RecipeProblem,
+  readRecipes,
+  saveRecipe,
+} from "./recipes.ts";
 import {
   effectiveBlocklist,
   isRecord,
@@ -16,12 +24,30 @@ declare const browser: SettingsBrowser & { runtime: Pick<BrowserApi["runtime"], 
 
 const READ_FAILED = "Could not read Foxhand's settings.";
 const ANSWERS_FAILED = "Could not read the answers of running sessions.";
+const RECIPES_READ_FAILED = "Could not read the recipes.";
+const RECIPE_FIELDS = ["name", "description", "sites", "steps"] as const;
 
 interface AnswerRow {
   key: string;
   text: string;
   forget(): void;
 }
+
+/** One button of a row; its accessible name is `label` followed by the row's name. */
+interface RowAction {
+  label: string;
+  action: string;
+  run(): void;
+}
+
+/** The row button that had focus: its row's key, its action, and its row's position. */
+interface FocusedRow {
+  key: string;
+  action: string;
+  index: number;
+}
+
+type TextField = HTMLInputElement | HTMLTextAreaElement;
 
 const list = element("sites");
 const empty = element("sites-empty");
@@ -31,13 +57,23 @@ const answers = element("answers");
 const answersEmpty = element("answers-empty");
 const answersStatus = element("answers-status");
 const answersHeading = element("answers-heading");
-const field = element("blocklist");
-if (!(field instanceof HTMLTextAreaElement)) {
-  throw new Error("The settings page's #blocklist is not a textarea.");
-}
-const blocklist: HTMLTextAreaElement = field;
+const blocklist = textArea("blocklist");
 const blocklistErrors = element("blocklist-errors");
 const blocklistStatus = element("blocklist-status");
+const recipeList = element("recipes");
+const recipesEmpty = element("recipes-empty");
+const recipesStatus = element("recipes-status");
+const recipesHeading = element("recipes-heading");
+const recipeAdd = element("recipe-add");
+const recipeUndo = element("recipe-undo");
+const editor = element("recipe-editor");
+const editorHeading = element("recipe-editor-heading");
+const editorFields: Record<RecipeProblem["field"], { field: TextField; errors: HTMLElement }> = {
+  name: { field: input("recipe-name"), errors: element("recipe-name-errors") },
+  description: { field: input("recipe-description"), errors: element("recipe-description-errors") },
+  sites: { field: textArea("recipe-sites"), errors: element("recipe-sites-errors") },
+  steps: { field: textArea("recipe-steps"), errors: element("recipe-steps-errors") },
+};
 // Each live region's latest announcement, written to it on the next frame.
 const messages = new Map<HTMLElement, string>();
 // Counts renders, so a read that finishes after a newer render started is discarded.
@@ -49,6 +85,17 @@ let shownAnswers = "";
 // Whether the textarea holds a whole list. Until then it is read-only and Save stores nothing,
 // so a failed or unfinished read cannot save an empty list.
 let filled = false;
+// The stored recipe the editor opened, or undefined for a new one.
+let editing: { name: string; savedAt: string | null } | undefined;
+// The recipe whose Edit button opened the editor, or undefined when Add did.
+let returnTo: string | undefined;
+// While the editor's save is out, Save, Add, Edit and Cancel do nothing, so its result applies to
+// the editor that started it.
+let saving = false;
+// The row button the next shown recipe list focuses, once.
+let pendingFocus: { key: string; action: string } | undefined;
+// The recipe the last delete removed, which Undo saves again.
+let undoable: RecipeFields | undefined;
 
 onSettingsChanged(browser, render);
 render();
@@ -62,10 +109,33 @@ document.addEventListener("visibilitychange", () => {
 fillBlocklist("");
 element("blocklist-save").addEventListener("click", save);
 element("blocklist-default").addEventListener("click", fillDefault);
+recipeAdd.addEventListener("click", () => openEditor(undefined));
+element("recipe-save").addEventListener("click", saveEditor);
+element("recipe-cancel").addEventListener("click", cancelEditor);
+recipeUndo.addEventListener("click", undo);
+// Delete moves focus to Undo, and Cancel to Add, where a held Enter would go on to act.
+ignoreHeldEnter(recipeUndo);
+ignoreHeldEnter(recipeAdd);
 
 function element(id: string): HTMLElement {
   const found = document.getElementById(id);
   if (found === null) throw new Error(`The settings page has no #${id}.`);
+  return found;
+}
+
+function textArea(id: string): HTMLTextAreaElement {
+  const found = element(id);
+  if (!(found instanceof HTMLTextAreaElement)) {
+    throw new Error(`The settings page's #${id} is not a textarea.`);
+  }
+  return found;
+}
+
+function input(id: string): HTMLInputElement {
+  const found = element(id);
+  if (!(found instanceof HTMLInputElement)) {
+    throw new Error(`The settings page's #${id} is not an input.`);
+  }
   return found;
 }
 
@@ -80,6 +150,17 @@ function render(): void {
       if (current === renders) announce(status, READ_FAILED);
     },
   );
+  readRecipes(browser).then(
+    (recipes) => {
+      if (current === renders) showRecipes(recipes);
+    },
+    () => {
+      if (current !== renders) return;
+      // A later render must not move focus out of an editor the user has gone on to type in.
+      pendingFocus = undefined;
+      announce(recipesStatus, RECIPES_READ_FAILED);
+    },
+  );
 }
 
 function show(sites: string[]): void {
@@ -91,42 +172,55 @@ function show(sites: string[]): void {
   if (focused !== undefined) restoreFocus(list, heading, focused, sites);
 }
 
-/** The key and position of the row button in `rows` that has focus, if one has. */
-function focusedRow(rows: HTMLElement): { key: string; index: number } | undefined {
+/** The row button in `rows` that has focus, if one has. */
+function focusedRow(rows: HTMLElement): FocusedRow | undefined {
   const active = document.activeElement;
   if (!(active instanceof HTMLButtonElement) || !rows.contains(active)) return undefined;
-  const key = active.dataset.key;
-  if (key === undefined) return undefined;
-  return { key, index: rowButtons(rows).indexOf(active) };
+  const { key, action } = active.dataset;
+  const item = active.closest("li");
+  if (key === undefined || action === undefined || item === null) return undefined;
+  return { key, action, index: [...rows.children].indexOf(item) };
 }
 
 function siteRow(site: string): HTMLLIElement {
-  const item = row(site, "Revoke", site, () => revoke(site));
+  const item = row(site, site, site, [
+    { label: "Revoke", action: "revoke", run: () => revoke(site) },
+  ]);
   const button = item.querySelector("button");
   if (button !== null) button.dataset.site = site;
   return item;
 }
 
-function row(text: string, action: string, key: string, onClick: () => void): HTMLLIElement {
+function row(text: string, name: string, key: string, actions: RowAction[]): HTMLLIElement {
   const item = document.createElement("li");
-  const name = document.createElement("span");
-  name.textContent = text;
-  const button = document.createElement("button");
-  button.type = "button";
-  button.textContent = action;
-  button.setAttribute("aria-label", `${action} ${text}`);
-  button.dataset.key = key;
-  button.addEventListener("click", (event) => {
-    // The second click of a double-click would land on the next row, moved up under the pointer.
-    if (event.detail > 1) return;
-    onClick();
-  });
-  // A held Enter would go on to act on each row that takes focus after this one.
+  const span = document.createElement("span");
+  span.textContent = text;
+  const buttons = document.createElement("div");
+  buttons.className = "actions";
+  for (const { label, action, run } of actions) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.setAttribute("aria-label", `${label} ${name}`);
+    button.dataset.key = key;
+    button.dataset.action = action;
+    button.addEventListener("click", (event) => {
+      // The second click of a double-click would land on the next row, moved up under the pointer.
+      if (event.detail > 1) return;
+      run();
+    });
+    // A held Enter would go on to act on each row that takes focus after this one.
+    ignoreHeldEnter(button);
+    buttons.append(button);
+  }
+  item.append(span, buttons);
+  return item;
+}
+
+function ignoreHeldEnter(button: HTMLElement): void {
   button.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && event.repeat) event.preventDefault();
   });
-  item.append(name, button);
-  return item;
 }
 
 function revoke(site: string): void {
@@ -136,21 +230,22 @@ function revoke(site: string): void {
   );
 }
 
-/** Focuses the same row's button, else the next row's, else the previous row's, else `fallback`. */
+/**
+ * Focuses the same row's button for the same action, else the next row's, else the previous
+ * row's, else `fallback`.
+ */
 function restoreFocus(
   rows: HTMLElement,
   fallback: HTMLElement,
-  focused: { key: string; index: number },
+  focused: FocusedRow,
   keys: string[],
 ): void {
-  const buttons = rowButtons(rows);
   const kept = keys.indexOf(focused.key);
-  const target = buttons[kept >= 0 ? kept : Math.min(focused.index, buttons.length - 1)];
+  const item = [...rows.children][kept >= 0 ? kept : Math.min(focused.index, keys.length - 1)];
+  const target = [...(item?.querySelectorAll("button") ?? [])].find(
+    (button) => button.dataset.action === focused.action,
+  );
   (target ?? fallback).focus();
-}
-
-function rowButtons(rows: HTMLElement): HTMLButtonElement[] {
-  return [...rows.querySelectorAll("button")];
 }
 
 /** Clears the live region first, so a repeated message is announced again. */
@@ -162,6 +257,83 @@ function announce(region: HTMLElement, text: string): void {
       region.textContent = messages.get(region) ?? "";
     });
   }
+}
+
+function showRecipes(recipes: Recipe[]): void {
+  const focused = focusedRow(recipeList);
+  recipeList.replaceChildren(...recipes.map(recipeRow));
+  recipeList.hidden = recipes.length === 0;
+  recipesEmpty.hidden = recipes.length > 0;
+  if (messages.get(recipesStatus) === RECIPES_READ_FAILED) announce(recipesStatus, "");
+  if (pendingFocus !== undefined) {
+    const { key, action } = pendingFocus;
+    pendingFocus = undefined;
+    (rowButton(recipeList, key, action) ?? recipesHeading).focus();
+  } else if (focused !== undefined) {
+    restoreFocus(
+      recipeList,
+      recipesHeading,
+      focused,
+      recipes.map(({ name }) => name),
+    );
+  }
+}
+
+function recipeRow(recipe: Recipe): HTMLLIElement {
+  const { name, description } = recipe;
+  return row(`${name}: ${description}`, name, name, [
+    { label: "Edit", action: "edit", run: () => openEditor(recipe) },
+    { label: "Delete", action: "delete", run: () => removeRecipe(recipe) },
+  ]);
+}
+
+/** Opens the editor on a stored recipe, or empty for a new one, replacing what it held. */
+function openEditor(recipe: Recipe | undefined): void {
+  if (saving) return;
+  clearEditorErrors();
+  editorFields.name.field.value = recipe?.name ?? "";
+  editorFields.description.field.value = recipe?.description ?? "";
+  editorFields.sites.field.value = recipe?.sites.join("\n") ?? "";
+  editorFields.steps.field.value = recipe?.steps ?? "";
+  editorHeading.textContent = recipe === undefined ? "New recipe" : `Edit ${recipe.name}`;
+  editing = recipe === undefined ? undefined : { name: recipe.name, savedAt: recipe.savedAt };
+  returnTo = recipe?.name;
+  editor.hidden = false;
+  editorHeading.focus();
+}
+
+function clearEditorErrors(): void {
+  for (const name of RECIPE_FIELDS) {
+    const { field, errors } = editorFields[name];
+    clearErrors(field, errors);
+  }
+}
+
+function removeRecipe({ name, description, sites, steps }: Recipe): void {
+  clearUndo();
+  deleteRecipe(browser, name).then(
+    () => {
+      undoable = { name, description, sites, steps };
+      // The visible text stays "Undo", which the accessible name starts with.
+      recipeUndo.setAttribute("aria-label", `Undo deleting ${name}`);
+      recipeUndo.hidden = false;
+      recipeUndo.focus();
+      announce(recipesStatus, `Deleted ${name}`);
+    },
+    () => announce(recipesStatus, `Could not delete ${name}.`),
+  );
+}
+
+function clearUndo(): void {
+  undoable = undefined;
+  recipeUndo.hidden = true;
+}
+
+/** The row button for `key` and `action`, compared on its data, never through a selector. */
+function rowButton(rows: HTMLElement, key: string, action: string): HTMLButtonElement | undefined {
+  return [...rows.querySelectorAll("button")].find(
+    (button) => button.dataset.key === key && button.dataset.action === action,
+  );
 }
 
 function refreshAnswers(): void {
@@ -211,7 +383,11 @@ function showAnswers(held: SessionAnswers[]): void {
   if (shown === shownAnswers) return;
   shownAnswers = shown;
   const focused = focusedRow(answers);
-  answers.replaceChildren(...rows.map(({ key, text, forget }) => row(text, "Forget", key, forget)));
+  answers.replaceChildren(
+    ...rows.map(({ key, text, forget }) =>
+      row(text, text, key, [{ label: "Forget", action: "forget", run: forget }]),
+    ),
+  );
   answers.hidden = rows.length === 0;
   answersEmpty.hidden = rows.length > 0;
   if (focused !== undefined) {
@@ -291,11 +467,25 @@ function save(): void {
   const text = blocklist.value;
   const parsed = parseBlocklist(text);
   if ("errors" in parsed) {
-    showErrors(parsed.errors);
+    const { errors } = parsed;
+    showErrors(
+      blocklist,
+      blocklistErrors,
+      errors.map(({ line, text }) => `Line ${line}: ${text}`),
+    );
+    blocklist.focus();
+    const first = errors[0];
+    if (first !== undefined) selectLine(blocklist, first.line);
+    announce(
+      blocklistStatus,
+      errors.length === 1
+        ? "Not saved: 1 line needs fixing"
+        : `Not saved: ${errors.length} lines need fixing`,
+    );
     return;
   }
   const { patterns } = parsed;
-  clearErrors();
+  clearErrors(blocklist, blocklistErrors);
   saveBlocklist(browser, patterns).then(
     () => {
       fillBlocklist(text);
@@ -308,44 +498,171 @@ function save(): void {
   );
 }
 
-function showErrors(errors: { line: number; text: string }[]): void {
-  blocklistErrors.replaceChildren(
-    ...errors.map(({ line, text }) => {
-      const item = document.createElement("li");
-      item.textContent = `Line ${line}: ${text}`;
-      return item;
-    }),
-  );
-  blocklistErrors.hidden = false;
-  blocklist.setAttribute("aria-invalid", "true");
-  blocklist.focus();
-  const first = errors[0];
-  if (first !== undefined) selectLine(first.line);
-  announce(
-    blocklistStatus,
-    errors.length === 1
-      ? "Not saved: 1 line needs fixing"
-      : `Not saved: ${errors.length} lines need fixing`,
-  );
-}
-
-/** Selects line `line`, counted from 1; a textarea's value separates lines with "\n" only. */
-function selectLine(line: number): void {
-  const lines = blocklist.value.split("\n");
-  const start = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
-  blocklist.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
-}
-
-function clearErrors(): void {
-  blocklistErrors.replaceChildren();
-  blocklistErrors.hidden = true;
-  blocklist.removeAttribute("aria-invalid");
-}
-
 function fillDefault(): void {
   blocklist.value = DEFAULT_BLOCKLIST.join("\n");
   blocklist.readOnly = false;
   filled = true;
-  clearErrors();
+  clearErrors(blocklist, blocklistErrors);
   announce(blocklistStatus, "Filled in the built-in list. Save to use it.");
+}
+
+function saveEditor(event: Event): void {
+  // Only a user's click saves a recipe.
+  if (!event.isTrusted || saving) return;
+  clearEditorErrors();
+  const checked = checkRecipe({
+    name: editorFields.name.field.value,
+    description: editorFields.description.field.value,
+    sites: editorFields.sites.field.value,
+    steps: editorFields.steps.field.value,
+  });
+  if (!checked.ok) {
+    showRecipeProblems(checked.problems);
+    return;
+  }
+  const { recipe } = checked;
+  const opened = editing;
+  clearUndo();
+  saving = true;
+  saveRecipe(browser, recipe, {
+    shown: opened ?? { name: recipe.name, savedAt: null },
+    replaceShown: opened !== undefined,
+  }).then(
+    (result) => {
+      saving = false;
+      if (result.ok) {
+        editor.hidden = true;
+        clearEditorErrors();
+        editing = undefined;
+        returnTo = undefined;
+        pendingFocus = { key: recipe.name, action: "edit" };
+        announce(recipesStatus, `Saved ${recipe.name}`);
+        render();
+      } else if (result.reason === "full") {
+        announce(recipesStatus, `Foxhand keeps at most ${MAX_RECIPES} recipes. Delete one first.`);
+      } else if (result.reason === "exists" || opened === undefined) {
+        // A new recipe whose name is stored is "changed": nothing was shown under that name.
+        const taken = result.current?.name ?? recipe.name;
+        showRecipeProblems([{ field: "name", text: `A recipe named ${taken} exists.` }]);
+      } else if (result.current === undefined) {
+        announce(recipesStatus, `${opened.name} was deleted meanwhile.`);
+      } else {
+        announce(
+          recipesStatus,
+          `${opened.name} changed since you opened it. Cancel and open it again to see the current version.`,
+        );
+      }
+    },
+    () => {
+      saving = false;
+      announce(recipesStatus, `Could not save ${recipe.name}.`);
+    },
+  );
+}
+
+/** Marks each invalid field, focuses the first and selects what its first problem points at. */
+function showRecipeProblems(problems: RecipeProblem[]): void {
+  const invalid = RECIPE_FIELDS.filter((name) => problems.some(({ field }) => field === name));
+  for (const name of invalid) {
+    const { field, errors } = editorFields[name];
+    const texts = problems.filter((problem) => problem.field === name).map(({ text }) => text);
+    showErrors(field, errors, texts);
+  }
+  const first = invalid[0];
+  if (first !== undefined) {
+    const { field } = editorFields[first];
+    field.focus();
+    const at = problems.find(
+      (problem) =>
+        problem.field === first && (problem.line !== undefined || problem.column !== undefined),
+    );
+    if (at?.column !== undefined) selectCharacter(field, at.line ?? 1, at.column);
+    else if (at?.line !== undefined) selectLine(field, at.line);
+  }
+  announce(
+    recipesStatus,
+    invalid.length === 1
+      ? "Not saved: 1 field needs fixing"
+      : `Not saved: ${invalid.length} fields need fixing`,
+  );
+}
+
+function cancelEditor(): void {
+  if (saving) return;
+  editor.hidden = true;
+  clearEditorErrors();
+  editing = undefined;
+  const target = returnTo === undefined ? undefined : rowButton(recipeList, returnTo, "edit");
+  returnTo = undefined;
+  (target ?? recipeAdd).focus();
+}
+
+function undo(event: Event): void {
+  // Only a user's click saves a recipe.
+  if (!event.isTrusted || undoable === undefined) return;
+  const fields = undoable;
+  const { name } = fields;
+  clearUndo();
+  saveRecipe(browser, fields, { shown: { name, savedAt: null } }).then(
+    (result) => {
+      if (result.ok) {
+        pendingFocus = { key: name, action: "edit" };
+        announce(recipesStatus, `Restored ${name}`);
+        render();
+        return;
+      }
+      announce(
+        recipesStatus,
+        result.reason === "full"
+          ? `Foxhand keeps at most ${MAX_RECIPES} recipes, so ${name} was not restored.`
+          : `A recipe named ${name} was saved meanwhile; nothing was restored.`,
+      );
+      recipesHeading.focus();
+    },
+    () => {
+      announce(recipesStatus, `Could not restore ${name}.`);
+      recipesHeading.focus();
+    },
+  );
+}
+
+/** Lists `texts` under the field and marks it invalid; focus and announcing stay with the caller. */
+function showErrors(field: TextField, errors: HTMLElement, texts: string[]): void {
+  errors.replaceChildren(
+    ...texts.map((text) => {
+      const item = document.createElement("li");
+      item.textContent = text;
+      return item;
+    }),
+  );
+  errors.hidden = false;
+  field.setAttribute("aria-invalid", "true");
+}
+
+/** Selects line `line`, counted from 1; a textarea's value separates lines with "\n" only. */
+function selectLine(field: TextField, line: number): void {
+  const lines = field.value.split("\n");
+  const start = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
+  field.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
+}
+
+/** Selects the character at `column` of line `line`, both counted from 1, in code points. */
+function selectCharacter(field: TextField, line: number, column: number): void {
+  const lines = field.value.split("\n");
+  let offset = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
+  let position = 1;
+  for (const character of lines[line - 1] ?? "") {
+    if (position === column) {
+      field.setSelectionRange(offset, offset + character.length);
+      return;
+    }
+    offset += character.length;
+    position += 1;
+  }
+}
+
+function clearErrors(field: TextField, errors: HTMLElement): void {
+  errors.replaceChildren();
+  errors.hidden = true;
+  field.removeAttribute("aria-invalid");
 }

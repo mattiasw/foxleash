@@ -2,6 +2,7 @@ import type { BrowserApi } from "./browser-api.ts";
 import { allowedSiteFor, ToolError } from "./handlers.ts";
 import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
+import { RECIPE_KEY_PREFIX } from "./settings.ts";
 import { redactedUrl, siteOf } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
@@ -91,8 +92,11 @@ export function createLiveDocuments({
     const entry = entries.get(tabId);
     if (entry !== undefined) drop(tabId, entry, { reason: "detached" });
   });
-  browser.storage.onChanged.addListener((_changes, areaName) => {
+  browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
+    const keys = Object.keys(changes);
+    // A recipe never narrows access.
+    if (keys.length > 0 && keys.every((key) => key.startsWith(RECIPE_KEY_PREFIX))) return;
     // Stored approvals and the blocklist live there: only a change that narrows access drops.
     for (const [tabId, entry] of [...entries]) void recheck(tabId, entry);
   });

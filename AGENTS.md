@@ -150,6 +150,8 @@ permission prompts can be switched off:
 - A site is the URL's origin (scheme, host and port). Tabs on sites the session is not
   approved for reach the agent redacted to their site, with no title (ADR 0007).
 - Financial and health sites are blocked by default.
+- A recipe is saved, and its sites granted for a session, only by a user click on an extension
+  page; a recipe's sites are never granted always (ADR 0035).
 - `upload_file` reads only from allowed folders and refuses dotfiles and key files.
 - Tool results mark page content as untrusted.
 
