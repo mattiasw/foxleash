@@ -60,6 +60,8 @@ export interface SiteAccessDeps<Handle> {
   timers: Timers<Handle>;
   /** The session's approval of the site ended: the user withdrew it, or the session ended. */
   onWithdraw?: (session: string, site: string) => void;
+  /** The session's open recipe page, which no site prompt may open beside. */
+  otherPrompt?: (session: string) => { tabId: number } | undefined;
 }
 
 export interface SiteAccess {
@@ -67,8 +69,8 @@ export interface SiteAccess {
   view(session: string): Promise<SiteView>;
   /**
    * The gate before a load: throws `invalid_url`, `site_blocked`, `site_refused` or
-   * `approval_pending`, else says whether the site is allowed, must be asked for, or can join
-   * the session's open prompt. Changes nothing.
+   * `approval_pending` (also while the session's recipe page is open), else says whether the
+   * site is allowed, must be asked for, or can join the session's open prompt. Changes nothing.
    */
   check(session: string, url: string): Promise<Decision>;
   /**
@@ -151,6 +153,7 @@ export function createSiteAccess<Handle>({
   sessions,
   timers,
   onWithdraw,
+  otherPrompt,
 }: SiteAccessDeps<Handle>): SiteAccess {
   // The open prompt of each session; at most one.
   const prompts = new Map<string, Prompt<Handle>>();
@@ -229,6 +232,7 @@ export function createSiteAccess<Handle>({
     if (current.blocked(url)) throw siteBlocked(site);
     if (current.allowed(url)) return { decision: "allowed" };
     refuseIfAnswered(session, site);
+    refuseBesideOtherPrompt(session);
     const prompt = prompts.get(session);
     if (prompt !== undefined) return { decision: "join", tabId: joinable(prompt, site).tabId };
     return { decision: "ask" };
@@ -249,6 +253,7 @@ export function createSiteAccess<Handle>({
     if (open?.tabId === tabId) return join(joinable(open, site), tabId);
     if (current.allowed(url)) return { answer: Promise.resolve(), promptInTab: false };
     refuseIfAnswered(session, site);
+    refuseBesideOtherPrompt(session);
     if (open !== undefined) return join(joinable(open, site), tabId);
     return show(session, site, url, tabId, promptUrl);
   }
@@ -338,10 +343,16 @@ export function createSiteAccess<Handle>({
     }
   }
 
+  /** The user is never asked two things at once in one session. */
+  function refuseBesideOtherPrompt(session: string): void {
+    const page = otherPrompt?.(session);
+    if (page !== undefined) throw approvalPending(page.tabId, "whether to save a recipe");
+  }
+
   /** The prompt, when a request for `site` may wait on it. */
   function joinable(prompt: Prompt<Handle>, site: string): Prompt<Handle> {
     if (prompt.site !== site || prompt.waiter !== undefined) {
-      throw approvalPending(prompt.tabId, prompt.site);
+      throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
     }
     return prompt;
   }
@@ -442,6 +453,8 @@ export function createSiteAccess<Handle>({
   }
 
   function connect(port: RuntimePort): void {
+    // Other extension pages' ports are theirs to answer.
+    if (port.name !== PORT_NAME) return;
     const prompt = promptOf(port);
     if (prompt === undefined) {
       post(port, { type: "ended" });
@@ -461,10 +474,8 @@ export function createSiteAccess<Handle>({
 
   /** The open prompt this page shows: this extension's exact prompt URL, in the prompt's tab. */
   function promptOf(port: RuntimePort): Prompt<Handle> | undefined {
-    const sender = port.sender;
-    if (port.name !== PORT_NAME || sender?.id !== browser.runtime.id) return undefined;
-    return [...prompts.values()].find(
-      (prompt) => prompt.promptUrl === sender.url && sender.tab?.id === prompt.tabId,
+    return [...prompts.values()].find((prompt) =>
+      portShowsPage(port, browser.runtime.id, PORT_NAME, prompt.promptUrl, prompt.tabId),
     );
   }
 
@@ -583,11 +594,31 @@ export function createSiteAccess<Handle>({
   }
 }
 
-/** The refusal while a session's prompt waits for the user. */
-export function approvalPending(tabId: number, site: string): ToolError {
+/** Whether the port is this extension's page `name` at exactly `pageUrl`, in tab `tabId`. */
+export function portShowsPage(
+  port: RuntimePort,
+  extensionId: string,
+  name: string,
+  pageUrl: string,
+  tabId: number,
+): boolean {
+  const sender = port.sender;
+  return (
+    port.name === name &&
+    sender?.id === extensionId &&
+    sender.url === pageUrl &&
+    sender.tab?.id === tabId
+  );
+}
+
+/**
+ * The refusal while a session's prompt waits for the user; `question` says what is asked, such
+ * as "whether to allow https://example.com".
+ */
+export function approvalPending(tabId: number, question: string): ToolError {
   return new ToolError(
     "approval_pending",
-    `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow ${site}. Try again after the user has answered.`,
+    `Foxhand is waiting for the user to answer in tab ${tabId} ${question}. Try again after the user has answered.`,
   );
 }
 
@@ -599,14 +630,14 @@ export function siteBlocked(site: string): ToolError {
 }
 
 /** A page that is reloading can still be attached, and posting to it then throws. */
-function post(port: Port, message: unknown): void {
+export function post(port: Port, message: unknown): void {
   try {
     port.postMessage(message);
   } catch {}
 }
 
 /** A message's own fields, or undefined when it is not an object. */
-function fieldsOf(message: unknown): Record<string, unknown> | undefined {
+export function fieldsOf(message: unknown): Record<string, unknown> | undefined {
   if (typeof message !== "object" || message === null) return undefined;
   return { ...message };
 }

@@ -32,10 +32,12 @@ export interface SessionGroups {
 /**
  * `onGrouped` runs after a tab joins a session's group, once the group is known to
  * `isSessionGroup`. It must not reject: a rejection would skip the title of a new group.
+ * `blankPage` says whether a Foxhand page in one of the group's tabs may close with it.
  */
 export function createSessionGroups(
   browser: BrowserApi,
   onGrouped: (tabId: number) => Promise<void> = async () => {},
+  blankPage: (url: string) => boolean = () => false,
 ): SessionGroups {
   // Maps, not objects: "__proto__" and "constructor" are valid session ids.
   const groups = new Map<string, number>();
@@ -166,7 +168,7 @@ export function createSessionGroups(
       return;
     }
     const promptPage = browser.runtime.getURL(PROMPT_PAGE);
-    if (!tabs.every((tab) => isBlank(tab, promptPage))) return;
+    if (!tabs.every((tab) => isBlank(tab, promptPage, blankPage))) return;
     // Removing a window's last tabs closes the window, and closing the last window quits Firefox.
     if (!windowTabs.some((tab) => tab.groupId !== group.id && !removing.has(tab.id))) return;
     return { removed: removeTabs(tabs.map((tab) => tab.id)), groupId: group.id };
@@ -221,9 +223,11 @@ const BLANK_URLS: ReadonlySet<string | undefined> = new Set([
  * A tab still loading may be leaving a new-tab page for an address the user typed. A prompt page
  * counts as blank: after the session it can only say that its request has ended.
  */
-function isBlank(tab: Tab, promptPage: string): boolean {
+function isBlank(tab: Tab, promptPage: string, blankPage: (url: string) => boolean): boolean {
   return (
     tab.status === "complete" &&
-    (BLANK_URLS.has(tab.url) || tab.url?.startsWith(promptPage) === true)
+    (BLANK_URLS.has(tab.url) ||
+      tab.url?.startsWith(promptPage) === true ||
+      (tab.url !== undefined && blankPage(tab.url)))
   );
 }

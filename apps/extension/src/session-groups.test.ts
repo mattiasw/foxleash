@@ -58,6 +58,26 @@ describe("endSession", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.has(other.id), true);
   });
 
+  it("lets blankPage decide for a Foxhand page, and counts the prompt page as blank without it", async () => {
+    for (const blank of [true, false]) {
+      const fake = createFakeBrowser();
+      fake.openTab({ url: "https://user.example/" });
+      const asked: string[] = [];
+      const groups = createSessionGroups(fake.browser, undefined, (url) => {
+        asked.push(url);
+        return blank;
+      });
+      const page = fake.openTab({ url: fake.browser.runtime.getURL("propose.html?id=1") });
+      const prompt = fake.openTab({ url: fake.browser.runtime.getURL("approve.html?id=1") });
+      await groups.ensureGroup("s1", page);
+      await groups.ensureGroup("s1", prompt);
+      await groups.endSession("s1");
+      assert.deepEqual(asked, [page.url]);
+      assert.equal(fake.tabs.has(page.id), !blank, String(blank));
+      assert.equal(fake.tabs.has(prompt.id), !blank, String(blank));
+    }
+  });
+
   it("keeps a blank tab that is still loading", async () => {
     const { fake, groups, open } = setup();
     const tab = await open("s1", { url: "about:newtab", status: "loading" });

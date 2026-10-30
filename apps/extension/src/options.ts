@@ -2,6 +2,16 @@ import { MAX_RECIPES, type Recipe, type RecipeFields } from "@foxhand/protocol";
 import type { BrowserApi } from "./browser-api.ts";
 import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
 import {
+  announce,
+  announced,
+  clearErrors,
+  element as pageElement,
+  selectLine,
+  showErrors,
+  showProblems,
+  type TextField,
+} from "./page-ui.ts";
+import {
   checkRecipe,
   deleteRecipe,
   type RecipeProblem,
@@ -47,8 +57,6 @@ interface FocusedRow {
   index: number;
 }
 
-type TextField = HTMLInputElement | HTMLTextAreaElement;
-
 const list = element("sites");
 const empty = element("sites-empty");
 const status = element("status");
@@ -74,8 +82,6 @@ const editorFields: Record<RecipeProblem["field"], { field: TextField; errors: H
   sites: { field: textArea("recipe-sites"), errors: element("recipe-sites-errors") },
   steps: { field: textArea("recipe-steps"), errors: element("recipe-steps-errors") },
 };
-// Each live region's latest announcement, written to it on the next frame.
-const messages = new Map<HTMLElement, string>();
 // Counts renders, so a read that finishes after a newer render started is discarded.
 let renders = 0;
 // Counts reads of the session answers, for the same reason.
@@ -118,9 +124,7 @@ ignoreHeldEnter(recipeUndo);
 ignoreHeldEnter(recipeAdd);
 
 function element(id: string): HTMLElement {
-  const found = document.getElementById(id);
-  if (found === null) throw new Error(`The settings page has no #${id}.`);
-  return found;
+  return pageElement(id, "settings page");
 }
 
 function textArea(id: string): HTMLTextAreaElement {
@@ -168,7 +172,7 @@ function show(sites: string[]): void {
   list.replaceChildren(...sites.map(siteRow));
   list.hidden = sites.length === 0;
   empty.hidden = sites.length > 0;
-  if (messages.get(status) === READ_FAILED) announce(status, "");
+  if (announced(status) === READ_FAILED) announce(status, "");
   if (focused !== undefined) restoreFocus(list, heading, focused, sites);
 }
 
@@ -248,23 +252,12 @@ function restoreFocus(
   (target ?? fallback).focus();
 }
 
-/** Clears the live region first, so a repeated message is announced again. */
-function announce(region: HTMLElement, text: string): void {
-  messages.set(region, text);
-  region.textContent = "";
-  if (text !== "") {
-    requestAnimationFrame(() => {
-      region.textContent = messages.get(region) ?? "";
-    });
-  }
-}
-
 function showRecipes(recipes: Recipe[]): void {
   const focused = focusedRow(recipeList);
   recipeList.replaceChildren(...recipes.map(recipeRow));
   recipeList.hidden = recipes.length === 0;
   recipesEmpty.hidden = recipes.length > 0;
-  if (messages.get(recipesStatus) === RECIPES_READ_FAILED) announce(recipesStatus, "");
+  if (announced(recipesStatus) === RECIPES_READ_FAILED) announce(recipesStatus, "");
   if (pendingFocus !== undefined) {
     const { key, action } = pendingFocus;
     pendingFocus = undefined;
@@ -376,7 +369,7 @@ function isStrings(value: unknown): value is string[] {
 }
 
 function showAnswers(held: SessionAnswers[]): void {
-  if (messages.get(answersStatus) === ANSWERS_FAILED) announce(answersStatus, "");
+  if (announced(answersStatus) === ANSWERS_FAILED) announce(answersStatus, "");
   const rows = held.flatMap(answerRows);
   const shown = JSON.stringify(rows.map(({ key, text }) => [key, text]));
   // Replacing identical rows would announce them again and could swap a button under a click.
@@ -560,30 +553,11 @@ function saveEditor(event: Event): void {
   );
 }
 
-/** Marks each invalid field, focuses the first and selects what its first problem points at. */
 function showRecipeProblems(problems: RecipeProblem[]): void {
-  const invalid = RECIPE_FIELDS.filter((name) => problems.some(({ field }) => field === name));
-  for (const name of invalid) {
-    const { field, errors } = editorFields[name];
-    const texts = problems.filter((problem) => problem.field === name).map(({ text }) => text);
-    showErrors(field, errors, texts);
-  }
-  const first = invalid[0];
-  if (first !== undefined) {
-    const { field } = editorFields[first];
-    field.focus();
-    const at = problems.find(
-      (problem) =>
-        problem.field === first && (problem.line !== undefined || problem.column !== undefined),
-    );
-    if (at?.column !== undefined) selectCharacter(field, at.line ?? 1, at.column);
-    else if (at?.line !== undefined) selectLine(field, at.line);
-  }
+  const invalid = showProblems(editorFields, RECIPE_FIELDS, problems);
   announce(
     recipesStatus,
-    invalid.length === 1
-      ? "Not saved: 1 field needs fixing"
-      : `Not saved: ${invalid.length} fields need fixing`,
+    invalid === 1 ? "Not saved: 1 field needs fixing" : `Not saved: ${invalid} fields need fixing`,
   );
 }
 
@@ -624,45 +598,4 @@ function undo(event: Event): void {
       recipesHeading.focus();
     },
   );
-}
-
-/** Lists `texts` under the field and marks it invalid; focus and announcing stay with the caller. */
-function showErrors(field: TextField, errors: HTMLElement, texts: string[]): void {
-  errors.replaceChildren(
-    ...texts.map((text) => {
-      const item = document.createElement("li");
-      item.textContent = text;
-      return item;
-    }),
-  );
-  errors.hidden = false;
-  field.setAttribute("aria-invalid", "true");
-}
-
-/** Selects line `line`, counted from 1; a textarea's value separates lines with "\n" only. */
-function selectLine(field: TextField, line: number): void {
-  const lines = field.value.split("\n");
-  const start = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
-  field.setSelectionRange(start, start + (lines[line - 1]?.length ?? 0));
-}
-
-/** Selects the character at `column` of line `line`, both counted from 1, in code points. */
-function selectCharacter(field: TextField, line: number, column: number): void {
-  const lines = field.value.split("\n");
-  let offset = lines.slice(0, line - 1).reduce((sum, text) => sum + text.length + 1, 0);
-  let position = 1;
-  for (const character of lines[line - 1] ?? "") {
-    if (position === column) {
-      field.setSelectionRange(offset, offset + character.length);
-      return;
-    }
-    offset += character.length;
-    position += 1;
-  }
-}
-
-function clearErrors(field: TextField, errors: HTMLElement): void {
-  errors.replaceChildren();
-  errors.hidden = true;
-  field.removeAttribute("aria-invalid");
 }

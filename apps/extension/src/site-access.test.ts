@@ -16,6 +16,7 @@ import {
   APPROVAL_WAIT_MS,
   type Approval,
   createSiteAccess,
+  portShowsPage,
   type SessionMemory,
   type SessionState,
 } from "./site-access.ts";
@@ -320,6 +321,104 @@ describe("check with prompts", () => {
   });
 });
 
+describe("beside a recipe page", () => {
+  const RECIPE_PENDING =
+    "Foxhand is waiting for the user to answer in tab 9 whether to save a recipe. Try again after the user has answered.";
+
+  it("refuses to check or ask for an unapproved site while the session's recipe page is open", async () => {
+    const fake = createFakeBrowser();
+    const sessions: SessionMemory = new Map();
+    let page: { tabId: number } | undefined = { tabId: 9 };
+    const access = createSiteAccess({
+      browser: fake.browser,
+      groups: createSessionGroups(fake.browser),
+      sessions,
+      timers: createFakeTimers(),
+      otherPrompt: (session) => (session === "s1" ? page : undefined),
+    });
+    const tab = fake.openTab({ active: true });
+    await assert.rejects(access.check("s1", "https://b.example/"), {
+      code: "approval_pending",
+      message: RECIPE_PENDING,
+    });
+    await assert.rejects(access.ask("s1", "https://b.example/", tab.id), {
+      code: "approval_pending",
+      message: RECIPE_PENDING,
+    });
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.deepEqual(await access.check("s2", "https://b.example/"), { decision: "ask" });
+    page = undefined;
+    assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "ask" });
+  });
+
+  it("still answers for allowed, blocked and refused sites while the recipe page is open", async () => {
+    const fake = createFakeBrowser();
+    const sessions: SessionMemory = new Map();
+    const access = createSiteAccess({
+      browser: fake.browser,
+      groups: createSessionGroups(fake.browser),
+      sessions,
+      timers: createFakeTimers(),
+      otherPrompt: () => ({ tabId: 9 }),
+    });
+    const tab = fake.openTab({ active: true });
+    await grantSite(fake.browser, "https://b.example");
+    assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "allowed" });
+    assert.equal((await access.ask("s1", "https://b.example/", tab.id)).promptInTab, false);
+    await fake.browser.storage.local.set({ blocklist: ["c.example"] });
+    await assert.rejects(access.check("s1", "https://c.example/"), { code: "site_blocked" });
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://a.example"]), closed: 0 });
+    await assert.rejects(access.check("s1", "https://a.example/"), {
+      code: "site_refused",
+      message: REFUSED,
+    });
+    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), {
+      code: "site_refused",
+      message: REFUSED,
+    });
+    assert.deepEqual(fake.tabUpdates, []);
+  });
+});
+
+describe("portShowsPage", () => {
+  it("holds only for this extension's page of that name, at exactly that URL, in that tab", () => {
+    const url = "moz-extension://8a7f9c1e/propose.html?id=1";
+    const exact = { id: FAKE_EXTENSION_ID, url, tab: { id: 4 } };
+    assert.equal(portShowsPage(port("recipe", exact), FAKE_EXTENSION_ID, "recipe", url, 4), true);
+    const others: [string, MessageSender | undefined][] = [
+      ["approve", exact],
+      ["recipe", { ...exact, id: "other@example.org" }],
+      ["recipe", { url, tab: { id: 4 } }],
+      ["recipe", { ...exact, url: `${url}#` }],
+      ["recipe", { id: FAKE_EXTENSION_ID, tab: { id: 4 } }],
+      ["recipe", { ...exact, tab: { id: 5 } }],
+      ["recipe", { id: FAKE_EXTENSION_ID, url }],
+      ["recipe", undefined],
+    ];
+    for (const [name, sender] of others) {
+      assert.equal(
+        portShowsPage(port(name, sender), FAKE_EXTENSION_ID, "recipe", url, 4),
+        false,
+        JSON.stringify([name, sender]),
+      );
+    }
+  });
+
+  function port(name: string, sender: MessageSender | undefined): RuntimePort {
+    const ignored = { addListener: () => {}, removeListener: () => {} };
+    const base = {
+      name,
+      postMessage: () => {},
+      disconnect: () => {},
+      onMessage: ignored,
+      onDisconnect: ignored,
+      error: null,
+    };
+    return sender === undefined ? base : { ...base, sender };
+  }
+});
+
 describe("ask", () => {
   it("loads a prompt page into the tab, brings it to the front and draws attention", async () => {
     const { fake, access, tab, ask } = setup();
@@ -564,7 +663,6 @@ describe("prompt page", () => {
     const prefix = promptUrl.slice(0, -1);
     const otherId = promptUrl.replace(/id=.*/, `id=${crypto.randomUUID()}`);
     const pages = [
-      fake.connectPage("other", { id: FAKE_EXTENSION_ID, url: promptUrl, tab: { id: tab.id } }),
       fake.connectPage("approve", { id: "other@example.org", url: promptUrl, tab: { id: tab.id } }),
       fake.connectPage("approve", { url: promptUrl, tab: { id: tab.id } }),
       fake.connectPage("approve", { id: FAKE_EXTENSION_ID, tab: { id: tab.id } }),
@@ -581,6 +679,25 @@ describe("prompt page", () => {
       page.deliver({ type: "answer", answer: "always" });
       assert.deepEqual(page.posted, [{ type: "ended" }]);
       assert.equal(page.disconnected, true);
+    }
+    assert.equal(access.openPrompt("s1")?.waiting, true);
+    assert.deepEqual((await readSettings(fake.browser)).sites, []);
+  });
+
+  it("leaves another page's port alone, even from the prompt URL in the prompt's tab", async () => {
+    const { fake, access, tab, ask } = setup();
+    const { promptUrl } = await ask();
+    for (const name of ["other", "recipe"]) {
+      const page = fake.connectPage(name, {
+        id: FAKE_EXTENSION_ID,
+        url: promptUrl,
+        tab: { id: tab.id },
+      });
+      page.deliver({ type: "ready" });
+      page.deliver({ type: "answer", answer: "always" });
+      await flush();
+      assert.deepEqual(page.posted, [], name);
+      assert.equal(page.disconnected, false, name);
     }
     assert.equal(access.openPrompt("s1")?.waiting, true);
     assert.deepEqual((await readSettings(fake.browser)).sites, []);

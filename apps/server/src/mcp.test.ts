@@ -299,6 +299,7 @@ describe("foxhand mcp", () => {
         "hover",
         "navigate",
         "press_key",
+        "propose_recipe",
         "read_console",
         "read_network",
         "read_page",

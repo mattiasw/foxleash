@@ -35,6 +35,7 @@ import {
 import type { NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
+import { createRecipePrompts } from "./recipe-prompts.ts";
 import { FIELD_MASK_CSS, FRAME_HIDE_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
@@ -5567,6 +5568,176 @@ interface PageCall {
 
 type PageReply = (type: string) => Promise<unknown>;
 
+describe("recipe_propose", { timeout: 10000 }, () => {
+  const RECIPE = {
+    name: "Receipt",
+    description: "Download the latest receipt.",
+    sites: ["https://shop.example"],
+    steps: "Open https://shop.example/orders.",
+  };
+
+  /** Proposes RECIPE in session s1 and returns the page's tab. */
+  async function proposed(env: ReturnType<typeof setup>): Promise<number> {
+    const result = await env.call("s1", "recipe_propose", RECIPE);
+    assert.ok("tabId" in result);
+    return result.tabId;
+  }
+
+  /** The page in the tab connecting and asking for the proposal. */
+  async function proposal(fake: FakeBrowser, tabId: number): Promise<unknown> {
+    const page = fake.connectPage("recipe", {
+      id: FAKE_EXTENSION_ID,
+      url: fake.tabs.get(tabId)?.url ?? "",
+      tab: { id: tabId },
+    });
+    page.deliver({ type: "ready" });
+    await flush();
+    return page.posted[0];
+  }
+
+  it("refuses a proposal with problems, naming each field, and opens no tab", async () => {
+    const { fake, call, recipes } = setup();
+    const tabs = fake.tabs.size;
+    await assert.rejects(
+      call("s1", "recipe_propose", {
+        name: "",
+        description: RECIPE.description,
+        sites: ["https://a.example", "ftp://b.example"],
+      }),
+      {
+        code: "invalid_params",
+        message:
+          "propose_recipe was refused: name: Give the recipe a name. sites: Line 2: this is not an http or https address. steps: The steps must be text.",
+      },
+    );
+    await assert.rejects(call("s1", "recipe_propose", { ...RECIPE, steps: "a\u200bb" }), {
+      code: "invalid_params",
+      message:
+        "propose_recipe was refused: steps: Line 1, column 2: U+200B (zero width space) is invisible; remove it.",
+    });
+    assert.equal(fake.tabs.size, tabs);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+  });
+
+  it("reads only the request's own fields", async () => {
+    const { call } = setup();
+    const params = Object.assign(Object.create(RECIPE), {});
+    await assert.rejects(call("s1", "recipe_propose", params), { code: "invalid_params" });
+  });
+
+  it("shows the normalized proposal, as an update of a stored recipe with the same name", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    const stored = { ...RECIPE, name: "OpenAI receipt", savedAt: "2026-01-02T03:04:05.000Z" };
+    await fake.browser.storage.local.set({ "recipe:OpenAI receipt": stored });
+    const result = await call("s1", "recipe_propose", {
+      ...RECIPE,
+      name: " OpenAI  receipt ",
+      sites: ["https://shop.example/orders?id=1"],
+    });
+    assert.ok("tabId" in result);
+    assert.deepEqual(await proposal(fake, result.tabId), {
+      type: "propose",
+      fields: { ...RECIPE, name: "OpenAI receipt" },
+      current: stored,
+    });
+    assert.equal(fake.tabs.get(result.tabId)?.groupId, groupIdOf(fake, result.tabId));
+    assert.equal((await env.list("s1")).length, 1);
+  });
+
+  it("keeps the page's tab from closing and from navigating", async () => {
+    const env = setup();
+    const { fake, call, grant } = env;
+    fake.openTab();
+    const tabId = await proposed(env);
+    await grant("https://a.example");
+    const keep = `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`;
+    await assert.rejects(call("s1", "tab_close", { tabId }), {
+      code: "recipe_prompt_open",
+      message: keep,
+    });
+    await assert.rejects(call("s1", "navigate", { tabId, url: "https://a.example/" }), {
+      code: "recipe_prompt_open",
+      message: keep,
+    });
+    for (const action of ["back", "forward"]) {
+      await assert.rejects(call("s1", "navigate", { tabId, action }), {
+        code: "recipe_prompt_open",
+        message: keep,
+      });
+    }
+    await assert.rejects(call("s1", "navigate", { tabId, action: "reload" }), {
+      code: "page_not_web",
+    });
+    await assert.rejects(call("s1", "navigate", { tabId, url: "https://b.example/" }), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+    });
+    assert.equal(fake.tabs.has(tabId), true);
+    assert.match(fake.tabs.get(tabId)?.url ?? "", /propose\.html\?id=/);
+  });
+
+  it("refuses tab_open on an unapproved site while the page is open, opening no tab", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    const tabId = await proposed(env);
+    const tabs = fake.tabs.size;
+    await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+    });
+    assert.equal(fake.tabs.size, tabs);
+  });
+
+  it("removes tab_open's new tab when a page opened before its prompt, and keeps the page", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    fake.openTab();
+    // Holds the grouping of tab_open's tab, before its prompt is recorded.
+    const held = Promise.withResolvers<void>();
+    const group = fake.browser.tabs.group;
+    fake.browser.tabs.group = async (options) => {
+      fake.browser.tabs.group = group;
+      await held.promise;
+      return group(options);
+    };
+    const opening = call("s1", "tab_open", { url: "https://b.example/" });
+    let prompt: Tab | undefined;
+    for (let turn = 0; turn < 50 && prompt === undefined; turn += 1) {
+      await flush();
+      prompt = [...fake.tabs.values()].find(({ url }) => url.includes("approve.html"));
+    }
+    assert.ok(prompt !== undefined);
+    const proposing = env.call("s1", "recipe_propose", RECIPE);
+    let page: { tabId: number } | undefined;
+    for (let turn = 0; turn < 50 && page === undefined; turn += 1) {
+      await flush();
+      page = env.recipes.openPrompt("s1");
+    }
+    assert.ok(page !== undefined);
+    const { tabId } = page;
+    held.resolve();
+    await proposing;
+    await assert.rejects(opening, {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+    });
+    await flush();
+    assert.equal(fake.tabs.has(prompt.id), false);
+    assert.equal(fake.tabs.has(tabId), true);
+  });
+
+  it("frees the session once the page's tab closes", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    const tabId = await proposed(env);
+    await assert.rejects(call("s1", "recipe_propose", RECIPE), { code: "recipe_prompt_open" });
+    fake.removeTab(tabId);
+    const next = await proposed(env);
+    assert.notEqual(next, tabId);
+  });
+});
+
 type Live = (session: string, tabId: number) => object | undefined;
 
 interface NetworkRead {
@@ -5585,9 +5756,16 @@ interface Save {
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
-  const groups = createSessionGroups(fake.browser);
+  const groups = createSessionGroups(fake.browser, undefined, (url) => recipes.isBlankPage(url));
   const sessions: SessionMemory = new Map();
-  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+  const access = createSiteAccess({
+    browser: fake.browser,
+    groups,
+    sessions,
+    timers,
+    otherPrompt: (session) => recipes.openPrompt(session),
+  });
+  const recipes = createRecipePrompts({ browser: fake.browser, groups, access });
   const probe = async function probe(_site: string): Promise<ProbeResult | null> {
     return null;
   };
@@ -5630,6 +5808,7 @@ function setup() {
     recordings,
     network,
     downloads,
+    recipes,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -5705,6 +5884,7 @@ function setup() {
     timers,
     sessions,
     access,
+    recipes,
     probe,
     uploads,
     pageCalls,

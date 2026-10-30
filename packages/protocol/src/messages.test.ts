@@ -93,6 +93,7 @@ describe("parseMessage accepts", () => {
         "read_console",
         "read_network",
         "download",
+        "recipe_propose",
         "probe_input",
       ] as const
     ).map((method) => ({

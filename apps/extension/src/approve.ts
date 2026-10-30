@@ -1,5 +1,5 @@
 import type { Port, Timers } from "./browser-api.ts";
-import { createArming } from "./prompt-arming.ts";
+import { announce, armButtons, element, fieldsOf } from "./page-ui.ts";
 
 declare const browser: { runtime: { connect(connectInfo: { name: string }): Port } };
 
@@ -15,75 +15,38 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
-const heading = element("heading");
-const target = element("target");
-const credentials = element("credentials");
-const answers = element("answers");
-const status = element("status");
-const after = element("after");
-const back = element("back");
-const close = element("close");
+const PAGE = "prompt page";
+const heading = element("heading", PAGE);
+const target = element("target", PAGE);
+const credentials = element("credentials", PAGE);
+const answers = element("answers", PAGE);
+const status = element("status", PAGE);
+const after = element("after", PAGE);
+const back = element("back", PAGE);
+const close = element("close", PAGE);
 const buttons = [...answers.querySelectorAll<HTMLButtonElement>("button[data-answer]")];
-const arming = createArming(timers, renderButtons);
 let state: State = "waiting";
 let port: Port | undefined;
-// Whether the press that starts the coming click happened while armed; undefined without one.
-let pressArmed: boolean | undefined;
-// The latest announcement, written to the live region on the next frame.
-let message = "";
+const { renderButtons, watch } = armButtons({
+  buttons,
+  timers,
+  asking: () => state === "prompt",
+  onAnswer,
+  onUnarmed: () => announce(status, UNARMED),
+});
 
-for (const button of buttons) {
-  // Fires when the press starts, also for touch and pen, whose mousedown comes after the tap.
-  button.addEventListener("pointerdown", () => {
-    pressArmed = arming.armed();
-  });
-  button.addEventListener("keydown", (event) => {
-    // A held key is one press, started when it went down. A held Enter would also answer
-    // again as soon as the buttons re-arm.
-    if (event.repeat) {
-      if (event.key === "Enter") event.preventDefault();
-      return;
-    }
-    // Only the keys that click a button; Tab moving focus on is no press.
-    if (event.key === "Enter" || event.key === " ") pressArmed = arming.armed();
-  });
-  button.addEventListener("click", (event) => onClick(event, button));
-}
 back.addEventListener("click", () => history.back());
 
 const id = new URLSearchParams(location.search).get("id");
 if (id === null) end();
 else connect(id);
 
-function element(id: string): HTMLElement {
-  const found = document.getElementById(id);
-  if (found === null) throw new Error(`The prompt page has no #${id}.`);
-  return found;
-}
-
-/** Buttons answer only while armed and asking; `aria-disabled`, not `disabled`, keeps them focusable. */
-function renderButtons(): void {
-  const enabled = state === "prompt" && arming.armed();
-  for (const button of buttons) {
-    if (enabled) button.removeAttribute("aria-disabled");
-    else button.setAttribute("aria-disabled", "true");
-  }
-}
-
-function onClick(event: MouseEvent, button: HTMLButtonElement): void {
-  const pressed = pressArmed;
-  pressArmed = undefined;
-  // Only the user's own click answers, and not the second click of a double click.
-  if (!event.isTrusted || event.detail > 1 || state !== "prompt") return;
-  if (!arming.armed() || pressed === false) {
-    announce(UNARMED);
-    return;
-  }
+function onAnswer(button: HTMLButtonElement): void {
   const answer = button.dataset.answer;
   if (!isAnswer(answer)) return;
   state = "saving";
   renderButtons();
-  announce("Saving");
+  announce(status, "Saving");
   try {
     port?.postMessage({ type: "answer", answer });
   } catch {
@@ -108,7 +71,7 @@ function receive(received: unknown): void {
     if (state !== "saving") return;
     state = "prompt";
     renderButtons();
-    announce("Firefox could not save the answer. Try again.");
+    announce(status, "Firefox could not save the answer. Try again.");
   } else if (fields.type === "done") {
     const { answer, loadsHere, late } = fields;
     if (isAnswer(answer) && typeof loadsHere === "boolean" && typeof late === "boolean") {
@@ -129,13 +92,7 @@ function ask(site: string, url: string): void {
   state = "prompt";
   renderButtons();
   // From now on, so the second before arming counts from when the question can be read.
-  arming.visible(document.visibilityState === "visible");
-  arming.focused(document.hasFocus());
-  document.addEventListener("visibilitychange", () => {
-    arming.visible(document.visibilityState === "visible");
-  });
-  window.addEventListener("focus", () => arming.focused(true));
-  window.addEventListener("blur", () => arming.focused(false));
+  watch();
 }
 
 /** The URL without a user name or password, which could make another site look like the one asked for. */
@@ -169,7 +126,7 @@ function done(answer: Answer, loadsHere: boolean, late: boolean): void {
   }
   if (!loading) showAfter();
   status.focus();
-  announce(text);
+  announce(status, text);
 }
 
 function showAfter(): void {
@@ -183,23 +140,7 @@ function end(): void {
   state = "ended";
   answers.remove();
   status.focus();
-  announce("This request has ended. Ask the agent to try again.");
-}
-
-/** Clears the live region first, so a repeated message is announced again. */
-function announce(text: string): void {
-  message = text;
-  status.textContent = "";
-  if (text !== "") {
-    requestAnimationFrame(() => {
-      status.textContent = message;
-    });
-  }
-}
-
-function fieldsOf(value: unknown): Record<string, unknown> | undefined {
-  if (typeof value !== "object" || value === null) return undefined;
-  return { ...value };
+  announce(status, "This request has ended. Ask the agent to try again.");
 }
 
 function isAnswer(value: unknown): value is Answer {

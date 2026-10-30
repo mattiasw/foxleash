@@ -105,3 +105,34 @@ li .actions {
 #target {
   overflow-wrap: anywhere;
 }
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff li {
+  display: block;
+  padding-block: 0;
+  border-bottom: none;
+  font-family: ui-monospace, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.diff .removed {
+  background: color-mix(in srgb, red 20%, Canvas);
+}
+
+.diff .added {
+  background: color-mix(in srgb, green 20%, Canvas);
+}

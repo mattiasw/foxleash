@@ -307,6 +307,8 @@ export interface Methods {
   };
   /** `path` is the absolute path Firefox saved the file at, `bytes` its size. */
   download: { params: { url: string; filename: string }; result: { path: string; bytes: number } };
+  /** Opens the propose page in the session's group; `tabId` is its tab. Never says whether the user saved. */
+  recipe_propose: { params: RecipeFields; result: { tabId: number } };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -343,6 +345,7 @@ export const METHOD_NAMES = [
   "read_console",
   "read_network",
   "download",
+  "recipe_propose",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

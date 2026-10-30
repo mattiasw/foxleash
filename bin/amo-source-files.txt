@@ -23,6 +23,7 @@ apps/extension/src/foreign-frames.ts
 apps/extension/src/frame-errors.ts
 apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
+apps/extension/src/line-diff.ts
 apps/extension/src/live-documents.ts
 apps/extension/src/log.ts
 apps/extension/src/network-log.ts
@@ -39,11 +40,15 @@ apps/extension/src/page-scripts.ts
 apps/extension/src/page-text-dom.ts
 apps/extension/src/page-text.ts
 apps/extension/src/page-tree.ts
+apps/extension/src/page-ui.ts
 apps/extension/src/page-upload.ts
 apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts
+apps/extension/src/propose.html
+apps/extension/src/propose.ts
 apps/extension/src/read-page.ts
+apps/extension/src/recipe-prompts.ts
 apps/extension/src/recipes.ts
 apps/extension/src/screenshot.ts
 apps/extension/src/session-groups.ts

@@ -414,7 +414,8 @@ function isProblems(
   return typeof result === "object" && !Array.isArray(result);
 }
 
-function lookOf(name: string): string {
+/** A name as it looks: two names that look the same cannot both be stored. */
+export function lookOf(name: string): string {
   // A joiner between a letter and its mark keeps NFC from composing them.
   return name.replace(INVISIBLE_IN_NAME, "").normalize("NFC");
 }

@@ -48,6 +48,8 @@ import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
+import type { RecipePrompts } from "./recipe-prompts.ts";
+import { checkRecipe } from "./recipes.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
@@ -103,6 +105,8 @@ export interface HandlerDeps<Handle> {
   network: Pick<NetworkLog, "read">;
   /** Saves files into the download folder; it imports this file too. */
   downloads: Pick<Downloads, "save">;
+  /** The session's recipe pages; `import type`, since it imports this file. */
+  recipes: Pick<RecipePrompts, "propose" | "openPrompt">;
 }
 
 type Params = Record<string, unknown>;
@@ -188,6 +192,7 @@ export function createHandlers<Handle>({
   recordings,
   network,
   downloads,
+  recipes,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const frameErrors = watchFrameErrors(browser);
   const handlers: Handlers = {
@@ -216,6 +221,7 @@ export function createHandlers<Handle>({
     read_console: readConsole,
     read_network: readNetwork,
     download,
+    recipe_propose: recipePropose,
     probe_input: probeInput,
   };
 
@@ -955,6 +961,24 @@ export function createHandlers<Handle>({
     return downloads.save(session, href, String(filename));
   }
 
+  /**
+   * Opens the user's page for a proposed recipe, normalized first, so a name with surrounding
+   * spaces or a site given as a URL is shown and looked up as it would be stored.
+   */
+  async function recipePropose(session: string, params: Params): Promise<Result<"recipe_propose">> {
+    const checked = checkRecipe({
+      name: own(params, "name"),
+      description: own(params, "description"),
+      sites: own(params, "sites"),
+      steps: own(params, "steps"),
+    });
+    if (!checked.ok) {
+      const problems = checked.problems.map(({ field, text }) => `${field}: ${text}`);
+      throw new ToolError("invalid_params", `propose_recipe was refused: ${problems.join(" ")}`);
+    }
+    return recipes.propose(session, checked.recipe);
+  }
+
   /** Records the site of every URL the tab moves to until `stop`. */
   function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
     const sites = new Set<string | undefined>();
@@ -1109,14 +1133,21 @@ export function createHandlers<Handle>({
   }
 
   /**
-   * Refuses a load over the session's open prompt, or closing its tab, which would dismiss the
-   * user's question and count against the session's prompts; a parallel request may have shown
-   * the prompt in the tab meanwhile. Called right before the load or the removal starts, with no
-   * await in between.
+   * Refuses a load over the session's open prompt or recipe page, or closing its tab, which would
+   * dismiss the user's question and count against the session's prompts; a parallel request may
+   * have shown the prompt in the tab meanwhile. Called right before the load or the removal
+   * starts, with no await in between.
    */
   function keepPrompt(session: string, tabId: number): void {
     const shown = access.openPrompt(session);
-    if (shown?.tabId === tabId) throw approvalPending(shown.tabId, shown.site);
+    if (shown?.tabId === tabId)
+      throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);
+    if (recipes.openPrompt(session)?.tabId === tabId) {
+      throw new ToolError(
+        "recipe_prompt_open",
+        `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+      );
+    }
   }
 
   async function existingTab(tabId: number): Promise<Tab> {
@@ -1177,7 +1208,8 @@ export async function allowedSiteFor(
   url: string,
 ): Promise<string> {
   const prompt = access.openPrompt(session);
-  if (prompt?.tabId === tabId) throw approvalPending(prompt.tabId, prompt.site);
+  if (prompt?.tabId === tabId)
+    throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
   const site = siteOf(url);
   if (site === undefined) throw pageNotWeb(tabId);
   const view = await access.view(session);
@@ -1532,7 +1564,7 @@ function retryUrl(prompt: OpenPrompt, target: NavigationTarget): string {
     if (target.kind === "url" && siteOf(target.url) === prompt.site) return target.url;
     if (isReload(target)) return prompt.url;
   }
-  throw approvalPending(prompt.tabId, prompt.site);
+  throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
 }
 
 function isReload(target: NavigationTarget): boolean {

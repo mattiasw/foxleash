@@ -42,7 +42,6 @@ const ARMED_STATE = `(() => {
   return buttons.length + " buttons, " + unarmed.length + " unarmed; document.hasFocus() " +
     document.hasFocus() + ", document.visibilityState " + document.visibilityState;
 })()`;
-const ARMED = "3 buttons, 0 unarmed;";
 
 // The longest socket path the host can make must fit in sun_path (108 bytes with its NUL).
 const MAX_SOCKET_PATH_BYTES = 107;
@@ -103,8 +102,13 @@ export interface Harness {
   connect(overrides?: Record<string, string>, options?: { cwd?: string }): Promise<Session>;
   /** Waits for a tab showing the approval prompt, other than the tabs in `except`. */
   promptContext(except?: readonly string[]): Promise<string>;
-  /** Shows and focuses the prompt's tab, then waits until its three answer buttons are armed. */
-  waitForArmed(context: string): Promise<void>;
+  /** Waits for a tab showing the extension's page `page`, other than the tabs in `except`. */
+  pageContext(page: string, except?: readonly string[]): Promise<string>;
+  /**
+   * Shows and focuses the page's tab, then waits until its answer buttons, three unless given,
+   * are armed.
+   */
+  waitForArmed(context: string, buttons?: number): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
   /** Calls a tool and returns its result, whether it failed or not. */
@@ -186,6 +190,16 @@ export function createHarness(): Harness {
       `the settings page is titled ${String(title)}${diagnostics()}`,
     );
     return context;
+  }
+
+  function pageContext(page: string, except: readonly string[] = []): Promise<string> {
+    assertOpen();
+    const firefox = currentFirefox();
+    const prefix = firefox.extensionUrl(page);
+    return firefox.waitForContext(
+      (tab) => tab.url.startsWith(prefix) && !except.includes(tab.context),
+      PAGE_TIMEOUT_MS,
+    );
   }
 
   async function waitForHost(): Promise<number> {
@@ -344,27 +358,24 @@ export function createHarness(): Harness {
     },
 
     promptContext(except = []) {
-      assertOpen();
-      const firefox = currentFirefox();
-      const prefix = firefox.extensionUrl(PROMPT_PAGE);
-      return firefox.waitForContext(
-        (tab) => tab.url.startsWith(prefix) && !except.includes(tab.context),
-        PAGE_TIMEOUT_MS,
-      );
+      return pageContext(PROMPT_PAGE, except);
     },
 
-    async waitForArmed(context) {
+    pageContext,
+
+    async waitForArmed(context, buttons = 3) {
       assertOpen();
       const firefox = currentFirefox();
+      const armed = `${buttons} buttons, 0 unarmed;`;
       await firefox.activate(context);
       await pollUntil(
         async () => {
           const state = await firefox.evaluate(context, ARMED_STATE);
-          if (typeof state === "string" && state.startsWith(ARMED)) return true;
-          throw new Error(`the prompt has ${String(state)}`);
+          if (typeof state === "string" && state.startsWith(armed)) return true;
+          throw new Error(`the page has ${String(state)}`);
         },
         PAGE_TIMEOUT_MS,
-        "the prompt's buttons to arm",
+        "the page's answer buttons to arm",
       );
     },
 

@@ -27,13 +27,14 @@
     {
       "listing": "download files from sites you approved into your Firefox download folder",
       "tools": ["download"]
-    }
+    },
+    { "listing": "propose recipes", "tools": ["propose_recipe"] }
   ],
   "safeguards": [
     {
       "listing": "The approval can only come from your click",
       "evidence": [
-        { "file": "apps/extension/src/approve.ts", "contains": "isTrusted" },
+        { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
         { "file": "apps/extension/src/site-access.ts", "contains": "sender.url" },
         { "file": "apps/extension/src/handlers.ts", "contains": "access.ask(" }
       ]
@@ -70,6 +71,14 @@
         { "file": "apps/extension/src/downloads.ts", "contains": "conflictAction: \"uniquify\"" },
         { "file": "apps/extension/src/downloads.ts", "contains": "!/[/\\\\]/.test(value)" },
         { "file": "apps/extension/src/handlers.ts", "contains": "downloadNameProblem(filename)" }
+      ]
+    },
+    {
+      "listing": "A recipe is saved only by your click on Foxhand's page in Firefox",
+      "evidence": [
+        { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
+        { "file": "apps/extension/src/recipe-prompts.ts", "contains": "portShowsPage(" },
+        { "file": "apps/extension/src/recipe-prompts.ts", "contains": "saveRecipe(" }
       ]
     },
     {

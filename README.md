@@ -82,7 +82,8 @@ running agent session, and the prompts you closed without an answer, each with a
 button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
 in memory until the session ends. The settings page is also where you edit the blocklist,
 and where you write, edit and delete recipes: a task's steps written down with the sites it
-uses, kept in Firefox on this computer.
+uses, kept in Firefox on this computer. An agent can also propose a recipe, which you read and
+save in Firefox.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -249,6 +250,16 @@ ending in `.desktop`; Firefox adds a number when the name is taken, so an existi
 replaced. At most 100 MiB and 50 seconds per file, one download at a time. Each download shows
 in Firefox's downloads panel and history.
 
+The agent proposes a recipe with `propose_recipe`, giving its name, description, sites and
+steps. Foxhand opens a page in the session's tab group that shows them in fields you can edit,
+and saves the recipe only when you click Save there; Discard drops it. When you have a recipe
+with that name, the page shows your saved version and the changes to its steps. The call
+returns at once with the page's tab id and does not tell the agent whether you saved. While
+the page is open, the session cannot open another recipe page or ask you about a site, and
+cannot close the page's tab or load another page in it. After three recipe pages that you
+discarded or closed, Foxhand opens no more in that session. A page still open when the session
+ends stays open and can still save.
+
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
 selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
 asks for up to 30. Text is matched in the text the page shows, without the values of form
@@ -292,6 +303,9 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   defaults. Files and folders whose names start with a dot below an upload folder, and files
   named like keys (`id_*`, `*.pem`, `*.key` and similar), are refused in any folder, and an
   upload takes at most 10 MB.
+- A recipe is saved only by your click on Foxhand's page in Firefox, after you read it:
+  nothing the agent sends can save one. Later agent sessions read a saved recipe as your
+  instructions, so read it before you save it.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 - Text results never return the values of password fields, of one-time code and card number

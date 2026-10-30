@@ -20,6 +20,10 @@ import {
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
   MAX_PAGE_TEXT_CHARS,
+  MAX_RECIPE_DESCRIPTION,
+  MAX_RECIPE_NAME,
+  MAX_RECIPE_SITES,
+  MAX_RECIPE_STEPS,
   MAX_TYPE_CHARS,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_FOR_TEXT,
@@ -127,6 +131,12 @@ const DRAG_START = "drag needs either ref or both x and y for the start, not bot
 const DRAG_END =
   "drag needs either targetRef or both targetX and targetY for the end, not both and not neither.";
 const UNREADABLE_UPLOAD = "Firefox returned an upload result Foxhand cannot read.";
+const MAX_STEPS = MAX_RECIPE_STEPS.toLocaleString("en-US");
+const PROPOSE_RECIPE =
+  "Propose a recipe to the user: written steps for a task across sites, which the user keeps in Foxhand and a later agent session can read and follow. A recipe is text, not a macro: nothing runs it. Propose one when the user asks for it, or after a task you had to work out across sites: offer it in the chat first and propose it only if the user wants it. Proposing the name of a recipe the user saved shows the user the changes to it. sites lists the sites the steps use as origins (scheme, host and port, such as https://example.com); a URL is reduced to its site. In steps, name pages by their address and elements by their visible names, never by element references from read_page, and leave the values that change from run to run, such as a date or an amount, to the user's request. Foxhand opens a page in this session's Foxhand tab group where the user reads the recipe, can edit it, and saves or discards it. The call returns at once and does not say whether the user saved: ask the user. The result names the page's tab id, which tabs_list shows only as moz-extension:; do not close that tab.";
+const UNREADABLE_PROPOSAL = "Firefox returned a recipe page Foxhand cannot read.";
+// A site entry may be a full URL, which the extension reduces to its site.
+const MAX_SITE_ENTRY = 2048;
 const DEFAULT_CONSOLE_LIMIT = 100;
 const MAX_MESSAGES = MAX_CONSOLE_MESSAGES.toLocaleString("en-US");
 const MAX_MESSAGE_TEXT = MAX_CONSOLE_TEXT.toLocaleString("en-US");
@@ -776,6 +786,61 @@ export function registerTools(
       return networkResult(parsed.data);
     },
   );
+  register(
+    "propose_recipe",
+    {
+      description: PROPOSE_RECIPE,
+      // zod counts UTF-16 units and the recipe limits count code points, so these allow twice
+      // the limits; the extension enforces the exact bound (see MAX_RECIPE_NAME).
+      inputSchema: {
+        name: z
+          .string()
+          .min(1)
+          .max(2 * MAX_RECIPE_NAME)
+          .describe(
+            `A short name the user will recognize, such as OpenAI receipt; at most ${MAX_RECIPE_NAME} characters`,
+          ),
+        description: z
+          .string()
+          .min(1)
+          .max(2 * MAX_RECIPE_DESCRIPTION)
+          .describe(
+            `One line saying what the recipe does; at most ${MAX_RECIPE_DESCRIPTION} characters`,
+          ),
+        sites: z
+          .array(z.string().min(1).max(MAX_SITE_ENTRY))
+          .min(1)
+          .max(MAX_RECIPE_SITES)
+          .describe(
+            `The sites the steps use, such as https://example.com; at most ${MAX_RECIPE_SITES} sites`,
+          ),
+        steps: z
+          .string()
+          .min(1)
+          .max(2 * MAX_RECIPE_STEPS)
+          .describe(`The steps, one per line; at most ${MAX_STEPS} characters`),
+      },
+    },
+    async ({ name, description, sites, steps }) => {
+      const called = await callBridge(bridge, "recipe_propose", {
+        name,
+        description,
+        sites,
+        steps,
+      });
+      if (!called.ok) return called.error;
+      const tabId = proposedTabOf(called.result);
+      if (tabId === undefined) return errorResult(UNREADABLE_PROPOSAL);
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Waiting in Firefox: the user can edit, save or discard the recipe in tab ${tabId}.`,
+          },
+        ],
+      };
+    },
+  );
   server.registerTool(
     "batch",
     {
@@ -1190,6 +1255,12 @@ async function sendUpload(
     return errorResult(UNREADABLE_UPLOAD);
   }
   return { content: [{ type: "text", text: uploadText(where, target, files) }] };
+}
+
+function proposedTabOf(result: unknown): number | undefined {
+  if (typeof result !== "object" || result === null) return undefined;
+  const tabId: unknown = Object.hasOwn(result, "tabId") ? Reflect.get(result, "tabId") : undefined;
+  return typeof tabId === "number" && Number.isInteger(tabId) && tabId >= 0 ? tabId : undefined;
 }
 
 function uploadTargetOf(result: unknown): "input" | "drop" | undefined {

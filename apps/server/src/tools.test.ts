@@ -49,7 +49,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the twenty-two tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the twenty-three tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -62,6 +62,7 @@ describe("tools", () => {
       "hover",
       "navigate",
       "press_key",
+      "propose_recipe",
       "read_console",
       "read_network",
       "read_page",
@@ -97,6 +98,7 @@ describe("tools", () => {
           "read_network",
           "resize_window",
           "download",
+          "propose_recipe",
           "batch",
         ].includes(tool.name),
         tool.name,
@@ -1670,6 +1672,135 @@ describe("download", () => {
   });
 });
 
+describe("propose_recipe", () => {
+  const RECIPE = {
+    name: "Receipt",
+    description: "Download the latest receipt.",
+    sites: ["https://shop.example"],
+    steps: "Open https://shop.example/orders.",
+  };
+  const INVALID =
+    "MCP error -32602: Input validation error: Invalid arguments for tool propose_recipe";
+
+  it("is described with its schema, after every tool but batch", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    assert.deepEqual(
+      tools.slice(-2).map(({ name }) => name),
+      ["propose_recipe", "batch"],
+    );
+    const tool = tools.find((listed) => listed.name === "propose_recipe");
+    assert.ok(tool?.description !== undefined);
+    assert.equal(tool.description.includes("list_recipes"), false);
+    for (const words of [
+      "not a macro: nothing runs it",
+      "offer it in the chat first",
+      "a URL is reduced to its site",
+      "never by element references from read_page",
+      "does not say whether the user saved: ask the user",
+      "tabs_list shows only as moz-extension:; do not close that tab",
+    ]) {
+      assert.ok(tool.description.includes(words), words);
+    }
+    assert.deepEqual(tool.inputSchema.required, ["name", "description", "sites", "steps"]);
+    const properties = record(tool.inputSchema.properties);
+    assert.match(String(record(properties.name).description), /at most 100 characters$/);
+    assert.match(String(record(properties.description).description), /at most 200 characters$/);
+    assert.match(String(record(properties.sites).description), /at most 20 sites$/);
+    assert.match(String(record(properties.steps).description), /at most 20,000 characters$/);
+  });
+
+  it("forwards the four fields and returns Foxhand's own text naming the tab", LIMIT, async () => {
+    for (const tabId of [7, 0]) {
+      const { client, calls } = await start(() => ({ tabId }));
+      const output = await client.callTool({ name: "propose_recipe", arguments: RECIPE });
+      assert.deepEqual(output, {
+        content: [
+          {
+            type: "text",
+            text: `Waiting in Firefox: the user can edit, save or discard the recipe in tab ${tabId}.`,
+          },
+        ],
+      });
+      assert.deepEqual(calls, [{ method: "recipe_propose", params: RECIPE }]);
+    }
+  });
+
+  it("refuses a result without a tab id it can read", LIMIT, async () => {
+    for (const result of [{}, { tabId: "7" }, { tabId: -1 }, { tabId: 1.5 }, null, 7]) {
+      const { client } = await start(() => result);
+      const output = await client.callTool({ name: "propose_recipe", arguments: RECIPE });
+      assert.deepEqual(
+        output,
+        {
+          content: [{ type: "text", text: "Firefox returned a recipe page Foxhand cannot read." }],
+          isError: true,
+        },
+        JSON.stringify(result),
+      );
+    }
+    const inherited = Object.create({ tabId: 7 });
+    const { client } = await start(() => inherited);
+    const output = await client.callTool({ name: "propose_recipe", arguments: RECIPE });
+    assert.equal(output.isError, true);
+  });
+
+  it("returns a host error as untrusted text", LIMIT, async () => {
+    const message = "propose_recipe was refused: name: Give the recipe a name.";
+    const { client } = await start(() => {
+      throw new HostError("invalid_params", message);
+    });
+    const output = await client.callTool({ name: "propose_recipe", arguments: RECIPE });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), message);
+  });
+
+  it("allows twice the code-point limits in UTF-16 units and refuses more", LIMIT, async () => {
+    const long = (length: number) => "a".repeat(length);
+    const sites = (count: number) =>
+      Array.from({ length: count }, (_, index) => `https://s${index}.example`);
+    const allowed = [
+      { name: long(200) },
+      { description: long(400) },
+      { steps: long(40_000) },
+      { sites: [`https://a.example/${long(2048 - 18)}`] },
+      { sites: sites(20) },
+    ];
+    const refused = [
+      { name: long(201) },
+      { name: "" },
+      { description: long(401) },
+      { description: "" },
+      { steps: long(40_001) },
+      { steps: "" },
+      { sites: [`https://a.example/${long(2049 - 18)}`] },
+      { sites: sites(21) },
+      { sites: [] },
+      { sites: [""] },
+      { sites: "https://a.example" },
+    ];
+    for (const change of allowed) {
+      const { client, calls } = await start(() => ({ tabId: 1 }));
+      const output = await client.callTool({
+        name: "propose_recipe",
+        arguments: { ...RECIPE, ...change },
+      });
+      assert.equal(output.isError, undefined, JSON.stringify(change).slice(0, 80));
+      assert.equal(calls.length, 1);
+    }
+    for (const change of refused) {
+      const { client, calls } = await start(() => ({ tabId: 1 }));
+      const output = await client.callTool({
+        name: "propose_recipe",
+        arguments: { ...RECIPE, ...change },
+      });
+      assert.equal(output.isError, true, JSON.stringify(change).slice(0, 80));
+      assert.ok(text(output).startsWith(INVALID), JSON.stringify(change).slice(0, 80));
+      assert.deepEqual(calls, []);
+    }
+  });
+});
+
 describe("read_network", () => {
   const UNREADABLE = "Firefox returned network requests Foxhand cannot read.";
 
@@ -2563,7 +2694,7 @@ describe("batch", () => {
         .filter((name) => name !== "batch")
         .sort(),
     );
-    assert.equal(tool.enum.length, 21);
+    assert.equal(tool.enum.length, 22);
   });
 
   it("runs each step as its tool does and returns every result in order", LIMIT, async () => {

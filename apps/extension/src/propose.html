@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Foxhand</title>
+    <link rel="stylesheet" href="pages.css">
+  </head>
+  <body>
+    <main>
+      <h1 id="heading">Foxhand</h1>
+      <p>The agent proposes this recipe. Read it, change what you want, then save or discard it.
+        Saving keeps it in Foxhand's settings; a later agent session can read and follow it.</p>
+      <h2>Recipe</h2>
+      <label for="recipe-name">Name</label>
+      <input type="text" id="recipe-name" autocomplete="off" aria-required="true"
+        aria-describedby="recipe-name-help recipe-name-errors">
+      <p id="recipe-name-help">One line of at most 100 characters; no two recipes share a
+        name.</p>
+      <ul id="recipe-name-errors" class="errors" hidden></ul>
+      <label for="recipe-description">Description</label>
+      <input type="text" id="recipe-description" autocomplete="off" aria-required="true"
+        aria-describedby="recipe-description-help recipe-description-errors">
+      <p id="recipe-description-help">One line of at most 200 characters saying what the
+        recipe does.</p>
+      <ul id="recipe-description-errors" class="errors" hidden></ul>
+      <label for="recipe-sites">Sites</label>
+      <textarea id="recipe-sites" rows="4" spellcheck="false" autocomplete="off"
+        autocapitalize="off" aria-required="true"
+        aria-describedby="recipe-sites-help recipe-sites-errors"></textarea>
+      <p id="recipe-sites-help">One site per line, such as https://example.com; a full address
+        is reduced to its site.</p>
+      <ul id="recipe-sites-errors" class="errors" hidden></ul>
+      <label for="recipe-steps">Steps</label>
+      <textarea id="recipe-steps" rows="12" aria-required="true"
+        aria-describedby="recipe-steps-help recipe-steps-errors"></textarea>
+      <p id="recipe-steps-help">The task's steps in your own words, at most 20,000
+        characters.</p>
+      <ul id="recipe-steps-errors" class="errors" hidden></ul>
+      <section id="current" aria-labelledby="current-heading" hidden>
+        <h2 id="current-heading" tabindex="-1">Current version</h2>
+        <h3>Name</h3>
+        <p id="current-name" class="value"></p>
+        <p id="current-name-change"></p>
+        <h3>Description</h3>
+        <p id="current-description" class="value"></p>
+        <p id="current-description-change"></p>
+        <h3>Sites</h3>
+        <p id="current-sites" class="value"></p>
+        <p id="current-sites-change"></p>
+        <h3 id="diff-heading">Changes to the steps, as edited above</h3>
+        <p id="current-steps-change"></p>
+        <ul id="diff" class="diff" aria-labelledby="diff-heading"></ul>
+      </section>
+      <div id="answers" class="answers">
+        <button type="button" data-answer="discard" aria-disabled="true">Discard</button>
+        <button type="button" data-answer="save" aria-disabled="true">Save</button>
+      </div>
+      <p id="status" role="status" aria-live="polite" tabindex="-1"></p>
+      <div id="after" hidden>
+        <p>You can close this tab.</p>
+      </div>
+    </main>
+    <script src="propose.js"></script>
+  </body>
+</html>

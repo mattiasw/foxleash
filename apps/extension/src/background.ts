@@ -7,6 +7,7 @@ import { createIndicator } from "./indicator.ts";
 import { createNetworkLog } from "./network-log.ts";
 import { createPageScripts } from "./page-scripts.ts";
 import { probePage } from "./probe-page.ts";
+import { createRecipePrompts } from "./recipe-prompts.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { createSiteAccess } from "./site-access.ts";
 import { createUploads } from "./uploads.ts";
@@ -19,7 +20,11 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
-const groups = createSessionGroups(browser, (tabId) => indicator.refresh(tabId));
+const groups = createSessionGroups(
+  browser,
+  (tabId) => indicator.refresh(tabId),
+  (url) => recipes.isBlankPage(url),
+);
 const indicator = createIndicator({ browser, groups });
 const access = createSiteAccess({
   browser,
@@ -30,7 +35,9 @@ const access = createSiteAccess({
     recordings.withdraw(session, site);
     network.withdraw(session, site);
   },
+  otherPrompt: (session) => recipes.openPrompt(session),
 });
+const recipes = createRecipePrompts({ browser, groups, access });
 const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });
@@ -57,6 +64,7 @@ const handleRequest = createHandlers({
   recordings,
   network,
   downloads,
+  recipes,
 });
 const connection = createConnection({
   browser,
@@ -64,6 +72,7 @@ const connection = createConnection({
   endSession: (session) => {
     access.endSession(session);
     uploads.endSession(session);
+    recipes.endSession(session);
     return groups.endSession(session);
   },
   timers,
