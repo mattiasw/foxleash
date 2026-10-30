@@ -7,6 +7,7 @@ import {
   deleteRecipe,
   type RecipeProblem,
   readRecipes,
+  recipeName,
   recipeOf,
   saveRecipe,
 } from "./recipes.ts";
@@ -556,6 +557,22 @@ describe("checkRecipe", () => {
     const result = checkRecipe({ ...VALID, steps: `Caf${c(0x65, 0x301)}` });
     assert.ok(result.ok);
     assert.equal(result.recipe.steps, `Caf${c(0xe9)}`);
+  });
+});
+
+describe("recipeName", () => {
+  it("normalizes a name as checkRecipe does", () => {
+    assert.equal(recipeName(" Receipt "), "Receipt");
+    assert.equal(recipeName("Cafe\u0301"), "Caf\u00e9");
+    assert.equal(recipeName("a   b"), "a b");
+    assert.equal(recipeName("a\u00a0\u3000b"), "a b");
+    assert.equal(recipeName("a".repeat(100)), "a".repeat(100));
+  });
+
+  it("gives undefined for a name checkRecipe refuses", () => {
+    for (const value of ["", "   ", "a".repeat(101), "a\u200bb", "a\u202eb", 7, undefined]) {
+      assert.equal(recipeName(value), undefined, JSON.stringify(value));
+    }
   });
 });
 

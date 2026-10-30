@@ -142,6 +142,15 @@ export function checkRecipe(fields: {
 }
 
 /**
+ * The name a recipe would be stored under for `value`, normalized as `checkRecipe` normalizes it,
+ * or undefined when `checkRecipe` would refuse it.
+ */
+export function recipeName(value: unknown): string | undefined {
+  const name = checkLine(value, "name", MAX_RECIPE_NAME, "Give the recipe a name.");
+  return typeof name === "string" ? name : undefined;
+}
+
+/**
  * Stores the recipe under its name, when what is stored is what the editor showed (`shown`, with
  * `savedAt` null for a recipe not stored). With `replaceShown`, a renamed recipe's old key is
  * removed after the write; a failed removal rejects and leaves both. Rejects, storing nothing,

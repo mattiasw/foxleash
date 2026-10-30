@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents can propose a recipe: Foxhand opens it on a page in the session's tab group, where you
   read it, edit it, and save or discard it. Proposing the name of a saved recipe shows the saved
   version and the changes to its steps.
+- Agents can read the recipes you saved: the list of their names, descriptions and sites, and
+  one recipe with its steps. Foxhand gives the agent a recipe as your instructions, while page
+  content stays marked as untrusted.
 
 ### Removed
 

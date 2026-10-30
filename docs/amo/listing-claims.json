@@ -28,7 +28,8 @@
       "listing": "download files from sites you approved into your Firefox download folder",
       "tools": ["download"]
     },
-    { "listing": "propose recipes", "tools": ["propose_recipe"] }
+    { "listing": "propose recipes", "tools": ["propose_recipe"] },
+    { "listing": "read the recipes you saved", "tools": ["list_recipes", "get_recipe"] }
   ],
   "safeguards": [
     {

@@ -5738,6 +5738,124 @@ describe("recipe_propose", { timeout: 10000 }, () => {
   });
 });
 
+describe("recipe_list", () => {
+  it("gives the saved recipes sorted by name, without their steps, ignoring malformed ones", async (t) => {
+    t.mock.method(console, "warn", () => {});
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({
+      "recipe:b": savedRecipe("b"),
+      "recipe:A": savedRecipe("A"),
+      "recipe:a": savedRecipe("a"),
+      "recipe:bad": { name: "bad" },
+      "site:https://a.example": "always",
+    });
+    const result = await call("s1", "recipe_list");
+    assert.deepEqual(result, {
+      recipes: [summaryOf("a"), summaryOf("A"), summaryOf("b")],
+    });
+    assert.ok("recipes" in result);
+    for (const entry of result.recipes) assert.equal(Object.hasOwn(entry, "steps"), false);
+  });
+
+  it("gives an empty list when no recipe is saved", async () => {
+    const { call } = setup();
+    assert.deepEqual(await call("s1", "recipe_list"), { recipes: [] });
+  });
+});
+
+describe("recipe_get", () => {
+  it("gives the saved recipe with its steps, for its name as a saved name is normalized", async () => {
+    const { fake, call } = setup();
+    const receipt = savedRecipe("Receipt");
+    const cafe = savedRecipe("Caf\u00e9 order");
+    await fake.browser.storage.local.set({
+      "recipe:Receipt": receipt,
+      [`recipe:${cafe.name}`]: cafe,
+      "recipe:Other": savedRecipe("Other"),
+    });
+    for (const name of ["Receipt", "  Receipt  "]) {
+      assert.deepEqual(await call("s1", "recipe_get", { name }), { recipe: receipt }, name);
+    }
+    for (const name of ["Cafe\u0301 order", "Caf\u00e9\u00a0order", "Caf\u00e9   order"]) {
+      assert.deepEqual(await call("s1", "recipe_get", { name }), { recipe: cafe }, name);
+    }
+  });
+
+  it("gives a recipe stored under a name that now normalizes otherwise, by that exact name", async () => {
+    const { fake, call } = setup();
+    const trimmed = savedRecipe("Receipt");
+    const spaced = savedRecipe("Receipt ");
+    const hidden = savedRecipe("Rec\u200beipt");
+    await fake.browser.storage.local.set({
+      [`recipe:${trimmed.name}`]: trimmed,
+      [`recipe:${spaced.name}`]: spaced,
+      [`recipe:${hidden.name}`]: hidden,
+    });
+    assert.deepEqual(await call("s1", "recipe_get", { name: "Receipt " }), { recipe: spaced });
+    assert.deepEqual(await call("s1", "recipe_get", { name: "Rec\u200beipt" }), { recipe: hidden });
+    assert.deepEqual(await call("s1", "recipe_get", { name: " Receipt" }), { recipe: trimmed });
+  });
+
+  it("refuses a name that matches no saved recipe, naming it normalized", async () => {
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    const cases: [string, string][] = [
+      ["Missing", "Missing"],
+      ["  Missing  ", "Missing"],
+      ["receipt", "receipt"],
+    ];
+    for (const [name, shown] of cases) {
+      await assert.rejects(call("s1", "recipe_get", { name }), {
+        code: "recipe_not_found",
+        message: `No recipe named "${shown}" is saved. list_recipes names the saved ones.`,
+      });
+    }
+  });
+
+  it("refuses a name no recipe can have, naming it as given", async () => {
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    for (const name of ["", "   ", "a".repeat(101), "Rec\u200beipt"]) {
+      await assert.rejects(call("s1", "recipe_get", { name }), {
+        code: "recipe_not_found",
+        message: `No recipe named ${JSON.stringify(name)} is saved. list_recipes names the saved ones.`,
+      });
+    }
+  });
+
+  it("refuses a name that is not the request's own string", async () => {
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    const params: Record<string, unknown>[] = [
+      { name: 7 },
+      { name: null },
+      {},
+      Object.create({ name: "Receipt" }),
+    ];
+    for (const given of params) {
+      await assert.rejects(call("s1", "recipe_get", given), {
+        code: "invalid_params",
+        message: "get_recipe needs name to be a string.",
+      });
+    }
+  });
+});
+
+function savedRecipe(name: string) {
+  return {
+    name,
+    description: `What ${name} does`,
+    sites: ["https://shop.example"],
+    steps: `Steps of ${name}`,
+    savedAt: "2026-10-01T08:00:00.000Z",
+  };
+}
+
+function summaryOf(name: string) {
+  const { description, sites, savedAt } = savedRecipe(name);
+  return { name, description, sites, savedAt };
+}
+
 type Live = (session: string, tabId: number) => object | undefined;
 
 interface NetworkRead {

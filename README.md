@@ -82,8 +82,8 @@ running agent session, and the prompts you closed without an answer, each with a
 button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
 in memory until the session ends. The settings page is also where you edit the blocklist,
 and where you write, edit and delete recipes: a task's steps written down with the sites it
-uses, kept in Firefox on this computer. An agent can also propose a recipe, which you read and
-save in Firefox.
+uses, kept in Firefox on this computer. An agent can also read the recipes you saved, and
+propose a recipe, which you read and save in Firefox.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -259,6 +259,12 @@ the page is open, the session cannot open another recipe page or ask you about a
 cannot close the page's tab or load another page in it. After three recipe pages that you
 discarded or closed, Foxhand opens no more in that session. A page still open when the session
 ends stays open and can still save.
+
+The agent reads your saved recipes with `list_recipes`, which gives each one's name,
+description, sites and the time you saved it, sorted by name, without the steps, and with
+`get_recipe`, which gives one recipe with its steps by its name. Foxhand hands the agent a
+recipe as your instructions, outside the untrusted marking it puts on page content; what the
+agent reads on pages while following a recipe is still marked untrusted.
 
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
 selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it

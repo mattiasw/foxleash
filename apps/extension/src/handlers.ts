@@ -49,7 +49,7 @@ import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import type { RecipePrompts } from "./recipe-prompts.ts";
-import { checkRecipe } from "./recipes.ts";
+import { checkRecipe, readRecipes, recipeName } from "./recipes.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
@@ -222,6 +222,8 @@ export function createHandlers<Handle>({
     read_network: readNetwork,
     download,
     recipe_propose: recipePropose,
+    recipe_list: recipeList,
+    recipe_get: recipeGet,
     probe_input: probeInput,
   };
 
@@ -977,6 +979,42 @@ export function createHandlers<Handle>({
       throw new ToolError("invalid_params", `propose_recipe was refused: ${problems.join(" ")}`);
     }
     return recipes.propose(session, checked.recipe);
+  }
+
+  /** The saved recipes, sorted by name, without their steps. */
+  async function recipeList(): Promise<Result<"recipe_list">> {
+    const saved = await readRecipes(browser);
+    return {
+      recipes: saved.map(({ name, description, sites, savedAt }) => ({
+        name,
+        description,
+        sites,
+        savedAt,
+      })),
+    };
+  }
+
+  /** The saved recipe named exactly `name`, or else named `name` normalized as a saved name is. */
+  async function recipeGet(_session: string, params: Params): Promise<Result<"recipe_get">> {
+    const name = own(params, "name");
+    if (typeof name !== "string") {
+      throw new ToolError("invalid_params", "get_recipe needs name to be a string.");
+    }
+    const normalized = recipeName(name);
+    const saved = await readRecipes(browser);
+    // A name saved under other rules (the hidden characters follow Firefox's Unicode version) is
+    // listed as stored, so the exact name finds it. A stored name is a string: undefined matches
+    // nothing.
+    const recipe =
+      saved.find((stored) => stored.name === name) ??
+      saved.find((stored) => stored.name === normalized);
+    if (recipe === undefined) {
+      throw new ToolError(
+        "recipe_not_found",
+        `No recipe named ${JSON.stringify(normalized ?? name)} is saved. list_recipes names the saved ones.`,
+      );
+    }
+    return { recipe };
   }
 
   /** Records the site of every URL the tab moves to until `stop`. */

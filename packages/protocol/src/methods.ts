@@ -309,6 +309,10 @@ export interface Methods {
   download: { params: { url: string; filename: string }; result: { path: string; bytes: number } };
   /** Opens the propose page in the session's group; `tabId` is its tab. Never says whether the user saved. */
   recipe_propose: { params: RecipeFields; result: { tabId: number } };
+  /** The saved recipes, sorted by name, without their steps. */
+  recipe_list: { params: Record<string, never>; result: { recipes: RecipeSummary[] } };
+  /** The saved recipe named exactly `name`, or else named `name` normalized as a saved name is. */
+  recipe_get: { params: { name: string }; result: { recipe: Recipe } };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -346,6 +350,8 @@ export const METHOD_NAMES = [
   "read_network",
   "download",
   "recipe_propose",
+  "recipe_list",
+  "recipe_get",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 
