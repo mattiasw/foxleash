@@ -1,6 +1,6 @@
 # 0006: The manifest has no Firefox for Android key
 
-**Status:** Accepted, 2026-10-18.
+**Status:** Accepted, 2026-10-18. Its minimum version of 140 and its lint allowance are superseded by [0034](0034-firefox-142-is-the-minimum-version.md), 2026-10-30.
 
 ## Context
 

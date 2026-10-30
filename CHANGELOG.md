@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Support for Firefox 140 and 141, including Firefox ESR 140, which Mozilla no longer
+  updates. Foxhand now requires Firefox 142 or later.
+
 ### Fixed
 
 - `type` into an editable area whose caret sits just before its first line, as in a Gmail reply

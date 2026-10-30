@@ -3,7 +3,7 @@
 ## Requirements
 
 - Linux, Node.js 24 or later (the version in `.nvmrc`), npm 11
-- Firefox 140 or later for running the extension
+- Firefox 142 or later for running the extension
 
 ## Setup
 
@@ -114,9 +114,7 @@ version from `apps/extension/package.json`, unminified `background.js`, `options
 `approve.js` and `content.js`, the script Foxhand injects into the pages of the agent's tabs,
 the settings page `options.html` and the approval prompt `approve.html` with their shared
 `pages.css`, and the icon. It then lints that folder with web-ext, ignoring web-ext's
-`WEB_EXT` environment variables and config files, and fails on any error or warning except
-the one expected Firefox for Android warning on `data_collection_permissions`. See
-[ADR 0006](adr/0006-no-firefox-for-android-key-in-the-manifest.md) for why.
+`WEB_EXT` environment variables and config files, and fails on any error or warning.
 
 `npm run dev` rebuilds `background.js`, `options.js`, `approve.js` and `content.js` whenever
 their TypeScript source changes and runs Firefox through `web-ext run`, which reloads the
@@ -124,7 +122,7 @@ extension after each rebuild. It writes the manifest, the icon and the pages (`s
 and `src/*.css`) once at start, so restart it after changing them. Firefox uses a persistent
 profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
 `~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
-runs. It needs a desktop with Firefox 140 or later.
+runs. It needs a desktop with Firefox 142 or later.
 
 ## AMO source archive
 

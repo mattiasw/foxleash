@@ -4,9 +4,10 @@ import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { esbuildOptions } from "./build.ts";
 import { lintEnv, lintFailures, outputFailures } from "./lint.ts";
 
-const allowedWarning = {
+const androidMinVersionWarning = {
   _type: "warning",
   code: "KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION",
   message: "Manifest key not supported by the specified minimum Firefox for Android version",
@@ -32,56 +33,20 @@ describe("lintFailures", () => {
     assert.deepEqual(lintFailures(report({})), []);
   });
 
-  test("passes the known Firefox for Android warning", () => {
-    assert.deepEqual(lintFailures(report({ warnings: [allowedWarning] })), []);
+  test("fails the Firefox for Android minimum-version warning", () => {
+    assert.deepEqual(lintFailures(report({ warnings: [androidMinVersionWarning] })), [
+      `warning KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION in manifest.json: ${androidMinVersionWarning.message} ${androidMinVersionWarning.description}`,
+    ]);
   });
 
-  test("passes several copies of the known warning", () => {
-    assert.deepEqual(lintFailures(report({ warnings: [allowedWarning, allowedWarning] })), []);
-  });
-
-  test("fails the known code when the description names another key", () => {
-    const warning = {
-      ...allowedWarning,
-      description: allowedWarning.description.replace(
-        "browser_specific_settings.gecko.data_collection_permissions",
-        "options_ui.open_in_tab",
-      ),
-    };
-    const failures = lintFailures(report({ warnings: [warning] }));
-    assert.equal(failures.length, 1);
-    assert.match(failures[0] ?? "", /options_ui\.open_in_tab/);
-  });
-
-  test("fails the known code when the description names a sub-key", () => {
-    const warning = {
-      ...allowedWarning,
-      description: allowedWarning.description.replace(
-        "data_collection_permissions",
-        "data_collection_permissions.optional",
-      ),
-    };
-    assert.equal(lintFailures(report({ warnings: [warning] })).length, 1);
-  });
-
-  test("fails the known code and description in another file", () => {
-    const warning = { ...allowedWarning, file: "background.js" };
-    const failures = lintFailures(report({ warnings: [warning] }));
-    assert.equal(failures.length, 1);
-    assert.match(failures[0] ?? "", /background\.js/);
-  });
-
-  test("fails the known warning with text appended to its description", () => {
-    const warning = {
-      ...allowedWarning,
-      description: `${allowedWarning.description} Also "permissions".`,
-    };
-    assert.equal(lintFailures(report({ warnings: [warning] })).length, 1);
-  });
-
-  test("fails the known warning with text before its description", () => {
-    const warning = { ...allowedWarning, description: `Also ${allowedWarning.description}` };
-    assert.equal(lintFailures(report({ warnings: [warning] })).length, 1);
+  test("fails each of two warnings", () => {
+    assert.deepEqual(
+      lintFailures(report({ warnings: [androidMinVersionWarning, permissionsWarning] })),
+      [
+        `warning KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION in manifest.json: ${androidMinVersionWarning.message} ${androidMinVersionWarning.description}`,
+        `warning MANIFEST_PERMISSIONS in manifest.json: ${permissionsWarning.message} ${permissionsWarning.description}`,
+      ],
+    );
   });
 
   test("fails another warning and names its code, file, position and message", () => {
@@ -89,13 +54,6 @@ describe("lintFailures", () => {
     assert.deepEqual(lintFailures(report({ warnings: [warning] })), [
       `warning MANIFEST_PERMISSIONS in manifest.json:3:7: ${permissionsWarning.message} ${permissionsWarning.description}`,
     ]);
-  });
-
-  test("fails an error that carries the known warning's code, file and description", () => {
-    const error = { ...allowedWarning, _type: "error" };
-    const failures = lintFailures(report({ errors: [error] }));
-    assert.equal(failures.length, 1);
-    assert.match(failures[0] ?? "", /^error KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION /);
   });
 
   test("fails another error", () => {
@@ -118,12 +76,6 @@ describe("lintFailures", () => {
       file: "manifest.json",
     };
     assert.deepEqual(lintFailures(report({ notices: [notice] })), []);
-  });
-
-  test("fails only the other warning next to the known one", () => {
-    const failures = lintFailures(report({ warnings: [allowedWarning, permissionsWarning] }));
-    assert.equal(failures.length, 1);
-    assert.match(failures[0] ?? "", /MANIFEST_PERMISSIONS/);
   });
 
   test("fails a report that is not an object", () => {
@@ -149,11 +101,6 @@ describe("lintFailures", () => {
   test("fails an entry that is not an object", () => {
     assert.deepEqual(lintFailures(report({ warnings: ["oops"] })), ['warning: "oops"']);
     assert.deepEqual(lintFailures(report({ errors: [null] })), ["error: null"]);
-  });
-
-  test("fails the known warning when its description is not a string", () => {
-    const warning = { ...allowedWarning, description: [allowedWarning.description] };
-    assert.equal(lintFailures(report({ warnings: [warning] })).length, 1);
   });
 
   test("prints placeholders for missing fields", () => {
@@ -273,9 +220,9 @@ describe("lint.ts as a program", () => {
     };
   }
 
-  test("passes silently on a large report with only the known warning", async () => {
+  test("passes silently on a large clean report", async () => {
     const large = {
-      ...report({ warnings: [allowedWarning] }),
+      ...report({}),
       metadata: { padding: "x".repeat(2 * 1024 * 1024) },
     };
     const result = await runLint(large);
@@ -297,24 +244,60 @@ describe("lint.ts as a program", () => {
     assert.equal(result.webExtEnv, "");
   });
 
-  test("fails on another warning and prints it", async () => {
-    const result = await runLint(report({ warnings: [allowedWarning, permissionsWarning] }));
+  test("fails on warnings and prints each one", async () => {
+    const result = await runLint(
+      report({ warnings: [androidMinVersionWarning, permissionsWarning] }),
+    );
     assert.equal(result.status, 1);
     assert.equal(result.stdout, "");
-    assert.match(result.stderr, /^warning MANIFEST_PERMISSIONS in manifest\.json: /);
+    assert.match(
+      result.stderr,
+      /^warning KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION in manifest\.json: /m,
+    );
+    assert.match(result.stderr, /^warning MANIFEST_PERMISSIONS in manifest\.json: /m);
   });
 });
 
 describe("manifest.json", () => {
+  // AMO would mark every version that has gecko_android compatible with Firefox for Android.
   test("has no Firefox for Android key", async () => {
-    const manifest: unknown = JSON.parse(
-      await readFile(join(import.meta.dirname, "manifest.json"), "utf8"),
-    );
-    assert.ok(typeof manifest === "object" && manifest !== null);
-    assert.ok("browser_specific_settings" in manifest);
-    const settings = manifest.browser_specific_settings;
-    assert.ok(typeof settings === "object" && settings !== null);
+    const settings = await browserSpecificSettings();
     assert.ok("gecko" in settings);
     assert.equal(Object.hasOwn(settings, "gecko_android"), false);
   });
+
+  // Without gecko_android, addons-linter checks Firefox for Android against
+  // strict_min_version, and Firefox for Android supports data_collection_permissions from 142.
+  test("requires Firefox 142 or later", async () => {
+    const gecko = await geckoSettings();
+    assert.ok("strict_min_version" in gecko);
+    assert.equal(gecko.strict_min_version, "142.0");
+  });
+
+  test("builds for the minimum Firefox version", async () => {
+    const gecko = await geckoSettings();
+    assert.ok("strict_min_version" in gecko);
+    assert.ok(typeof gecko.strict_min_version === "string");
+    const major = gecko.strict_min_version.split(".")[0];
+    assert.equal(esbuildOptions.target, `firefox${major}`);
+  });
 });
+
+async function geckoSettings(): Promise<object> {
+  const settings = await browserSpecificSettings();
+  assert.ok("gecko" in settings);
+  const gecko = settings.gecko;
+  assert.ok(typeof gecko === "object" && gecko !== null);
+  return gecko;
+}
+
+async function browserSpecificSettings(): Promise<object> {
+  const manifest: unknown = JSON.parse(
+    await readFile(join(import.meta.dirname, "manifest.json"), "utf8"),
+  );
+  assert.ok(typeof manifest === "object" && manifest !== null);
+  assert.ok("browser_specific_settings" in manifest);
+  const settings = manifest.browser_specific_settings;
+  assert.ok(typeof settings === "object" && settings !== null);
+  return settings;
+}

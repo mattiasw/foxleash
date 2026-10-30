@@ -24,7 +24,7 @@ local MCP server, and from there to the agent.
 ## Requirements
 
 - Linux
-- Firefox 140 or later, installed from Mozilla's package or tarball (Snap and Flatpak
+- Firefox 142 or later, installed from Mozilla's package or tarball (Snap and Flatpak
   builds are untested)
 - Node.js 24 or later
 - An MCP client. The setup command registers Foxhand with Claude Code if it is installed.

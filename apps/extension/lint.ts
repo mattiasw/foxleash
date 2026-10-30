@@ -10,10 +10,6 @@ export interface LintRun {
   stderr?: string | null;
 }
 
-const ALLOWED_WARNING_CODE = "KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION";
-const ALLOWED_WARNING_DESCRIPTION =
-  /^"strict_min_version" requires Firefox for Android \d+, which was released before version \d+ introduced support for "browser_specific_settings\.gecko\.data_collection_permissions"\.$/;
-
 /** Returns one line per reason the lint run fails the build; an empty list means it passed. */
 export function outputFailures(result: LintRun): string[] {
   const failures = reportFailures(result);
@@ -49,9 +45,7 @@ export function lintFailures(report: unknown): string[] {
   if (!Array.isArray(warnings)) return [unexpectedShape("warnings is not an array")];
   return [
     ...errors.map((entry: unknown) => findingLine("error", entry)),
-    ...warnings
-      .filter((entry: unknown) => !isAllowedWarning(entry))
-      .map((entry: unknown) => findingLine("warning", entry)),
+    ...warnings.map((entry: unknown) => findingLine("warning", entry)),
   ];
 }
 
@@ -61,19 +55,6 @@ function unexpectedShape(part: string): string {
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-// Without gecko_android, addons-linter checks Firefox for Android against
-// gecko.strict_min_version; adding gecko_android to quiet it would make AMO mark Foxhand
-// compatible with Firefox for Android.
-function isAllowedWarning(entry: unknown): boolean {
-  return (
-    isObject(entry) &&
-    entry.code === ALLOWED_WARNING_CODE &&
-    entry.file === "manifest.json" &&
-    typeof entry.description === "string" &&
-    ALLOWED_WARNING_DESCRIPTION.test(entry.description)
-  );
 }
 
 function findingLine(kind: string, entry: unknown): string {
