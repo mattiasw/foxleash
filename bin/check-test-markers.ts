@@ -45,14 +45,20 @@
 // Vocabulary. ROOTS are the test receivers: test, describe, it, suite, context, specify and
 // Jest/Vitest's concurrent. A chain is ROOTED when, walking down the object side of the member
 // access, through member accesses, TypeScript wrappers (`!`, `as`, `satisfies`, `<T>x`, `f<T>`),
-// parentheses and calls of a LINK (skipIf, runIf, extend, info: they return a test object, and
-// their arguments may hold anything: `test.runIf(f(x)).skip(`), one reaches a ROOT identifier, or
-// a ROOT read off a name (`nt.test`, `globalThis.it`: a namespace import, a global). A
+// parentheses, the last operand of a comma expression, the right side of a plain `=`
+// assignment and an `await`'s operand (`(0, test).skip(`, `(x = test).skip(`,
+// `(await test).skip(`: a function is no thenable), and calls of a LINK (skipIf, runIf,
+// extend, info: they return a test object, and their arguments may hold anything:
+// `test.runIf(f(x)).skip(`), one reaches a ROOT identifier, or a ROOT read off a name
+// (`nt.test`, `globalThis.it`: a namespace import, a global) or off a `require(` / `import(` of
+// any module (`require("vitest").test`, `(await import("vitest")).test`). A
 // call of any other name ends the chain (`t.context.db.collection("u").find({}).skip(10)` is a
 // database cursor, not a test). A member access is CALLED when, walking up through member
-// accesses whose object it is, TypeScript wrappers, parentheses and the last operand of a comma
-// expression, one reaches a call (optional or not), a `new` or a tagged template whose callee or
-// tag it is: so `test.only.each(...)(...)`, `(0, test.only)(`, `new test.only(`,
+// accesses whose object it is, TypeScript wrappers, parentheses, the last operand of a comma
+// expression, the right side of a plain `=` assignment and an `await`'s operand, one reaches a
+// call (optional or not), a `new` or a tagged template whose callee or tag it is: so
+// `test.only.each(...)(...)`, `(0, test.only)(`, `(f = test.only)(`, `(await test.only)(`,
+// `new test.only(`,
 // `test.only?.(`, `test.only<T>(`, `test!.only(`, `test.only!(` and `test.only.each\`...\`` are
 // called, and `opts.only != x` is data. A member's name is read as the engine reads it: an
 // escaped identifier (`test.only`) and a computed string or no-substitution template key
@@ -69,10 +75,14 @@
 //      `apply` or `bind`, or a computed key that is no literal (`xit.each(...)(`, `fit!(`,
 //      `fit?.(`, `fit["each"](`, `fit.call(`, `fit[mode](`), so a variable so named is data
 //      (`const problems = fit.outsideCircle.map(`); and all but `fit` also as a member of a name
-//      (`jg.xit(`, a namespace import). A method of that name on any other object is no marker,
-//      and `.fit` on a name is none either (`model.fit(X, y)`). A bare `expectFailure(` is refused
-//      whatever it was imported from or declared as: a helper of that name reads as node:test's
-//      expected failure.
+//      or of a `require(` / `import(` (`jg.xit(`, a namespace import,
+//      `require("@jest/globals").xit(`). A name an import of any module that is not type-only, or
+//      a destructure of a module value or of node:test or a test function (rule 11), binds to one
+//      of those markers is that marker (`import { xit as check } from "@jest/globals"` or
+//      `const { xit: check } = require("mocha")`, then `check(`; `check.length` is data). A
+//      method of that name on any other object is no marker, and `.fit` on a name is none either
+//      (`model.fit(X, y)`). A bare `expectFailure(` is refused whatever it was imported from or
+//      declared as: a helper of that name reads as node:test's expected failure.
 //   3. `.skip`, `.fail`, `.fails` and `.failing` called on a ROOTED chain, the chain after them
 //      included (`test.skip.each(`, `test.sequential.skip(`, Playwright's `test.step.skip(` and
 //      `test.describe.skip(`, `test.extend({}).skip(`). Jest's `.failing(` and Vitest's
@@ -83,21 +93,34 @@
 //      Vitest's `test.skipIf(cond)` and node:test's `{ skip: !process.env.X }`. ONLY in a
 //      Playwright spec (below) is the canonical `test.skip(<condition>, ...)` /
 //      `test.fail(<condition>, ...)` allowed: the callee is a plain member access (`.skip` or
-//      `["skip"]`, not optional) on the bare identifier `test`, with no wrapper, no type
-//      arguments and no optional call anywhere; the first argument is a CONDITION (below); and no
-//      later argument is a function (`test.skip(title, () => {})` declares a skipped test).
+//      `["skip"]`, not optional) on the bare identifier `test`, or on a name the spec's own
+//      top-level import of `@playwright/test` binds to its `test` (`import { test as base } from
+//      "@playwright/test"`, `import base from "@playwright/test"`, then `base.skip(isCI, "r")`),
+//      with no wrapper, no type arguments and no optional call anywhere; the first argument is a
+//      CONDITION (below); and no later argument is a function (`test.skip(title, () => {})`
+//      declares a skipped test).
 //      Everything else is refused there too: `test.skip()`, `test.skip("title", fn)`,
 //      `test.skip(true, r)`, `test.skip?.(isCI, r)`, `test.skip!(isCI, r)`,
 //      `test?.["skip"](isCI, r)`, `test.info().skip(isCI, r)`, `test.describe.skip(...)`.
 //   4. A bare `.skip()` or `.todo()` with no argument on any receiver (`this.skip()` in a
 //      mocha-style body, node:test's `t.todo()`): a failure after it no longer fails the run
 //      (measured, node 24.18). And (rule `contextSkip`) `.skip` or `.todo` called on a TEST
-//      CONTEXT whatever the arguments: `this`, the name `t` (but a `t` that only rule 11 binds,
-//      to node:test, is a ROOT: `t.todo("planned")` stays allowed), or a name that is the first
-//      parameter of a function passed to a test call (as rule 8 reads one, `t.test(` included, or
-//      a call of a name rule 11 makes a ROOT, `check(`) or to a hook (before, beforeEach, after,
-//      afterEach, beforeAll, afterAll; bare or as a member), also through `.call` / `.apply` /
-//      `.bind` or a comma expression as rule 3 reads a call.
+//      CONTEXT whatever the arguments: `this`, the name `t`, or a name that is the first
+//      parameter of a function passed to a test call (as rule 8 reads one, `t.test(` included),
+//      to a call of a test function (as rule 11 reads one: `check(`, `it.concurrent(`,
+//      `test.runIf(x)(`, `nt.default(`) or to a hook (before, beforeEach, after, afterEach,
+//      beforeAll, afterAll; bare, as a member, or renamed on import or in a destructure whatever
+//      the source, `import { beforeEach as setup } from "vitest"`,
+//      `const { beforeEach: setup } = v`, nested under a test function's key too), or the second
+//      parameter of a function passed to the call a `.for` table of a test function returns
+//      (`test.for(rows)("x", (row, ctx) => …)`, a tagged `` test.for`…` `` too: the row comes
+//      first); the function also passed as the last operand of a comma expression, the right
+//      side of a plain `=` assignment or an `await`'s operand (`test("x", (0, (ctx) => …))`,
+//      `test("x", f = (ctx) => …)`);
+//      a TypeScript `this` parameter is not counted (`function (this: void, ctx)`); also
+//      through `.call` / `.apply` / `.bind` or a comma expression as rule 3 reads a call, and
+//      with the receiver behind a comma expression, a plain `=` assignment or an `await`
+//      (`(0, t).skip(`, `(c = ctx).skip(`, `(await ctx).skip(`).
 //      After node:test's `t.skip("reason")` or `t.todo("later")` the body runs on but a failure
 //      no longer fails the run (measured, node 24.18.1: a throwing body exits 0), and mocha's
 //      `this.skip` (Cypress 16's included) ignores its argument, so a reason makes neither
@@ -159,27 +182,53 @@
 //      `await import("node:test")`). node:test exports `expectFailure`, `skip`, `only` and `todo`
 //      as functions (measured, node 24.18: an imported `skip("t", fn)` or `todo("t", fn)` whose
 //      body throws exits 0), and a call of such a binding, under its own name or another, is no
-//      member call rules 1 to 5 see (nor, renamed, a bare `expectFailure(`, rule 2), so the binding
-//      itself is refused, `todo` too: a planned test is `test.todo("name")` (rule 5). Only the
-//      `node:` spelling names the builtin. Likewise a destructure (`const`, `let` or `var`,
+//      member call rules 1 to 5 see (rule 2 refuses a bare `expectFailure(` under either). So the
+//      binding itself is refused, `todo` too: a planned test is `test.todo("name")` (rule 5). Only
+//      the `node:` spelling names the builtin. Likewise a destructure (`const`, `let` or `var`,
 //      renamed or not) of those names from a test function: a ROOTED chain whose last step is a
 //      ROOT, a test modifier (rule 2's list), a computed key that is no literal or a LINK call
 //      (`const { skip } = test`, `const { only: o } = describe`, `const { skip } = test.describe`,
-//      `= nt.test`, `= test[kind]`, `= test.extend({})`), and a nested one under a ROOT's key
-//      (`const { test: { skip } } = require("node:test")`). A destructure of anything else is
+//      `= nt.test`, `= test[kind]`, `= test.extend({})`), and a nested one under a test
+//      function's key (a ROOT, `default`, a test modifier, or a computed key that is no literal:
+//      `const { test: { skip } } = require("node:test")`,
+//      `const { sequential: { skip } } = test`). A destructure of anything else is
 //      data (`const { skip } = query`, `const { skip, take } = context.args`); a ROOT read off a
 //      name counts (`const { skip } = req.context` is refused: the strict side), and so does a
 //      destructure whose call rule 3 would allow in a Playwright spec (`skip(isCI, "r")`).
 //      Every name a file binds to node:test or to its test functions is a ROOT in that file, for
 //      rules 3, 4, 5, 6 and this one: a default or namespace import (`import nt from "node:test"`,
-//      `import * as nt from "node:test"`, then `nt.skip(`; an import or a destructure counts the
-//      key `default` as `test`), a renamed one
+//      `import * as nt from "node:test"`, then `nt.skip(`), a renamed one
 //      (`import { test as check } from "node:test"`, then `check.skip(` or
 //      `const { skip } = check`), `const nt = require("node:test")` or `= await import(...)`, a
-//      name assigned one (`nt = require("node:test")`), and
-//      `const { test: check } = require("node:test")` or the rest of such a destructure; so is a
-//      `require("node:test")` or `import("node:test")` itself
-//      (`(await import("node:test")).skip(`).
+//      name assigned either (`nt = require("node:test")`), and a name destructured under a test
+//      function's key, nested too, or as the rest, from node:test or from a test function
+//      (`const { test: check } = require("node:test")`, `const { test: check } = nt`,
+//      `const { describe: d } = test`, `const { sequential: seq } = test`,
+//      `const { test: { describe: d } } = nt`, `const { mock, ...rest } = nt`; also through
+//      such a name, `const { it: i } = d`); so is a `require("node:test")` or
+//      `import("node:test")` itself (`(await import("node:test")).skip(`). `default` counts as
+//      `test` in an import or a destructure under the key `default` and as a test function's last
+//      step (`nt.default`), but `nt.default(` is no test call for rule 8 (see the residuals).
+//      From any other module, a ROOT but `context` is a test function too (`@opentelemetry/api`
+//      exports a `context`, which stays data): a name an import that is not type-only binds to
+//      one (`import { test as check } from "vitest"`, `import { it as check } from
+//      "@jest/globals"`, `import { test as check } from "./fixtures"`), and a name a destructure
+//      binds under such a key from a MODULE VALUE: a `require(` or `import(` of any module,
+//      whatever its argument, a namespace import that is not type-only, a name declared with or
+//      assigned such a load, or the global object, `globalThis`, `global`, `window` or `self`
+//      (`const { test: check } = await import("vitest")`, `import * as v from "vitest";
+//      const { describe: d } = v`, `const { test: check } = globalThis`), nested too
+//      (`const { test: { describe: d } } = require("@playwright/test")`). From the global object
+//      `context` counts too (Mocha's globals hold one: `const { context: c } = globalThis`). No
+//      other key binds a ROOT there (a modifier, `default`, a computed key, the rest), and a
+//      destructure of anything else stays data
+//      (`const { describe: d } = config`). A marker destructured under such a key from a module
+//      value is refused (`const { test: { skip } } = require("vitest")`); one at the top is not
+//      (`const { skip } = require("vitest")`: only node:test exports one there).
+//      `@playwright/test`'s default export is its `test`: `import base from "@playwright/test"`
+//      and `import { default as base } from "@playwright/test"` bind a ROOT (a destructure or a
+//      read of its `default` does not: see the residuals). Rule 8 does not read
+//      a renamed test function's options object either (see the residuals).
 //
 // A PLAYWRIGHT SPEC is a file whose head imports `@playwright/test` itself at the top level: an
 // import that is not type-only and binds at least one value, or a `require("@playwright/test")`.
@@ -228,34 +277,58 @@
 // goes on.
 //
 // Accepted residuals: a marker reached through an alias (`const s = test.skip; s("x", fn)`,
-// `const focus = test.only`), a test function under a name no import or require of node:test
-// binds (`const check = test; check.skip(`, `const check = require("node:test").test`), a
+// `const focus = test.only`), a test function under a name only an alias binds
+// (`const check = test; check.skip(`, `const check = require("node:test").test`) or a module
+// value only an alias binds (`const g = globalThis; const { test: check } = g`; jsdom's `top`,
+// `parent` and `frames`, which are the window), a test
+// function or a test context chosen by a conditional, a logical operator or a logical
+// assignment (`(a || test).skip(`, `(x ??= test).skip(`, `(ok ? ctx : other).skip("r")`), a
 // destructure that is no variable declaration (a parameter `({ skip }) =>`, an assignment
 // `({ skip } = test)`), a test function's member this
 // check does not list (`const { only } = test.describe.serial`), a marker re-exported through a
 // local module (`export { skip } from "node:test"` in a helper the test imports), node:test
-// loaded other than by `import`, `require(` or `import(` (`process.getBuiltinModule("node:test")`,
+// loaded other than by `import`, or by `require(` or `import(` of the literal `"node:test"`
+// (`const mod = "node:test"; require(mod)`, `process.getBuiltinModule("node:test")`,
 // `module.require(`, `createRequire(import.meta.url)("node:test")`, TypeScript's
-// `import nt = require("node:test")`), a renamed test function's
-// options object (`check("x", { skip: true }, fn)` is judged by rule 9, not rule 8), a condition
+// `import nt = require("node:test")`; another module so loaded is no module value for rule 11:
+// `import v = require("vitest"); const { test: check } = v`), a `context` renamed from any module
+// but node:test (`import { context as c } from "mocha"`: other modules export a `context` that is
+// data), a renamed test function's
+// options object (`check("x", { skip: true }, fn)` and `nt.default("x", { skip: true }, fn)` are
+// judged by rule 9, not rule 8), a test function imported as another module's default export
+// under another name (`import check from "ava"`: a default export may be anything;
+// `@playwright/test`'s is read), a ROOT destructured from a default import
+// (`import jg from "@jest/globals"; const { it: check } = jg`: a default export may be data with
+// a `test` key, as a Vitest config is), `@playwright/test`'s default reached other than by an
+// import declaration (`const { default: base } = require("@playwright/test")`,
+// `import * as pw from "@playwright/test"; pw.default.skip(`), a condition
 // that is always true but that the folder cannot see
 // (`test.skip(isCI === isCI, r)`), a skipped test whose body is passed by name
 // (`test.skip(title, body)`, which reads like `test.skip(cond, REASON)`), Playwright's fixture
 // under a name other than `testInfo`, an options object on a call this check does not take for a
 // test call (`test.concurrent(`, `test.sequential(`), an option value that is no constant
 // but never false (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`), a test context rule 4
-// cannot see (an alias, `const self = this; self.skip("r")`; a member named `t`,
+// cannot see (an alias, `const self = this; self.skip("r")`; the callback of a hook called
+// through `.call`, `.apply` or `.bind`, `beforeEach.call(null, (ctx) => …)`, or of a test
+// function through `.bind`, `test.bind(null)("x", (ctx) => …)`; a member named `t`,
 // `ctx.t.skip("r")`; a context passed to a helper under a name other than `t`; a context named
 // other than `t` in a test body that is no inline argument of the test call: passed by name,
 // `test("x", run)`, held in a table entry, `{ fn(ctx) {…} }`, or wrapped, `withDb((ctx) => …)`),
 // and a legacy marker moved between tests that a concise arrow body holds with no statement between
 // (`describe("s", () => [{ fn(t) {…} }, …])`: the statement around them elides that body whole)
-// or that are bare functions in an array (`[(t) => {…}, (t) => {…}]`: nothing names them).
+// or that are bare functions in an array (`[(t) => {…}, (t) => {…}]`: nothing names them), or
+// whose title sits beside a function in an element that is not the test's own
+// (`[{ meta: { name: "a", setup() {} }, fn(t) {…} }, …]`: an element holding a function is not
+// written, so the title drops out of the key).
 // AGENTS.md forbids them all the same. The other way, rule 4 refuses a `skip` or `todo` method on
 // `this` or on a name `t` that is no test context (`this.skip(10)` in a cursor class,
-// `const t = db.find({}); t.skip(10);`), as its bare `.skip()` does on any receiver: rename the
-// variable. And a legacy marker is new when an element beside its test that holds no function
-// is edited (`{ name: "b" }` in a table, a class field), when its unit holds its sibling tests
+// `const t = db.find({}); t.skip(10);`, `import t from "node:test"; t.todo("planned")`), as its
+// bare `.skip()` does on any receiver: rename the variable (import node:test under another name,
+// or write `test.todo("planned")`). A Playwright `test` renamed by a destructure gets no
+// conditional-skip exemption (`const { test: base } = require("@playwright/test");
+// base.skip(isCI, "r")`, or the same from a namespace import): import it, or call `test.skip`.
+// And a legacy marker is new when an element beside its test that holds no function is edited
+// (`{ name: "b" }` in a table, a class field), when its unit holds its sibling tests
 // (`fn: (t) => t.skip()` as a concise body makes the whole table its unit), and when an untitled
 // test or suite is edited (`describe.skip(() => {…})`: its body is the call's first argument,
 // kept as the marker's condition).
@@ -285,6 +358,12 @@ import type {
 } from "@babel/types";
 
 const ROOTS = new Set(["test", "describe", "it", "suite", "context", "specify", "concurrent"]);
+// The ROOTS another module may export as a test function (rule 11): all but `context`, which
+// other modules export as something else (`@opentelemetry/api`'s `context`).
+const EXPORTED_ROOTS = new Set([...ROOTS].filter((name) => name !== "context"));
+// The names of the global object, where Jest's, Vitest's and Mocha's globals put the test
+// functions (rule 11): `window` and `self` too, which jsdom environments make the global.
+const GLOBAL_OBJECTS = new Set(["globalThis", "global", "window", "self"]);
 const LINKS = new Set(["skipIf", "runIf", "extend", "info"]);
 const PREFIXED = new Set([
   "fit",
@@ -384,6 +463,12 @@ interface Analysis {
   found: Found[];
   /** ROOTS and the names this file binds to node:test or its test functions (rule 11). */
   roots: ReadonlySet<string>;
+  /** HOOKS and the names this file binds to a hook: renamed on import or in a destructure
+   * (rule 4). */
+  hooks: ReadonlySet<string>;
+  /** The names this file binds to a module: a namespace import, or a name declared with or
+   * assigned a `require(` or `import(` (rule 11). */
+  modules: ReadonlySet<string>;
 }
 
 function startOf(node: Node): number {
@@ -450,6 +535,37 @@ function unwrapAll(node: Node): Node {
   return cur;
 }
 
+/** The node an expression evaluates to: every wrapper stepped through, a comma expression read
+ * as its last operand, a plain `=` assignment as its right side and an `await` as its operand (a
+ * test function or context is no thenable), as often as they nest (`(0, t)`, `(c = t)` and
+ * `(await t)` are `t`). A compound or logical assignment is itself. */
+function unwrapValue(node: Node): Node {
+  let cur = unwrapAll(node);
+  for (;;) {
+    if (cur.type === "SequenceExpression") {
+      const last = cur.expressions.at(-1);
+      if (last === undefined) return cur;
+      cur = unwrapAll(last);
+    } else if (cur.type === "AssignmentExpression" && cur.operator === "=") {
+      cur = unwrapAll(cur.right);
+    } else if (cur.type === "AwaitExpression") {
+      cur = unwrapAll(cur.argument);
+    } else {
+      return cur;
+    }
+  }
+}
+
+/** Whether an expression evaluates to its child, as unwrapValue reads it: a wrapper around it,
+ * a comma expression whose last operand it is, a plain `=` assignment whose right side it is, or
+ * an `await` of it. */
+function evaluatesTo(node: Node, child: Node): boolean {
+  if (wrapped(node) === child) return true;
+  if (node.type === "SequenceExpression") return node.expressions.at(-1) === child;
+  if (node.type === "AwaitExpression") return node.argument === child;
+  return node.type === "AssignmentExpression" && node.operator === "=" && node.right === child;
+}
+
 /** The text a literal key spells: a string or a template with no substitution. */
 function literalKey(node: Node): string | null {
   if (node.type === "StringLiteral") return node.value;
@@ -479,11 +595,10 @@ function isCalled(node: Node, parents: Map<Node, Node>, members?: ReadonlySet<st
   for (let parent = parents.get(cur); parent !== undefined; parent = parents.get(cur)) {
     const name = isMember(parent) ? memberName(parent) : null;
     const passes =
-      wrapped(parent) === cur ||
+      evaluatesTo(parent, cur) ||
       (isMember(parent) &&
         parent.object === cur &&
-        (members === undefined || name === null || members.has(name))) ||
-      (parent.type === "SequenceExpression" && parent.expressions.at(-1) === cur);
+        (members === undefined || name === null || members.has(name)));
     if (!passes) {
       if (isCall(parent) || parent.type === "NewExpression") return parent.callee === cur;
       return parent.type === "TaggedTemplateExpression";
@@ -496,20 +611,22 @@ function isCalled(node: Node, parents: Map<Node, Node>, members?: ReadonlySet<st
 /** Whether an expression is a chain rooted at a test receiver (see the header). roots is ROOTS
  * and the file's own names for node:test and its test functions. */
 function isRooted(node: Node, roots: ReadonlySet<string>): boolean {
-  let cur = unwrapAll(node);
+  let cur = unwrapValue(node);
   for (;;) {
     if (cur.type === "Identifier") return roots.has(cur.name);
     if (isMember(cur)) {
-      const object = unwrapAll(cur.object);
-      // A receiver read off a name: a namespace import or a global (`nt.test`, `globalThis.it`).
-      if (object.type === "Identifier" && ROOTS.has(memberName(cur) ?? "")) return true;
+      const object = unwrapValue(cur.object);
+      // A receiver read off a name or a module load: a namespace import, a global or any module
+      // (`nt.test`, `globalThis.it`, `require("vitest").test`).
+      const reader = object.type === "Identifier" || loadSource(object) !== null;
+      if (reader && ROOTS.has(memberName(cur) ?? "")) return true;
       cur = object;
       continue;
     }
     if (loads(cur, "node:test")) return true;
-    const callee = isCall(cur) ? unwrapAll(cur.callee) : null;
+    const callee = isCall(cur) ? unwrapValue(cur.callee) : null;
     if (callee === null || !isMember(callee) || !LINKS.has(memberName(callee) ?? "")) return false;
-    cur = unwrapAll(callee.object);
+    cur = unwrapValue(callee.object);
   }
 }
 
@@ -978,19 +1095,49 @@ function skipAnnotation(value: Node): Node | null {
   return null;
 }
 
-/** Whether an expression is `require("<module>")` or `import("<module>")`, awaited or not. */
-function loads(value: Node, module: string): boolean {
-  let node = unwrapAll(value);
-  if (node.type === "AwaitExpression") node = unwrapAll(node.argument);
-  if (node.type === "ImportExpression") return literalKey(unwrapAll(node.source)) === module;
-  if (node.type !== "CallExpression") return false;
-  const callee = unwrapAll(node.callee);
+/** The argument of a `require(<arg>)` (an optional call too, `require?.(m)`) or the source of an
+ * `import(<arg>)`, awaited or not, each part read as unwrapValue reads it
+ * (`await (0, import("node:test"))`, `(0, require)(m)`), whatever the argument is; null when the
+ * expression is no such load. */
+function loadSource(value: Node): Node | null {
+  const node = unwrapValue(value);
+  if (node.type === "ImportExpression") return node.source;
+  if (node.type !== "CallExpression" && node.type !== "OptionalCallExpression") return null;
+  const callee = unwrapValue(node.callee);
   const first = node.arguments[0];
+  if (callee.type !== "Identifier" || callee.name !== "require" || first === undefined) return null;
+  return first;
+}
+
+/** Whether an expression is `require("<module>")` or `import("<module>")`, read as loadSource
+ * reads a load, the argument as unwrapValue reads it (`require((0, "node:test"))`). */
+function loads(value: Node, module: string): boolean {
+  const source = loadSource(value);
+  return source !== null && literalKey(unwrapValue(source)) === module;
+}
+
+/** Rule 11: whether an expression is the global object (GLOBAL_OBJECTS). */
+function isGlobalObject(value: Node): boolean {
+  const node = unwrapValue(value);
+  return node.type === "Identifier" && GLOBAL_OBJECTS.has(node.name);
+}
+
+/** Rule 11: whether a destructured value is a module: a `require(` or `import(` of any module, a
+ * name bound to one (modules), or the global object (isGlobalObject). */
+function isModuleValue(value: Node, modules: ReadonlySet<string>): boolean {
+  if (loadSource(value) !== null || isGlobalObject(value)) return true;
+  const node = unwrapValue(value);
+  return node.type === "Identifier" && modules.has(node.name);
+}
+
+/** Whether a statement is a value import of @playwright/test itself: not `import type` or
+ * `import typeof`. */
+function isPlaywrightImport(statement: Node): statement is ImportDeclaration {
   return (
-    callee.type === "Identifier" &&
-    callee.name === "require" &&
-    first !== undefined &&
-    literalKey(unwrapAll(first)) === module
+    statement.type === "ImportDeclaration" &&
+    statement.source.value === "@playwright/test" &&
+    statement.importKind !== "type" &&
+    statement.importKind !== "typeof"
   );
 }
 
@@ -1001,10 +1148,7 @@ function importsPlaywright(statement: Node): boolean {
       (declaration) => declaration.init != null && loads(declaration.init, "@playwright/test"),
     );
   }
-  if (statement.type !== "ImportDeclaration" || statement.source.value !== "@playwright/test") {
-    return false;
-  }
-  if (statement.importKind === "type" || statement.importKind === "typeof") return false;
+  if (!isPlaywrightImport(statement)) return false;
   return statement.specifiers.some(
     (specifier) =>
       specifier.type !== "ImportSpecifier" ||
@@ -1012,13 +1156,39 @@ function importsPlaywright(statement: Node): boolean {
   );
 }
 
-/** Rule 3's exemption: the canonical conditional `test.skip(` / `test.fail(` in a spec. */
-function isConditionalSkip(member: Member, parents: Map<Node, Node>): boolean {
+/** Rule 3: the names a file may call the conditional `.skip(` / `.fail(` on: in a Playwright
+ * spec, `test` and each name a top-level value import of @playwright/test binds to its `test`
+ * (`import { test as base }`, its default export, `import base` or `import { default as base }`);
+ * in any other file, none. */
+function playwrightTests(body: Node[]): Set<string> {
+  const names = new Set<string>();
+  if (!body.some(importsPlaywright)) return names;
+  names.add("test");
+  for (const statement of body) {
+    if (!isPlaywrightImport(statement)) continue;
+    for (const specifier of statement.specifiers) {
+      if (specifier.type === "ImportDefaultSpecifier") names.add(specifier.local.name);
+      if (specifier.type !== "ImportSpecifier") continue;
+      if (specifier.importKind === "type" || specifier.importKind === "typeof") continue;
+      const name = importedName(specifier);
+      if (name === "test" || name === "default") names.add(specifier.local.name);
+    }
+  }
+  return names;
+}
+
+/** Rule 3's exemption: the canonical conditional `test.skip(` / `test.fail(` in a spec, on a name
+ * in names (playwrightTests). */
+function isConditionalSkip(
+  member: Member,
+  parents: Map<Node, Node>,
+  names: ReadonlySet<string>,
+): boolean {
   if (member.type !== "MemberExpression") return false;
   if (member.computed && member.property.type !== "StringLiteral") return false;
   const name = memberName(member);
   if (name !== "skip" && name !== "fail") return false;
-  if (member.object.type !== "Identifier" || member.object.name !== "test") return false;
+  if (member.object.type !== "Identifier" || !names.has(member.object.name)) return false;
   const call = parents.get(member);
   if (call === undefined || call.type !== "CallExpression" || call.callee !== member) return false;
   if (call.typeArguments != null) return false;
@@ -1050,42 +1220,55 @@ function isNamePath(node: Node): boolean {
   return cur.type === "Identifier";
 }
 
-/** Rule 4: whether a function is an argument of a test call, of a call of one of the file's
- * roots or of a hook, through wrappers. */
-function isTestCallback(fn: Node, parents: Map<Node, Node>, roots: ReadonlySet<string>): boolean {
+/** Rule 4: the index of the parameter that is the test context of a function passed to a call,
+ * through what evaluatesTo steps through (a TypeScript `this` parameter not counted): 0 for a
+ * test call, a hook or a call of a test function, 1 for the call a `.for` table returns (the row
+ * comes first), and -1 when the function is no test's or hook's callback. */
+function contextIndex(fn: Node, analysis: Analysis): number {
+  const { parents, roots, hooks } = analysis;
   let cur = fn;
   let parent = parents.get(cur);
-  while (parent !== undefined && wrapped(parent) === cur) {
+  while (parent !== undefined && evaluatesTo(parent, cur)) {
     cur = parent;
     parent = parents.get(cur);
   }
   // A function that is the call's callee is never a test call's or a hook's own name.
-  if (parent === undefined || !isCall(parent)) return false;
-  if (isTestCall(parent)) return true;
-  const callee = unwrapAll(parent.callee);
-  if (callee.type === "Identifier") return HOOKS.has(callee.name) || roots.has(callee.name);
-  return isMember(callee) && HOOKS.has(memberName(callee) ?? "");
+  if (parent === undefined || !isCall(parent)) return -1;
+  if (isTestCall(parent)) return 0;
+  const callee = unwrapValue(parent.callee);
+  if (callee.type === "Identifier" && hooks.has(callee.name)) return 0;
+  if (isMember(callee) && HOOKS.has(memberName(callee) ?? "")) return 0;
+  if (isTestFunction(parent.callee, roots)) return 0;
+  // The function a `.for` table of a test function returns: a call of `<test function>.for`
+  // (`test.for(rows)`) or a template tagged with it.
+  let table: Node | null = null;
+  if (isCall(callee)) table = unwrapValue(callee.callee);
+  else if (callee.type === "TaggedTemplateExpression") table = unwrapValue(callee.tag);
+  const forTable =
+    table !== null &&
+    isMember(table) &&
+    memberName(table) === "for" &&
+    isTestFunction(table.object, roots);
+  return forTable ? 1 : -1;
 }
 
 /** Rule 4: whether a receiver is a test context (see the header). A name is bound by the nearest
- * function having a parameter so named; it is a context when that is the function's first
- * parameter and the function is a test call's or a hook's callback. */
+ * function having a parameter so named; it is a context when that parameter, a TypeScript `this`
+ * parameter not counted, sits at the function's context index. */
 function isTestContext(object: Node, analysis: Analysis): boolean {
-  const { parents, roots } = analysis;
-  const receiver = unwrapAll(object);
+  const { parents } = analysis;
+  const receiver = unwrapValue(object);
   if (receiver.type === "ThisExpression") return true;
   if (receiver.type !== "Identifier") return false;
+  if (receiver.name === "t") return true;
   for (let cur = parents.get(receiver); cur !== undefined; cur = parents.get(cur)) {
     if (!("params" in cur)) continue;
-    // A TypeScript `this` parameter is no argument.
     const index = cur.params
       .filter((param) => paramName(param) !== "this")
       .findIndex((param) => paramName(param) === receiver.name);
-    if (index === -1) continue;
-    return receiver.name === "t" || (index === 0 && isTestCallback(cur, parents, roots));
+    if (index !== -1) return index === contextIndex(cur, analysis);
   }
-  // A `t` the file binds to node:test or a test function is judged by rules 3 and 5.
-  return receiver.name === "t" && !roots.has("t");
+  return false;
 }
 
 /** The name a parameter binds when it is a name, with or without a default value, else null. */
@@ -1094,8 +1277,9 @@ function paramName(param: Node): string | null {
   return binding.type === "Identifier" ? binding.name : null;
 }
 
-/** Rules 1 to 7 on a member access. */
-function judgeMember(member: Member, analysis: Analysis, playwright: boolean): void {
+/** Rules 1 to 7 on a member access. playwright holds the names rule 3's exemption reads
+ * (playwrightTests). */
+function judgeMember(member: Member, analysis: Analysis, playwright: ReadonlySet<string>): void {
   const name = memberName(member);
   if (name === null) return;
   const { parents, found, roots } = analysis;
@@ -1103,16 +1287,17 @@ function judgeMember(member: Member, analysis: Analysis, playwright: boolean): v
   if (ANY_RECEIVER.has(name) && isCalled(member, parents)) {
     found.push({ anchor, rule: "focus", name });
   }
+  const receiver = unwrapAll(member.object);
   if (
     PREFIXED.has(name) &&
     name !== "fit" &&
-    unwrapAll(member.object).type === "Identifier" &&
+    (receiver.type === "Identifier" || loadSource(receiver) !== null) &&
     isCalled(member, parents)
   ) {
     found.push({ anchor, rule: "prefixed", name });
   }
   if (ROOTED_SKIPS.has(name) && isCalled(member, parents) && isRooted(member.object, roots)) {
-    if (!playwright || !isConditionalSkip(member, parents)) {
+    if (!isConditionalSkip(member, parents, playwright)) {
       found.push({ anchor, rule: "skip", name });
     }
   }
@@ -1197,21 +1382,33 @@ function importedName(specifier: ImportSpecifier): string {
 }
 
 /** Rule 11 on a variable declarator: a destructure of node:test's require or import, or of a test
- * function. */
-function judgeRequire(node: VariableDeclarator, found: Found[], roots: ReadonlySet<string>): void {
+ * function; and of any other module, a pattern nested under a key in EXPORTED_ROOTS (of the
+ * global object, under any ROOT). */
+function judgeRequire(node: VariableDeclarator, analysis: Analysis): void {
   if (node.id.type !== "ObjectPattern" || node.init == null) return;
+  const { found, roots, modules } = analysis;
   const imported = loads(node.init, "node:test");
-  if (!imported && !isTestFunction(node.init, roots)) return;
-  judgePattern(node.id, imported ? "import" : "destructure", found);
+  if (imported || isTestFunction(node.init, roots)) {
+    judgePattern(node.id, imported ? "import" : "destructure", found);
+  } else if (isModuleValue(node.init, modules)) {
+    const exported = isGlobalObject(node.init) ? ROOTS : EXPORTED_ROOTS;
+    for (const property of node.id.properties) {
+      if (property.type !== "ObjectProperty" || !exported.has(keyName(property) ?? "")) continue;
+      const value =
+        property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+      if (value.type === "ObjectPattern") judgePattern(value, "destructure", found);
+    }
+  }
 }
 
 /** Rule 11 over a destructuring pattern: each marker's name, and the names a pattern nested under
- * a ROOT's key pulls out. */
+ * a test function's key pulls out. */
 function judgePattern(pattern: ObjectPattern, rule: string, found: Found[]): void {
   for (const property of pattern.properties) {
-    const name = keyName(property) ?? "";
+    const key = keyName(property);
+    const name = key ?? "";
     if (BINDING_MARKERS.has(name)) found.push({ anchor: property, rule, name });
-    else if (isRootKey(name) && property.type === "ObjectProperty") {
+    else if (isTestFunctionKey(key) && property.type === "ObjectProperty") {
       const value =
         property.value.type === "AssignmentPattern" ? property.value.left : property.value;
       if (value.type === "ObjectPattern") judgePattern(value, rule, found);
@@ -1223,11 +1420,10 @@ function judgePattern(pattern: ObjectPattern, rule: string, found: Found[]): voi
  * ROOT, a test modifier, a computed key that is no literal or a LINK call, not data read off one
  * (`context.args`). */
 function isTestFunction(value: Node, roots: ReadonlySet<string>): boolean {
-  const node = unwrapAll(value);
+  const node = unwrapValue(value);
   if (!isRooted(node, roots)) return false;
   if (!isMember(node)) return true;
-  const name = memberName(node);
-  return name === null || isRootKey(name) || MODIFIERS.has(name);
+  return isTestFunctionKey(memberName(node));
 }
 
 /** Rule 11: whether a name read off node:test or a test function is a test function: a ROOT, or
@@ -1236,36 +1432,142 @@ function isRootKey(name: string): boolean {
   return ROOTS.has(name) || name === "default";
 }
 
-/** Rule 11: ROOTS and the names a file binds to node:test or to one of its test functions (see
- * the header). */
-function rootsOf(all: Node[]): Set<string> {
-  const roots = new Set(ROOTS);
-  for (const node of all) {
-    if (node.type === "ImportDeclaration") {
-      if (node.source.value !== "node:test") continue;
-      if (node.importKind === "type" || node.importKind === "typeof") continue;
-      for (const specifier of node.specifiers) {
-        if (specifier.type !== "ImportSpecifier") roots.add(specifier.local.name);
-        else if (isRootKey(importedName(specifier))) roots.add(specifier.local.name);
+/** Rules 4 and 11: whether a key read off node:test or a test function gives a test function: a
+ * ROOT, `default`, a test modifier, or null (a computed key that is no literal: the strict
+ * side). */
+function isTestFunctionKey(name: string | null): boolean {
+  return name === null || isRootKey(name) || MODIFIERS.has(name);
+}
+
+/** Rules 2, 4 and 11: what a file binds (see the header). */
+interface Bindings {
+  /** ROOTS and the names bound to node:test or to a test function. */
+  roots: Set<string>;
+  /** HOOKS and the names bound to a hook. */
+  hooks: Set<string>;
+  /** PREFIXED and the names bound to one of them: renamed on import or destructured from a
+   * module (`import { xit as check } from "@jest/globals"`). */
+  prefixed: Set<string>;
+  /** The names bound to a module (modulesOf), collected before the others. */
+  modules: ReadonlySet<string>;
+}
+
+/** Rule 11: what a destructured value is: node:test or a test function ("test"), the global
+ * object (isGlobalObject), another module (isModuleValue), or data. */
+type Source = "test" | "global" | "module" | "data";
+
+/** Rule 11: what a destructured value is (Source), node:test and a test function first. */
+function sourceOf(value: Node, bindings: Bindings): Source {
+  if (loads(value, "node:test") || isTestFunction(value, bindings.roots)) return "test";
+  if (isGlobalObject(value)) return "global";
+  return isModuleValue(value, bindings.modules) ? "module" : "data";
+}
+
+/** Rule 11: whether a key of a destructured value (Source) gives a test function: under node:test
+ * or a test function, isTestFunctionKey; under the global object, a ROOT (Mocha's globals hold
+ * `context`); under another module, a key in EXPORTED_ROOTS; under data, none. */
+function isSourceTestKey(key: string | null, source: Source): boolean {
+  if (source === "test") return isTestFunctionKey(key);
+  if (key === null || source === "data") return false;
+  return (source === "global" ? ROOTS : EXPORTED_ROOTS).has(key);
+}
+
+/** Rules 2, 4 and 11: the names a destructure binds: to a test function under a key
+ * isSourceTestKey accepts (a pattern under one read as under a test function), and as the rest
+ * when the value is node:test or a test function ("test"); when it is not data, to a prefixed
+ * marker under its key; whatever its value, to a hook under a hook's key. */
+function bindPattern(pattern: ObjectPattern, source: Source, bindings: Bindings): void {
+  const { roots, hooks, prefixed } = bindings;
+  for (const property of pattern.properties) {
+    if (property.type === "RestElement") {
+      if (source === "test" && property.argument.type === "Identifier") {
+        roots.add(property.argument.name);
       }
-    } else if (node.type === "VariableDeclarator" && node.init != null) {
-      if (!loads(node.init, "node:test")) continue;
-      if (node.id.type === "Identifier") roots.add(node.id.name);
-      if (node.id.type !== "ObjectPattern") continue;
-      for (const property of node.id.properties) {
-        if (property.type === "RestElement") {
-          if (property.argument.type === "Identifier") roots.add(property.argument.name);
-        } else if (isRootKey(keyName(property) ?? "")) {
-          const value =
-            property.value.type === "AssignmentPattern" ? property.value.left : property.value;
-          if (value.type === "Identifier") roots.add(value.name);
-        }
-      }
-    } else if (node.type === "AssignmentExpression" && node.left.type === "Identifier") {
-      if (loads(node.right, "node:test")) roots.add(node.left.name);
+      continue;
+    }
+    const key = keyName(property);
+    const value =
+      property.value.type === "AssignmentPattern" ? property.value.left : property.value;
+    const testKey = isSourceTestKey(key, source);
+    if (value.type === "Identifier") {
+      if (testKey) roots.add(value.name);
+      else if (key !== null && HOOKS.has(key)) hooks.add(value.name);
+      // Not an `else`: `expectFailure` is a test modifier and a prefixed marker both.
+      if (source !== "data" && key !== null && PREFIXED.has(key)) prefixed.add(value.name);
+    } else if (value.type === "ObjectPattern" && testKey) {
+      bindPattern(value, "test", bindings);
     }
   }
-  return roots;
+}
+
+/** Rules 2, 4 and 11: what one node binds, into bindings (see the header). */
+function bindNode(node: Node, bindings: Bindings): void {
+  const { roots, hooks, prefixed } = bindings;
+  if (node.type === "ImportDeclaration") {
+    if (node.importKind === "type" || node.importKind === "typeof") return;
+    const nodeTest = node.source.value === "node:test";
+    // @playwright/test's default export is its `test`.
+    const playwright = node.source.value === "@playwright/test";
+    for (const specifier of node.specifiers) {
+      if (specifier.type !== "ImportSpecifier") {
+        const playwrightDefault = playwright && specifier.type === "ImportDefaultSpecifier";
+        if (nodeTest || playwrightDefault) roots.add(specifier.local.name);
+        continue;
+      }
+      const name = importedName(specifier);
+      const value = specifier.importKind !== "type" && specifier.importKind !== "typeof";
+      if (value && HOOKS.has(name)) hooks.add(specifier.local.name);
+      if (value && PREFIXED.has(name)) prefixed.add(specifier.local.name);
+      if (nodeTest && isTestFunctionKey(name)) roots.add(specifier.local.name);
+      const exported = EXPORTED_ROOTS.has(name) || (playwright && name === "default");
+      if (value && exported) roots.add(specifier.local.name);
+    }
+  } else if (node.type === "VariableDeclarator" && node.init != null) {
+    if (node.id.type === "Identifier" && loads(node.init, "node:test")) roots.add(node.id.name);
+    if (node.id.type === "ObjectPattern") {
+      bindPattern(node.id, sourceOf(node.init, bindings), bindings);
+    }
+  } else if (node.type === "AssignmentExpression" && node.left.type === "Identifier") {
+    if (loads(node.right, "node:test")) roots.add(node.left.name);
+  }
+}
+
+/** Rule 11: the names a file binds to a module: a namespace import of any module that is not
+ * `import type`, and a name declared with or assigned a `require(` or `import(` (loadSource). They
+ * are collected before the roots, in a pass of their own: the walk visits sibling statements in
+ * reverse order, and an import is hoisted above the destructure that reads it. */
+function modulesOf(all: Node[]): Set<string> {
+  const modules = new Set<string>();
+  for (const node of all) {
+    if (node.type === "ImportDeclaration") {
+      if (node.importKind === "type" || node.importKind === "typeof") continue;
+      for (const specifier of node.specifiers) {
+        if (specifier.type === "ImportNamespaceSpecifier") modules.add(specifier.local.name);
+      }
+    } else if (node.type === "VariableDeclarator" && node.id.type === "Identifier") {
+      if (node.init != null && loadSource(node.init) !== null) modules.add(node.id.name);
+    } else if (node.type === "AssignmentExpression" && node.left.type === "Identifier") {
+      if (loadSource(node.right) !== null) modules.add(node.left.name);
+    }
+  }
+  return modules;
+}
+
+/** Rules 2, 4 and 11: what a file binds (Bindings). A name bound from a test function can itself
+ * be one (`const { describe: d } = test; const { it: i } = d;`), so the walk repeats until a pass
+ * adds no root. */
+function bindingsOf(all: Node[]): Bindings {
+  const bindings: Bindings = {
+    roots: new Set(ROOTS),
+    hooks: new Set(HOOKS),
+    prefixed: new Set(PREFIXED),
+    modules: modulesOf(all),
+  };
+  for (let size = -1; size !== bindings.roots.size; ) {
+    size = bindings.roots.size;
+    for (const node of all) bindNode(node, bindings);
+  }
+  return bindings;
 }
 
 // TypeScript's decorators as `experimentalDecorators` writes them, parameter decorators included
@@ -1360,8 +1662,10 @@ function analyse(text: string, fileName: string): Analysis {
     parents: new Map(),
     found: [],
     roots: ROOTS,
+    hooks: HOOKS,
+    modules: new Set(),
   };
-  const playwright = program.body.some(importsPlaywright);
+  const playwright = playwrightTests(program.body);
   // Every test call's options objects are judged by rule 8 first, so rule 9 can leave them out.
   const all: Node[] = [];
   const stack: Node[] = [program];
@@ -1372,20 +1676,23 @@ function analyse(text: string, fileName: string): Analysis {
       stack.push(child);
     }
   }
-  analysis.roots = rootsOf(all);
+  const { roots, hooks, prefixed, modules } = bindingsOf(all);
+  analysis.roots = roots;
+  analysis.hooks = hooks;
+  analysis.modules = modules;
   const judged = new Set<Node>();
   for (const node of all) {
     if (isCall(node)) judgeCall(node, analysis, judged);
   }
   for (const node of all) {
     if (isMember(node)) judgeMember(node, analysis, playwright);
-    else if (node.type === "Identifier" && PREFIXED.has(node.name)) {
+    else if (node.type === "Identifier" && prefixed.has(node.name)) {
       if (isCalled(node, analysis.parents, MODIFIERS)) {
         analysis.found.push({ anchor: node, rule: "prefixed", name: node.name });
       }
     } else if (node.type === "ObjectExpression") judgeObject(node, analysis.found, judged);
     else if (node.type === "ImportDeclaration") judgeImport(node, analysis.found);
-    else if (node.type === "VariableDeclarator") judgeRequire(node, analysis.found, analysis.roots);
+    else if (node.type === "VariableDeclarator") judgeRequire(node, analysis);
   }
   analysis.found.sort((a, b) => startOf(a.anchor) - startOf(b.anchor));
   return analysis;

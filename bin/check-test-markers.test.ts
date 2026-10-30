@@ -66,6 +66,9 @@ runCases(
     ["an each chain", m("test.", "only.each([[1]])(", BODY), ["focus"]],
     ["a new expression", m("new test.", "only(", BODY), ["focus"]],
     ["a comma callee", m("(0, test.", "only)(", BODY), ["focus"]],
+    ["an assignment callee", m("let f;\n(f = test.", "only)(", BODY), ["focus"]],
+    ["an awaited callee", m("(await test.", "only)(", BODY), ["focus"]],
+    ["an assignment that is not called", m("let f;\nf = test.", "only;\n"), []],
     ["the first operand of a comma callee", m("(test.", "only, f)(", BODY), []],
     ["a tagged each table", m("test.", "only.each`a`(", BODY), ["focus"]],
     ["a comparison", "if (opts.only != mode) run();\n", []],
@@ -88,6 +91,8 @@ runCases(
     ["a tagged template", m("x", "test`t`;\n"), ["prefixed"]],
     ["a new expression", m("new f", "it(", BODY), ["prefixed"]],
     ["a comma callee", m("(0, f", "it)(", BODY), ["prefixed"]],
+    ["an assignment callee", m("let f;\n(f = f", "it)(", BODY), ["prefixed"]],
+    ["an awaited callee", m("(await f", "it)(", BODY), ["prefixed"]],
     ["a modifier other than each", m("x", "it.failing(", BODY), ["prefixed"]],
     ["a computed modifier key", m("f", 'it["each"]([[1]])(', BODY), ["prefixed"]],
     ["a call through call", m("f", 'it.call(null, "t", () => {});\n'), ["prefixed"]],
@@ -131,6 +136,21 @@ runCases(
     ["expectFailure as a member of a name", m("jg.", "expect", "Failure(", BODY), ["focus"]],
     ["a declaration of expectFailure", m("function expect", "Failure() {}\n"), []],
     ["a read of expectFailure", m("use(expect", "Failure);\n"), []],
+    [
+      "a renamed expectFailure imported from a local module",
+      m("import { expect", 'Failure as check } from "./helpers";\ncheck(', BODY),
+      ["prefixed"],
+    ],
+    [
+      "a renamed expectFailure destructured from node:test",
+      m("const { expect", 'Failure: check } = require("node:test");\ncheck(', BODY),
+      ["import", "prefixed"],
+    ],
+    [
+      "a renamed expectFailure destructured from a test function",
+      m("const { expect", "Failure: check } = test;\ncheck(", BODY),
+      ["destructure", "prefixed"],
+    ],
   ],
   (source) => rules(source),
 );
@@ -155,6 +175,12 @@ runCases(
     ["an extend link", m("test.extend({}).", "skip(", BODY), ["skip"]],
     ["a receiver read off a namespace", m("nt.test.", "skip(", BODY), ["skip"]],
     ["a comma callee", m("(0, test.", "skip)(", BODY), ["skip"]],
+    ["an assignment callee", m("let f;\n(f = test.", "skip)(", BODY), ["skip"]],
+    ["a comma receiver", m("(0, test).", "skip(", BODY), ["skip"]],
+    ["an assignment receiver", m("let x;\n(x = test).", "skip(", BODY), ["skip"]],
+    ["a comma namespace", m("(0, nt).test.", "skip(", BODY), ["skip"]],
+    ["an awaited receiver", m("(await test).", "skip(", BODY), ["skip"]],
+    ["an awaited namespace", m("(await nt).test.", "skip(", BODY), ["skip"]],
     ["a new expression", m("new describe.", "skip(", BODY), ["skip"]],
     ["a receiver read off a global", m("globalThis.it.", "skip(", BODY), ["skip"]],
     ["a member of a name that is no receiver", m("db.cursor.", "skip(10);\n"), []],
@@ -332,16 +358,6 @@ runCases(
       ["contextSkip"],
     ],
     [
-      "a skip on a context after a TypeScript this parameter",
-      m('test("x", function (this: unknown, ctx) {\n  ctx.', 'skip("wip");\n});\n'),
-      ["contextSkip"],
-    ],
-    [
-      "a skip on a second parameter after a TypeScript this parameter",
-      m('test("x", function (this: unknown, ctx, done) {\n  done.', 'skip("wip");\n});\n'),
-      [],
-    ],
-    [
       "a skip on this in a hook",
       m("beforeEach(function () {\n  this.", 'skip("x");\n});\n'),
       ["contextSkip"],
@@ -371,11 +387,6 @@ runCases(
       "a skip method on this in a cursor class (the closed side)",
       m("class Cursor {\n  page() {\n    return this.", "skip(10);\n  }\n}\n"),
       ["contextSkip"],
-    ],
-    [
-      "a planned todo on node:test imported as t",
-      m('import t from "node:test";\nt.', 'todo("planned");\n'),
-      [],
     ],
     [
       "a todo with a body on node:test imported as t",
@@ -437,6 +448,223 @@ runCases(
       "a skip on the first parameter of another export's callback",
       m('import { mock as mk } from "node:test";\nmk("x", (ctx) => ctx.', "skip(1));\n"),
       [],
+    ],
+    // A TypeScript this parameter is not counted.
+    [
+      "a skip on a context after a this parameter",
+      m(
+        'test("x", function (this: void, ctx) {\n  ctx.',
+        'skip("r");\n  throw new Error("boom");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the parameter after a this parameter and the context",
+      m('test("x", function (this: void, ctx, done) {\n  done.', 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on a context after a TypeScript this parameter",
+      m('test("x", function (this: unknown, ctx) {\n  ctx.', 'skip("wip");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on a second parameter after a TypeScript this parameter",
+      m('test("x", function (this: unknown, ctx, done) {\n  done.', 'skip("wip");\n});\n'),
+      [],
+    ],
+    // Hooks under a name of the file's own.
+    [
+      "a skip on the context of a renamed hook import",
+      m(
+        'import { test, beforeEach as setup } from "node:test";\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a renamed hook import from another module",
+      m(
+        'import { beforeEach as setup } from "vitest";\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a hook destructured from a require",
+      m(
+        'const { beforeEach: setup } = require("node:test");\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a hook destructured from a test function",
+      m("const { afterEach: done } = test;\ndone((ctx) => {\n  ctx.", 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a hook destructured from another module's namespace",
+      m(
+        'import * as v from "vitest";\nconst { beforeEach: setup } = v;\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a hook destructured from an awaited import",
+      m(
+        'const { beforeEach: setup } = await import("vitest");\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a comma-wrapped hook",
+      m("(0, beforeEach)((ctx) => {\n  ctx.", 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the first parameter of a renamed import of another export",
+      m(
+        'import { mock as setup } from "node:test";\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      [],
+    ],
+    [
+      "a skip on the first parameter of another export destructured from a require",
+      m('const { mock: mk } = require("node:test");\nmk((ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a renamed type import of a hook",
+      m(
+        'import { type beforeEach as setup } from "node:test";\nsetup((ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      [],
+    ],
+    // Calls of a test function.
+    [
+      "a skip on the context of a concurrent test",
+      m('it.concurrent("a", (ctx) => {\n  ctx.', 'skip("wip");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a runIf test",
+      m('test.runIf(true)("c", (ctx) => {\n  ctx.', 'skip("wip");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a skipIf test",
+      m('test.skipIf(false)("e", (ctx) => {\n  ctx.', 'skip("wip");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a namespace's default export",
+      m(
+        'import * as nt from "node:test";\nnt.default("x", (ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the second parameter of a for table's test",
+      m('test.for([1])("d", (row, ctx) => ctx.', 'skip("w"));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the second parameter of a tagged for table's test",
+      m("test.for`a\n$", '{1}`("d", ({ a }, ctx) => ctx.', 'skip("w"));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the row of a for table's test",
+      m('test.for([1])("d", (row, ctx) => row.', "skip(1));\n"),
+      [],
+    ],
+    [
+      "a skip on the row of an each table's test",
+      m('test.each([1])("d", (row) => row.', "skip(1));\n"),
+      [],
+    ],
+    [
+      "a skip on the second parameter of a for table of no test",
+      m('rows.for([1])("d", (row, ctx) => ctx.', 'skip("w"));\n'),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a query's callback",
+      m('t.context.db.query("x", (row) => row.', "skip(1));\n"),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a comma-wrapped query's callback",
+      m('(0, t.context.db.query)("x", (row) => row.', "skip(1));\n"),
+      [],
+    ],
+    // A receiver behind a comma expression or an assignment.
+    [
+      "a skip on a comma-wrapped context",
+      m('test("x", (ctx) => {\n  (0, ctx).', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on a comma-wrapped t",
+      m('test("x", (t) => {\n  (0, t).', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on a comma-wrapped this",
+      m('it("x", function () {\n  (0, this).', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on a context assigned in the receiver",
+      m('test("x", (ctx) => {\n  let c;\n  (c = ctx).', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on an awaited context",
+      m('test("x", async (ctx) => {\n  (await ctx).', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of an awaited callback",
+      m('test("x", await ((ctx) => {\n  ctx.', 'skip("r");\n}));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a comma-wrapped callback",
+      m('test("x", (0, (ctx) => {\n  ctx.', 'skip("r");\n}));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a callback assigned in the call",
+      m('let f;\ntest("x", f = (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the first parameter of a function before a comma in a test call",
+      m('test("x", ((row) => row.', "skip(1), run));\n"),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a function compound-assigned in a test call",
+      m('let f = "";\ntest("x", (f += (row) => row.', "skip(1)));\n"),
+      [],
+    ],
+    [
+      "a skip on a compound assignment of a context",
+      m('test("x", (ctx) => {\n  let n = 0;\n  (n += ctx).', "skip(1);\n});\n"),
+      [],
+    ],
+    // The closed side: t bound to node:test is still read as a context (rename the import).
+    [
+      "a planned todo on t imported from node:test",
+      m('import t from "node:test";\nt.', 'todo("planned");\n'),
+      ["contextSkip"],
     ],
   ],
   (source) => rules(source),
@@ -663,6 +891,7 @@ const OPTION_VALUES: Array<[string, boolean]> = [
   ["!0", true],
   ["~0", true],
   ["(true)", true],
+  ["(false)", true],
   ["!void 0", true],
   ["!!/x/", true],
   ["() => x", true],
@@ -860,6 +1089,7 @@ runCases(
     ["todo a negated null", m("const o = { ", "todo: !null };\n"), ["data"]],
     ["todo a parenthesised null", m("const o = { ", "todo: (null) };\n"), ["data"]],
     ["todo a parenthesised undefined", m("const o = { ", "todo: (undefined) };\n"), ["data"]],
+    ["todo a parenthesised false", m("const o = { ", "todo: (false) };\n"), ["data"]],
     ["expectFailure a regex", m("const o = { ", "expectFailure: /boom/ };\n"), ["data"]],
     ["expectFailure a negated regex", m("const o = { ", "expectFailure: !/boom/ };\n"), ["data"]],
     [
@@ -890,8 +1120,8 @@ runCases(
     ["skip null", m("const o = { ", "skip: null };\n"), ["data"]],
     ["skip NaN", m("const o = { ", "skip: NaN };\n"), ["data"]],
     ["skip a parenthesised null", m("const o = { ", "skip: (null) };\n"), ["data"]],
-    ["only null", m("const o = { ", "only: null };\n"), []],
-    ["only NaN", m("const o = { ", "only: NaN };\n"), []],
+    ["only null", "const o = { only: null };\n", []],
+    ["only NaN", "const o = { only: NaN };\n", []],
     ["expectFailure NaN", m("const o = { ", "expectFailure: NaN };\n"), ["data"]],
     ["skip null or a name", m("const o = { ", "skip: null ?? x };\n"), []],
     ["fails null", m("const o = { ", "fails: null };\n"), []],
@@ -1094,16 +1324,6 @@ runCases(
       ["skip"],
     ],
     [
-      "a skip on a name assigned a required module",
-      m('let nt;\nnt = require("node:test");\nnt.', "skip(", BODY),
-      ["skip"],
-    ],
-    [
-      "a skip on a name assigned another module",
-      m('let nt;\nnt = require("./helpers");\nnt.', "skip(", BODY),
-      [],
-    ],
-    [
       "a skip on a test destructured from a require",
       m('const { test: check } = require("node:test");\ncheck.', "skip(", BODY),
       ["skip"],
@@ -1206,8 +1426,501 @@ runCases(
       m('const { test: check = test } = require("node:test");\ncheck.', "skip(", BODY),
       ["skip"],
     ],
+    // Test functions destructured from a test function or a namespace.
+    [
+      "a skip on a describe destructured from a test function",
+      m(
+        'import test from "node:test";\nconst { describe: d } = test;\nd.',
+        'skip("s", () => {\n  test("x", () => {\n    throw new Error("b");\n  });\n});\n',
+      ),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from a namespace import",
+      m('import * as nt from "node:test";\nconst { test: check } = nt;\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured nested from a namespace import",
+      m(
+        'import * as nt from "node:test";\nconst { test: { describe: d } } = nt;\nd.',
+        "skip(",
+        BODY,
+      ),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured nested from a require",
+      m('const { test: { describe: d } } = require("node:test");\nd.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a modifier destructured from a test function",
+      m("const { sequential: seq } = test;\nseq.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip destructured nested under a modifier",
+      m("const { sequential: { s", "kip } } = test;\n"),
+      ["destructure"],
+    ],
+    [
+      "a skip on a computed key destructured from a test function",
+      m("const { [kind]: k } = test;\nk.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on the rest of a namespace import",
+      m('import * as nt from "node:test";\nconst { mock, ...rest } = nt;\nrest.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured with a default value",
+      m("const { describe: d = describe } = test;\nd.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a chain of destructures in document order",
+      m("const { describe: d } = test;\nconst { it: i } = d;\ni.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip destructured from a destructured describe",
+      m("const { describe: d } = test;\nconst { s", "kip } = d;\n"),
+      ["destructure"],
+    ],
+    [
+      "a skip on a describe destructured from data",
+      m("const { describe: d } = config;\nd.", "skip(", BODY),
+      [],
+    ],
+    ["a skip on the rest of data", m("const { a, ...rest } = config;\nrest.", "skip(", BODY), []],
+    [
+      "a skip on another key destructured from a test function",
+      m("const { mock: mk } = test;\nmk.", "skip(", BODY),
+      [],
+    ],
+    // A name assigned node:test.
+    [
+      "a skip on a name assigned a require",
+      m('let nt;\nnt = require("node:test");\nnt.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a name assigned another module",
+      m('let nt;\nnt = require("./helpers");\nnt.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a name assigned an awaited import",
+      m('let nt;\nnt = await import("node:test");\nnt.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a name assigned another call",
+      m('let nt;\nnt = load("node:test");\nnt.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a name bound to a comma-wrapped require",
+      m('const nt = (0, require("node:test"));\nnt.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a name assigned a comma-wrapped require",
+      m('let nt;\nnt = (0, require("node:test"));\nnt.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a name bound to an awaited comma-wrapped import",
+      m('const nt = await (0, import("node:test"));\nnt.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip destructured from a require of a comma-wrapped specifier",
+      m("const { s", 'kip } = require((0, "node:test"));\n'),
+      ["import"],
+    ],
+    [
+      "a skip destructured from a comma-wrapped require",
+      m("const { s", 'kip } = (0, require)("node:test");\n'),
+      ["import"],
+    ],
+    [
+      "a skip destructured from an import of a comma-wrapped specifier",
+      m("const { s", 'kip } = await import((0, "node:test"));\n'),
+      ["import"],
+    ],
   ],
   (source) => rules(source),
+);
+
+runCases(
+  "rule 11: a test function renamed on import or destructured from another module",
+  [
+    [
+      "a skip on a test renamed on import from vitest",
+      m('import { test as check } from "vitest";\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on the context of a test renamed on import from vitest",
+      m(
+        'import { test as check } from "vitest";\ncheck("x", (ctx) => {\n  ctx.',
+        'skip("r");\n});\n',
+      ),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on an it renamed on import from jest's globals",
+      m('import { it as check } from "@jest/globals";\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe renamed on import from mocha",
+      m('import { describe as d } from "mocha";\nd.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a todo with a body on a test renamed on import from bun",
+      m('import { test as check } from "bun:test";\ncheck.', "todo(", BODY),
+      ["todo"],
+    ],
+    [
+      "a constant skipIf on a test renamed on import from vitest",
+      m('import { test as check } from "vitest";\ncheck.', "skipIf(true)(", BODY),
+      ["skipIf"],
+    ],
+    [
+      "a skip on a test renamed on import from a fixtures module",
+      m('import { test as check } from "./fixtures";\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from an awaited import",
+      m('const { test: check } = await import("vitest");\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on an it destructured from a require",
+      m('const { it: check } = require("vitest");\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured from a namespace import",
+      m('import * as v from "vitest";\nconst { describe: d } = v;\nd.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured from a namespace import declared after it",
+      m("const { describe: d } = v;\nd.", "skip(", BODY, 'import * as v from "vitest";\n'),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from a name bound to a require",
+      m('const v = require("vitest");\nconst { test: check } = v;\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from a name assigned an awaited import",
+      m('let v;\nv = await import("vitest");\nconst { test: check } = v;\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on the context of a for table of a renamed it",
+      m(
+        'import { it as check } from "vitest";\ncheck.for([1])("d", (row, ctx) => ctx.',
+        'skip("w"));\n',
+      ),
+      ["contextSkip"],
+    ],
+    ["a skip on a test read off a require", m('require("vitest").test.', "skip(", BODY), ["skip"]],
+    [
+      "a skip on a test destructured from an optional require",
+      m('const { test: check } = require?.("vitest");\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test read off an optional require",
+      m('require?.("vitest").test.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip destructured from an optional require of node:test",
+      m("const { s", 'kip } = require?.("node:test");\n'),
+      ["import"],
+    ],
+    [
+      "a skip on a test read off an awaited import",
+      m('(await import("vitest")).test.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a describe destructured nested from a require of another module",
+      m('const { test: { describe: d } } = require("@playwright/test");\nd.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip destructured from a test renamed on import from vitest",
+      m('import { test as check } from "vitest";\nconst { s', "kip } = check;\n"),
+      ["destructure"],
+    ],
+    [
+      "an xit renamed on import from jest's globals",
+      m("import { x", 'it as check } from "@jest/globals";\ncheck(', BODY),
+      ["prefixed"],
+    ],
+    [
+      "an fit renamed on import from jest's globals",
+      m("import { f", 'it as focus } from "@jest/globals";\nfocus(', BODY),
+      ["prefixed"],
+    ],
+    [
+      "an xit destructured from a require",
+      m("const { x", 'it: check } = require("mocha");\ncheck(', BODY),
+      ["prefixed"],
+    ],
+    ["an xit read off a require", m('require("@jest/globals").x', "it(", BODY), ["prefixed"]],
+    [
+      "an xdescribe read off an awaited import",
+      m('(await import("@jest/globals")).x', "describe(", BODY),
+      ["prefixed"],
+    ],
+    ["an xit read off another call", m('load("@jest/globals").x', "it(", BODY), []],
+    ["an fit read off a require", m('require("ml-regression").f', "it(x, y);\n"), []],
+    [
+      "a skip destructured nested under a test from a require of another module",
+      m("const { test: { s", 'kip } } = require("vitest");\n'),
+      ["destructure"],
+    ],
+    [
+      "a skip on a test read off a require of a name",
+      m('const mod = "vitest";\nrequire(mod).test.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from a require of a name",
+      m('const mod = "vitest";\nconst { test: check } = require(mod);\ncheck.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from globalThis",
+      m("const { test: check } = globalThis;\ncheck.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from global",
+      m("const { test: check } = global;\ncheck.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from window",
+      m("const { test: check } = window;\ncheck.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a test destructured from self",
+      m("const { test: check } = self;\ncheck.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip on a context destructured from globalThis",
+      m("const { context: c } = globalThis;\nc.", "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a todo with a body on a context destructured from global",
+      m("const { context: c } = global;\nc.", "todo(", BODY),
+      ["todo"],
+    ],
+    [
+      "a skip destructured nested under a context from globalThis",
+      m("const { context: { s", "kip } } = globalThis;\n"),
+      ["destructure"],
+    ],
+    [
+      "a skip destructured nested under a context from a module",
+      m("const { context: { s", 'kip } } = require("mocha");\n'),
+      [],
+    ],
+    [
+      "a todo with a body on a renamed test",
+      m('import { test as check } from "vitest";\ncheck.', "todo(", BODY),
+      ["todo"],
+    ],
+    [
+      "a skip destructured nested under a test from a namespace import",
+      m('import * as v from "vitest";\nconst { test: { s', "kip } } = v;\n"),
+      ["destructure"],
+    ],
+    [
+      "a skip destructured nested under another key from a module",
+      m("const { mock: { s", 'kip } } = require("vitest");\n'),
+      [],
+    ],
+    [
+      "a skip on a describe destructured from a type-only namespace import",
+      m('import type * as v from "vitest";\nconst { describe: d } = v;\nd.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on another name imported from playwright",
+      m('import { expect as e } from "@playwright/test";\ne.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a modifier destructured from a module",
+      m('const { each: e } = require("./table");\ne.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on the rest of a module",
+      m('const { a, ...rest } = require("./data");\nrest.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on an it destructured from a default import",
+      m('import jg from "@jest/globals";\nconst { it: check } = jg;\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a data use of an xit renamed on import",
+      m("import { x", 'it as check } from "@jest/globals";\nconst n = check.length;\n'),
+      [],
+    ],
+    [
+      "a skip on the context of a function bound by another module's context",
+      m(
+        'import { context as c } from "@opentelemetry/api";\nc.bind(x, (q) => {\n  q.',
+        "skip(1);\n});\n",
+      ),
+      [],
+    ],
+    [
+      "a skip on the context of a function bound by a destructured context",
+      m(
+        'const { context: c } = await import("@opentelemetry/api");\nc.bind(x, (q) => {\n  q.',
+        "skip(1);\n});\n",
+      ),
+      [],
+    ],
+    [
+      "a skip on a test renamed in a type-only import",
+      m('import type { test as check } from "vitest";\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a test renamed in a type-only specifier",
+      m('import { type test as check } from "vitest";\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on another module's default import",
+      m('import check from "ava";\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a test destructured from another call",
+      m('const { test: check } = load("vitest");\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a skip on a test destructured from a name bound to another call",
+      m('const v = load("vitest");\nconst { test: check } = v;\ncheck.', "skip(", BODY),
+      [],
+    ],
+    [
+      "a test renamed on import from playwright and extended",
+      'import { test as base } from "@playwright/test";\nexport const test = base.extend({\n  page: async ({ page }, use) => {\n    await use(page);\n  },\n});\n',
+      [],
+    ],
+    [
+      "a planned todo on a renamed test",
+      m('import { test as check } from "vitest";\ncheck.', 'todo("planned");\n'),
+      [],
+    ],
+  ],
+  (source) => rules(source),
+);
+
+runCases(
+  "rule 3: a Playwright test renamed on import",
+  [
+    [
+      "a skip with a body on a renamed test",
+      m('import { test as base } from "@playwright/test";\nbase.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip with a literal on a renamed test",
+      m('import { test as base } from "@playwright/test";\nbase.', 'skip(true, "r");\n'),
+      ["skip"],
+    ],
+    [
+      "a conditional skip on a test renamed from a fixtures module",
+      m('import { test as base } from "./fixtures";\nbase.', 'skip(isCI, "r");\n'),
+      ["skip"],
+    ],
+    [
+      "a conditional skip on a fixtures module's test in a spec",
+      m(
+        'import { expect } from "@playwright/test";\nimport { test as base } from "./fixtures";\nbase.',
+        'skip(isCI, "r");\n',
+      ),
+      ["skip"],
+    ],
+    [
+      "a conditional skip on a test destructured from a require",
+      m('const { test: base } = require("@playwright/test");\nbase.', 'skip(isCI, "r");\n'),
+      ["skip"],
+    ],
+    [
+      "a skip with a body on the default import",
+      m('import base from "@playwright/test";\nbase.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a skip with a literal on the default import",
+      m('import base from "@playwright/test";\nbase.', 'skip(true, "r");\n'),
+      ["skip"],
+    ],
+    [
+      "a skip with a body on a renamed default",
+      m('import { default as base } from "@playwright/test";\nbase.', "skip(", BODY),
+      ["skip"],
+    ],
+    [
+      "a conditional skip on the default import",
+      m('import base from "@playwright/test";\nbase.', 'skip(isCI, "r");\n'),
+      [],
+    ],
+    [
+      "a conditional skip on a renamed default",
+      m('import { default as base } from "@playwright/test";\nbase.', 'skip(isCI, "r");\n'),
+      [],
+    ],
+    [
+      "a conditional skip on a renamed test",
+      m('import { test as base } from "@playwright/test";\nbase.', 'skip(isCI, "r");\n'),
+      [],
+    ],
+    [
+      "a conditional fail on a renamed test",
+      m('import { test as base } from "@playwright/test";\nbase.', 'fail(isWebkit, "bug");\n'),
+      [],
+    ],
+    [
+      "a conditional skip on it under a type-only rename of test",
+      m('import { expect, type test as it } from "@playwright/test";\nit.', 'skip(isCI, "r");\n'),
+      ["skip"],
+    ],
+    [
+      "a renamed test extended",
+      'import { test as base } from "@playwright/test";\nexport const test = base.extend({\n  page: async ({ page }, use) => {\n    await use(page);\n  },\n});\n',
+      [],
+    ],
+  ],
+  (source) => rules(source, "a.spec.ts"),
 );
 
 describe("which markers are new", () => {
@@ -1219,9 +1932,21 @@ describe("which markers are new", () => {
   });
 
   test("a name added to an import line already in base is new", () => {
-    const base = m("import { s", 'kip, test } from "node:test";\n');
-    const head = m("import { s", "kip, test, t", 'odo } from "node:test";\n');
-    assert.deepEqual(rules(head, "a.test.ts", base), ["import"]);
+    const legacy = m("import { s", 'kip } from "node:test";\n');
+    const base = `${legacy}import { test } from "node:test";\n`;
+    const head = m(legacy, "import { test, t", 'odo } from "node:test";\n');
+    const listed = findAddedMarkers(base, head, "a.test.ts").map((marker) => [
+      marker.rule,
+      marker.line,
+    ]);
+    assert.deepEqual(listed, [["import", 2]]);
+  });
+
+  test("a name that is no marker added to an import line already in base refuses nothing", () => {
+    const legacy = m("import { s", 'kip } from "node:test";\n');
+    const base = `${legacy}import { test } from "node:test";\n`;
+    const head = `${legacy}import { test, mock } from "node:test";\n`;
+    assert.deepEqual(rules(head, "a.test.ts", base), []);
   });
 
   test("a marker in a file the diff adds is new", () => {
@@ -1384,12 +2109,20 @@ describe("which markers are new", () => {
     assert.deepEqual(rules(holding("b()"), "a.test.ts", holding("a()")), ["bare"]);
   });
 
-  test("markers keep apart by rule, name and position", () => {
+  test("markers keep apart by name", () => {
     const two = m("f(test.", "only(1), test.", "only(1));\n");
     assert.deepEqual(rules(two, "a.test.ts", two), []);
     assert.deepEqual(rules(m("test.", "fixme(1);\n"), "a.test.ts", m("test.", "only(1);\n")), [
       "focus",
     ]);
+  });
+
+  test("a marker's position in its unit is part of it", () => {
+    // The unit text is the same in both; only the binding outside it moves the marker from a to b.
+    const unit = m("f(a.", 'skip("x", g), b.', 'skip("x", g));\n');
+    const base = `import { test as a } from "node:test";\n${unit}`;
+    const head = `import { test as b } from "node:test";\n${unit}`;
+    assert.deepEqual(rules(head, "a.test.ts", base), ["skip"]);
   });
 
   test("a body elided before the marker does not shift it", () => {
