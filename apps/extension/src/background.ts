@@ -7,7 +7,7 @@ import { createIndicator } from "./indicator.ts";
 import { createNetworkLog } from "./network-log.ts";
 import { createPageScripts } from "./page-scripts.ts";
 import { probePage } from "./probe-page.ts";
-import { createRecipePrompts } from "./recipe-prompts.ts";
+import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { createSiteAccess } from "./site-access.ts";
 import { createUploads } from "./uploads.ts";
@@ -37,7 +37,7 @@ const access = createSiteAccess({
   },
   otherPrompt: (session) => recipes.openPrompt(session),
 });
-const recipes = createRecipePrompts({ browser, groups, access });
+const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });
 const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
 const pages = createPageScripts({ browser, groups, access, timers });

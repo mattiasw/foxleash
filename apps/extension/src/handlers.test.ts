@@ -35,7 +35,7 @@ import {
 import type { NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
-import { createRecipePrompts } from "./recipe-prompts.ts";
+import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { FIELD_MASK_CSS, FRAME_HIDE_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
@@ -5841,6 +5841,103 @@ describe("recipe_get", () => {
   });
 });
 
+describe("recipe_run", { timeout: 10000 }, () => {
+  /** Calls recipe_run and waits until its run page is open; returns the call and the tab. */
+  async function running(
+    env: ReturnType<typeof setup>,
+    name = "Receipt",
+  ): Promise<{ result: Promise<unknown>; tabId: number }> {
+    const result = env.call("s1", "recipe_run", { name });
+    result.catch(() => {});
+    for (let turn = 0; turn < 50; turn += 1) {
+      const page = env.recipes.openPrompt("s1");
+      if (page !== undefined) {
+        await flush();
+        return { result, tabId: page.tabId };
+      }
+      await flush();
+    }
+    assert.fail("no run page");
+  }
+
+  it("asks on the run page and resolves with the sites allowed for the session", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    const { result, tabId } = await running(env);
+    assert.match(fake.tabs.get(tabId)?.url ?? "", /run\.html\?id=/);
+    const page = fake.connectPage("recipe", {
+      id: FAKE_EXTENSION_ID,
+      url: fake.tabs.get(tabId)?.url ?? "",
+      tab: { id: tabId },
+    });
+    page.deliver({ type: "answer", answer: "allow" });
+    assert.deepEqual(await result, {
+      asked: true,
+      allowed: ["https://shop.example"],
+      blocked: [],
+      refused: [],
+    });
+    const opened = await call("s1", "tab_open", { url: "https://shop.example/" });
+    assert.ok("tab" in opened);
+    assert.equal(opened.tab.url, "https://shop.example/");
+  });
+
+  it("keeps the run page's tab and refuses tab_open on an unapproved site while it is open", async () => {
+    const env = setup();
+    const { fake, call } = env;
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    fake.openTab();
+    const { tabId } = await running(env);
+    const tabs = fake.tabs.size;
+    await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`,
+    });
+    assert.equal(fake.tabs.size, tabs);
+    await assert.rejects(call("s1", "tab_close", { tabId }), {
+      code: "recipe_prompt_open",
+      message: `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+    });
+    assert.equal(fake.tabs.has(tabId), true);
+  });
+
+  it("refuses a name that matches no saved recipe with get_recipe's words", async () => {
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    for (const name of ["Missing", "  Missing  ", "receipt", "", "a".repeat(101)]) {
+      const refusal = await call("s1", "recipe_get", { name }).then(
+        () => assert.fail(name),
+        (error: unknown) => error,
+      );
+      assert.ok(refusal instanceof ToolError);
+      assert.equal(refusal.code, "recipe_not_found");
+      await assert.rejects(call("s1", "recipe_run", { name }), {
+        code: "recipe_not_found",
+        message: refusal.message,
+      });
+    }
+  });
+
+  it("refuses a name that is not the request's own string", async () => {
+    const { fake, call } = setup();
+    await fake.browser.storage.local.set({ "recipe:Receipt": savedRecipe("Receipt") });
+    const params: Record<string, unknown>[] = [
+      { name: 7 },
+      { name: null },
+      {},
+      Object.create({ name: "Receipt" }),
+    ];
+    for (const given of params) {
+      await assert.rejects(call("s1", "recipe_run", given), {
+        code: "invalid_params",
+        message: "start_recipe needs name to be a string.",
+      });
+    }
+    assert.equal(fake.tabs.size, 0);
+  });
+});
+
 function savedRecipe(name: string) {
   return {
     name,
@@ -5883,7 +5980,12 @@ function setup() {
     timers,
     otherPrompt: (session) => recipes.openPrompt(session),
   });
-  const recipes = createRecipePrompts({ browser: fake.browser, groups, access });
+  const recipes: RecipePrompts = createRecipePrompts({
+    browser: fake.browser,
+    groups,
+    access,
+    timers,
+  });
   const probe = async function probe(_site: string): Promise<ProbeResult | null> {
     return null;
   };

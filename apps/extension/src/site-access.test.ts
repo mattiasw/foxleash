@@ -328,7 +328,10 @@ describe("beside a recipe page", () => {
   it("refuses to check or ask for an unapproved site while the session's recipe page is open", async () => {
     const fake = createFakeBrowser();
     const sessions: SessionMemory = new Map();
-    let page: { tabId: number } | undefined = { tabId: 9 };
+    let page: { tabId: number; question: string } | undefined = {
+      tabId: 9,
+      question: "whether to save a recipe",
+    };
     const access = createSiteAccess({
       browser: fake.browser,
       groups: createSessionGroups(fake.browser),
@@ -352,6 +355,22 @@ describe("beside a recipe page", () => {
     assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "ask" });
   });
 
+  it("names what the recipe page asks", async () => {
+    const fake = createFakeBrowser();
+    const access = createSiteAccess({
+      browser: fake.browser,
+      groups: createSessionGroups(fake.browser),
+      sessions: new Map(),
+      timers: createFakeTimers(),
+      otherPrompt: () => ({ tabId: 9, question: "whether to allow the recipe's sites" }),
+    });
+    await assert.rejects(access.check("s1", "https://b.example/"), {
+      code: "approval_pending",
+      message:
+        "Foxhand is waiting for the user to answer in tab 9 whether to allow the recipe's sites. Try again after the user has answered.",
+    });
+  });
+
   it("still answers for allowed, blocked and refused sites while the recipe page is open", async () => {
     const fake = createFakeBrowser();
     const sessions: SessionMemory = new Map();
@@ -360,7 +379,7 @@ describe("beside a recipe page", () => {
       groups: createSessionGroups(fake.browser),
       sessions,
       timers: createFakeTimers(),
-      otherPrompt: () => ({ tabId: 9 }),
+      otherPrompt: () => ({ tabId: 9, question: "whether to save a recipe" }),
     });
     const tab = fake.openTab({ active: true });
     await grantSite(fake.browser, "https://b.example");
@@ -1531,6 +1550,146 @@ describe("forget", () => {
       closed: 1,
     });
     assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+  });
+});
+
+describe("siteStates", () => {
+  it("gives each site its state, blocked before allowed and refused, allowed before refused", async () => {
+    const { fake, access, sessions } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["b.example", "e.example"] });
+    await grantSite(fake.browser, "https://a.example");
+    await grantSite(fake.browser, "https://b.example");
+    sessions.set("s1", {
+      allowed: new Set(["https://c.example", "https://e.example"]),
+      refused: new Set(["https://a.example", "https://b.example", "https://d.example"]),
+      closed: 0,
+    });
+    const sites = [
+      "https://f.example",
+      "https://a.example",
+      "https://b.example",
+      "https://c.example",
+      "https://d.example",
+      "https://e.example",
+    ];
+    const states = await access.siteStates("s1", sites);
+    assert.deepEqual(
+      [...states],
+      [
+        ["https://f.example", "askable"],
+        ["https://a.example", "allowed"],
+        ["https://b.example", "blocked"],
+        ["https://c.example", "allowed"],
+        ["https://d.example", "refused"],
+        ["https://e.example", "blocked"],
+      ],
+    );
+  });
+
+  it("changes nothing, and creates no entry for a session without answers", async () => {
+    const { fake, access, sessions } = setup();
+    const stored = await fake.browser.storage.local.get(null);
+    const states = await access.siteStates("s1", ["https://a.example"]);
+    assert.deepEqual([...states], [["https://a.example", "askable"]]);
+    assert.equal(sessions.has("s1"), false);
+    assert.deepEqual(await fake.browser.storage.local.get(null), stored);
+  });
+});
+
+describe("allowForSession", () => {
+  it("allows the askable sites for the session only, each once, and stores nothing", async () => {
+    const { fake, access, sessions } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://c.example");
+    sessions.set("s1", {
+      allowed: new Set(),
+      refused: new Set(["https://d.example"]),
+      closed: 0,
+    });
+    const stored = await fake.browser.storage.local.get(null);
+    const granted = await access.allowForSession(
+      "s1",
+      [
+        "https://e.example",
+        "https://b.example",
+        "https://c.example",
+        "https://d.example",
+        "https://a.example",
+        "https://e.example",
+      ],
+      () => true,
+    );
+    assert.deepEqual(granted, ["https://e.example", "https://a.example"]);
+    assert.deepEqual(sessions.get("s1"), {
+      allowed: new Set(["https://e.example", "https://a.example"]),
+      refused: new Set(["https://d.example"]),
+      closed: 0,
+    });
+    assert.deepEqual(await fake.browser.storage.local.get(null), stored);
+    assert.equal((await readSettings(fake.browser)).sites.includes("https://a.example"), false);
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "allowed" });
+    assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+  });
+
+  it("never allows a string that is not exactly an http or https site", async () => {
+    const { access, sessions } = setup();
+    const granted = await access.allowForSession(
+      "s1",
+      ["javascript:alert(1)", "https://a.example/path", "HTTPS://A.EXAMPLE", "a.example", ""],
+      () => true,
+    );
+    assert.deepEqual(granted, []);
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("allows nothing when the session ended while the settings were read", async () => {
+    const { fake, access, sessions } = setup();
+    let open = true;
+    const held = Promise.withResolvers<void>();
+    const get = fake.browser.storage.local.get;
+    fake.browser.storage.local.get = async (keys) => {
+      await held.promise;
+      return get(keys);
+    };
+    const granting = access.allowForSession("s1", ["https://a.example"], () => open);
+    await flush();
+    access.endSession("s1");
+    open = false;
+    held.resolve();
+    assert.deepEqual(await granting, []);
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("rejects, allowing nothing, when the settings cannot be read", async () => {
+    const { fake, access, sessions } = setup();
+    fake.browser.storage.local.get = async () => {
+      throw new Error("Storage is gone");
+    };
+    await assert.rejects(
+      access.allowForSession("s1", ["https://a.example"], () => true),
+      /Storage is gone/,
+    );
+    assert.equal(sessions.has("s1"), false);
+  });
+});
+
+describe("refuseIfStoppedAsking", () => {
+  it("refuses once the session's refused and closed prompts reach three", () => {
+    const { access, sessions } = setup();
+    access.refuseIfStoppedAsking("s1");
+    assert.equal(sessions.has("s1"), false);
+    sessions.set("s1", {
+      allowed: new Set(["https://c.example"]),
+      refused: new Set(["https://a.example"]),
+      closed: 1,
+    });
+    access.refuseIfStoppedAsking("s1");
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://a.example"]), closed: 2 });
+    assert.throws(() => access.refuseIfStoppedAsking("s1"), {
+      code: "site_refused",
+      message: BUDGET,
+    });
+    access.refuseIfStoppedAsking("s2");
   });
 });
 

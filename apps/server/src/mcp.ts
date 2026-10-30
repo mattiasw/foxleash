@@ -6,6 +6,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { Bridge } from "./bridge.ts";
 import { INSTRUCTIONS } from "./instructions.ts";
 import { createLog, type Log } from "./log.ts";
+import { registerPrompts } from "./prompts.ts";
 import { resolveSocketDir } from "./socket-dir.ts";
 import { registerTools, startingFolder, type ToolBridge, type UploadContext } from "./tools.ts";
 import { uploadFolders } from "./upload-policy.ts";
@@ -124,5 +125,6 @@ export function createMcpServer(options: {
     { instructions: INSTRUCTIONS },
   );
   registerTools(server, options.bridge, options.upload, options.saveFolder);
+  registerPrompts(server, options.bridge);
   return server;
 }

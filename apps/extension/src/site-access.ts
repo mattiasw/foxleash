@@ -28,6 +28,9 @@ const PORT_NAME = "approve";
 // Refused and closed prompts a session may have before Foxhand stops asking.
 const PROMPT_BUDGET = 3;
 
+/** What a session may do with a site: load it, never, never in this session, or ask the user. */
+export type SiteState = "allowed" | "blocked" | "refused" | "askable";
+
 export type Decision =
   | { decision: "allowed" }
   | { decision: "ask" }
@@ -60,8 +63,11 @@ export interface SiteAccessDeps<Handle> {
   timers: Timers<Handle>;
   /** The session's approval of the site ended: the user withdrew it, or the session ended. */
   onWithdraw?: (session: string, site: string) => void;
-  /** The session's open recipe page, which no site prompt may open beside. */
-  otherPrompt?: (session: string) => { tabId: number } | undefined;
+  /**
+   * The session's open recipe page, which no site prompt may open beside; `question` says what it
+   * asks, such as "whether to save a recipe".
+   */
+  otherPrompt?: (session: string) => { tabId: number; question: string } | undefined;
 }
 
 export interface SiteAccess {
@@ -89,6 +95,23 @@ export interface SiteAccess {
   endSession(session: string): void;
   /** The answers each session holds, sites sorted. */
   sessionAnswers(): Promise<SessionAnswers[]>;
+  /** For a recipe's sites: what the session may do with each, as stored and granted now. Changes nothing. */
+  siteStates(session: string, sites: readonly string[]): Promise<Map<string, SiteState>>;
+  /**
+   * Allows for this session only the given sites that are still askable after a fresh read, and
+   * returns them; allows nothing and returns [] when `stillOpen()` is false after the read.
+   * Stores nothing.
+   */
+  allowForSession(
+    session: string,
+    sites: readonly string[],
+    stillOpen: () => boolean,
+  ): Promise<string[]>;
+  /**
+   * Refuses once the session's refused and closed prompts reach the budget: from then on Foxhand
+   * asks the user nothing about sites in that session.
+   */
+  refuseIfStoppedAsking(session: string): void;
   /**
    * Forgets one answer of the session: a site it allowed or refused, or with `"closed"` its
    * closed prompts. Only removes; never allows anything.
@@ -192,6 +215,9 @@ export function createSiteAccess<Handle>({
     askedUrl,
     endSession,
     sessionAnswers,
+    siteStates,
+    allowForSession,
+    refuseIfStoppedAsking,
     forget,
   };
 
@@ -295,6 +321,42 @@ export function createSiteAccess<Handle>({
     );
   }
 
+  async function siteStates(
+    session: string,
+    sites: readonly string[],
+  ): Promise<Map<string, SiteState>> {
+    const current = await view(session);
+    // Read, not stateOf: asking creates no session entry.
+    const refused = sessions.get(session)?.refused;
+    const states = new Map<string, SiteState>();
+    for (const site of sites) {
+      if (current.blocked(site)) states.set(site, "blocked");
+      else if (current.allowed(site)) states.set(site, "allowed");
+      else if (refused?.has(site) === true) states.set(site, "refused");
+      else states.set(site, "askable");
+    }
+    return states;
+  }
+
+  async function allowForSession(
+    session: string,
+    sites: readonly string[],
+    stillOpen: () => boolean,
+  ): Promise<string[]> {
+    const states = await siteStates(session, sites);
+    // An ended session's memory must not come back: a session reconnecting with its id asks again.
+    if (!stillOpen()) return [];
+    const granted: string[] = [];
+    for (const site of sites) {
+      if (states.get(site) !== "askable" || siteOf(site) !== site || granted.includes(site)) {
+        continue;
+      }
+      stateOf(session).allowed.add(site);
+      granted.push(site);
+    }
+    return granted;
+  }
+
   function forget(session: string, site: string): void {
     const state = sessions.get(session);
     if (state === undefined) return;
@@ -335,7 +397,12 @@ export function createSiteAccess<Handle>({
         `The user did not allow Foxhand on ${site} in this session.`,
       );
     }
-    if (state.refused.size + state.closed >= PROMPT_BUDGET) {
+    refuseIfStoppedAsking(session);
+  }
+
+  function refuseIfStoppedAsking(session: string): void {
+    const state = sessions.get(session);
+    if (state !== undefined && state.refused.size + state.closed >= PROMPT_BUDGET) {
       throw new ToolError(
         "site_refused",
         "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.",
@@ -346,7 +413,7 @@ export function createSiteAccess<Handle>({
   /** The user is never asked two things at once in one session. */
   function refuseBesideOtherPrompt(session: string): void {
     const page = otherPrompt?.(session);
-    if (page !== undefined) throw approvalPending(page.tabId, "whether to save a recipe");
+    if (page !== undefined) throw approvalPending(page.tabId, page.question);
   }
 
   /** The prompt, when a request for `site` may wait on it. */

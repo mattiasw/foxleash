@@ -778,7 +778,11 @@ function setup() {
     recordings: { liveRecording: () => undefined },
     network: { read: () => ({ recording: false, requests: [], truncated: false }) },
     downloads: { save: async () => ({ path: "", bytes: 0 }) },
-    recipes: { propose: () => Promise.reject(new Error("unused")), openPrompt: () => undefined },
+    recipes: {
+      propose: () => Promise.reject(new Error("unused")),
+      run: () => Promise.reject(new Error("unused")),
+      openPrompt: () => undefined,
+    },
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

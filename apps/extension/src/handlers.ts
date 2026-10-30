@@ -49,7 +49,7 @@ import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import type { RecipePrompts } from "./recipe-prompts.ts";
-import { checkRecipe, readRecipes, recipeName } from "./recipes.ts";
+import { checkRecipe, findRecipe, readRecipes, recipeName } from "./recipes.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
@@ -106,7 +106,7 @@ export interface HandlerDeps<Handle> {
   /** Saves files into the download folder; it imports this file too. */
   downloads: Pick<Downloads, "save">;
   /** The session's recipe pages; `import type`, since it imports this file. */
-  recipes: Pick<RecipePrompts, "propose" | "openPrompt">;
+  recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt">;
 }
 
 type Params = Record<string, unknown>;
@@ -224,6 +224,7 @@ export function createHandlers<Handle>({
     recipe_propose: recipePropose,
     recipe_list: recipeList,
     recipe_get: recipeGet,
+    recipe_run: recipeRun,
     probe_input: probeInput,
   };
 
@@ -1000,21 +1001,18 @@ export function createHandlers<Handle>({
     if (typeof name !== "string") {
       throw new ToolError("invalid_params", "get_recipe needs name to be a string.");
     }
-    const normalized = recipeName(name);
-    const saved = await readRecipes(browser);
-    // A name saved under other rules (the hidden characters follow Firefox's Unicode version) is
-    // listed as stored, so the exact name finds it. A stored name is a string: undefined matches
-    // nothing.
-    const recipe =
-      saved.find((stored) => stored.name === name) ??
-      saved.find((stored) => stored.name === normalized);
-    if (recipe === undefined) {
-      throw new ToolError(
-        "recipe_not_found",
-        `No recipe named ${JSON.stringify(normalized ?? name)} is saved. list_recipes names the saved ones.`,
-      );
-    }
+    const recipe = await findRecipe(browser, name);
+    if (recipe === undefined) throw recipeNotFound(name);
     return { recipe };
+  }
+
+  /** Asks the user to allow a saved recipe's sites for the session, on the run page. */
+  async function recipeRun(session: string, params: Params): Promise<Result<"recipe_run">> {
+    const name = own(params, "name");
+    if (typeof name !== "string") {
+      throw new ToolError("invalid_params", "start_recipe needs name to be a string.");
+    }
+    return recipes.run(session, name);
   }
 
   /** Records the site of every URL the tab moves to until `stop`. */
@@ -1590,6 +1588,14 @@ function notInGroup(tabId: number): ToolError {
   return new ToolError(
     "tab_not_in_group",
     `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
+  );
+}
+
+/** The refusal of get_recipe and start_recipe for a name no saved recipe has. */
+export function recipeNotFound(name: string): ToolError {
+  return new ToolError(
+    "recipe_not_found",
+    `No recipe named ${JSON.stringify(recipeName(name) ?? name)} is saved. list_recipes names the saved ones.`,
   );
 }
 

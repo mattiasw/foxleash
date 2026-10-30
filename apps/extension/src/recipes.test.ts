@@ -5,6 +5,7 @@ import { createFakeBrowser, type FakeBrowser } from "./fake-browser.ts";
 import {
   checkRecipe,
   deleteRecipe,
+  findRecipe,
   type RecipeProblem,
   readRecipes,
   recipeName,
@@ -573,6 +574,27 @@ describe("recipeName", () => {
     for (const value of ["", "   ", "a".repeat(101), "a\u200bb", "a\u202eb", 7, undefined]) {
       assert.equal(recipeName(value), undefined, JSON.stringify(value));
     }
+  });
+});
+
+describe("findRecipe", () => {
+  it("finds the recipe of exactly the name before the one of the normalized name", async (t) => {
+    const { fake } = setup(t);
+    await seed(fake, recipe("a  b"), recipe("a b"), recipe(`Caf${c(0xe9)}`));
+    assert.deepEqual(await findRecipe(fake.browser, "a  b"), recipe("a  b"));
+    assert.deepEqual(await findRecipe(fake.browser, " a b "), recipe("a b"));
+    assert.deepEqual(
+      await findRecipe(fake.browser, `Caf${c(0x65, 0x301)}`),
+      recipe(`Caf${c(0xe9)}`),
+    );
+  });
+
+  it("gives undefined for a name no recipe has, or one no recipe could have", async (t) => {
+    const { fake } = setup(t);
+    await seed(fake, recipe("a"));
+    assert.equal(await findRecipe(fake.browser, "b"), undefined);
+    assert.equal(await findRecipe(fake.browser, ""), undefined);
+    assert.equal(await findRecipe(fake.browser, "   "), undefined);
   });
 });
 

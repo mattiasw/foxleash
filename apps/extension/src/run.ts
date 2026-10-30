@@ -1,0 +1,152 @@
+import type { Port, Timers } from "./browser-api.ts";
+import { announce, armButtons, element, fieldsOf } from "./page-ui.ts";
+
+declare const browser: { runtime: { connect(connectInfo: { name: string }): Port } };
+
+type Answer = "allow" | "no";
+type SiteState = "allowed" | "blocked" | "refused" | "askable";
+type State = "waiting" | "asking" | "answering" | "done" | "ended";
+
+const PAGE = "run page";
+const UNARMED = "The buttons respond a moment after this window is focused.";
+const WORDS: Record<SiteState, string> = {
+  askable: "will be allowed for this session",
+  allowed: "already allowed",
+  blocked: "blocked by your blocklist, stays blocked",
+  refused: "refused earlier in this session, stays refused",
+};
+
+// Wrapped: Firefox's setTimeout throws when called on anything but the window.
+const timers: Timers<ReturnType<typeof setTimeout>> = {
+  setTimeout: (callback, delay) => setTimeout(callback, delay),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+
+const recipe = element("recipe", PAGE);
+const sites = element("sites", PAGE);
+const answers = element("answers", PAGE);
+const status = element("status", PAGE);
+const after = element("after", PAGE);
+const buttons = [...answers.querySelectorAll<HTMLButtonElement>("button[data-answer]")];
+let state: State = "waiting";
+let port: Port | undefined;
+const { renderButtons, watch } = armButtons({
+  buttons,
+  timers,
+  asking: () => state === "asking",
+  onAnswer,
+  onUnarmed: () => announce(status, UNARMED),
+});
+
+const id = new URLSearchParams(location.search).get("id");
+if (id === null) end();
+else connect();
+
+function onAnswer(button: HTMLButtonElement): void {
+  const answer = button.dataset.answer;
+  if (!isAnswer(answer)) return;
+  state = "answering";
+  renderButtons();
+  send({ type: "answer", answer });
+}
+
+function end(): void {
+  if (state === "done" || state === "ended") return;
+  state = "ended";
+  answers.remove();
+  status.focus();
+  announce(status, "This request has ended.");
+}
+
+function connect(): void {
+  const opened = browser.runtime.connect({ name: "recipe" });
+  port = opened;
+  opened.onMessage.addListener(receive);
+  opened.onDisconnect.addListener(() => end());
+  opened.postMessage({ type: "ready" });
+}
+
+function send(message: unknown): void {
+  try {
+    port?.postMessage(message);
+  } catch {
+    end();
+  }
+}
+
+function receive(received: unknown): void {
+  const message = fieldsOf(received);
+  if (message === undefined) return;
+  if (message.type === "run") {
+    const { name, description } = message;
+    const shown = sitesOf(message.sites);
+    if (
+      state === "waiting" &&
+      typeof name === "string" &&
+      typeof description === "string" &&
+      shown !== undefined
+    ) {
+      ask(name, description, shown);
+    }
+  } else if (message.type === "done") {
+    const { answer, late } = message;
+    if (isAnswer(answer) && typeof late === "boolean") done(answer, late);
+  } else if (message.type === "ended") {
+    end();
+  }
+}
+
+function ask(name: string, description: string, shown: { site: string; state: SiteState }[]): void {
+  recipe.textContent = `Recipe ${name}: ${description}`;
+  sites.replaceChildren(
+    ...shown.map(({ site, state: siteState }) => {
+      const item = document.createElement("li");
+      item.textContent = `${site}: ${WORDS[siteState]}`;
+      return item;
+    }),
+  );
+  state = "asking";
+  renderButtons();
+  // From now on, so the second before arming counts from when the sites can be read.
+  watch();
+}
+
+function done(answer: Answer, late: boolean): void {
+  if (state === "done" || state === "ended") return;
+  state = "done";
+  answers.remove();
+  after.hidden = false;
+  status.focus();
+  let text: string;
+  if (answer === "allow") {
+    text = late
+      ? "Allowed for this session. Ask the agent to try again."
+      : "Allowed for this session. The agent is continuing.";
+  } else {
+    text = late ? "Not allowed." : "Not allowed. The agent was told.";
+  }
+  announce(status, text);
+}
+
+/** The sites with their states, or undefined when any entry is not one. */
+function sitesOf(value: unknown): { site: string; state: SiteState }[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const given: unknown[] = value;
+  const entries: { site: string; state: SiteState }[] = [];
+  for (const entry of given) {
+    const fields = fieldsOf(entry);
+    if (fields === undefined || typeof fields.site !== "string" || !isSiteState(fields.state)) {
+      return undefined;
+    }
+    entries.push({ site: fields.site, state: fields.state });
+  }
+  return entries;
+}
+
+function isAnswer(value: unknown): value is Answer {
+  return value === "allow" || value === "no";
+}
+
+function isSiteState(value: unknown): value is SiteState {
+  return value === "allowed" || value === "blocked" || value === "refused" || value === "askable";
+}

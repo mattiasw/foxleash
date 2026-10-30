@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Recipe, RecipeFields } from "@foxhand/protocol";
+import type { Recipe, RecipeFields, Result } from "@foxhand/protocol";
 import type { MessageSender } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -11,10 +11,11 @@ import {
   flush,
 } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
-import { createRecipePrompts } from "./recipe-prompts.ts";
+import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { readRecipes } from "./recipes.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { createSiteAccess } from "./site-access.ts";
+import { grantSite } from "./settings.ts";
+import { APPROVAL_WAIT_MS, createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 const RECIPE: RecipeFields = {
   name: "Receipt",
@@ -25,8 +26,23 @@ const RECIPE: RecipeFields = {
 const PAGE_URL =
   /^moz-extension:\/\/[0-9a-f-]+\/propose\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const STORED: Recipe = { ...RECIPE, steps: "Old steps.", savedAt: "2026-01-02T03:04:05.000Z" };
+const SAVING = "whether to save a recipe";
+const ALLOWING = "whether to allow the recipe's sites";
+const TRIP: Recipe = {
+  name: "Trip",
+  description: "Book a trip.",
+  sites: ["https://a.example", "https://b.example"],
+  steps: "Book the train on https://a.example.\nBook the hotel on https://b.example.",
+  savedAt: "2026-01-02T03:04:05.000Z",
+};
+const RUN_URL =
+  /^moz-extension:\/\/[0-9a-f-]+\/run\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const REFUSED = "The user did not allow the recipe's sites in this session.";
+const UNREADABLE =
+  "Firefox could not read Foxhand's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.";
+const ENDED_EARLY = "The session ended before the recipe page opened.";
 const BUDGET =
-  "Foxhand shows no more recipe pages in this session after three that were discarded or closed without an answer. Start a new session to be asked again.";
+  "Foxhand shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
 
 describe("propose", { timeout: 10000 }, () => {
   it("opens one selected page in the session's group, drawing attention, and resolves with its tab", async () => {
@@ -41,7 +57,7 @@ describe("propose", { timeout: 10000 }, () => {
     assert.equal(tab.groupId, group?.id);
     assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
     assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     assert.equal(recipes.openPrompt("s2"), undefined);
   });
 
@@ -77,7 +93,7 @@ describe("propose", { timeout: 10000 }, () => {
       throw new Error("No window");
     };
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
 
   it("refuses a second page while one is open, naming its tab", async () => {
@@ -106,7 +122,10 @@ describe("propose", { timeout: 10000 }, () => {
     assert.equal(refused[0].reason.code, "recipe_prompt_open");
     await flush();
     assert.equal(fake.tabs.size, tabs + 1);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId: opened[0]?.value.tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId: opened[0]?.value.tabId,
+      question: SAVING,
+    });
   });
 
   it("refuses while the session's site prompt is open, and the site prompt while the page is", async () => {
@@ -191,7 +210,7 @@ describe("propose", { timeout: 10000 }, () => {
       [],
     );
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
 
   it("ends a page that connected before its group failed, and forgets it without charging", async () => {
@@ -214,7 +233,7 @@ describe("propose", { timeout: 10000 }, () => {
       assert.equal(fake.tabs.has(tabId), false);
     }
     const opened = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), opened);
+    assert.deepEqual(recipes.openPrompt("s1"), { ...opened, question: SAVING });
   });
 
   it("drops a page that connected before it loaded once its tab navigates away, and leaves the tab to the user", async () => {
@@ -277,7 +296,7 @@ describe("propose", { timeout: 10000 }, () => {
       await assert.rejects(proposing);
     }
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
 });
 
@@ -350,7 +369,7 @@ describe("the propose page", { timeout: 10000 }, () => {
     reloaded.deliver({ type: "ready" });
     await flush();
     assert.deepEqual(reloaded.posted, [{ type: "propose", fields: RECIPE }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
 
   it("ignores messages from an older page once a newer one connected, and from a gone one", async () => {
@@ -366,7 +385,7 @@ describe("the propose page", { timeout: 10000 }, () => {
     newer.deliver({ type: "answer", answer: "discard" });
     await flush();
     assert.deepEqual(newer.posted, []);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 
@@ -397,7 +416,7 @@ describe("the propose page", { timeout: 10000 }, () => {
     await flush();
     assert.deepEqual(named.posted, []);
     assert.equal(named.disconnected, false);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 
@@ -424,7 +443,7 @@ describe("the propose page", { timeout: 10000 }, () => {
     }
     await flush();
     assert.equal(page.posted.length, 1);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 });
@@ -552,7 +571,7 @@ describe("saving", { timeout: 10000 }, () => {
       type: "problems",
       problems: [{ field: "name", text: "A recipe named Taken exists." }],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     await saveAgain(fake, page);
   });
 
@@ -580,7 +599,7 @@ describe("saving", { timeout: 10000 }, () => {
     page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: NEW });
     await flush();
     assert.deepEqual(page.posted.at(-1), { type: "changed", current: STORED });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     assert.equal((await readRecipes(fake.browser))[0]?.steps, STORED.steps);
     const token = { name: STORED.name, savedAt: STORED.savedAt };
     page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: token });
@@ -617,7 +636,7 @@ describe("saving", { timeout: 10000 }, () => {
         { text: "Foxhand keeps at most 100 recipes. Delete one in Foxhand's settings first." },
       ],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     await fake.browser.storage.local.remove("recipe:R0");
     await saveAgain(fake, page);
   });
@@ -632,7 +651,7 @@ describe("saving", { timeout: 10000 }, () => {
       type: "problems",
       problems: [{ text: "Firefox could not save the recipe. Try again." }],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     await saveAgain(fake, page);
   });
 
@@ -724,7 +743,7 @@ describe("discarding and closing", { timeout: 10000 }, () => {
     const { tabId, page } = await shown(fake, recipes);
     await fake.browser.tabs.reload(tabId);
     await flush();
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
     fake.navigateByUser(tabId, "https://a.example/");
     assert.deepEqual(page.posted.at(-1), { type: "ended" });
     assert.equal(recipes.openPrompt("s1"), undefined);
@@ -775,7 +794,7 @@ describe("discarding and closing", { timeout: 10000 }, () => {
     const other = fake.openTab();
     fake.navigateByUser(other.id, "https://a.example/");
     fake.removeTab(other.id);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId });
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
 });
 
@@ -839,13 +858,843 @@ describe("endSession", { timeout: 10000 }, () => {
     recipes.endSession("s1");
     const next = await recipes.propose("s1", RECIPE);
     assert.notEqual(next.tabId, tabId);
-    assert.deepEqual(recipes.openPrompt("s1"), next);
+    assert.deepEqual(recipes.openPrompt("s1"), { ...next, question: SAVING });
   });
 
   it("ends a session without a page", () => {
     const { recipes } = setup();
     recipes.endSession("s1");
     assert.equal(recipes.openPrompt("s1"), undefined);
+  });
+});
+
+describe("run", { timeout: 10000 }, () => {
+  it("resolves at once without a page when no site is askable, in the recipe's order", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    const sites = [
+      "https://d.example",
+      "https://c.example",
+      "https://b.example",
+      "https://a.example",
+    ];
+    await seed(fake, { ...TRIP, sites }, { ...TRIP, name: "Nothing", sites: [] });
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://a.example");
+    await grantSite(fake.browser, "https://b.example");
+    sessions.set("s1", {
+      allowed: new Set(["https://c.example"]),
+      refused: new Set(["https://d.example"]),
+      closed: 0,
+    });
+    // Neither an open site prompt nor an open recipe page is in the way.
+    const tab = fake.openTab({ active: true });
+    await access.ask("s1", "https://e.example/", tab.id);
+    await recipes.propose("s2", RECIPE);
+    const created = recordCreates(fake);
+    assert.deepEqual(await recipes.run("s1", "Trip"), {
+      asked: false,
+      allowed: ["https://c.example", "https://a.example"],
+      blocked: ["https://b.example"],
+      refused: ["https://d.example"],
+    });
+    assert.deepEqual(await recipes.run("s2", "Nothing"), {
+      asked: false,
+      allowed: [],
+      blocked: [],
+      refused: [],
+    });
+    assert.deepEqual(created, []);
+  });
+
+  it("refuses a name no saved recipe has, as get_recipe does, opening nothing", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const created = recordCreates(fake);
+    await assert.rejects(recipes.run("s1", " Nope "), {
+      code: "recipe_not_found",
+      message: 'No recipe named "Nope" is saved. list_recipes names the saved ones.',
+    });
+    assert.deepEqual(created, []);
+  });
+
+  it("finds the recipe by its normalized name", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { tabId } = await openRun(fake, recipes, "s1", " Trip ");
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+  });
+
+  it("opens one selected page, created unloaded, in the session's group, drawing attention", async () => {
+    const { fake, groups, recipes } = setup();
+    await seed(fake, TRIP);
+    const created = recordCreates(fake);
+    const { tabId } = await openRun(fake, recipes);
+    const tab = fake.tabs.get(tabId);
+    assert.ok(tab !== undefined);
+    assert.match(tab.url, RUN_URL);
+    assert.deepEqual(created, [{ url: tab.url, active: false, discarded: true }]);
+    assert.equal(tab.active, true);
+    assert.equal(tab.groupId, (await groups.groupOf("s1"))?.id);
+    assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.equal(recipes.openPrompt("s2"), undefined);
+  });
+
+  it("opens the page in the window of the session's group", async () => {
+    const { fake, groups, recipes } = setup();
+    await seed(fake, TRIP);
+    const other = fake.openTab({ windowId: 2, url: "https://user2.example/" });
+    await groups.ensureGroup("s1", other);
+    const created = recordCreates(fake);
+    const { tabId } = await openRun(fake, recipes);
+    const url = fake.tabs.get(tabId)?.url;
+    assert.deepEqual(created, [{ url, active: false, discarded: true, windowId: 2 }]);
+  });
+
+  it("joins the open page for the same recipe, drawing attention without selecting it", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { tabId, answer } = await openRun(fake, recipes);
+    const user = fake.openTab({ active: true, url: "https://user3.example/" });
+    const created = recordCreates(fake);
+    const updates = fake.windowUpdates.length;
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    assert.deepEqual(created, []);
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+    assert.deepEqual(fake.windowUpdates.slice(updates), [
+      { windowId: fake.tabs.get(tabId)?.windowId, drawAttention: true },
+    ]);
+    const page = connect(fake, tabId);
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    const result = { asked: true, allowed: TRIP.sites, blocked: [], refused: [] };
+    assert.deepEqual(answer.value, result);
+    assert.deepEqual(joined.value, result);
+  });
+
+  it("still joins when Firefox cannot draw attention to the window", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { tabId } = await openRun(fake, recipes);
+    fake.browser.windows.update = async () => {
+      throw new Error("No window");
+    };
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    connect(fake, tabId).deliver({ type: "answer", answer: "no" });
+    await flush();
+    assertRejected(joined, "recipe_refused", REFUSED);
+  });
+
+  it("opens one page for two parallel calls of one recipe, closing the other's tab", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const first = track(recipes.run("s1", "Trip"));
+    const second = track(recipes.run("s1", "Trip"));
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    const pages = [...fake.tabs.values()].filter(({ url }) => url.includes("run.html"));
+    assert.equal(pages.length, 1);
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId: pages[0]?.id, question: ALLOWING });
+    connect(fake, pages[0]?.id ?? 0).deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.equal(first.state, "resolved");
+    assert.equal(second.state, "resolved");
+  });
+
+  it("settles a call that joined a page opened meanwhile only once its own tab is removed", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const release = holdCreates(fake);
+    const first = track(recipes.run("s1", "Trip"));
+    const second = track(recipes.run("s1", "Trip"));
+    await flush();
+    const removal = holdRemoves(fake);
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+    connect(fake, tabId).deliver({ type: "answer", answer: "allow" });
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assert.equal(first.state, "resolved");
+    assert.equal(second.state, "pending");
+    removal();
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assert.deepEqual(second.value, first.value);
+    assert.equal(runTabs(fake).length, 1);
+  });
+
+  it("rejects a call that joined a page opened meanwhile once its own tab is removed, when the user does not allow", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const release = holdCreates(fake);
+    const first = track(recipes.run("s1", "Trip"));
+    const second = track(recipes.run("s1", "Trip"));
+    await flush();
+    const removal = holdRemoves(fake);
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+    connect(fake, tabId).deliver({ type: "answer", answer: "no" });
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assertRejected(first, "recipe_refused", REFUSED);
+    assert.equal(second.state, "pending");
+    removal();
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assertRejected(second, "recipe_refused", REFUSED);
+    assert.equal(runTabs(fake).length, 1);
+  });
+
+  it("still opens the page when Firefox cannot draw attention to the window", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    fake.browser.windows.update = async () => {
+      throw new Error("No window");
+    };
+    const { answer, tabId } = await openRun(fake, recipes);
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    connect(fake, tabId).deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("ignores another URL before the page committed, and drops it after", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const release = holdGroups(fake);
+    const running = track(recipes.run("s1", "Trip"));
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+    const tab = fake.tabs.get(tabId);
+    assert.ok(tab !== undefined);
+    const url = tab.url;
+    // A late URL event of the page the tab replaces.
+    fake.pushState(tabId, "about:blank");
+    assert.notEqual(recipes.openPrompt("s1"), undefined);
+    tab.url = url;
+    fake.emitStatus(tabId, "complete");
+    fake.pushState(tabId, "https://a.example/");
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(running, "recipe_prompt_closed");
+  });
+
+  it("refuses beside another recipe's run page or a propose page, and a propose page beside a run page", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP, { ...TRIP, name: "Other" });
+    const { tabId } = await openRun(fake, recipes);
+    const open = `Foxhand is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`;
+    const created = recordCreates(fake);
+    await assert.rejects(recipes.run("s1", "Other"), { code: "recipe_prompt_open", message: open });
+    await assert.rejects(recipes.propose("s1", RECIPE), {
+      code: "recipe_prompt_open",
+      message: open,
+    });
+    const proposed = await recipes.propose("s2", RECIPE);
+    await assert.rejects(recipes.run("s2", "Trip"), {
+      code: "recipe_prompt_open",
+      message: `Foxhand is still showing the user a recipe page in tab ${proposed.tabId}. Try again after the user has answered there.`,
+    });
+    assert.equal(created.length, 1);
+  });
+
+  it("refuses while the session's site prompt is open, and a site prompt while the run page is", async () => {
+    const { fake, access, recipes } = setup();
+    await seed(fake, TRIP);
+    const tab = fake.openTab({ active: true });
+    await access.ask("s1", "https://e.example/", tab.id);
+    const created = recordCreates(fake);
+    await assert.rejects(recipes.run("s1", "Trip"), {
+      code: "approval_pending",
+      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
+    });
+    assert.deepEqual(created, []);
+    const { tabId } = await openRun(fake, recipes, "s2");
+    const pending = `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`;
+    await assert.rejects(access.check("s2", "https://e.example/"), {
+      code: "approval_pending",
+      message: pending,
+    });
+    await assert.rejects(access.ask("s2", "https://e.example/", fake.openTab().id), {
+      code: "approval_pending",
+      message: pending,
+    });
+  });
+
+  it("refuses when a site prompt opened while the page's tab was created, closing that tab", async () => {
+    const { fake, access, recipes } = setup();
+    await seed(fake, TRIP);
+    const tab = fake.openTab({ active: true });
+    const release = holdCreates(fake);
+    const running = track(recipes.run("s1", "Trip"));
+    await flush();
+    await access.ask("s1", "https://e.example/", tab.id);
+    // The refusal waits until Firefox has removed the page's tab.
+    const removal = holdRemoves(fake);
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assert.equal(running.state, "pending");
+    removal();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(running, "approval_pending");
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.deepEqual(runTabs(fake), []);
+  });
+
+  it("refuses once three pages were refused or closed without an answer", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const refused = await shownRun(fake, recipes);
+    refused.page.deliver({ type: "answer", answer: "no" });
+    const closed = await shownRun(fake, recipes);
+    fake.removeTab(closed.tabId);
+    await spend(fake, recipes, 1);
+    await assert.rejects(recipes.run("s1", "Trip"), {
+      code: "recipe_prompt_refused",
+      message: BUDGET,
+    });
+    await assert.rejects(recipes.propose("s1", RECIPE), {
+      code: "recipe_prompt_refused",
+      message: BUDGET,
+    });
+    // A recipe with nothing to ask needs no page.
+    await seed(fake, { ...TRIP, name: "Nothing", sites: [] });
+    assert.equal((await recipes.run("s1", "Nothing")).asked, false);
+  });
+
+  it("opens no page once the session's site prompts stopped asking", async () => {
+    const { fake, recipes, sessions } = setup();
+    await seed(fake, TRIP, { ...TRIP, name: "Refused", sites: ["https://x.example"] });
+    const refused = new Set(["https://x.example", "https://y.example"]);
+    sessions.set("s1", { allowed: new Set(), refused, closed: 1 });
+    await assert.rejects(recipes.run("s1", "Trip"), {
+      code: "site_refused",
+      message:
+        "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.",
+    });
+    assert.deepEqual(runTabs(fake), []);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    // A recipe with nothing to ask needs no page.
+    assert.deepEqual(await recipes.run("s1", "Refused"), {
+      asked: false,
+      allowed: [],
+      blocked: [],
+      refused: ["https://x.example"],
+    });
+    sessions.set("s1", { allowed: new Set(), refused, closed: 0 });
+    await openRun(fake, recipes);
+  });
+
+  it("refuses when the session's site prompts stopped asking while the page's tab was created", async () => {
+    const { fake, recipes, sessions } = setup();
+    await seed(fake, TRIP);
+    const release = holdCreates(fake);
+    const running = track(recipes.run("s1", "Trip"));
+    await flush();
+    sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 3 });
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(running, "site_refused");
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.deepEqual(runTabs(fake), []);
+  });
+
+  it("ends the session's page and closes the new tab when the session ends while the tab is created", async () => {
+    for (const opening of ["run", "propose"] as const) {
+      const { fake, access, recipes } = setup();
+      await seed(fake, TRIP);
+      const release = holdCreates(fake);
+      const pending = track<unknown>(
+        opening === "run" ? recipes.run("s1", "Trip") : recipes.propose("s1", RECIPE),
+      );
+      await flush();
+      access.endSession("s1");
+      recipes.endSession("s1");
+      release();
+      for (let turn = 0; turn < 10; turn += 1) await flush();
+      assertRejected(pending, "recipe_prompt_closed", ENDED_EARLY);
+      assert.equal(recipes.openPrompt("s1"), undefined, opening);
+      assert.deepEqual(
+        [...fake.tabs.values()].filter(({ url }) =>
+          url.includes(`${opening === "run" ? "run" : "propose"}.html`),
+        ),
+        [],
+      );
+      assert.deepEqual(await access.sessionAnswers(), []);
+      // A new session with the same id opens its page.
+      if (opening === "run") await openRun(fake, recipes);
+      else await recipes.propose("s1", RECIPE);
+      assert.notEqual(recipes.openPrompt("s1"), undefined);
+    }
+  });
+
+  it("rejects and keeps no prompt, charging nothing, when the page cannot be loaded", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const update = fake.browser.tabs.update;
+    let failures = 0;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.loadReplace === true && failures < 3) {
+        failures += 1;
+        throw new Error("Invalid tab ID");
+      }
+      return update(tabId, properties);
+    };
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await assert.rejects(recipes.run("s1", "Trip"), /Invalid tab ID/);
+      assert.equal(recipes.openPrompt("s1"), undefined);
+    }
+    assert.deepEqual(runTabs(fake), []);
+    await openRun(fake, recipes);
+  });
+
+  it("rejects the opener and every joined call when the group fails, and closes the tab", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const held = Promise.withResolvers<void>();
+      const group = fake.browser.tabs.group;
+      fake.browser.tabs.group = async () => {
+        fake.browser.tabs.group = group;
+        await held.promise;
+        throw new Error("No group");
+      };
+      const opening = track(recipes.run("s1", "Trip"));
+      for (let turn = 0; turn < 10; turn += 1) await flush();
+      const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+      const page = connect(fake, tabId);
+      const joined = track(recipes.run("s1", "Trip"));
+      await flush();
+      held.resolve();
+      for (let turn = 0; turn < 10; turn += 1) await flush();
+      assertRejected(opening, undefined, "No group");
+      assertRejected(
+        joined,
+        "recipe_prompt_closed",
+        `The recipe page in tab ${tabId} closed without an answer.`,
+      );
+      assert.deepEqual(page.posted, [{ type: "ended" }]);
+      assert.equal(recipes.openPrompt("s1"), undefined);
+      assert.equal(fake.tabs.has(tabId), false);
+    }
+    await openRun(fake, recipes);
+  });
+
+  it("returns the answer of a page answered before its group was made", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const release = holdGroups(fake);
+    const running = track(recipes.run("s1", "Trip"));
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+    const page = connect(fake, tabId);
+    page.deliver({ type: "answer", answer: "no" });
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(running, "recipe_refused", REFUSED);
+    assert.deepEqual(fake.tabUpdates, []);
+  });
+});
+
+describe("the run page", { timeout: 10000 }, () => {
+  it("gets the recipe and each site's state on ready, again after a reload", async () => {
+    const { fake, recipes, sessions } = setup();
+    const sites = [
+      "https://a.example",
+      "https://b.example",
+      "https://c.example",
+      "https://d.example",
+    ];
+    await seed(fake, { ...TRIP, sites });
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://c.example");
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://d.example"]), closed: 0 });
+    const { tabId } = await openRun(fake, recipes);
+    const shownStates = {
+      type: "run",
+      name: "Trip",
+      description: "Book a trip.",
+      sites: [
+        { site: "https://a.example", state: "askable" },
+        { site: "https://b.example", state: "blocked" },
+        { site: "https://c.example", state: "allowed" },
+        { site: "https://d.example", state: "refused" },
+      ],
+    };
+    const page = connect(fake, tabId);
+    page.deliver({ type: "ready" });
+    assert.deepEqual(page.posted, [shownStates]);
+    page.drop();
+    const reloaded = connect(fake, tabId);
+    reloaded.deliver({ type: "ready" });
+    page.deliver({ type: "ready" });
+    assert.deepEqual(reloaded.posted, [shownStates]);
+    assert.deepEqual(page.posted, [shownStates]);
+  });
+
+  it("ignores messages that are not a ready or an allow or no answer", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    for (const message of [
+      null,
+      "allow",
+      { type: "answer" },
+      { type: "answer", answer: "save", fields: RECIPE, shown: NEW },
+      { type: "answer", answer: "discard" },
+      { type: "answer", answer: "always" },
+      { type: "other", answer: "allow" },
+    ]) {
+      page.deliver(message);
+    }
+    await flush();
+    assert.equal(page.posted.length, 1);
+    assert.equal(answer.state, "pending");
+    assert.deepEqual(await readRecipes(fake.browser), [TRIP]);
+    assert.notEqual(recipes.openPrompt("s1"), undefined);
+  });
+
+  it("ends a page from another URL, tab or extension", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { tabId } = await openRun(fake, recipes);
+    const url = fake.tabs.get(tabId)?.url ?? "";
+    const strangers = [
+      fake.connectPage("recipe", { id: FAKE_EXTENSION_ID, url: `${url}x`, tab: { id: tabId } }),
+      fake.connectPage("recipe", { id: FAKE_EXTENSION_ID, url, tab: { id: tabId + 100 } }),
+      fake.connectPage("recipe", { id: "other@example.org", url, tab: { id: tabId } }),
+    ];
+    for (const stranger of strangers) {
+      stranger.deliver({ type: "answer", answer: "allow" });
+      assert.deepEqual(stranger.posted, [{ type: "ended" }]);
+    }
+    await flush();
+    assert.notEqual(recipes.openPrompt("s1"), undefined);
+  });
+
+  it("does not let the propose page's answers reach a run page, or the run page's a propose page", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const proposed = await shown(fake, recipes, "s2");
+    proposed.page.deliver({ type: "answer", answer: "allow" });
+    proposed.page.deliver({ type: "answer", answer: "no" });
+    await flush();
+    assert.equal(proposed.page.posted.length, 1);
+    assert.notEqual(recipes.openPrompt("s2"), undefined);
+  });
+});
+
+describe("allowing a recipe's sites", { timeout: 10000 }, () => {
+  it("allows the askable sites for the session only, resolves every call and tells the page", async () => {
+    const { fake, access, recipes } = setup();
+    const sites = ["https://a.example", "https://b.example", "https://c.example"];
+    await seed(fake, { ...TRIP, sites });
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    const before = await fake.browser.storage.local.get(null);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    const result = {
+      asked: true,
+      allowed: ["https://a.example", "https://c.example"],
+      blocked: ["https://b.example"],
+      refused: [],
+    };
+    assert.deepEqual(answer.value, result);
+    assert.deepEqual(joined.value, result);
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: false });
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.deepEqual(await fake.browser.storage.local.get(null), before);
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "allowed" });
+    assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+    assert.deepEqual(
+      (await access.sessionAnswers()).map(({ session, allowed }) => ({ session, allowed })),
+      [{ session: "s1", allowed: ["https://a.example", "https://c.example"] }],
+    );
+    assert.deepEqual(await recipes.run("s1", "Trip"), { ...result, asked: false });
+    assert.equal(fake.tabs.has(tabId), true);
+  });
+
+  it("allows only sites the page showed as askable that still are at the click", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    const sites = [
+      "https://a.example",
+      "https://b.example",
+      "https://c.example",
+      "https://d.example",
+    ];
+    await seed(fake, { ...TRIP, sites });
+    await grantSite(fake.browser, "https://b.example");
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://c.example"]), closed: 0 });
+    const { page, answer } = await shownRun(fake, recipes);
+    // Meanwhile the user revokes b, forgets the refusal of c, and blocks d.
+    await fake.browser.storage.local.remove("site:https://b.example");
+    access.forget("s1", "https://c.example");
+    await fake.browser.storage.local.set({ blocklist: ["d.example"] });
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.deepEqual(answer.value, {
+      asked: true,
+      allowed: ["https://a.example"],
+      blocked: ["https://d.example"],
+      refused: [],
+    });
+    assert.deepEqual([...(sessions.get("s1")?.allowed ?? [])], ["https://a.example"]);
+  });
+
+  it("tells the page the answer was late once every call timed out, and still allows", async () => {
+    const { fake, access, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout");
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: true });
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "allowed" });
+    assert.deepEqual(await recipes.run("s1", "Trip"), {
+      asked: false,
+      allowed: TRIP.sites,
+      blocked: [],
+      refused: [],
+    });
+  });
+
+  it("answers in time when reading the settings outlasts the clock", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    const reads = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    timers.advance(APPROVAL_WAIT_MS);
+    reads.release();
+    await flush();
+    assert.equal(answer.state, "resolved");
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("ignores a second answer while the first is handled", async () => {
+    const { fake, recipes, sessions } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    const reads = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    page.deliver({ type: "answer", answer: "no" });
+    page.deliver({ type: "answer", answer: "allow" });
+    assert.equal(answer.state, "pending");
+    reads.release();
+    await flush();
+    assert.equal(answer.state, "resolved");
+    assert.deepEqual(
+      page.posted.filter((message) => fieldsOfMessage(message).type === "done"),
+      [{ type: "done", answer: "allow", late: false }],
+    );
+    assert.deepEqual([...(sessions.get("s1")?.allowed ?? [])], TRIP.sites);
+  });
+
+  it("allows nothing, charging nothing, and ends the page when the settings cannot be read", async () => {
+    for (const failing of [1, 2]) {
+      const { fake, recipes, sessions } = setup();
+      await seed(fake, TRIP);
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        const { page, answer } = await shownRun(fake, recipes);
+        const joined = track(recipes.run("s1", "Trip"));
+        await flush();
+        failRead(fake, failing);
+        page.deliver({ type: "answer", answer: "allow" });
+        for (let turn = 0; turn < 5; turn += 1) await flush();
+        assertRejected(answer, "recipe_prompt_closed", UNREADABLE);
+        assertRejected(joined, "recipe_prompt_closed", UNREADABLE);
+        assert.deepEqual(page.posted.at(-1), { type: "ended" });
+        assert.equal(recipes.openPrompt("s1"), undefined);
+        assert.equal(sessions.has("s1"), false, `read ${failing}`);
+      }
+      await openRun(fake, recipes);
+    }
+  });
+
+  it("allows nothing when the tab closes while the settings are read", async () => {
+    const { fake, recipes, sessions } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    const reads = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    fake.removeTab(tabId);
+    reads.release();
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assertRejected(answer, "recipe_prompt_closed");
+    assert.equal(sessions.has("s1"), false);
+    // Not charged: the user answered.
+    await spend(fake, recipes, 2);
+    await openRun(fake, recipes);
+  });
+});
+
+describe("not allowing a recipe's sites", { timeout: 10000 }, () => {
+  it("rejects every call, tells the page, charges the budget, and refuses no site", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    page.deliver({ type: "answer", answer: "no" });
+    await flush();
+    assertRejected(answer, "recipe_refused", REFUSED);
+    assertRejected(joined, "recipe_refused", REFUSED);
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "no", late: false });
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.equal(sessions.has("s1"), false);
+    assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "ask" });
+    await spend(fake, recipes, 2);
+    await assert.rejects(recipes.run("s1", "Trip"), { code: "recipe_prompt_refused" });
+  });
+
+  it("tells the page the answer was late once every call timed out", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page } = await shownRun(fake, recipes);
+    timers.advance(APPROVAL_WAIT_MS);
+    page.deliver({ type: "answer", answer: "no" });
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "no", late: true });
+  });
+});
+
+describe("waiting for a run page", { timeout: 10000 }, () => {
+  it("times out each call on its own clock and keeps the page", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    timers.advance(10_000);
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    timers.advance(APPROVAL_WAIT_MS - 10_000);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxhand is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+    );
+    assert.equal(joined.state, "pending");
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    timers.advance(10_000);
+    await flush();
+    assertRejected(joined, "approval_timeout");
+    const again = track(recipes.run("s1", "Trip"));
+    await flush();
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.equal(again.state, "resolved");
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: false });
+  });
+
+  it("forgets a page that never connected at the first call's timeout, without charging", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { answer, tabId } = await openRun(fake, recipes);
+      timers.advance(10_000);
+      const joined = track(recipes.run("s1", "Trip"));
+      await flush();
+      timers.advance(APPROVAL_WAIT_MS - 10_000);
+      await flush();
+      const closed = `The recipe page in tab ${tabId} closed without an answer.`;
+      assertRejected(answer, "recipe_prompt_closed", closed);
+      assertRejected(joined, "recipe_prompt_closed", closed);
+      assert.equal(recipes.openPrompt("s1"), undefined);
+      assert.equal(timers.pending(), 0);
+      const late = connect(fake, tabId);
+      assert.deepEqual(late.posted, [{ type: "ended" }]);
+    }
+    await openRun(fake, recipes);
+  });
+});
+
+describe("ending a run page", { timeout: 10000 }, () => {
+  it("rejects every call when its tab closes, charging once the page connected", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    fake.removeTab(tabId);
+    await flush();
+    const closed = `The recipe page in tab ${tabId} closed without an answer.`;
+    assertRejected(answer, "recipe_prompt_closed", closed);
+    assertRejected(joined, "recipe_prompt_closed", closed);
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
+    assert.equal(timers.pending(), 0);
+    await spend(fake, recipes, 2);
+    await assert.rejects(recipes.run("s1", "Trip"), { code: "recipe_prompt_refused" });
+  });
+
+  it("charges nothing for a page closed before it connected", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { answer, tabId } = await openRun(fake, recipes);
+      fake.removeTab(tabId);
+      await flush();
+      assertRejected(answer, "recipe_prompt_closed");
+    }
+    await openRun(fake, recipes);
+  });
+
+  it("rejects every call when its tab navigates away after showing it, but not on a reload", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    const url = fake.tabs.get(tabId)?.url ?? "";
+    fake.emitStatus(tabId, "complete");
+    fake.navigateByUser(tabId, url);
+    assert.equal(answer.state, "pending");
+    fake.navigateByUser(tabId, "https://a.example/");
+    await flush();
+    assertRejected(answer, "recipe_prompt_closed");
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
+  });
+
+  it("ends with its session: rejects every call, tells the page, and lets its group close", async () => {
+    const { fake, access, groups, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    const url = fake.tabs.get(tabId)?.url ?? "";
+    assert.equal(recipes.isBlankPage(url), false);
+    access.endSession("s1");
+    recipes.endSession("s1");
+    await flush();
+    const closed = `The recipe page in tab ${tabId} closed without an answer.`;
+    assertRejected(answer, "recipe_prompt_closed", closed);
+    assertRejected(joined, "recipe_prompt_closed", closed);
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.equal(timers.pending(), 0);
+    assert.equal(recipes.isBlankPage(url), true);
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.deepEqual(await access.sessionAnswers(), []);
+    await groups.endSession("s1");
+    assert.equal(fake.tabs.has(tabId), false);
+  });
+
+  it("does not let an allow re-create a session that ended while the settings were read", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    await seed(fake, TRIP);
+    const { page, answer } = await shownRun(fake, recipes);
+    const reads = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    access.endSession("s1");
+    recipes.endSession("s1");
+    reads.release();
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assertRejected(answer, "recipe_prompt_closed");
+    assert.equal(sessions.has("s1"), false);
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
   });
 });
 
@@ -871,10 +1720,23 @@ describe("isBlankPage", { timeout: 10000 }, () => {
     assert.equal(recipes.isBlankPage(url), true);
   });
 
+  it("holds for a run page that no open prompt shows", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const base = fake.browser.runtime.getURL("run.html");
+    assert.equal(recipes.isBlankPage(`${base}?id=unknown`), true);
+    assert.equal(recipes.isBlankPage("moz-extension://other/run.html?id=1"), false);
+    const { tabId } = await openRun(fake, recipes);
+    const url = fake.tabs.get(tabId)?.url ?? "";
+    assert.equal(recipes.isBlankPage(url), false);
+    fake.removeTab(tabId);
+    assert.equal(recipes.isBlankPage(url), true);
+  });
+
   it("treats __proto__ as an ordinary session", async () => {
     const { fake, recipes } = setup();
     const { tabId, page } = await shown(fake, recipes, "__proto__");
-    assert.deepEqual(recipes.openPrompt("__proto__"), { tabId });
+    assert.deepEqual(recipes.openPrompt("__proto__"), { tabId, question: SAVING });
     assert.equal(recipes.openPrompt("constructor"), undefined);
     recipes.endSession("__proto__");
     page.deliver({ type: "answer", answer: "discard" });
@@ -888,17 +1750,23 @@ function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser, undefined, (url) => recipes.isBlankPage(url));
+  const sessions: SessionMemory = new Map();
   const access = createSiteAccess({
     browser: fake.browser,
     groups,
-    sessions: new Map(),
+    sessions,
     timers,
     otherPrompt: (session) => recipes.openPrompt(session),
   });
-  const recipes = createRecipePrompts({ browser: fake.browser, groups, access });
+  const recipes: RecipePrompts = createRecipePrompts({
+    browser: fake.browser,
+    groups,
+    access,
+    timers,
+  });
   // Keeps the window open, so a group of only blank tabs can close.
   fake.openTab({ url: "https://user.example/" });
-  return { fake, groups, access, recipes };
+  return { fake, groups, access, recipes, sessions, timers };
 }
 
 type Recipes = ReturnType<typeof setup>["recipes"];
@@ -1011,4 +1879,123 @@ function holdWrites(fake: FakeBrowser): { release(): void; calls(): number } {
     return set(items);
   };
   return { release: () => held.resolve(), calls: () => calls };
+}
+
+type RunResult = Result<"recipe_run">;
+
+interface Tracked<T> {
+  state: "pending" | "resolved" | "rejected";
+  value: T | undefined;
+  error: unknown;
+}
+
+function track<T>(promise: Promise<T>): Tracked<T> {
+  const tracked: Tracked<T> = { state: "pending", value: undefined, error: undefined };
+  promise.then(
+    (value) => {
+      tracked.state = "resolved";
+      tracked.value = value;
+    },
+    (error: unknown) => {
+      tracked.state = "rejected";
+      tracked.error = error;
+    },
+  );
+  return tracked;
+}
+
+/** `code` undefined: the error is not a ToolError, only its message is checked. */
+function assertRejected(
+  tracked: Tracked<unknown>,
+  code: string | undefined,
+  message?: string,
+): void {
+  assert.equal(tracked.state, "rejected");
+  if (code !== undefined) {
+    assert.ok(tracked.error instanceof ToolError);
+    assert.equal(tracked.error.code, code);
+  }
+  assert.ok(tracked.error instanceof Error);
+  if (message !== undefined) assert.equal(tracked.error.message, message);
+}
+
+/** Calls run and waits until its page is recorded and selected. */
+async function openRun(
+  fake: FakeBrowser,
+  recipes: Recipes,
+  session = "s1",
+  name = TRIP.name,
+): Promise<{ answer: Tracked<RunResult>; tabId: number }> {
+  const answer = track(recipes.run(session, name));
+  for (let turn = 0; turn < 50; turn += 1) {
+    const page = recipes.openPrompt(session);
+    if (page !== undefined && fake.tabs.get(page.tabId)?.active === true) {
+      await flush();
+      return { answer, tabId: page.tabId };
+    }
+    await flush();
+  }
+  assert.fail("no run page");
+}
+
+/** Opens the run page of session s1 and connects it, which has had the recipe. */
+async function shownRun(
+  fake: FakeBrowser,
+  recipes: Recipes,
+): Promise<{ answer: Tracked<RunResult>; tabId: number; page: FakePort & { tabId: number } }> {
+  const { answer, tabId } = await openRun(fake, recipes);
+  const page = connect(fake, tabId);
+  page.deliver({ type: "ready" });
+  assert.equal(fieldsOfMessage(page.posted[0]).type, "run");
+  return { answer, tabId, page: Object.assign(page, { tabId }) };
+}
+
+function runTabs(fake: FakeBrowser): number[] {
+  return [...fake.tabs.values()].filter(({ url }) => url.includes("run.html")).map(({ id }) => id);
+}
+
+function fieldsOfMessage(message: unknown): Record<string, unknown> {
+  return typeof message === "object" && message !== null ? { ...message } : {};
+}
+
+/** Holds every `tabs.create` until the returned release runs. */
+function holdCreates(fake: FakeBrowser): () => void {
+  const held = Promise.withResolvers<void>();
+  const create = fake.browser.tabs.create;
+  fake.browser.tabs.create = async (properties) => {
+    await held.promise;
+    return create(properties);
+  };
+  return () => {
+    fake.browser.tabs.create = create;
+    held.resolve();
+  };
+}
+
+/** Holds every `tabs.remove` until the returned release runs. */
+function holdRemoves(fake: FakeBrowser): () => void {
+  const held = Promise.withResolvers<void>();
+  const remove = fake.browser.tabs.remove;
+  fake.browser.tabs.remove = async (tabIds) => {
+    await held.promise;
+    return remove(tabIds);
+  };
+  return () => {
+    fake.browser.tabs.remove = remove;
+    held.resolve();
+  };
+}
+
+/** Makes the `nth` `storage.local.get` from now on throw. */
+function failRead(fake: FakeBrowser, nth: number): void {
+  const get = fake.browser.storage.local.get;
+  let calls = 0;
+  fake.browser.storage.local.get = async (keys) => {
+    calls += 1;
+    if (calls === nth) {
+      fake.browser.storage.local.get = get;
+      throw new Error("Storage is gone");
+    }
+    return get(keys);
+  };
 }

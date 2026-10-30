@@ -29,7 +29,11 @@
       "tools": ["download"]
     },
     { "listing": "propose recipes", "tools": ["propose_recipe"] },
-    { "listing": "read the recipes you saved", "tools": ["list_recipes", "get_recipe"] }
+    { "listing": "read the recipes you saved", "tools": ["list_recipes", "get_recipe"] },
+    {
+      "listing": "ask you to allow a saved recipe's sites for a session in one click",
+      "tools": ["start_recipe"]
+    }
   ],
   "safeguards": [
     {
@@ -80,6 +84,13 @@
         { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
         { "file": "apps/extension/src/recipe-prompts.ts", "contains": "portShowsPage(" },
         { "file": "apps/extension/src/recipe-prompts.ts", "contains": "saveRecipe(" }
+      ]
+    },
+    {
+      "listing": "Allowing a recipe's sites takes your click too",
+      "evidence": [
+        { "file": "apps/extension/src/site-access.ts", "contains": "function allowForSession" },
+        { "file": "apps/extension/src/recipe-prompts.ts", "contains": "allowForSession(" }
       ]
     },
     {

@@ -22,7 +22,8 @@ npm ci && npm run build
 
 The unminified extension appears in `apps/extension/dist/`: `background.js`, bundled by
 esbuild from `apps/extension/src/` and `packages/protocol/src/`; `options.js`, `approve.js`,
-`propose.js` and `content.js`, bundled from `apps/extension/src/`; `options.html`, the
-settings page, `approve.html`, the page that asks the user to approve a site, and
-`propose.html`, the page where the user saves or discards a recipe the agent proposes, all
-styled by `pages.css`; plus `manifest.json` and the icon.
+`propose.js`, `run.js` and `content.js`, bundled from `apps/extension/src/`; `options.html`,
+the settings page, `approve.html`, the page that asks the user to approve a site,
+`propose.html`, the page where the user saves or discards a recipe the agent proposes, and
+`run.html`, the page where the user allows a recipe's sites for a session, all styled by
+`pages.css`; plus `manifest.json` and the icon.

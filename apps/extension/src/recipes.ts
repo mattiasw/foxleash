@@ -74,6 +74,22 @@ const CHARACTER_NAMES = new Map<number, string>([
   [0x1d159, "musical symbol null notehead"],
 ]);
 
+/** The saved recipe named exactly `name`, or else named `name` normalized as a saved name is. */
+export async function findRecipe(
+  browser: SettingsBrowser,
+  name: string,
+): Promise<Recipe | undefined> {
+  const normalized = recipeName(name);
+  const saved = await readRecipes(browser);
+  // A name saved under other rules (the hidden characters follow Firefox's Unicode version) is
+  // listed as stored, so the exact name finds it. A stored name is a string: undefined matches
+  // nothing.
+  return (
+    saved.find((stored) => stored.name === name) ??
+    saved.find((stored) => stored.name === normalized)
+  );
+}
+
 /** The stored recipes, sorted by name; a malformed one is ignored with a warning. */
 export async function readRecipes(browser: SettingsBrowser): Promise<Recipe[]> {
   const items = await browser.storage.local.get(null);

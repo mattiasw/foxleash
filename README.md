@@ -82,8 +82,9 @@ running agent session, and the prompts you closed without an answer, each with a
 button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
 in memory until the session ends. The settings page is also where you edit the blocklist,
 and where you write, edit and delete recipes: a task's steps written down with the sites it
-uses, kept in Firefox on this computer. An agent can also read the recipes you saved, and
-propose a recipe, which you read and save in Firefox.
+uses, kept in Firefox on this computer. An agent can also read the recipes you saved, ask you
+to allow a saved recipe's sites for its session, and propose a recipe, which you read and save
+in Firefox.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -266,6 +267,21 @@ description, sites and the time you saved it, sorted by name, without the steps,
 recipe as your instructions, outside the untrusted marking it puts on page content; what the
 agent reads on pages while following a recipe is still marked untrusted.
 
+Before it opens a recipe's sites, the agent calls `start_recipe` with the recipe's name.
+Foxhand opens a page in the session's tab group that lists the recipe's sites and what allowing
+does for each, and when you click Allow there, the sites are allowed for that session only,
+never always. Sites already allowed, on the blocklist or refused in the session are not asked:
+the blocklist and your earlier answers still win. The call waits up to 30 seconds for your
+answer and returns the sites now allowed, blocked and refused; when no site needs asking, it
+returns at once without a page. The page is a recipe page, so the rules above apply to it: one
+recipe page at a time, and none after three discarded, refused or closed without an answer.
+Like a site prompt, it no longer opens once the session has stopped asking after three refused
+or closed prompts. Sites outside the recipe are still asked one by one.
+
+You can also start a saved recipe from your MCP client with the `run_recipe` prompt: in
+Claude Code, `/mcp__foxhand__run_recipe <name>`, where a part of the name that only one recipe
+has is enough. It tells the agent to call `start_recipe` and then follow the recipe's steps.
+
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
 selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
 asks for up to 30. Text is matched in the text the page shows, without the values of form
@@ -312,6 +328,8 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
 - A recipe is saved only by your click on Foxhand's page in Firefox, after you read it:
   nothing the agent sends can save one. Later agent sessions read a saved recipe as your
   instructions, so read it before you save it.
+- Allowing a recipe's sites takes your click too, grants them for the session only, never
+  always, and sites on your blocklist or that you refused in the session stay so.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 - Text results never return the values of password fields, of one-time code and card number

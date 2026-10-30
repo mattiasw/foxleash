@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents can read the recipes you saved: the list of their names, descriptions and sites, and
   one recipe with its steps. Foxhand gives the agent a recipe as your instructions, while page
   content stays marked as untrusted.
+- Agents can ask you to allow a saved recipe's sites for their session in one click, on a
+  Foxhand page that lists the sites. Nothing is allowed always this way, and sites on your
+  blocklist or that you refused in the session stay so.
+- A `run_recipe` prompt starts a saved recipe from your agent: in Claude Code,
+  `/mcp__foxhand__run_recipe <name>`.
 
 ### Removed
 

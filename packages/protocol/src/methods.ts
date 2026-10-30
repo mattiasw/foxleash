@@ -313,6 +313,11 @@ export interface Methods {
   recipe_list: { params: Record<string, never>; result: { recipes: RecipeSummary[] } };
   /** The saved recipe named exactly `name`, or else named `name` normalized as a saved name is. */
   recipe_get: { params: { name: string }; result: { recipe: Recipe } };
+  /** Asks the user to allow a saved recipe's sites for the session; each list in the recipe's order. */
+  recipe_run: {
+    params: { name: string };
+    result: { asked: boolean; allowed: string[]; blocked: string[]; refused: string[] };
+  };
   /** Not an MCP tool: only `foxhand probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -352,6 +357,7 @@ export const METHOD_NAMES = [
   "recipe_propose",
   "recipe_list",
   "recipe_get",
+  "recipe_run",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

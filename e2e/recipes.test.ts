@@ -3,12 +3,25 @@ import { after, afterEach, before, describe, type TestContext, test } from "node
 import { setTimeout as sleep } from "node:timers/promises";
 import type { Recipe } from "@foxhand/protocol";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
-import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
-import { createHarness, EXTENSION_DIST, type Harness, type Session } from "./harness.ts";
+import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
+import {
+  createHarness,
+  EXTENSION_DIST,
+  type Harness,
+  parseResult,
+  type Session,
+  stillPending,
+  tabOf,
+} from "./harness.ts";
 
 const PROPOSE_PAGE = "propose.html";
+const RUN_PAGE = "run.html";
 const SAVE = 'button[data-answer="save"]';
 const DISCARD = 'button[data-answer="discard"]';
+const ALLOW = 'button[data-answer="allow"]';
+const NO = 'button[data-answer="no"]';
+// Seeded as allowed always; never loaded.
+const ALWAYS = "https://a.example";
 const UNARMED = "The buttons respond a moment after this window is focused.";
 const CHANGED =
   "This recipe changed since this page opened. Check the current version, then save again.";
@@ -36,6 +49,21 @@ const PAGE_STATE = `JSON.stringify({
   status: document.getElementById("status").textContent,
   after: !document.getElementById("after").hidden,
 })`;
+
+// The run page as the user sees it: the question, the recipe, the sites and the status.
+const RUN_STATE = `JSON.stringify({
+  heading: document.getElementById("heading").textContent,
+  title: document.title,
+  recipe: document.getElementById("recipe").textContent,
+  sites: [...document.querySelectorAll("#sites li")].map((item) => item.textContent),
+  status: document.getElementById("status").textContent,
+  after: !document.getElementById("after").hidden,
+})`;
+
+// The session answers the settings page lists.
+const ANSWER_ROWS = `JSON.stringify(
+  [...document.querySelectorAll("#answers li span")].map((span) => span.textContent)
+)`;
 
 // Each diff line: its class, its visually hidden word, and its text.
 const DIFF_STATE = `JSON.stringify([...document.querySelectorAll("#diff li")].map((item) => [
@@ -93,7 +121,9 @@ describe("recipes the agent proposes, in real Firefox", () => {
 
   // A failed test can leave its page open, and the next test must not take it for its own.
   afterEach(async () => {
-    for (const context of await proposeContexts()) await firefox.closeContext(context);
+    for (const context of [...(await proposeContexts()), ...(await runContexts())]) {
+      await firefox.closeContext(context);
+    }
   });
 
   test("propose_recipe returns at once and the page shows the normalized proposal", async (t) => {
@@ -266,7 +296,7 @@ describe("recipes the agent proposes, in real Firefox", () => {
     const refused = await harness.refused(session, "propose_recipe", proposal("Budget"));
     assert.ok(
       refused.includes(
-        "Foxhand shows no more recipe pages in this session after three that were discarded or closed without an answer. Start a new session to be asked again.",
+        "Foxhand shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
       ),
       refused,
     );
@@ -407,6 +437,179 @@ describe("recipes the agent proposes, in real Firefox", () => {
     );
   });
 
+  test("start_recipe lists the sites' states, and only a trusted click on Allow grants them for the session", async (t) => {
+    const blocked = `http://localhost:${fixtures.port}`;
+    await harness.seedSettings({
+      blocklist: ["localhost"],
+      [`site:${ALWAYS}`]: { grantedAt: new Date().toISOString() },
+      "recipe:Run trip": {
+        ...storedRecipe("Run trip", "Open the fixture page."),
+        sites: [fixtures.site, ALWAYS, blocked],
+      },
+    });
+    t.after(() => removeStored(["blocklist", `site:${ALWAYS}`]));
+    const session = await connected(t);
+    const existing = await runContexts();
+    const starting = pending(harness.call(session, "start_recipe", { name: "Run trip" }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await waitFor(
+      page,
+      RUN_STATE,
+      JSON.stringify({
+        heading: "Allow Foxhand on these sites for this session?",
+        title: "Allow Foxhand on these sites for this session?",
+        recipe: "Recipe Run trip: Download the latest receipt.",
+        sites: [
+          `${fixtures.site}: will be allowed for this session`,
+          `${ALWAYS}: already allowed`,
+          `${blocked}: blocked by your blocklist, stays blocked`,
+        ],
+        status: "",
+        after: false,
+      }),
+    );
+
+    // A scripted click on an armed button grants nothing.
+    await harness.waitForArmed(page, 2);
+    await firefox.evaluate(page, `document.querySelector(${JSON.stringify(ALLOW)}).click()`);
+    await stillPending(starting, PENDING_MS);
+
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, ALLOW);
+    const result = await starting;
+    assert.equal(result.isError, false, result.text);
+    assert.deepEqual(parseResult(result.text), {
+      asked: true,
+      allowed: [fixtures.site, ALWAYS],
+      blocked: [blocked],
+      refused: [],
+    });
+    await waitForStatus(page, "Allowed for this session. The agent is continuing.");
+    assert.equal(await firefox.evaluate(page, `!document.getElementById("after").hidden`), true);
+
+    // The granted site loads with no prompt; the blocked one is still refused.
+    const prompts = await contextsOf("approve.html");
+    const opened = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
+    assert.equal(opened.title, TITLES.a);
+    assert.deepEqual(await contextsOf("approve.html"), prompts);
+    const refused = await harness.refused(session, "tab_open", { url: `${blocked}/a` });
+    assert.ok(refused.includes(`Foxhand does not act on ${blocked}`), refused);
+
+    const settings = await harness.settingsPage();
+    t.after(() => firefox.closeContext(settings));
+    await pollUntil(
+      async () => {
+        const rows: unknown = JSON.parse(String(await firefox.evaluate(settings, ANSWER_ROWS)));
+        assert.ok(Array.isArray(rows));
+        if (
+          rows.some((row) => String(row).startsWith(`${fixtures.site}: allowed this session (`))
+        ) {
+          return true;
+        }
+        throw new Error(`the settings page lists ${JSON.stringify(rows)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      "the settings page to list the recipe's site as allowed this session",
+    );
+  });
+
+  test("Don't allow fails start_recipe, and the site still asks on its own", async (t) => {
+    await harness.seedSettings({
+      "recipe:Refused trip": {
+        ...storedRecipe("Refused trip", "Open it."),
+        sites: [fixtures.site],
+      },
+    });
+    const session = await connected(t);
+    const existing = await runContexts();
+    const starting = pending(harness.call(session, "start_recipe", { name: "Refused trip" }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, NO);
+    const result = await starting;
+    assert.equal(result.isError, true);
+    assert.ok(
+      result.text.includes("The user did not allow the recipe's sites in this session."),
+      result.text,
+    );
+    await waitForStatus(page, "Not allowed. The agent was told.");
+
+    const prompts = await contextsOf("approve.html");
+    const opening = pending(harness.call(session, "tab_open", { url: fixtures.url("/b") }));
+    const prompt = await harness.promptContext(prompts);
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, 'button[data-answer="once"]');
+    const opened = await opening;
+    assert.equal(opened.isError, false, opened.text);
+    assert.equal(tabOf(parseResult(opened.text)).title, TITLES.b);
+  });
+
+  test("start_recipe returns at once without a page when every site is already allowed", async (t) => {
+    await harness.seedSettings({
+      [`site:${ALWAYS}`]: { grantedAt: new Date().toISOString() },
+      "recipe:Allowed trip": { ...storedRecipe("Allowed trip", "Open it."), sites: [ALWAYS] },
+    });
+    t.after(() => removeStored([`site:${ALWAYS}`]));
+    const session = await connected(t);
+    const before = await runContexts();
+    assert.deepEqual(await harness.ok(session, "start_recipe", { name: "Allowed trip" }), {
+      asked: false,
+      allowed: [ALWAYS],
+      blocked: [],
+      refused: [],
+    });
+    await sleep(PENDING_MS);
+    assert.deepEqual(await runContexts(), before);
+  });
+
+  test("two parallel start_recipe calls of one recipe share one page and one click", async (t) => {
+    await harness.seedSettings({
+      "recipe:Shared trip": { ...storedRecipe("Shared trip", "Open it."), sites: [fixtures.site] },
+    });
+    const session = await connected(t);
+    const existing = await runContexts();
+    const calls = [1, 2].map(() =>
+      pending(harness.call(session, "start_recipe", { name: "Shared trip" })),
+    );
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await sleep(PENDING_MS);
+    assert.deepEqual(
+      (await runContexts()).filter((context) => !existing.includes(context)),
+      [page],
+    );
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, ALLOW);
+    for (const result of await Promise.all(calls)) {
+      assert.equal(result.isError, false, result.text);
+      assert.deepEqual(parseResult(result.text), {
+        asked: true,
+        allowed: [fixtures.site],
+        blocked: [],
+        refused: [],
+      });
+    }
+  });
+
+  test("the run_recipe prompt gives the recipe's steps, by its name or a unique part of it", async (t) => {
+    const errand = storedRecipe("Prompted errand", "Open https://shop.example/errand.\nPay.");
+    await harness.seedSettings({ [`recipe:${errand.name}`]: errand });
+    const session = await connected(t);
+    for (const name of ["Prompted errand", "errand"]) {
+      const { messages } = await session.client.getPrompt({
+        name: "run_recipe",
+        arguments: { name },
+      });
+      assert.equal(messages.length, 1);
+      const [message] = messages;
+      assert.equal(message?.role, "user");
+      assert.equal(message?.content.type, "text");
+      const text = message?.content.type === "text" ? message.content.text : "";
+      assert.ok(text.startsWith('Run the Foxhand recipe "Prompted errand": '), text);
+      assert.ok(text.includes('First call start_recipe with name "Prompted errand"'), text);
+      assert.ok(text.endsWith(`Steps: ${errand.steps}`), text);
+    }
+  });
+
   async function connected(t: TestContext): Promise<Session> {
     const session = await harness.connect();
     t.after(() => session.close());
@@ -453,7 +656,15 @@ describe("recipes the agent proposes, in real Firefox", () => {
   }
 
   async function proposeContexts(): Promise<string[]> {
-    const prefix = firefox.extensionUrl(PROPOSE_PAGE);
+    return contextsOf(PROPOSE_PAGE);
+  }
+
+  async function runContexts(): Promise<string[]> {
+    return contextsOf(RUN_PAGE);
+  }
+
+  async function contextsOf(page: string): Promise<string[]> {
+    const prefix = firefox.extensionUrl(page);
     return (await firefox.contexts())
       .filter((tab) => tab.url.startsWith(prefix))
       .map(({ context }) => context);
@@ -482,6 +693,20 @@ describe("recipes the agent proposes, in real Firefox", () => {
       GONE_TIMEOUT_MS,
       "the later session's group to close",
     );
+  }
+
+  /** Removes the given storage keys, from the settings page. */
+  async function removeStored(keys: string[]): Promise<void> {
+    const settings = await harness.settingsPage();
+    try {
+      const removed = await firefox.evaluate(
+        settings,
+        `browser.storage.local.remove(${JSON.stringify(keys)}).then(() => true)`,
+      );
+      assert.equal(removed, true);
+    } finally {
+      await firefox.closeContext(settings);
+    }
   }
 
   /** Removes every stored recipe, as openWith in recipes-settings.test.ts does. */
@@ -547,4 +772,10 @@ function proposal(name: string): Proposal {
 
 function storedRecipe(name: string, steps: string): Recipe {
   return { ...proposal(name), steps, savedAt: "2026-10-01T08:00:00.000Z" };
+}
+
+/** A call left running while the test acts; its outcome is awaited later. */
+function pending<T>(call: Promise<T>): Promise<T> {
+  call.catch(() => undefined);
+  return call;
 }

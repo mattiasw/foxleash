@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Allow Foxhand on these sites for this session?</title>
+    <link rel="stylesheet" href="pages.css">
+  </head>
+  <body>
+    <main>
+      <h1 id="heading">Allow Foxhand on these sites for this session?</h1>
+      <p id="recipe"></p>
+      <ul id="sites"></ul>
+      <p>This session: until the agent's session ends. To allow a site always, answer its own prompt.</p>
+      <div id="answers" class="answers">
+        <button type="button" data-answer="no" aria-disabled="true">Don't allow</button>
+        <button type="button" data-answer="allow" aria-disabled="true">Allow these sites for this session</button>
+      </div>
+      <p id="status" role="status" aria-live="polite" tabindex="-1"></p>
+      <div id="after" hidden><p>You can close this tab.</p></div>
+    </main>
+    <script src="run.js"></script>
+  </body>
+</html>

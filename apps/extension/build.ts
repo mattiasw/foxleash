@@ -11,6 +11,7 @@ export const esbuildOptions: BuildOptions = {
     join(root, "src", "options.ts"),
     join(root, "src", "approve.ts"),
     join(root, "src", "propose.ts"),
+    join(root, "src", "run.ts"),
     join(root, "src", "content.ts"),
   ],
   outdir: dist,

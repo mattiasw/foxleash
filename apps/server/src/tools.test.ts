@@ -49,7 +49,7 @@ after(async () => {
 });
 
 describe("tools", () => {
-  it("lists exactly the twenty-five tools with neutral descriptions", LIMIT, async () => {
+  it("lists exactly the twenty-six tools with neutral descriptions", LIMIT, async () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(tools.map((tool) => tool.name).sort(), [
@@ -71,6 +71,7 @@ describe("tools", () => {
       "resize_window",
       "screenshot",
       "scroll",
+      "start_recipe",
       "tab_close",
       "tab_open",
       "tab_select",
@@ -103,6 +104,7 @@ describe("tools", () => {
           "propose_recipe",
           "list_recipes",
           "get_recipe",
+          "start_recipe",
           "batch",
         ].includes(tool.name),
         tool.name,
@@ -1690,8 +1692,8 @@ describe("propose_recipe", () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(
-      tools.slice(-4).map(({ name }) => name),
-      ["propose_recipe", "list_recipes", "get_recipe", "batch"],
+      tools.slice(-5).map(({ name }) => name),
+      ["propose_recipe", "list_recipes", "get_recipe", "start_recipe", "batch"],
     );
     const tool = tools.find((listed) => listed.name === "propose_recipe");
     assert.ok(tool?.description !== undefined);
@@ -2029,6 +2031,79 @@ describe("get_recipe", () => {
       content: [{ type: "text", text: "The result from Firefox is too large to return." }],
       isError: true,
     });
+  });
+});
+
+describe("start_recipe", () => {
+  const RESULT = {
+    asked: true,
+    allowed: ["https://a.example"],
+    blocked: ["https://b.example"],
+    refused: [],
+  };
+  const INVALID =
+    "MCP error -32602: Input validation error: Invalid arguments for tool start_recipe";
+
+  it("is described with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "start_recipe");
+    assert.ok(tool?.description !== undefined);
+    for (const words of [
+      "for this session in one click, never always",
+      "in this session's Foxhand tab group",
+      "the blocklist and the user's earlier answers still win",
+      "waits up to 30 seconds",
+      "tell the user to answer in the named tab, then call start_recipe with the same name again",
+      "(asked)",
+      "(allowed)",
+      "(blocked)",
+      "(refused)",
+      "returns at once without a page",
+      "Call it before opening the recipe's sites",
+      "sites outside the recipe still ask one by one",
+      "list_recipes names the saved ones",
+    ]) {
+      assert.ok(tool.description.includes(words), words);
+    }
+    assert.deepEqual(tool.inputSchema.required, ["name"]);
+    const properties = record(tool.inputSchema.properties);
+    assert.match(String(record(properties.name).description), /at most 100 characters$/);
+  });
+
+  it("asks the extension and returns its answer as untrusted text", LIMIT, async () => {
+    const { client, calls } = await start(() => RESULT);
+    const output = await client.callTool({ name: "start_recipe", arguments: { name: "Trip" } });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(RESULT));
+    assert.deepEqual(calls, [{ method: "recipe_run", params: { name: "Trip" } }]);
+  });
+
+  it("returns a host error as untrusted text", LIMIT, async () => {
+    const message = "The user did not allow the recipe's sites in this session.";
+    const { client } = await start(() => {
+      throw new HostError("recipe_refused", message);
+    });
+    const output = await client.callTool({ name: "start_recipe", arguments: { name: "Trip" } });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), message);
+  });
+
+  it("allows twice the code-point limit in UTF-16 units and refuses more", LIMIT, async () => {
+    {
+      const { client, calls } = await start(() => RESULT);
+      const name = "a".repeat(200);
+      const output = await client.callTool({ name: "start_recipe", arguments: { name } });
+      assert.equal(output.isError, undefined);
+      assert.deepEqual(calls, [{ method: "recipe_run", params: { name } }]);
+    }
+    for (const name of ["", "a".repeat(201)]) {
+      const { client, calls } = await start(() => RESULT);
+      const output = await client.callTool({ name: "start_recipe", arguments: { name } });
+      assert.equal(output.isError, true, name.slice(0, 10));
+      assert.ok(text(output).startsWith(INVALID), name.slice(0, 10));
+      assert.deepEqual(calls, []);
+    }
   });
 });
 
@@ -2925,8 +3000,9 @@ describe("batch", () => {
         .filter((name) => name !== "batch")
         .sort(),
     );
-    assert.equal(tool.enum.length, 24);
+    assert.equal(tool.enum.length, 25);
     assert.ok(tool.enum.includes("list_recipes") && tool.enum.includes("get_recipe"));
+    assert.ok(tool.enum.includes("start_recipe"));
   });
 
   it("runs each step as its tool does and returns every result in order", LIMIT, async () => {
