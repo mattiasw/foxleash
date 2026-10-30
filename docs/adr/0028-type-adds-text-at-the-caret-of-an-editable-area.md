@@ -1,6 +1,6 @@
 # 0028: type adds text in an editable area at its caret, else at its start
 
-**Status:** Accepted, 2026-10-24. Supersedes the caret at the end of an editable area in [0017](0017-text-input-and-keys-without-key-event-defaults.md).
+**Status:** Accepted, 2026-10-24. Supersedes the caret at the end of an editable area in [0017](0017-text-input-and-keys-without-key-event-defaults.md). Amended 2026-10-30: a caret just before the area's first block goes on that block's first line.
 
 ## Context
 
@@ -26,6 +26,12 @@ Measured in Firefox 156 through the end-to-end harness:
 - After a caret is restored on an empty line above a signature, `execCommand("insertText")`
   inserts on that line, and a second insertion follows on after the first. A selection collapsed
   to its end before inserting keeps the selected text.
+- With a caret collapsed directly in the host before its first block, at `(host, 0)` in front of
+  `<div><br></div>`, `execCommand("insertText")` inserts in the host above that block, so the
+  empty line stays below the text: `"Hi Ann,\n\nThanks.\n"` typed there leaves two empty lines
+  above a signature instead of one. With the caret at the start of that block the text goes on
+  the line, as Firefox's own focus places it. A page can leave the caret there; Gmail does after
+  opening a reply.
 
 ## Decision
 
@@ -35,14 +41,20 @@ lies inside the target element and its end point is in an editable place (the en
 element, or a text node's parent, is `isContentEditable`), the text goes at that range's end: a
 selection is collapsed to its end, so `type` adds text and never replaces what the page had
 selected. Otherwise the text goes at the start of the target element, which is where Firefox
-puts the caret when it focuses an editing host. A target that is part of an editing host, such
-as a paragraph given by its reference, is judged against the target, not the host.
+puts the caret when it focuses an editing host. Either point, when nothing comes before it in
+the target element and it lies directly in an element just before a block, is moved to the
+start of that block's first line, through nested blocks, as Firefox's focus and a click on the
+line put it. It never enters a part that is not editable or not shown, nor a table, flex or grid
+container, and a caret with anything before it, such as one between two blocks or in front of
+the signature's block, stays where it is. A target that is part of an editing host, such as a
+paragraph given by its reference, is judged against the target, not the host.
 
 The `beforeinput` fallback applies the same rule to the selection as it is then, and its own
-DOM insertion puts the text at the start of the element when the caret is not in it. Text
-fields are unchanged: the text goes after what they hold.
+DOM insertion puts the text at the start of the element's first line when the caret is not in
+it. Text fields are unchanged: the text goes after what they hold.
 
-The code is in `apps/extension/src/page-input-dom.ts` (`placeCaret`, `caretInside`).
+The code is in `apps/extension/src/page-input-dom.ts` (`placeCaret`, `caretInside`,
+`insertionPoint`).
 
 ## Alternatives rejected
 

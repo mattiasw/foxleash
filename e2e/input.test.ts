@@ -139,41 +139,145 @@ describe("type and press_key in real Firefox", () => {
       await evaluate(input, 'document.getElementById("compose-lines").lastElementChild.id'),
       "compose-lines-signature",
     );
-    // A <br> at the end of a block is in the DOM and in innerText but not rendered, so the
-    // blank lines are measured.
-    const gaps = record(
-      await evaluate(
-        input,
-        `(() => {
-          const host = document.getElementById("compose-lines");
-          const signature = document.getElementById("compose-lines-signature").getBoundingClientRect();
-          const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
-          const boxes = {};
-          for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-            const range = document.createRange();
-            range.selectNodeContents(node);
-            boxes[node.data] = range.getBoundingClientRect();
-          }
-          const hi = boxes["Hi Ann,"];
-          const thanks = boxes["Thanks."];
-          return {
-            line: signature.height,
-            between: hi && thanks ? thanks.top - hi.bottom : null,
-            above: thanks ? signature.top - thanks.bottom : null,
-          };
-        })()`,
-      ),
-    );
-    const { line, between, above } = gaps;
-    const seen = JSON.stringify(gaps);
-    assert.ok(typeof line === "number" && line > 0, seen);
-    assert.ok(typeof between === "number", seen);
-    assert.ok(typeof above === "number", seen);
-    assert.ok(Math.abs(between - line) < line / 2, `one empty line between the lines: ${seen}`);
-    assert.ok(Math.abs(above - line) < line / 2, `one empty line above the signature: ${seen}`);
+    await assertOneEmptyLineEach(input);
     assert.equal(
       await evaluate(input, 'document.getElementById("compose-lines").innerText'),
       "Hi Ann,\n\nThanks.\n\n\n-- Signature",
+    );
+  });
+
+  test("type puts the text on an editable area's empty first line when the page left the caret in front of it", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '<div id="compose-lines-top"><br></div><div id="compose-lines-signature">-- Signature</div>',
+        0,
+      ),
+      { id: "compose-lines", offset: 0 },
+    );
+    assert.deepEqual(
+      await type(input, 'textbox "Compose lines"', "Hi Ann,\n\nThanks.\n"),
+      typed("exec_command"),
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-top").textContent'),
+      "Hi Ann,Thanks.",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").firstChild.id'),
+      "compose-lines-top",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").lastElementChild.id'),
+      "compose-lines-signature",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-signature").textContent'),
+      "-- Signature",
+    );
+    await assertOneEmptyLineEach(input);
+  });
+
+  test("type puts the text on the first line of nested blocks when the page left the caret before whitespace and a comment", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '\n<!-- c -->\n<div dir="ltr">\n<div id="compose-lines-top"><br></div></div>\n<div id="compose-lines-signature">-- Signature</div>',
+        0,
+      ),
+      { id: "compose-lines", offset: 0 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Compose lines"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-top").textContent'),
+      "x",
+    );
+  });
+
+  test("type leaves a caret the page put after an editable area's first line where it is, out of the signature", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '<div id="compose-lines-top">Hello</div><div><div id="compose-lines-signature">-- Signature</div></div>',
+        1,
+      ),
+      { id: "compose-lines", offset: 1 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Compose lines"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-signature").textContent'),
+      "-- Signature",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").textContent'),
+      "Hellox-- Signature",
+    );
+  });
+
+  test("type leaves a caret the page put in front of a later block where it is, out of the signature", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '<div id="compose-lines-top">Hello</div><div id="compose-lines-wrap"><div id="compose-lines-signature">-- Signature</div></div>',
+        0,
+        "compose-lines-wrap",
+      ),
+      { id: "compose-lines-wrap", offset: 0 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Compose lines"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-signature").textContent'),
+      "-- Signature",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").textContent'),
+      "Hellox-- Signature",
+    );
+  });
+
+  test("type never puts the text in an invisible block at the start of an editable area", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '<div id="compose-lines-hidden" style="visibility: hidden"><br></div><div id="compose-lines-top"><br></div>',
+        0,
+      ),
+      { id: "compose-lines", offset: 0 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Compose lines"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines-hidden").textContent'),
+      "",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").textContent'),
+      "x",
+    );
+  });
+
+  test("type never puts the text inside a table at the start of an editable area", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "compose-lines",
+        '<table><tbody><tr><td>A</td></tr></tbody></table><div id="compose-lines-top"><br></div>',
+        0,
+      ),
+      { id: "compose-lines", offset: 0 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Compose lines"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.querySelector("#compose-lines table").textContent'),
+      "A",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("compose-lines").textContent'),
+      "xA",
     );
   });
 
@@ -200,6 +304,27 @@ describe("type and press_key in real Firefox", () => {
       "xFixed text",
     );
     assert.equal(await evaluate(input, 'document.getElementById("island").textContent'), "Fixed");
+  });
+
+  test("type never puts the text in a block the page made not editable at the start of an editable area", async () => {
+    assert.deepEqual(
+      await caretAt(
+        input,
+        "island-host",
+        '<div id="island-block" contenteditable="false">Fixed</div><div id="island-line"><br></div>',
+        0,
+      ),
+      { id: "island-host", offset: 0 },
+    );
+    assert.deepEqual(await type(input, 'textbox "Island"', "x"), typed("exec_command"));
+    assert.equal(
+      await evaluate(input, 'document.getElementById("island-block").textContent'),
+      "Fixed",
+    );
+    assert.equal(
+      await evaluate(input, 'document.getElementById("island-host").textContent'),
+      "xFixed",
+    );
   });
 
   test("type into a field in a shadow root", async () => {
@@ -626,6 +751,71 @@ describe("type and press_key in real Firefox", () => {
 
   async function tab(page: Page, key: string): Promise<unknown> {
     return harness.ok(session, "press_key", { tabId: page.tabId, key });
+  }
+
+  /**
+   * That the typed "Hi Ann," and "Thanks." lines of #compose-lines have one empty line between
+   * them and one above the signature.
+   */
+  async function assertOneEmptyLineEach(page: Page): Promise<void> {
+    // A <br> at the end of a block is in the DOM and in innerText but not rendered, so the
+    // blank lines are measured.
+    const gaps = record(
+      await evaluate(
+        page,
+        `(() => {
+          const host = document.getElementById("compose-lines");
+          const signature = document.getElementById("compose-lines-signature").getBoundingClientRect();
+          const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT);
+          const boxes = {};
+          for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            boxes[node.data] = range.getBoundingClientRect();
+          }
+          const hi = boxes["Hi Ann,"];
+          const thanks = boxes["Thanks."];
+          return {
+            line: signature.height,
+            between: hi && thanks ? thanks.top - hi.bottom : null,
+            above: thanks ? signature.top - thanks.bottom : null,
+          };
+        })()`,
+      ),
+    );
+    const { line, between, above } = gaps;
+    const seen = JSON.stringify(gaps);
+    assert.ok(typeof line === "number" && line > 0, seen);
+    assert.ok(typeof between === "number", seen);
+    assert.ok(typeof above === "number", seen);
+    assert.ok(Math.abs(between - line) < line / 2, `one empty line between the lines: ${seen}`);
+    assert.ok(Math.abs(above - line) < line / 2, `one empty line above the signature: ${seen}`);
+  }
+
+  /**
+   * Replaces the children of the editable area with the id, focuses it and collapses the caret at
+   * the offset in it or in the element with the id `inId`, then where the caret is.
+   */
+  async function caretAt(
+    page: Page,
+    id: string,
+    html: string,
+    offset: number,
+    inId = id,
+  ): Promise<Record<string, unknown>> {
+    return record(
+      await evaluate(
+        page,
+        `(() => {
+          const host = document.getElementById(${JSON.stringify(id)});
+          host.innerHTML = ${JSON.stringify(html)};
+          host.focus();
+          getSelection().collapse(document.getElementById(${JSON.stringify(inId)}), ${offset});
+          const selection = getSelection();
+          return { id: selection.anchorNode.id, offset: selection.anchorOffset };
+        })()`,
+      ),
+    );
   }
 
   /** The page's value of a JavaScript expression, through JSON. */

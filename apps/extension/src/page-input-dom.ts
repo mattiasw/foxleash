@@ -47,12 +47,16 @@ export const SETTLE_MS = 100;
 const FALLBACK_BEFORE_MS = 5_000;
 const EDITABLE = '[contenteditable]:not([contenteditable="false"])';
 const DOCS_INPUT_FRAME = ".docs-texteventtarget-iframe";
+// ASCII whitespace: a no-break space renders.
+const BLANK = /^[\t\n\f\r ]*$/;
+// Boxes whose content is lines; tables, flex and grid containers and ruby are not entered.
+const LINE_BOXES = new Set(["block", "flow-root", "list-item"]);
 
 /**
  * type in the page: focuses the element, inserts the text with execCommand insertText, after
- * what a field holds and in an editable area at its caret when inside the element, else at its
- * start, reads it back, and falls back once to the native value setter or to beforeinput plus
- * DOM insertion when nothing changed.
+ * what a field holds and in an editable area at its caret when inside the element, else at the
+ * start of its first line, reads it back, and falls back once to the native value setter or to
+ * beforeinput plus DOM insertion when nothing changed.
  */
 export async function typeText(options: TypeOptions, page: InputPage): Promise<Result<"type">> {
   const started = performance.now();
@@ -203,8 +207,9 @@ export function isFocused(element: Element): boolean {
 /**
  * Places the caret, and whether it could: a field's at its end (some inputs, such as email, have
  * none); an editable area's at its caret when inside the element, collapsed to the end of a
- * selection so nothing is replaced, else at the element's start, where Firefox puts the caret
- * when it focuses an editing host.
+ * selection so nothing is replaced, else at the start of its first line, where Firefox puts the
+ * caret when it focuses an editing host. A caret at the area's start just before a block goes on
+ * that block's first line.
  */
 function placeCaret(target: TypeTarget): boolean {
   const { field } = target;
@@ -220,11 +225,7 @@ function placeCaret(target: TypeTarget): boolean {
   const editable = target.editable;
   const selection = viewOf(editable).getSelection();
   if (selection === null) return false;
-  const inside = caretInside(editable, selection);
-  const atStart = inside === null;
-  const range = inside?.cloneRange() ?? editable.ownerDocument.createRange();
-  if (atStart) range.selectNodeContents(editable);
-  range.collapse(atStart);
+  const range = insertionPoint(editable, caretInside(editable, selection));
   selection.removeAllRanges();
   selection.addRange(range);
   return true;
@@ -238,6 +239,75 @@ function caretInside(editable: HTMLElement, selection: Selection): Range | null 
   const end = range.endContainer;
   const element = end instanceof view.Element ? end : end.parentElement;
   return element instanceof view.HTMLElement && element.isContentEditable ? range : null;
+}
+
+/**
+ * A collapsed range at the caret's end, else at the editable's start, moved onto the first line
+ * of a block it lies just before when nothing comes before it in the editable, as Firefox's focus
+ * and a click put the caret.
+ */
+function insertionPoint(editable: HTMLElement, caret: Range | null): Range {
+  const range = caret?.cloneRange() ?? editable.ownerDocument.createRange();
+  if (caret === null) range.selectNodeContents(editable);
+  range.collapse(caret === null);
+  const view = viewOf(editable);
+  const start = range.startContainer;
+  let block = onlyBlankBefore(editable, start, view)
+    ? blockAfter(start, range.startOffset, view)
+    : null;
+  while (block !== null) {
+    range.setStart(block, 0);
+    range.collapse(true);
+    block = blockAfter(block, 0, view);
+  }
+  return range;
+}
+
+/** Whether only blank nodes come before the node and each of its ancestors in the editable. */
+function onlyBlankBefore(
+  editable: HTMLElement,
+  node: Node,
+  view: Window & typeof globalThis,
+): boolean {
+  for (let current: Node | null = node; current !== editable; current = current.parentNode) {
+    if (current === null) return false;
+    for (
+      let sibling = current.previousSibling;
+      sibling !== null;
+      sibling = sibling.previousSibling
+    ) {
+      if (!isBlank(sibling, view)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * The block a point in an element lies just before, with only blank nodes from the element's
+ * start to the block, when that block is editable, shown and not empty, so a caret can go on its
+ * first line.
+ */
+function blockAfter(
+  node: Node,
+  offset: number,
+  view: Window & typeof globalThis,
+): HTMLElement | null {
+  if (!(node instanceof view.Element)) return null;
+  const children = [...node.childNodes];
+  if (!children.slice(0, offset).every((child) => isBlank(child, view))) return null;
+  const next = children.slice(offset).find((child) => !isBlank(child, view));
+  return next instanceof view.HTMLElement &&
+    next.isContentEditable &&
+    next.hasChildNodes() &&
+    isRendered(next) &&
+    LINE_BOXES.has(view.getComputedStyle(next).display)
+    ? next
+    : null;
+}
+
+/** A node that renders nothing between blocks: whitespace-only text or a comment. */
+function isBlank(node: Node, view: Window & typeof globalThis): boolean {
+  return (node instanceof view.Text && BLANK.test(node.data)) || node instanceof view.Comment;
 }
 
 /**
@@ -359,23 +429,23 @@ function insertTextInit(text: string): InputEventInit {
 }
 
 /**
- * The text at the caret, at the end of a selection, or at the editable's start when the caret is
- * not in it, then an input event on the editing host.
+ * The text at the caret, at the end of a selection, or at the start of the editable's first line
+ * when the caret is not in it, then an input event on the editing host.
  */
 function insertAtCaret(editable: HTMLElement, host: HTMLElement, text: string): void {
   const view = viewOf(host);
   const node = editable.ownerDocument.createTextNode(text);
   const selection = view.getSelection();
-  const range = selection === null ? null : caretInside(editable, selection);
-  if (selection !== null && range !== null) {
-    range.collapse(false);
-    range.insertNode(node);
+  const range = insertionPoint(
+    editable,
+    selection === null ? null : caretInside(editable, selection),
+  );
+  range.insertNode(node);
+  if (selection !== null) {
     range.setStartAfter(node);
     range.collapse(true);
     selection.removeAllRanges();
     selection.addRange(range);
-  } else {
-    editable.prepend(node);
   }
   host.dispatchEvent(new view.InputEvent("input", insertTextInit(text)));
 }

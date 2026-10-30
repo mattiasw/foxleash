@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `type` into an editable area whose caret sits just before its first line, as in a Gmail reply
+  typed right after opening it, now writes on that line instead of above it, so no extra empty
+  line is left above the signature.
+
 ## [0.1.1] - 2026-10-27
 
 ### Changed
