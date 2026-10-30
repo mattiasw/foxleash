@@ -25,14 +25,14 @@
         recipe does.</p>
       <ul id="recipe-description-errors" class="errors" hidden></ul>
       <label for="recipe-sites">Sites</label>
-      <textarea id="recipe-sites" rows="4" spellcheck="false" autocomplete="off"
+      <textarea id="recipe-sites" class="whole" rows="4" spellcheck="false" autocomplete="off"
         autocapitalize="off" aria-required="true"
         aria-describedby="recipe-sites-help recipe-sites-errors"></textarea>
       <p id="recipe-sites-help">One site per line, such as https://example.com; a full address
         is reduced to its site.</p>
       <ul id="recipe-sites-errors" class="errors" hidden></ul>
-      <label for="recipe-steps">Steps</label>
-      <textarea id="recipe-steps" rows="12" aria-required="true"
+      <label for="recipe-steps" id="recipe-steps-label">Steps</label>
+      <textarea id="recipe-steps" class="whole" rows="12" aria-required="true"
         aria-describedby="recipe-steps-help recipe-steps-errors"></textarea>
       <p id="recipe-steps-help">The task's steps in your own words, at most 20,000
         characters.</p>

@@ -405,7 +405,10 @@ function siteOfEntry(entry: unknown): string | undefined | { problem: string } {
   return site;
 }
 
-/** The steps: line breaks as "\n", invisible spacing gone, 1 to MAX_RECIPE_STEPS characters. */
+/**
+ * The steps: line breaks as "\n", at most two in a row, invisible spacing gone, 1 to
+ * MAX_RECIPE_STEPS characters.
+ */
 function checkSteps(value: unknown): string | { problems: RecipeProblem[] } {
   const field = "steps";
   if (typeof value !== "string") return { problems: [{ field, text: "The steps must be text." }] };
@@ -417,7 +420,9 @@ function checkSteps(value: unknown): string | { problems: RecipeProblem[] } {
     // U+3000 is the visible full-width space of CJK text.
     .replace(/(?![ \u3000])\p{Zs}/gu, " ")
     // The lookbehind tries each run of spacing once, from its start, not from every character.
-    .replace(/(?<![\t\p{Zs}])[\t\p{Zs}]+$/gmu, "");
+    .replace(/(?<![\t\p{Zs}])[\t\p{Zs}]+$/gmu, "")
+    // The line above has emptied every spacing-only line, so this folds every run of blank lines.
+    .replace(/\n{3,}/g, "\n\n");
   if (!/\S/u.test(steps)) return { problems: [{ field, text: "Write the steps." }] };
   const length = [...steps].length;
   if (length > MAX_RECIPE_STEPS) {

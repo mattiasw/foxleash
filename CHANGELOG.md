@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Recipes section on the settings page, where you write, edit and delete recipes: a task's
   steps written down with the sites it uses. A deleted recipe can be restored with Undo.
 - Agents can propose a recipe: Foxhand opens it on a page in the session's tab group, where you
-  read it, edit it, and save or discard it. Proposing the name of a saved recipe shows the saved
-  version and the changes to its steps.
+  read it, edit it, and save or discard it. The page shows all of the sites and steps, with no
+  scrolling inside the fields. Proposing the name of a saved recipe shows the saved version and
+  the changes to its steps.
 - Agents can read the recipes you saved: the list of their names, descriptions and sites, and
   one recipe with its steps. Foxhand gives the agent a recipe as your instructions, while page
   content stays marked as untrusted.

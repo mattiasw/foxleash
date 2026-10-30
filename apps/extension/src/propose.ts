@@ -36,7 +36,11 @@ const PAGE = "recipe page";
 const UNARMED = "The buttons respond a moment after this window is focused.";
 const CHANGED =
   "This recipe changed since this page opened. Check the current version, then save again.";
+const OUT_OF_VIEW =
+  "Not saved: part of the recipe was out of view. Read the sites and steps again, then save.";
 const ORDER: readonly Field[] = ["name", "description", "sites", "steps"];
+// The fields with class="whole", which grow to show all of their text.
+const WHOLE: readonly Field[] = ["sites", "steps"];
 // A run of more unchanged lines than this shows as one item that counts them.
 const MAX_SAME_RUN = 3;
 const WORDS: Record<DiffLine["kind"], string> = {
@@ -99,6 +103,11 @@ const { renderButtons, watch, rearm } = armButtons({
 });
 
 for (const name of ORDER) fields[name].field.addEventListener("input", () => edited(name));
+for (const name of WHOLE) fields[name].field.addEventListener("input", showWhole);
+// The label is as wide as the fields and its text scales with theirs, so its box changes whenever
+// their wrapping can, and fitting them leaves it alone unless the page's own scrollbar comes or
+// goes.
+new ResizeObserver(showWhole).observe(element("recipe-steps-label", PAGE));
 
 const id = new URLSearchParams(location.search).get("id");
 if (id === null) end();
@@ -116,6 +125,17 @@ function onAnswer(button: HTMLButtonElement): void {
   const answer = button.dataset.answer;
   unarmedText = UNARMED;
   if (answer === "save") {
+    // A reflow after the last fit (a late font, a style change) can hide text with no scrollbar.
+    const hidden = WHOLE.find((name) => !inView(fields[name].field));
+    if (hidden !== undefined) {
+      showWhole();
+      rearm();
+      renderButtons();
+      fields[hidden].field.focus();
+      unarmedText = OUT_OF_VIEW;
+      announce(status, OUT_OF_VIEW);
+      return;
+    }
     for (const name of ORDER) clearErrors(fields[name].field, fields[name].errors);
     state = "saving";
     setEditable(false);
@@ -128,6 +148,11 @@ function onAnswer(button: HTMLButtonElement): void {
     renderButtons();
     send({ type: "answer", answer: "discard" });
   }
+}
+
+/** Whether the field shows all of its text; 1 px allows for rounding, and hides no character. */
+function inView(field: TextField): boolean {
+  return field.scrollHeight <= field.clientHeight + 1 && field.scrollWidth <= field.clientWidth + 1;
 }
 
 /** No edits while an answer is out or after the last one, so the fields show what was answered. */
@@ -224,6 +249,21 @@ function propose(given: RecipeFields, stored: Recipe | undefined): void {
 
 function fill(given: Values): void {
   for (const name of ORDER) fields[name].field.value = given[name];
+  // Setting a value fires no input event. Synchronous, so it also fits in a background tab.
+  showWhole();
+}
+
+/** Grows the sites and steps fields to their text, never below their rows. */
+function showWhole(): void {
+  const { scrollX, scrollY } = window;
+  for (const name of WHOLE) {
+    const { field } = fields[name];
+    field.style.height = "auto";
+    // scrollHeight leaves out the border, which the border-box height includes.
+    field.style.height = `${field.scrollHeight + field.offsetHeight - field.clientHeight}px`;
+  }
+  // Measuring at "auto" shortens the page for a moment, which can move its scroll position.
+  if (window.scrollX !== scrollX || window.scrollY !== scrollY) window.scrollTo(scrollX, scrollY);
 }
 
 /** The recipe's fields as the page's fields show them. */
