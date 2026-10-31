@@ -62,7 +62,16 @@
 // `test.only?.(`, `test.only<T>(`, `test!.only(`, `test.only!(` and `test.only.each\`...\`` are
 // called, and `opts.only != x` is data. A member's name is read as the engine reads it: an
 // escaped identifier (`test.only`) and a computed string or no-substitution template key
-// (`test["only"]`, `test[\`only\`]`, escapes decoded) are the name they spell.
+// (`test["only"]`, `test[\`only\`]`, escapes decoded) are the name they spell. A call INVOKES
+// its callee, read behind wrappers, the last operand of a comma expression, the right side of a
+// plain `=` assignment and an `await`'s operand (`(0, describe.skipIf)(`), with its arguments;
+// a call of Function.prototype's `call` or `apply` invokes the function it is read off instead,
+// one level deep (`f.call(self, a, b)` and `f.apply(self, [a, b])` invoke `f` with `a, b`, a
+// hole in the list `undefined` in its place; `f.apply(self)`, `f.apply(self, null)` and
+// `f.apply(self, undefined)` with none). An `apply` list that is no array literal and no such
+// constant (`f.apply(self, list)`, an array-like object `f.apply(self, {})`), or a spread first
+// argument (`f.call(...a)`), leaves the call as written. Rules 4, 6, 7 and 8 judge the call a
+// call invokes; `.bind` is a residual.
 //
 // Refused when head adds it:
 //   1. `.only`, `.fixme` and node:test's `.expectFailure` called on ANY receiver
@@ -76,8 +85,10 @@
 //      `fit?.(`, `fit["each"](`, `fit.call(`, `fit[mode](`), so a variable so named is data
 //      (`const problems = fit.outsideCircle.map(`); and all but `fit` also as a member of a name
 //      or of a `require(` / `import(` (`jg.xit(`, a namespace import,
-//      `require("@jest/globals").xit(`). A name an import of any module that is not type-only, or
-//      a destructure of a module value or of node:test or a test function (rule 11), binds to one
+//      `require("@jest/globals").xit(`), the name also behind a comma expression, a plain `=`
+//      assignment or an `await` (`(0, jg).xit(`, `(await jg).xit(`, `(0, globalThis).xit(`;
+//      `(0, a.b).xit(` stays data). A name an import of any module that is not type-only, or a
+//      destructure of a module value or of node:test or a test function (rule 11), binds to one
 //      of those markers is that marker (`import { xit as check } from "@jest/globals"` or
 //      `const { xit: check } = require("mocha")`, then `check(`; `check.length` is data). A
 //      method of that name on any other object is no marker, and `.fit` on a name is none either
@@ -97,13 +108,17 @@
 //      top-level import of `@playwright/test` binds to its `test` (`import { test as base } from
 //      "@playwright/test"`, `import base from "@playwright/test"`, then `base.skip(isCI, "r")`),
 //      with no wrapper, no type arguments and no optional call anywhere; the first argument is a
-//      CONDITION (below); and no later argument is a function (`test.skip(title, () => {})`
-//      declares a skipped test).
+//      CONDITION (below); and no later argument may be a function (`test.skip(title, () => {})`
+//      declares a skipped test): one behind a comma expression, a plain `=` assignment or an
+//      `await`, an immediately invoked function, or a conditional or logical expression with a
+//      branch or operand that may be one counts too (`test.skip(title, (0, () => {}))`,
+//      `test.skip(title, isCI ? () => {} : () => {})`, `test.skip(title, body || (() => {}))`).
 //      Everything else is refused there too: `test.skip()`, `test.skip("title", fn)`,
 //      `test.skip(true, r)`, `test.skip?.(isCI, r)`, `test.skip!(isCI, r)`,
 //      `test?.["skip"](isCI, r)`, `test.info().skip(isCI, r)`, `test.describe.skip(...)`.
-//   4. A bare `.skip()` or `.todo()` with no argument on any receiver (`this.skip()` in a
-//      mocha-style body, node:test's `t.todo()`): a failure after it no longer fails the run
+//   4. A bare `.skip()` or `.todo()` with no argument on any receiver, the call read as it
+//      INVOKES (`this.skip()` in a mocha-style body, node:test's `t.todo()`, `(0, this.skip)()`,
+//      `this.skip.call(this)`, `x.todo.apply(x, [])`): a failure after it no longer fails the run
 //      (measured, node 24.18). And (rule `contextSkip`) `.skip` or `.todo` called on a TEST
 //      CONTEXT whatever the arguments: `this`, the name `t`, or a name that is the first
 //      parameter of a function passed to a test call (as rule 8 reads one, `t.test(` included),
@@ -116,10 +131,16 @@
 //      (`test.for(rows)("x", (row, ctx) => …)`, a tagged `` test.for`…` `` too: the row comes
 //      first); the function also passed as the last operand of a comma expression, the right
 //      side of a plain `=` assignment or an `await`'s operand (`test("x", (0, (ctx) => …))`,
-//      `test("x", f = (ctx) => …)`);
-//      a TypeScript `this` parameter is not counted (`function (this: void, ctx)`); also
-//      through `.call` / `.apply` / `.bind` or a comma expression as rule 3 reads a call, and
-//      with the receiver behind a comma expression, a plain `=` assignment or an `await`
+//      `test("x", f = (ctx) => …)`); each of those calls read as it INVOKES, the function also
+//      an element of `.apply`'s array literal (`test.apply(null, ["x", (ctx) => …])`,
+//      `test.for(rows).call(null, "x", (row, ctx) => …)`, `test.for.call(test, rows)(`,
+//      `beforeEach.call(null, (ctx) => …)`), but not as `.call`'s or `.apply`'s receiver
+//      (`test.call((ctx) => …)`: the test never calls it) or inside an array that is no `.apply`
+//      list (`test("x", [(ctx) => …])`);
+//      a TypeScript `this` parameter is not counted (`function (this: void, ctx)`); the `.skip`
+//      or `.todo` itself also called through `.call` / `.apply` / `.bind` or a comma expression
+//      as rule 3 reads a call (`ctx.skip.call(ctx, "r")`, `(0, ctx.skip)("r")`), and with the
+//      receiver behind a comma expression, a plain `=` assignment or an `await`
 //      (`(0, t).skip(`, `(c = ctx).skip(`, `(await ctx).skip(`).
 //      After node:test's `t.skip("reason")` or `t.todo("later")` the body runs on but a failure
 //      no longer fails the run (measured, node 24.18.1: a throwing body exits 0), and mocha's
@@ -136,21 +157,34 @@
 //   6. Vitest's `skipIf(x)` / `runIf(x)` on a ROOTED chain with a constant argument (see the
 //      condition rules): `skipIf` is refused when x always skips or is a literal in a spelling
 //      that is no plain literal; `runIf` when x is absent, never runs, or is such a spelling.
+//      The call is read as it INVOKES (`test.skipIf.call(test, true)`,
+//      `test.skipIf.apply(test, [true])`, `(0, describe.skipIf)(true)`): Vitest's
+//      `describe.skipIf` and `describe.runIf` keep no receiver, so the comma form skips
+//      (measured, vitest 5.0.5).
 //   7. Playwright's fixture `testInfo.skip(x, ...)` / `testInfo.fail(x, ...)` (receiver named
-//      `testInfo`, in any file) whose first argument is not a CONDITION or is a function (the
-//      fixture takes a condition, not a callback), and a bare `testInfo.fail()`.
+//      `testInfo`, in any file, also behind a comma expression, a plain `=` assignment or an
+//      `await`: `(0, testInfo).skip(`) whose first argument is not a CONDITION or is a function
+//      (the fixture takes a condition, not a callback), and a bare `testInfo.fail()`; the call
+//      read as it INVOKES (`testInfo.skip.call(testInfo, true)`, `(0, testInfo.skip)(true)`).
 //   8. node:test's and Vitest's options object of a test call: the first or second argument of a
 //      call of test, it, describe, suite, context or specify (bare, or as a member: `t.test(`,
-//      `test?.(`), behind any wrapper, also an object literal spread into it
-//      (`{ ...{ skip: 1 } }`). A `skip`, `only`, `todo`, `fails` or `expectFailure` key (any
+//      `test?.(`), the call read as it INVOKES (`(0, test)(`, `test.call(null, "x", { skip: 1 },
+//      fn)`, `test.apply(null, ["x", { skip: 1 }, fn])`); the object behind any wrapper, a comma
+//      expression, a plain `=` assignment or an `await` (`test("x", (0, { skip: 1 }), fn)`),
+//      also an object literal spread into it, read the same way (`{ ...{ skip: 1 } }`,
+//      `{ ...(0, { skip: 1 }) }`). A `skip`, `only`, `todo`, `fails` or `expectFailure` key (any
 //      spelling an object allows: quoted, computed, a no-substitution template) is refused when it
 //      is a method or accessor (`todo() {}`, `get skip() {...}`), when its value is not an OPTION
 //      CONDITION (below), and for `expectFailure` when its value is an error class (a name or
 //      member path whose last name is `Error`, `Exception` or a capitalised name ending in either:
 //      node:test's validator, as assert.throws takes it). PLACEHOLDER exemption: a `skip` key
 //      written as a plain property (never a method or accessor) is allowed when the options
-//      object is the call's second-to-last argument and the last is an EMPTY function with no
-//      parameters, the env-gated placeholder
+//      object is the second-to-last argument the call invokes with and the last is an EMPTY
+//      function with no parameters, written as itself; the options object holds no function,
+//      method or class (a getter could hand it to another test as `this`), and no plain `=`
+//      assignment or `await` sits on the way from the call to the key (`(o = { skip: true })`
+//      would skip `test("u", o, fn)` too, and an awaited object's `then`, from anywhere, gets it
+//      as `this`): the env-gated placeholder
 //        test("... (set DATABASE_URL to run)", { skip: true }, () => {});
 //      a skipped empty test silences nothing. Never `only` (an empty test focused under
 //      `--test-only` silences every test beside it, measured, node 24.18), `todo` (a planned test
@@ -243,12 +277,13 @@
 // `&&`, `||` and `??` short-circuit on a known left side, and `x || y` with an always truthy y
 // is always truthy; a conditional with a known test takes its branch; a comma expression is its
 // last operand, an assignment its right side, `await` its operand; a comparison of two known
-// values is computed; an immediately invoked function is a function. Everything else (a name, a
-// member access, a call) is unknown. A PLAIN literal is one written as itself: a literal,
-// `undefined`, `NaN`, `Infinity`, `void x`, a bare regex, array, object or function, or a number,
-// `true`, `false`, `null`, `undefined`, `NaN` or `Infinity` behind a run of `+` / `-` only, each
-// optionally cast (`false as boolean`); anything behind `!`, `~` or parentheses, a comma
-// expression and a signed string are not.
+// values is computed; an immediately invoked function is a function, the call read as it
+// INVOKES (`(0, () => x)()`, `(() => x)?.()`, `(() => x).call(null)`).
+// Everything else (a name, a member access, a call) is unknown. A PLAIN literal is one written
+// as itself: a literal, `undefined`, `NaN`, `Infinity`, `void x`, a bare regex, array, object or
+// function, or a number, `true`, `false`, `null`, `undefined`, `NaN` or `Infinity` behind a run
+// of `+` / `-` only, each optionally cast (`false as boolean`); anything behind `!`, `~` or
+// parentheses, a comma expression and a signed string are not.
 //   - skipIf(x): allowed with no argument (never skips), a plain literal that is falsy
 //     (`skipIf(false)`, `skipIf(0x0)`, `skipIf(void 0)`, `skipIf(-false)`), and anything unknown
 //     (`skipIf(isCI)`, `skipIf(!0 && isCI)`, `skipIf(["linux"].includes(p))`).
@@ -304,16 +339,24 @@
 // `import * as pw from "@playwright/test"; pw.default.skip(`), a condition
 // that is always true but that the folder cannot see
 // (`test.skip(isCI === isCI, r)`), a skipped test whose body is passed by name
-// (`test.skip(title, body)`, which reads like `test.skip(cond, REASON)`), Playwright's fixture
+// (`test.skip(title, body)`, which reads like `test.skip(cond, REASON)`) or as any other value
+// rule 3 does not read as a function (`test.skip(title, bodies[0])`, `test.skip(title, make())`),
+// Playwright's fixture
 // under a name other than `testInfo`, an options object on a call this check does not take for a
 // test call (`test.concurrent(`, `test.sequential(`), an option value that is no constant
 // but never false (`{ skip: offset - 1 }`, `{ skip: isCI ? "r" : null }`), a test context rule 4
-// cannot see (an alias, `const self = this; self.skip("r")`; the callback of a hook called
-// through `.call`, `.apply` or `.bind`, `beforeEach.call(null, (ctx) => …)`, or of a test
-// function through `.bind`, `test.bind(null)("x", (ctx) => …)`; a member named `t`,
+// cannot see (an alias, `const self = this; self.skip("r")`; the callback of a hook or a test
+// function called through `.bind`, `beforeEach.bind(null)((ctx) => …)`,
+// `test.bind(null)("x", (ctx) => …)`; a member named `t`,
 // `ctx.t.skip("r")`; a context passed to a helper under a name other than `t`; a context named
 // other than `t` in a test body that is no inline argument of the test call: passed by name,
 // `test("x", run)`, held in a table entry, `{ fn(ctx) {…} }`, or wrapped, `withDb((ctx) => …)`),
+// a LINK in a ROOTED chain called through `.call` or `.apply` (`test.skipIf.call(test, x).skip(`,
+// `test.runIf.call(test, x)("t", (ctx) => …)`: a chain walks a LINK only as a direct call), a
+// call rules 4, 6, 7 and 8 judge made through `.bind` (`test.skipIf.bind(test)(true)`,
+// `test.bind(null)("x", { skip: 1 }, fn)`), a `.for` table under a name a destructure binds
+// (`const { for: table } = test; table(rows)("x", (row, ctx) => …)`: Vitest's `.for` reads its
+// receiver, so that call throws a TypeError and the file fails, measured, vitest 5.0.5),
 // and a legacy marker moved between tests that a concise arrow body holds with no statement between
 // (`describe("s", () => [{ fn(t) {…} }, …])`: the statement around them elides that body whole)
 // or that are bare functions in an array (`[(t) => {…}, (t) => {…}]`: nothing names them), or
@@ -762,8 +805,10 @@ function foldValue(node: Node): Fold {
     case "NewExpression":
       return { kind: "object", plain: false, text: null };
     case "CallExpression":
-      // An immediately invoked function is read as the function (the strict side).
-      return isFunction(unwrapAll(node.callee))
+    case "OptionalCallExpression":
+      // An immediately invoked function is read as the function (the strict side), the callee the
+      // call INVOKES (invocation: `(0, () => x)()`, `(() => x)?.()`, `(() => x).call(null)`).
+      return isFunction(invocation(node).callee)
         ? { kind: "object", plain: false, text: null }
         : UNKNOWN;
     case "UnaryExpression":
@@ -813,6 +858,31 @@ function foldValue(node: Node): Fold {
     default:
       return UNKNOWN;
   }
+}
+
+/** The call a call INVOKES (see the header): its callee as unwrapValue reads it, with its
+ * arguments; for a call of Function.prototype's `call` or `apply` read off a member, the function
+ * that member is read off instead, one level deep: `f.call(self, a, b)` and
+ * `f.apply(self, [a, b])` invoke `f` with `a, b` (a hole in the list is `undefined` in its
+ * place), and `f.apply(self)`, `f.apply(self, null)` and `f.apply(self, undefined)` with none. A
+ * spread first argument, or an `apply` list that is no array literal and no known `null` or
+ * `undefined`, leaves the call as written. */
+function invocation(call: Call): { callee: Node; args: Array<Node | undefined> } {
+  const callee = unwrapValue(call.callee);
+  const written = { callee, args: call.arguments };
+  if (!isMember(callee)) return written;
+  const name = memberName(callee);
+  const [self, list] = call.arguments;
+  if ((name !== "call" && name !== "apply") || self?.type === "SpreadElement") return written;
+  const target = unwrapValue(callee.object);
+  if (name === "call") return { callee: target, args: call.arguments.slice(1) };
+  if (list === undefined) return { callee: target, args: [] };
+  const fold = foldValue(list);
+  const nullish = fold.kind === "value" && (fold.value === null || fold.value === undefined);
+  if (nullish) return { callee: target, args: [] };
+  const array = unwrapValue(list);
+  if (array.type !== "ArrayExpression") return written;
+  return { callee: target, args: array.elements.map((element) => element ?? undefined) };
 }
 
 /** The values a function returns: its concise body, or each `return` of its block body. */
@@ -1025,13 +1095,14 @@ function isNullOrNaN(node: Node): boolean {
   return node.type === "NullLiteral" || (node.type === "Identifier" && node.name === "NaN");
 }
 
-/** The properties of an options object, those of object literals spread into it included. */
+/** The properties of an options object, those of object literals spread into it included (read
+ * as unwrapValue reads a value: `{ ...(0, { skip: 1 }) }`). */
 function optionProperties(object: ObjectExpression, judged: Set<Node>): Node[] {
   judged.add(object);
   const out: Node[] = [];
   for (const property of object.properties) {
     if (property.type === "SpreadElement") {
-      const spread = unwrapAll(property.argument);
+      const spread = unwrapValue(property.argument);
       if (spread.type === "ObjectExpression") out.push(...optionProperties(spread, judged));
     } else {
       out.push(property);
@@ -1050,26 +1121,38 @@ function isEmptyFunction(node: Node | undefined): boolean {
   );
 }
 
-/** Whether a call is a test call whose options object rule 8 judges. */
-function isTestCall(call: Call): boolean {
-  const callee = unwrapAll(call.callee);
+/** Whether the callee a call invokes (invocation) is a test call's, whose options object rule 8
+ * judges: one of TEST_CALLS, bare or as a member. */
+function isTestCallee(callee: Node): boolean {
   if (callee.type === "Identifier") return TEST_CALLS.has(callee.name);
   return isMember(callee) && TEST_CALLS.has(memberName(callee) ?? "");
 }
 
-/** Rule 8 over one test call. */
-function judgeOptions(call: Call, judged: Set<Node>, found: Found[]): void {
-  const args = call.arguments;
+/** Rule 8 over the arguments a test call invokes its callee with (invocation), each of the first
+ * two read as unwrapValue reads a value. */
+function judgeOptions(
+  call: Call,
+  args: Array<Node | undefined>,
+  analysis: Analysis,
+  judged: Set<Node>,
+): void {
+  const { found, parents } = analysis;
   for (const index of [0, 1]) {
     const argument = args[index];
     if (argument === undefined) continue;
-    const object = unwrapAll(argument);
+    const object = unwrapValue(argument);
     if (object.type !== "ObjectExpression") continue;
-    const placeholder = index === args.length - 2 && isEmptyFunction(args[args.length - 1]);
+    const placeholder =
+      index === args.length - 2 && isEmptyFunction(args[args.length - 1]) && !holdsCode(object);
     for (const property of optionProperties(object, judged)) {
       const key = keyName(property);
       if (key === null || !OPTION_KEYS.has(key)) continue;
-      if (placeholder && PLACEHOLDER_KEYS.has(key) && property.type === "ObjectProperty") continue;
+      const exempt =
+        placeholder &&
+        PLACEHOLDER_KEYS.has(key) &&
+        property.type === "ObjectProperty" &&
+        !isBoundOrAwaited(property, call, parents);
+      if (exempt) continue;
       const refused =
         property.type === "ObjectMethod" ||
         (property.type === "ObjectProperty" && refusedOptionValue(property.value, key));
@@ -1079,16 +1162,33 @@ function judgeOptions(call: Call, judged: Set<Node>, found: Found[]): void {
   }
 }
 
-/** Rule 10: the `type` property that makes an annotation value a skip, or null. */
+/** Rule 8's PLACEHOLDER exemption: whether a node holds a function, method or class anywhere. */
+function holdsCode(node: Node): boolean {
+  if (isFunctionLike(node) || node.type === "ClassExpression") return true;
+  return childrenOf(node).some(holdsCode);
+}
+
+/** Rule 8's PLACEHOLDER exemption: whether a plain `=` assignment (binding the node, or a list or
+ * object holding it, to a name) or an `await` (whose `then` gets it) sits between a node and the
+ * call holding it. */
+function isBoundOrAwaited(node: Node, call: Call, parents: Map<Node, Node>): boolean {
+  for (let cur = parents.get(node); cur !== undefined && cur !== call; cur = parents.get(cur)) {
+    if (cur.type === "AssignmentExpression" || cur.type === "AwaitExpression") return true;
+  }
+  return false;
+}
+
+/** Rule 10: the `type` property that makes an annotation value a skip, or null; the value, each
+ * item and the type read as unwrapValue reads a value (`(0, { type: "skip" })`). */
 function skipAnnotation(value: Node): Node | null {
-  const node = unwrapAll(value);
+  const node = unwrapValue(value);
   const items: Array<Node | null> = node.type === "ArrayExpression" ? node.elements : [node];
   for (const item of items) {
-    const object = item === null ? null : unwrapAll(item);
+    const object = item === null ? null : unwrapValue(item);
     if (object?.type !== "ObjectExpression") continue;
     for (const property of object.properties) {
       if (property.type !== "ObjectProperty" || keyName(property) !== "type") continue;
-      const type = literalKey(unwrapAll(property.value));
+      const type = literalKey(unwrapValue(property.value));
       if (type !== null && ANNOTATION_TYPES.has(type)) return property;
     }
   }
@@ -1194,7 +1294,22 @@ function isConditionalSkip(
   if (call.typeArguments != null) return false;
   const [first, ...rest] = call.arguments;
   if (!isCondition(first, true)) return false;
-  return !rest.some((argument) => isFunction(unwrapAll(argument)));
+  return !rest.some(mayBeFunction);
+}
+
+/** Rule 3's exemption: whether a later argument may be a function: one as unwrapValue reads it,
+ * an immediately invoked function (as the folder reads one: the strict side), or a conditional or
+ * logical expression with a branch or operand that may be one. */
+function mayBeFunction(node: Node): boolean {
+  const value = unwrapValue(node);
+  if (isFunction(value)) return true;
+  if (value.type === "ConditionalExpression") {
+    return mayBeFunction(value.consequent) || mayBeFunction(value.alternate);
+  }
+  if (value.type === "LogicalExpression") {
+    return mayBeFunction(value.left) || mayBeFunction(value.right);
+  }
+  return isCall(value) && isFunction(invocation(value).callee);
 }
 
 /** Rule 5: whether a rooted `.todo` is a planned test: one name, called directly. */
@@ -1221,28 +1336,30 @@ function isNamePath(node: Node): boolean {
 }
 
 /** Rule 4: the index of the parameter that is the test context of a function passed to a call,
- * through what evaluatesTo steps through (a TypeScript `this` parameter not counted): 0 for a
- * test call, a hook or a call of a test function, 1 for the call a `.for` table returns (the row
- * comes first), and -1 when the function is no test's or hook's callback. */
+ * through what evaluatesTo steps through (a TypeScript `this` parameter not counted), the call
+ * read as it INVOKES (invocation: `.call`'s arguments, the elements of `.apply`'s array literal):
+ * 0 for a test call, a hook or a call of a test function, 1 for the call a `.for` table returns
+ * (the row comes first), and -1 when the function is no test's or hook's callback. */
 function contextIndex(fn: Node, analysis: Analysis): number {
   const { parents, roots, hooks } = analysis;
-  let cur = fn;
-  let parent = parents.get(cur);
-  while (parent !== undefined && evaluatesTo(parent, cur)) {
-    cur = parent;
-    parent = parents.get(cur);
-  }
-  // A function that is the call's callee is never a test call's or a hook's own name.
+  const { cur, parent: holder } = climbValue(fn, parents);
+  let parent = holder;
+  // An element of an array literal: an argument of the call it is `.apply`'s list for.
+  if (parent?.type === "ArrayExpression") parent = climbValue(parent, parents).parent;
   if (parent === undefined || !isCall(parent)) return -1;
-  if (isTestCall(parent)) return 0;
-  const callee = unwrapValue(parent.callee);
+  const { callee, args } = invocation(parent);
+  // The call's callee, `.call`'s or `.apply`'s receiver (`test.call((ctx) => …)`) and an array
+  // that is no `.apply` list (`test("x", [(ctx) => …])`) pass no callback: a function that is the
+  // call's callee is never a test call's or a hook's own name.
+  if (!args.includes(cur)) return -1;
+  if (isTestCallee(callee)) return 0;
   if (callee.type === "Identifier" && hooks.has(callee.name)) return 0;
   if (isMember(callee) && HOOKS.has(memberName(callee) ?? "")) return 0;
-  if (isTestFunction(parent.callee, roots)) return 0;
+  if (isTestFunction(callee, roots)) return 0;
   // The function a `.for` table of a test function returns: a call of `<test function>.for`
-  // (`test.for(rows)`) or a template tagged with it.
+  // (`test.for(rows)`, `test.for.call(test, rows)`) or a template tagged with it.
   let table: Node | null = null;
-  if (isCall(callee)) table = unwrapValue(callee.callee);
+  if (isCall(callee)) table = invocation(callee).callee;
   else if (callee.type === "TaggedTemplateExpression") table = unwrapValue(callee.tag);
   const forTable =
     table !== null &&
@@ -1250,6 +1367,18 @@ function contextIndex(fn: Node, analysis: Analysis): number {
     memberName(table) === "for" &&
     isTestFunction(table.object, roots);
   return forTable ? 1 : -1;
+}
+
+/** The outermost expression that evaluates to a node (evaluatesTo, as often as it nests), and what
+ * holds that expression. */
+function climbValue(node: Node, parents: Map<Node, Node>): { cur: Node; parent: Node | undefined } {
+  let cur = node;
+  let parent = parents.get(cur);
+  while (parent !== undefined && evaluatesTo(parent, cur)) {
+    cur = parent;
+    parent = parents.get(cur);
+  }
+  return { cur, parent };
 }
 
 /** Rule 4: whether a receiver is a test context (see the header). A name is bound by the nearest
@@ -1287,7 +1416,7 @@ function judgeMember(member: Member, analysis: Analysis, playwright: ReadonlySet
   if (ANY_RECEIVER.has(name) && isCalled(member, parents)) {
     found.push({ anchor, rule: "focus", name });
   }
-  const receiver = unwrapAll(member.object);
+  const receiver = unwrapValue(member.object);
   if (
     PREFIXED.has(name) &&
     name !== "fit" &&
@@ -1315,14 +1444,14 @@ function judgeMember(member: Member, analysis: Analysis, playwright: ReadonlySet
   }
 }
 
-/** Rules 4, 6, 7 and 8 on a call. */
+/** Rules 4, 6, 7 and 8 on a call, read as the call it INVOKES (invocation: `(0, x.skip)()`,
+ * `test.skipIf.call(test, true)`, `test.apply(null, ["x", { skip: 1 }, fn])`). */
 function judgeCall(call: Call, analysis: Analysis, judged: Set<Node>): void {
   const { found } = analysis;
-  if (isTestCall(call)) judgeOptions(call, judged, found);
-  const member = unwrapAll(call.callee);
+  const { callee: member, args } = invocation(call);
+  if (isTestCallee(member)) judgeOptions(call, args, analysis, judged);
   if (!isMember(member)) return;
   const name = memberName(member);
-  const args = call.arguments;
   const anchor = member.property;
   if ((name === "skip" || name === "todo") && args.length === 0) {
     found.push({ anchor, rule: "bare", name });
@@ -1331,7 +1460,7 @@ function judgeCall(call: Call, analysis: Analysis, judged: Set<Node>): void {
     const constant = name === "skipIf" ? constantSkipIf(args[0]) : constantRunIf(args[0]);
     if (constant) found.push({ anchor, rule: name, name });
   }
-  const receiver = unwrapAll(member.object);
+  const receiver = unwrapValue(member.object);
   if (
     (name === "skip" || name === "fail") &&
     receiver.type === "Identifier" &&
@@ -1834,8 +1963,9 @@ function keyOf(found: Found, analysis: Analysis): string {
 }
 
 /** A marker's own condition, whose functions keep their bodies in its key: the value of its key
- * (a method's body included), and the first argument of each call it is the callee of (a
- * Playwright condition or fixture callback, a skipIf's condition, else a title). */
+ * (a method's body included), and the first argument of each call it is the callee of, as the
+ * call INVOKES it (invocation: `test.skipIf.call(test, () => x)`), or of each `new` (a Playwright
+ * condition or fixture callback, a skipIf's condition, else a title). */
 function conditionRanges(found: Found, parents: Map<Node, Node>): Array<[number, number]> {
   const ranges: Array<[number, number]> = [];
   const holder = parents.get(found.anchor);
@@ -1849,7 +1979,7 @@ function conditionRanges(found: Found, parents: Map<Node, Node>): Array<[number,
     if (/(?:Statement|Declaration)$/.test(parent.type)) break;
     if (isCall(parent) || parent.type === "NewExpression") {
       if (parent.callee !== cur) break;
-      const first = parent.arguments[0];
+      const first = isCall(parent) ? invocation(parent).args[0] : parent.arguments[0];
       if (first !== undefined) ranges.push([startOf(first), endOf(first)]);
     }
     cur = parent;

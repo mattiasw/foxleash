@@ -106,6 +106,18 @@ runCases(
     ["fdescribe as a member of a name", m("jg.", "fdescribe(", BODY), ["prefixed"]],
     ["fit as a member of a name", m("jg.", "fit(", BODY), []],
     ["a member of a member", m("a.b.", "xit(", BODY), []],
+    ["a member of a comma-wrapped name", m("(0, jg).", "xit(", BODY), ["prefixed"]],
+    ["xdescribe on a comma-wrapped name", m("(0, jg).", "xdescribe(", BODY), ["prefixed"]],
+    [
+      "a member of a name assigned in the receiver",
+      m("let x;\n(x = jg).", "xit(", BODY),
+      ["prefixed"],
+    ],
+    ["a member of an awaited name", m("(await jg).", "xit(", BODY), ["prefixed"]],
+    ["a member of a comma-wrapped global", m("(0, globalThis).", "xit(", BODY), ["prefixed"]],
+    ["fit on a comma-wrapped name", m("(0, jg).", "fit(", BODY), []],
+    ["a member of a comma-wrapped member", m("(0, a.b).", "xit(", BODY), []],
+    ["a member of a compound assignment", m("let x;\n(x += jg).", "xit(", BODY), []],
     ["a member read", m("const f = jg.", "xit;\n"), []],
     ["a variable", "const fit = 1;\nuse(fit);\n", []],
     ["an object key", "const o = { fit: 1 };\n", []],
@@ -207,6 +219,9 @@ runCases(
     ["a condition", m("test.", "skip(isCI, ", '"r");\n'), []],
     ["a string-keyed condition", m('test["', 'skip"](isCI, "r");\n'), []],
     ["a conditional fail", m("test.", "fail(isWebkit, ", '"bug");\n'), []],
+    ["a reason chosen by a conditional", m("test.", 'skip(isCI, isMobile ? "a" : "b");\n'), []],
+    ["a reason with a fallback", m("test.", 'skip(isCI, reason || "r");\n'), []],
+    ["a reason from a call", m("test.", "skip(isCI, why());\n"), []],
     ["a negated condition", m("test.", "skip(!process.env.X, ", '"r");\n'), []],
     [
       "a fixture callback",
@@ -273,6 +288,41 @@ runCases(
     ["a later function", m("test.", "skip(isCI, () => {});\n"), ["skip"]],
     ["a later async function", m("test.", "skip(isCI, async function () {});\n"), ["skip"]],
     ["a later parenthesised function", m("test.", "skip(isCI, (() => {}));\n"), ["skip"]],
+    [
+      "a later comma-wrapped function",
+      m("test.", "skip(isCI, (0, () => {\n  run();\n}));\n"),
+      ["skip"],
+    ],
+    [
+      "a later function assigned in the call",
+      m("let f;\ntest.", "skip(isCI, (f = () => {\n  run();\n}));\n"),
+      ["skip"],
+    ],
+    [
+      "a later conditional of functions",
+      m("test.", "skip(isCI, isMobile ? () => {\n  run();\n} : () => {\n  run();\n});\n"),
+      ["skip"],
+    ],
+    [
+      "a later conditional with one function",
+      m("test.", 'skip(isCI, isMobile ? "r" : () => {\n  run();\n});\n'),
+      ["skip"],
+    ],
+    [
+      "a later logical expression with a function",
+      m("test.", "skip(isCI, body || (() => {\n  run();\n}));\n"),
+      ["skip"],
+    ],
+    [
+      "a later immediately invoked function",
+      m("test.", "skip(isCI, (() => () => {\n  run();\n})());\n"),
+      ["skip"],
+    ],
+    [
+      "a later function invoked through call",
+      m("test.", "skip(isCI, (() => () => {\n  run();\n}).call(null));\n"),
+      ["skip"],
+    ],
     ["a spread", m("test.", "skip(...conditions);\n"), ["skip"]],
     ["an optional call", m("test.", "skip?.(isCI, ", '"r");\n'), ["skip"]],
     ["an optional member", m("test?.", "skip(isCI, ", '"r");\n'), ["skip"]],
@@ -660,6 +710,107 @@ runCases(
       m('test("x", (ctx) => {\n  let n = 0;\n  (n += ctx).', "skip(1);\n});\n"),
       [],
     ],
+    ["a bare skip behind a comma", m("(0, x.", "skip)();\n"), ["bare"]],
+    ["a bare skip through call", m("x.", "skip.call(x);\n"), ["bare"]],
+    ["a bare skip through call on this", m("this.", "skip.call(this);\n"), ["bare"]],
+    ["a bare todo through call on a test", m("test.", "todo.call(test);\n"), ["bare"]],
+    ["a bare todo through apply", m("x.", "todo.apply(x, []);\n"), ["bare"]],
+    ["a bare skip through apply with no list", m("x.", "skip.apply(x);\n"), ["bare"]],
+    ["a bare skip through apply of undefined", m("x.", "skip.apply(x, undefined);\n"), ["bare"]],
+    ["a skip with an argument through call", m("x.", "skip.call(x, 10);\n"), []],
+    ["a skip through apply of a name", m("x.", "skip.apply(x, page);\n"), []],
+    ["a skip through call of a spread", m("x.", "skip.call(...rest);\n"), []],
+    [
+      "a skip on the context of a test called through call",
+      m('test.call(null, "x", (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a deep test member called through call",
+      m('a.b.test.call(null, "x", (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a test called through apply",
+      m('test.apply(null, ["x", (ctx) => {\n  ctx.', 'skip("r");\n}]);\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a for table called through call",
+      m('test.for([1]).call(null, "d", (row, ctx) => ctx.', 'skip("w"));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a for table called through apply",
+      m('test.for([1]).apply(null, ["d", (row, ctx) => ctx.', 'skip("w")]);\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a for table built through call",
+      m('test.for.call(test, [1])("d", (row, ctx) => ctx.', 'skip("w"));\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the row of a for table called through call",
+      m('test.for([1]).call(null, "d", (row, ctx) => row.', "skip(1));\n"),
+      [],
+    ],
+    [
+      "a skip on the context of a hook called through call",
+      m("beforeEach.call(null, (ctx) => {\n  ctx.", 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the context of a hook called through apply",
+      m("beforeEach.apply(null, [(ctx) => {\n  ctx.", 'skip("r");\n}]);\n'),
+      ["contextSkip"],
+    ],
+    [
+      "a skip on the first parameter of the receiver of call",
+      m("test.call((ctx) => {\n  ctx.", 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a function in an array argument",
+      m('test("x", [(ctx) => {\n  ctx.', 'skip("r");\n}]);\n'),
+      [],
+    ],
+    [
+      "a skip on the first parameter of a function in a nested apply list",
+      m("test.apply(null, [[(ctx) => ctx.", 'skip("r")]]);\n'),
+      [],
+    ],
+    // Residuals (see the header): .bind, and a for table under a destructured name.
+    [
+      "a skip on the context of a test called through bind",
+      m('test.bind(null)("x", (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on the context of a hook called through bind",
+      m("beforeEach.bind(null)((ctx) => {\n  ctx.", 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on the context of a destructured for table",
+      m(
+        'import { test } from "vitest";\nconst { for: table } = test;\n',
+        'table([1])("d", (row, ctx) => ctx.',
+        'skip("w"));\n',
+      ),
+      [],
+    ],
+    ["a bare skip through apply of an array-like list", m("x.", "skip.apply(x, {});\n"), []],
+    [
+      "a skip on the context of a link called through call",
+      m("test.", 'runIf.call(test, x)("t", (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      [],
+    ],
+    [
+      "a skip on the context of a link called directly",
+      m("test.", 'runIf(x)("t", (ctx) => {\n  ctx.', 'skip("r");\n});\n'),
+      ["contextSkip"],
+    ],
     // The closed side: t bound to node:test is still read as a context (rename the import).
     [
       "a planned todo on t imported from node:test",
@@ -854,6 +1005,40 @@ describe("rule 6: skipIf and runIf with a constant argument", () => {
     assert.deepEqual(rules(m("vi.", "skipIf(true);\n")), []);
     assert.deepEqual(rules(m("skipIf", "(true);\n")), []);
   });
+
+  test("judges the link through call, apply and a comma", () => {
+    const refused: Array<[string, string]> = [
+      [m("(0, test.", 'skipIf)(true)("t", fn);\n'), "skipIf"],
+      [m("(0, describe.", 'skipIf)(true)("s", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf.call(test, true)("t", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf.apply(test, [true])("t", fn);\n'), "skipIf"],
+      [m("(0, test.", 'skipIf).call(test, true)("t", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf.apply(test, (0, [true]))("t", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf.call?.(test, true)("t", fn);\n'), "skipIf"],
+      [m("test.", 'runIf.call(test)("t", fn);\n'), "runIf"],
+      [m("test.", 'runIf.apply(test)("t", fn);\n'), "runIf"],
+      [m("test.", 'runIf.apply(test, null)("t", fn);\n'), "runIf"],
+      [m("test.", 'runIf.apply(test, [, true])("t", fn);\n'), "runIf"],
+      [m("test.", 'skipIf((0, () => true)())("t", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf((() => true)?.())("t", fn);\n'), "skipIf"],
+      [m("test.", 'skipIf((() => true).call(null))("t", fn);\n'), "skipIf"],
+    ];
+    for (const [source, rule] of refused) assert.deepEqual(rules(source), [rule], source);
+    const allowed = [
+      m("test.", 'skipIf.call(test, isCI)("t", fn);\n'),
+      m("test.", 'skipIf.call(test, false)("t", fn);\n'),
+      m("test.", 'runIf.call(test, true)("t", fn);\n'),
+      m("test.", 'skipIf.apply(test, conds)("t", fn);\n'),
+      m("test.", 'runIf.call(...args)("t", fn);\n'),
+      m("vi.", "skipIf.call(vi, true);\n"),
+      // Residuals (see the header): .bind, and a link called through call inside a chain.
+      m("test.", 'skipIf.bind(test)(true)("t", fn);\n'),
+      m("test.", "skipIf.call(test, x).", 'skip("t", fn);\n'),
+    ];
+    for (const source of allowed) assert.deepEqual(rules(source), [], source);
+    // The direct control of the chain residual above.
+    assert.deepEqual(rules(m("test.", "skipIf(x).", 'skip("t", fn);\n')), ["skip"]);
+  });
 });
 
 runCases(
@@ -869,12 +1054,36 @@ runCases(
     ["an optional receiver", m("testInfo?.", "skip(true);\n"), ["testInfo"]],
     ["a non-null callee", m("testInfo.", "skip!(true);\n"), ["testInfo"]],
     ["a parenthesised receiver", m("(testInfo).", "skip(true);\n"), ["testInfo"]],
+    ["a comma-wrapped receiver", m("(0, testInfo).", 'skip(true, "r");\n'), ["testInfo"]],
+    ["an awaited receiver", m("(await testInfo).", "skip(true);\n"), ["testInfo"]],
+    ["a receiver assigned in place", m("let i;\n(i = testInfo).", "skip(true);\n"), ["testInfo"]],
+    ["a comma-wrapped callee", m("(0, testInfo.", "skip)(true);\n"), ["testInfo"]],
+    ["a call through call", m("testInfo.", "skip.call(testInfo, true);\n"), ["testInfo"]],
+    ["a call through bind", m("testInfo.", "skip.bind(testInfo)(true);\n"), []],
+    ["a bare fail through apply", m("testInfo.", "fail.apply(testInfo, []);\n"), ["testInfo"]],
+    ["a condition through call", m("testInfo.", 'skip.call(testInfo, isMobile, "r");\n'), []],
+    ["a compound-assigned receiver", m("let i = 0;\n(i += testInfo).", "skip(true);\n"), []],
     ["a condition", m("testInfo.", 'skip(isMobile, "r");\n'), []],
     ["a comparison", m("testInfo.", 'fail(browserName === "webkit");\n'), []],
     ["another fixture name", m("info.", "skip(true);\n"), []],
     ["another method", m("testInfo.", "annotate(true);\n"), []],
   ],
   (source) => rules(source),
+);
+
+runCases(
+  "rule 7: Playwright's testInfo fixture in a spec",
+  [
+    [
+      "a comma-wrapped fixture parameter",
+      m(
+        'test("x", async ({ page }, testInfo) => {\n  (0, testInfo).',
+        'skip(true, "r");\n  run();\n});\n',
+      ),
+      ["testInfo"],
+    ],
+  ],
+  inSpec,
 );
 
 // Options values of a test call: [value, refused].
@@ -1056,6 +1265,155 @@ describe("rule 8: the options object of a test call", () => {
     ["another call", m("makeContext({ ", "skip: 0 });\n"), []],
     ["pagination", m("db.findMany({ ", "skip: 10, take: 5 });\n"), []],
     ["an annotation", m('test("t", { annotation: { type: "', 'skip" } }, fn);\n'), ["annotation"]],
+    ["a comma-wrapped callee", m('(0, test)("t", { ', "skip: 1 }, fn);\n"), ["option"]],
+    ["an awaited callee", m('(await test)("t", { ', "skip: 1 }, fn);\n"), ["option"]],
+    [
+      "a callee assigned in place",
+      m('let f;\n(f = test)("t", { ', "skip: 1 }, fn);\n"),
+      ["option"],
+    ],
+    ["a comma-wrapped object", m('test("t", (0, { ', "skip: 1 }), fn);\n"), ["option"]],
+    [
+      "an object assigned in place",
+      m('let o;\ntest("t", (o = { ', "skip: 1 }), fn);\n"),
+      ["option"],
+    ],
+    ["an awaited object", m('test("t", await { ', "skip: 1 }, fn);\n"), ["option"]],
+    [
+      "a comma-wrapped spread object",
+      m('test("t", { ...(0, { ', "skip: 1 }) }, fn);\n"),
+      ["option"],
+    ],
+    [
+      "a comma-wrapped object on a body",
+      m('test("t", (0, { ', "skip: true }), () => {\n  run();\n});\n"),
+      ["option"],
+    ],
+    [
+      "a comma-wrapped object on the placeholder",
+      m('test("t", (0, { ', "skip: true }), () => {});\n"),
+      [],
+    ],
+    [
+      "an object assigned in place on the placeholder",
+      m('let o;\ntest("t", (o = { ', "skip: true }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "an object assigned in place behind a comma on the placeholder",
+      m('let o;\ntest("t", (0, o = { ', "skip: true }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a spread object assigned in place on the placeholder",
+      m('let o;\ntest("t", { ...(o = { ', "skip: true }) }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "an object assigned in place holding a spread on the placeholder",
+      m('let o;\ntest("t", (o = { ...{ ', "skip: true } }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "an object assigned in place on the placeholder through call",
+      m('let o;\ntest.call(null, "t", (o = { ', "skip: true }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "an apply list assigned in place on the placeholder",
+      m('let a;\ntest.apply(null, (a = ["t", { ', "skip: true }, () => {}]));\n"),
+      ["option"],
+    ],
+    [
+      "a comma-wrapped object after an assignment on the placeholder",
+      m('let o;\ntest("t", (o = 1, { ', "skip: true }), () => {});\n"),
+      [],
+    ],
+    [
+      "the placeholder whose call is assigned",
+      m('let r;\nr = test("t", { ', "skip: true }, () => {});\n"),
+      [],
+    ],
+    [
+      "a getter beside the placeholder's skip",
+      m('test("t", { ', "skip: true, get timeout() {\n  return 1;\n} }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a then method on an awaited placeholder",
+      m('test("t", await { ', "skip: true, then(r) {\n  r(this);\n} }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a then function on an awaited placeholder",
+      m('test("t", await { ', "skip: true, then: function (r) {\n  r(this);\n} }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a getter in an object spread into the placeholder",
+      m('test("t", { ...{ ', "skip: true, get timeout() {\n  return 1;\n} } }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a class in the placeholder's options",
+      m('test("t", { ', "skip: true, __proto__: new (class {})() }, () => {});\n"),
+      ["option"],
+    ],
+    ["an awaited placeholder", m('test("t", await { ', "skip: true }, () => {});\n"), ["option"]],
+    [
+      "an awaited placeholder with a then by name",
+      m('test("t", await { ', "skip: true, then: next }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "an awaited placeholder behind a comma",
+      m('test("t", (0, await { ', "skip: true }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a placeholder after an await in a comma",
+      m('test("t", (await ready, { ', "skip: true }), () => {});\n"),
+      [],
+    ],
+    [
+      "a constant beside the placeholder's skip",
+      m('test("t", { ', "skip: true, timeout: 1 }, () => {});\n"),
+      [],
+    ],
+    [
+      "an object logically assigned in place",
+      m('let o;\ntest("t", (o ||= { ', "skip: 1 }), fn);\n"),
+      [],
+    ],
+    ["a call through call", m('test.call(null, "t", { ', "skip: 1 }, fn);\n"), ["option"]],
+    ["a call through apply", m('test.apply(null, ["t", { ', "skip: 1 }, fn]);\n"), ["option"]],
+    [
+      "the placeholder through call",
+      m('test.call(null, "t", { ', "skip: true }, () => {});\n"),
+      [],
+    ],
+    ["a subtest through call", m('t.test.call(t, "t", { ', "only: true }, fn);\n"), ["option"]],
+    ["a call through bind", m('test.bind(null)("t", { ', "skip: 1 }, fn);\n"), []],
+    [
+      "a call through apply of an array-like list",
+      m('test.apply(null, { 0: "t", 1: { ', "skip: 1 }, 2: fn, length: 3 });\n"),
+      [],
+    ],
+    [
+      "a comma-wrapped todo option on a placeholder",
+      m('test("t", (0, { ', "todo: true }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a comma-wrapped skip method on a placeholder",
+      m('test("t", (0, { ', "skip() {\n  return true;\n} }), () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a todo option on a placeholder through call",
+      m('test.call(null, "t", { ', "todo: true }, () => {});\n"),
+      ["option"],
+    ],
   ];
   for (const [label, source, expected] of cases) {
     test(`${expected.length > 0 ? "refuses" : "allows"} ${label}`, () => {
@@ -1163,6 +1521,26 @@ runCases(
     [
       "a cast value",
       m("const o = { annotation: { type: ", '"skip" } as const };\n'),
+      ["annotation"],
+    ],
+    [
+      "a comma-wrapped value",
+      m("const o = { annotation: (0, { type: ", '"skip" }) };\n'),
+      ["annotation"],
+    ],
+    [
+      "a comma-wrapped array",
+      m("const o = { annotation: (0, [{ type: ", '"skip" }]) };\n'),
+      ["annotation"],
+    ],
+    [
+      "a comma-wrapped array item",
+      m("const o = { annotation: [(0, { type: ", '"fixme" })] };\n'),
+      ["annotation"],
+    ],
+    [
+      "a comma-wrapped type",
+      m("const o = { annotation: { type: (0, ", '"skip") } };\n'),
       ["annotation"],
     ],
     ["an issue", 'const o = { annotation: { type: "issue" } };\n', []],
@@ -2151,6 +2529,9 @@ describe("which markers are new", () => {
     const body = (x: string) =>
       m("test.", `skip(({ browserName }) => browserName === "a", () => {\n  ${x};\n});\n`);
     assert.deepEqual(rules(body("b()"), "a.test.ts", body("a()")), []);
+    const called = (x: string) => m("test.", `skipIf.call(test, () => ${x})("t", fn);\n`);
+    assert.deepEqual(rules(called("b"), "a.test.ts", called("a")), ["skipIf"]);
+    assert.deepEqual(rules(called("a"), "a.test.ts", called("a")), []);
   });
 
   // The concise body starts where the marker does: kept, and the test body nested in it elided.
