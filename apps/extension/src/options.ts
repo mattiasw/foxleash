@@ -372,15 +372,11 @@ function showAnswers(held: SessionAnswers[]): void {
   if (announced(answersStatus) === ANSWERS_FAILED) announce(answersStatus, "");
   const rows = held.flatMap(answerRows);
   const shown = JSON.stringify(rows.map(({ key, text }) => [key, text]));
-  // Replacing identical rows would announce them again and could swap a button under a click.
+  // Unchanged rows need no update, nor a focus move.
   if (shown === shownAnswers) return;
   shownAnswers = shown;
   const focused = focusedRow(answers);
-  answers.replaceChildren(
-    ...rows.map(({ key, text, forget }) =>
-      row(text, text, key, [{ label: "Forget", action: "forget", run: forget }]),
-    ),
-  );
+  updateAnswerRows(rows);
   answers.hidden = rows.length === 0;
   answersEmpty.hidden = rows.length > 0;
   if (focused !== undefined) {
@@ -426,6 +422,40 @@ function forget(session: string, site: string, what: string): void {
       announce(answersStatus, text);
       refreshAnswers();
     });
+}
+
+/**
+ * Updates the answer rows in place by key, so a press on a row's button survives a change of its
+ * text: a new button under the release would get no click.
+ */
+function updateAnswerRows(rows: AnswerRow[]): void {
+  const wanted = new Set(rows.map(({ key }) => key));
+  const kept = new Map<string, Element>();
+  // Stale rows go before the survivors are placed, or a survivor after one would be moved.
+  for (const item of [...answers.children]) {
+    const key = item.querySelector("button")?.dataset.key;
+    if (key !== undefined && wanted.has(key) && !kept.has(key)) kept.set(key, item);
+    else item.remove();
+  }
+  let next = answers.firstElementChild;
+  for (const { key, text, forget } of rows) {
+    let item = kept.get(key);
+    if (item === undefined) {
+      item = row(text, text, key, [{ label: "Forget", action: "forget", run: forget }]);
+    } else {
+      kept.delete(key);
+      // The kept button's handler acts on the session and site its key names, not on the text.
+      const span = item.querySelector("span");
+      if (span !== null && span.textContent !== text) span.textContent = text;
+      const button = item.querySelector("button");
+      const name = `Forget ${text}`;
+      if (button !== null && button.getAttribute("aria-label") !== name) {
+        button.setAttribute("aria-label", name);
+      }
+    }
+    if (item === next) next = next.nextElementSibling;
+    else answers.insertBefore(item, next);
+  }
 }
 
 /**

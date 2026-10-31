@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `type` into an editable area whose caret sits just before its first line, as in a Gmail reply
   typed right after opening it, now writes on that line instead of above it, so no extra empty
   line is left above the signature.
+- A Forget click on the settings page is no longer lost when it is the click that brings Firefox
+  back into focus after an agent opened or closed a tab.
 
 ## [0.1.1] - 2026-10-27
 

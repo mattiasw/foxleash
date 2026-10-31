@@ -181,6 +181,83 @@ describe("editing the settings, in real Firefox", () => {
     assert.ok(closed.includes("was closed without an answer"), closed);
   });
 
+  test("a Forget click keeps its row when the answers refresh between press and release", async (t) => {
+    const session = await connected();
+    t.after(() => session.close());
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(session, "tab_open", { url: third.url("/a") }));
+    const allowing = await harness.promptContext(existing);
+    await harness.waitForArmed(allowing);
+    await firefox.click(allowing, ANSWER.once);
+    await opening;
+    const second = tabOf(await harness.ok(session, "tab_open", { url: third.url("/a") }));
+
+    const page = await harness.settingsPage();
+    t.after(() => firefox.closeContext(page));
+    const two = `${third.site}: allowed this session (session with 2 tabs)`;
+    await waitForAnswers(page, {
+      rows: [two],
+      list: true,
+      empty: false,
+      status: "",
+      focus: null,
+    });
+
+    // Focusing the button also scrolls it into view, which the press needs.
+    const button = `button[aria-label="Forget ${two}"]`;
+    await firefox.evaluate(page, `document.querySelector(${JSON.stringify(button)}).focus()`);
+    await firefox.press(page, button);
+    try {
+      // Closing a background tab changes the label and leaves the settings page selected.
+      await harness.ok(session, "tab_close", { tabId: second.id });
+      await firefox.evaluate(page, 'dispatchEvent(new Event("focus"))');
+      const one = `${third.site}: allowed this session (session with 1 tab)`;
+      await waitForAnswers(page, {
+        rows: [one],
+        list: true,
+        empty: false,
+        status: "",
+        focus: `Forget ${one}`,
+      });
+    } finally {
+      await firefox.release(page);
+    }
+    await waitForAnswers(page, {
+      rows: [],
+      list: false,
+      empty: true,
+      status: `Forgot ${third.site} for this session`,
+      focus: "heading",
+    });
+  });
+
+  test("coming back to the settings page reads the session answers again", async (t) => {
+    const session = await connected();
+    t.after(() => session.close());
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(session, "tab_open", { url: third.url("/a") }));
+    const allowing = await harness.promptContext(existing);
+    await harness.waitForArmed(allowing);
+    await firefox.click(allowing, ANSWER.once);
+    await opening;
+
+    const page = await harness.settingsPage();
+    t.after(() => firefox.closeContext(page));
+    const one = `${third.site}: allowed this session (session with 1 tab)`;
+    await waitForAnswers(page, { rows: [one], list: true, empty: false, status: "", focus: null });
+
+    // The agent's new tab is selected, which hides the settings page.
+    const second = tabOf(await harness.ok(session, "tab_open", { url: third.url("/a") }));
+    await firefox.activate(page);
+    const two = `${third.site}: allowed this session (session with 2 tabs)`;
+    await waitForAnswers(page, { rows: [two], list: true, empty: false, status: "", focus: null });
+
+    // Closing a background tab leaves the settings page selected, so only the event refreshes it.
+    await harness.ok(session, "tab_close", { tabId: second.id });
+    await firefox.evaluate(page, 'document.dispatchEvent(new Event("visibilitychange"))');
+    await waitForAnswers(page, { rows: [one], list: true, empty: false, status: "", focus: null });
+  });
+
   test("Forget on closed prompts lets a session that stopped asking ask again", async (t) => {
     const session = await connected();
     t.after(() => session.close());

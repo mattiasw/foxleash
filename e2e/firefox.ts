@@ -45,6 +45,8 @@ const IDENTIFY_TIMEOUT_MS = 10_000;
 const POLL_MS = 100;
 // The WebDriver web element identifier, the key of an element reference.
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
+// press and release share one pointer source, so Marionette keeps the button held between them.
+const MOUSE = { type: "pointer", id: "mouse", parameters: { pointerType: "mouse" } };
 
 // An empty form action origin matches any form on the origin.
 const SAVE_LOGIN = `const [origin, username, password] = arguments;
@@ -222,6 +224,10 @@ export interface Firefox {
   captureViewport(context: string): Promise<string>;
   /** Clicks the first element matching `cssSelector` with real (trusted) input. */
   click(context: string, cssSelector: string): Promise<void>;
+  /** Presses the mouse button on the first element matching `cssSelector` until release. */
+  press(context: string, cssSelector: string): Promise<void>;
+  /** Releases the mouse button that `press` holds down. */
+  release(context: string): Promise<void>;
   /**
    * Shows and focuses the tab with the Marionette switch that `click` sends before it clicks.
    * BiDi's `browsingContext.activate` refuses extension pages.
@@ -462,6 +468,11 @@ export async function launchFirefox({
   }
 
   async function clickElement(context: string, cssSelector: string): Promise<void> {
+    const element = await findElement(context, cssSelector);
+    await input.send("WebDriver:ElementClick", { id: element });
+  }
+
+  async function findElement(context: string, cssSelector: string): Promise<string> {
     await switchTo(context);
     let found: unknown;
     try {
@@ -476,7 +487,29 @@ export async function launchFirefox({
     if (typeof element !== "string" || element === "") {
       throw new Error(`WebDriver:FindElement returned ${JSON.stringify(found)}`);
     }
-    await input.send("WebDriver:ElementClick", { id: element });
+    return element;
+  }
+
+  async function pressElement(context: string, cssSelector: string): Promise<void> {
+    const element = await findElement(context, cssSelector);
+    await input.send("WebDriver:PerformActions", {
+      actions: [
+        {
+          ...MOUSE,
+          actions: [
+            { type: "pointerMove", origin: { [ELEMENT_KEY]: element }, x: 0, y: 0 },
+            { type: "pointerDown", button: 0 },
+          ],
+        },
+      ],
+    });
+  }
+
+  async function releasePointer(context: string): Promise<void> {
+    await switchTo(context);
+    await input.send("WebDriver:PerformActions", {
+      actions: [{ ...MOUSE, actions: [{ type: "pointerUp", button: 0 }] }],
+    });
   }
 
   // Runs `script` with Firefox's privileges, awaiting a promise it returns.
@@ -623,6 +656,16 @@ export async function launchFirefox({
         HELPER_TIMEOUT_MS,
         `click ${context} ${cssSelector}`,
       );
+    },
+    press(context, cssSelector) {
+      return withDeadline(
+        pressElement(context, cssSelector),
+        HELPER_TIMEOUT_MS,
+        `press ${context} ${cssSelector}`,
+      );
+    },
+    release(context) {
+      return withDeadline(releasePointer(context), HELPER_TIMEOUT_MS, `release ${context}`);
     },
     activate(context) {
       // The same switch as click's, so a click right after this changes neither focus nor
