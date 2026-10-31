@@ -77,6 +77,11 @@ textarea {
   overflow-wrap: anywhere;
 }
 
+.line {
+  min-height: 44px;
+  font: inherit;
+}
+
 .errors li {
   display: block;
   padding-block: 0.25rem;

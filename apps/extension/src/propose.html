@@ -13,14 +13,15 @@
         Saving keeps it in Foxhand's settings; a later agent session can read and follow it.</p>
       <h2>Recipe</h2>
       <label for="recipe-name">Name</label>
-      <input type="text" id="recipe-name" autocomplete="off" aria-required="true"
-        aria-describedby="recipe-name-help recipe-name-errors">
+      <textarea id="recipe-name" class="whole line" rows="1" autocomplete="off" aria-required="true"
+        aria-describedby="recipe-name-help recipe-name-errors"></textarea>
       <p id="recipe-name-help">One line of at most 100 characters; no two recipes share a
         name.</p>
       <ul id="recipe-name-errors" class="errors" hidden></ul>
       <label for="recipe-description">Description</label>
-      <input type="text" id="recipe-description" autocomplete="off" aria-required="true"
-        aria-describedby="recipe-description-help recipe-description-errors">
+      <textarea id="recipe-description" class="whole line" rows="1" autocomplete="off"
+        aria-required="true"
+        aria-describedby="recipe-description-help recipe-description-errors"></textarea>
       <p id="recipe-description-help">One line of at most 200 characters saying what the
         recipe does.</p>
       <ul id="recipe-description-errors" class="errors" hidden></ul>

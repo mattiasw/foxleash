@@ -37,10 +37,11 @@ const UNARMED = "The buttons respond a moment after this window is focused.";
 const CHANGED =
   "This recipe changed since this page opened. Check the current version, then save again.";
 const OUT_OF_VIEW =
-  "Not saved: part of the recipe was out of view. Read the sites and steps again, then save.";
+  "Not saved: part of the recipe was out of view. Read the recipe again, then save.";
+// The fields in page order; each has class="whole" and grows to show all of its text.
 const ORDER: readonly Field[] = ["name", "description", "sites", "steps"];
-// The fields with class="whole", which grow to show all of their text.
-const WHOLE: readonly Field[] = ["sites", "steps"];
+// checkRecipe refuses a line break in these.
+const LINES: readonly Field[] = ["name", "description"];
 // A run of more unchanged lines than this shows as one item that counts them.
 const MAX_SAME_RUN = 3;
 const WORDS: Record<DiffLine["kind"], string> = {
@@ -102,8 +103,17 @@ const { renderButtons, watch, rearm } = armButtons({
   onUnarmed: () => announce(status, unarmedText),
 });
 
+for (const name of LINES) {
+  const { field } = fields[name];
+  field.addEventListener("keydown", (event) => {
+    if (event instanceof KeyboardEvent && event.key === "Enter" && !event.isComposing) {
+      event.preventDefault();
+    }
+  });
+  field.addEventListener("input", () => spaceLineBreaks(field));
+}
 for (const name of ORDER) fields[name].field.addEventListener("input", () => edited(name));
-for (const name of WHOLE) fields[name].field.addEventListener("input", showWhole);
+for (const name of ORDER) fields[name].field.addEventListener("input", showWhole);
 // The label is as wide as the fields and its text scales with theirs, so its box changes whenever
 // their wrapping can, and fitting them leaves it alone unless the page's own scrollbar comes or
 // goes.
@@ -126,7 +136,7 @@ function onAnswer(button: HTMLButtonElement): void {
   unarmedText = UNARMED;
   if (answer === "save") {
     // A reflow after the last fit (a late font, a style change) can hide text with no scrollbar.
-    const hidden = WHOLE.find((name) => !inView(fields[name].field));
+    const hidden = ORDER.find((name) => !inView(fields[name].field));
     if (hidden !== undefined) {
       showWhole();
       rearm();
@@ -158,6 +168,22 @@ function inView(field: TextField): boolean {
 /** No edits while an answer is out or after the last one, so the fields show what was answered. */
 function setEditable(editable: boolean): void {
   for (const name of ORDER) fields[name].field.readOnly = !editable;
+}
+
+/** Replaces each line break with a space, as Firefox does when pasting into a one-line input. */
+function spaceLineBreaks(field: TextField): void {
+  const { value, selectionStart, selectionEnd, selectionDirection } = field;
+  if (!/[\r\n]/.test(value)) return;
+  field.value = spaced(value);
+  field.setSelectionRange(
+    spaced(value.slice(0, selectionStart ?? value.length)).length,
+    spaced(value.slice(0, selectionEnd ?? value.length)).length,
+    selectionDirection ?? undefined,
+  );
+}
+
+function spaced(text: string): string {
+  return text.replace(/\r\n|[\r\n]/g, " ");
 }
 
 function edited(name: Field): void {
@@ -253,10 +279,10 @@ function fill(given: Values): void {
   showWhole();
 }
 
-/** Grows the sites and steps fields to their text, never below their rows. */
+/** Grows each field to its text, never below its rows or its min-height. */
 function showWhole(): void {
   const { scrollX, scrollY } = window;
-  for (const name of WHOLE) {
+  for (const name of ORDER) {
     const { field } = fields[name];
     field.style.height = "auto";
     // scrollHeight leaves out the border, which the border-box height includes.
