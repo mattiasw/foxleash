@@ -240,4 +240,8 @@ describe("DEFAULT_BLOCKLIST", () => {
   it("has no duplicates", () => {
     assert.equal(new Set(DEFAULT_BLOCKLIST).size, DEFAULT_BLOCKLIST.length);
   });
+
+  it("is in alphabetical order", () => {
+    assert.deepEqual(DEFAULT_BLOCKLIST, [...DEFAULT_BLOCKLIST].sort());
+  });
 });

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The built-in blocklist in the settings is in alphabetical order.
+
 ## [0.2.0] - 2026-10-31
 
 ### Added
