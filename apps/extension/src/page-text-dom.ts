@@ -1,3 +1,4 @@
+// biome-ignore-all lint/performance/useDomNodeTextContent: page text omits CSS-hidden text
 import type { PageText, PageTextSource } from "@foxhand/protocol";
 import { flatParentOf, inDetailsContent, shadowRootOf } from "./flat-tree.ts";
 import { composePageText } from "./page-text.ts";

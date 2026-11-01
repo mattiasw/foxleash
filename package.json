@@ -35,11 +35,11 @@
     "*": "biome check --write --no-errors-on-unmatched --files-ignore-unknown=true"
   },
   "devDependencies": {
-    "@babel/parser": "^8.0.7",
-    "@biomejs/biome": "2.5.15",
+    "@babel/parser": "^8.0.8",
+    "@biomejs/biome": "2.6.3",
     "husky": "^9.1.7",
     "lint-staged": "^17.6.0",
-    "turbo": "^2.11.9",
+    "turbo": "^2.11.10",
     "typescript": "^7.0.2"
   },
   "overrides": {
