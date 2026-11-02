@@ -110,9 +110,13 @@
 //      with no wrapper, no type arguments and no optional call anywhere; the first argument is a
 //      CONDITION (below); and no later argument may be a function (`test.skip(title, () => {})`
 //      declares a skipped test): one behind a comma expression, a plain `=` assignment or an
-//      `await`, an immediately invoked function, or a conditional or logical expression with a
-//      branch or operand that may be one counts too (`test.skip(title, (0, () => {}))`,
-//      `test.skip(title, isCI ? () => {} : () => {})`, `test.skip(title, body || (() => {}))`).
+//      `await`, a call of one (an immediately invoked function), a conditional or logical
+//      expression with a branch or operand that may be one, a logical assignment (`||=`, `&&=`,
+//      `??=`) whose right side may be one, or a `.bind(` of one (the call read as it INVOKES, so
+//      `Function.prototype.bind.call(f, x)` binds `f`) counts too
+//      (`test.skip(title, (0, () => {}))`, `test.skip(title, isCI ? () => {} : () => {})`,
+//      `test.skip(title, body || (() => {}))`, `test.skip(title, (body ??= () => {}))`,
+//      `test.skip(title, (() => {}).bind(null))`).
 //      Everything else is refused there too: `test.skip()`, `test.skip("title", fn)`,
 //      `test.skip(true, r)`, `test.skip?.(isCI, r)`, `test.skip!(isCI, r)`,
 //      `test?.["skip"](isCI, r)`, `test.info().skip(isCI, r)`, `test.describe.skip(...)`.
@@ -181,7 +185,10 @@
 //      written as a plain property (never a method or accessor) is allowed when the options
 //      object is the second-to-last argument the call invokes with and the last is an EMPTY
 //      function with no parameters, written as itself; the options object holds no function,
-//      method or class (a getter could hand it to another test as `this`), and no plain `=`
+//      method or class (a getter could hand it to another test as `this`) and no key spelling
+//      `__proto__` whose value is not `null` (`{ skip: true, __proto__: proto }` inherits such a
+//      getter: Vitest reads `options.timeout` off the caller's object, so `proto`'s getter
+//      registered and skipped a test with a real body, measured, vitest 5.0.5), and no plain `=`
 //      assignment or `await` sits on the way from the call to the key (`(o = { skip: true })`
 //      would skip `test("u", o, fn)` too, and an awaited object's `then`, from anywhere, gets it
 //      as `this`): the env-gated placeholder
@@ -441,6 +448,7 @@ const MODIFIERS = new Set([
 ]);
 const OPTION_KEYS = new Set(["skip", "only", "todo", "fails", "expectFailure"]);
 const PLACEHOLDER_KEYS = new Set(["skip"]);
+const LOGICAL_ASSIGNMENTS = new Set(["||=", "&&=", "??="]);
 const ANNOTATION_TYPES = new Set(["skip", "fixme", "fail"]);
 const ERROR_CLASS = /^(?:[A-Z][A-Za-z0-9_$]*)?(?:Error|Exception)$/;
 const SIGN_RUN = new Set(["!", "~", "+", "-"]);
@@ -1143,7 +1151,10 @@ function judgeOptions(
     const object = unwrapValue(argument);
     if (object.type !== "ObjectExpression") continue;
     const placeholder =
-      index === args.length - 2 && isEmptyFunction(args[args.length - 1]) && !holdsCode(object);
+      index === args.length - 2 &&
+      isEmptyFunction(args[args.length - 1]) &&
+      !holdsCode(object) &&
+      !holdsPrototype(object);
     for (const property of optionProperties(object, judged)) {
       const key = keyName(property);
       if (key === null || !OPTION_KEYS.has(key)) continue;
@@ -1166,6 +1177,21 @@ function judgeOptions(
 function holdsCode(node: Node): boolean {
   if (isFunctionLike(node) || node.type === "ClassExpression") return true;
   return childrenOf(node).some(holdsCode);
+}
+
+/** Rule 8's PLACEHOLDER exemption: whether a node holds, anywhere, a key spelling `__proto__` (as
+ * keyName reads one) whose value, as unwrapValue reads it, is not `null`: written `__proto__:`
+ * it sets the object's prototype, whose inherited getter Vitest reads (`options.timeout`) with
+ * the object as `this`, so it can hand the object to another test as holdsCode's getter can. */
+function holdsPrototype(node: Node): boolean {
+  if (
+    node.type === "ObjectProperty" &&
+    keyName(node) === "__proto__" &&
+    unwrapValue(node.value).type !== "NullLiteral"
+  ) {
+    return true;
+  }
+  return childrenOf(node).some(holdsPrototype);
 }
 
 /** Rule 8's PLACEHOLDER exemption: whether a plain `=` assignment (binding the node, or a list or
@@ -1298,8 +1324,11 @@ function isConditionalSkip(
 }
 
 /** Rule 3's exemption: whether a later argument may be a function: one as unwrapValue reads it,
- * an immediately invoked function (as the folder reads one: the strict side), or a conditional or
- * logical expression with a branch or operand that may be one. */
+ * a call of one (an immediately invoked function, as the folder reads one: the strict side), a
+ * conditional or logical expression with a branch or operand that may be one, a logical
+ * assignment whose right side may be one, or a `.bind(` of one, the call read as it INVOKES:
+ * through `.call` or `.apply` the function bound is their first argument, whatever the list
+ * holds, and the receiver of `.bind` is read too (the strict side). */
 function mayBeFunction(node: Node): boolean {
   const value = unwrapValue(node);
   if (isFunction(value)) return true;
@@ -1309,7 +1338,27 @@ function mayBeFunction(node: Node): boolean {
   if (value.type === "LogicalExpression") {
     return mayBeFunction(value.left) || mayBeFunction(value.right);
   }
-  return isCall(value) && isFunction(invocation(value).callee);
+  if (value.type === "AssignmentExpression" && LOGICAL_ASSIGNMENTS.has(value.operator)) {
+    return mayBeFunction(value.right);
+  }
+  if (!isCall(value)) return false;
+  const bound = boundThrough(value);
+  if (bound !== undefined && mayBeFunction(bound)) return true;
+  const { callee } = invocation(value);
+  if (isMember(callee) && memberName(callee) === "bind") return mayBeFunction(callee.object);
+  return mayBeFunction(callee);
+}
+
+/** Rule 3's exemption: the function `f.bind.call(g, ...)` or `f.bind.apply(g, list)` binds, `g`,
+ * or undefined for any other call. */
+function boundThrough(call: Call): Node | undefined {
+  const callee = unwrapValue(call.callee);
+  if (!isMember(callee)) return undefined;
+  const name = memberName(callee);
+  if (name !== "call" && name !== "apply") return undefined;
+  const target = unwrapValue(callee.object);
+  if (!isMember(target) || memberName(target) !== "bind") return undefined;
+  return call.arguments[0];
 }
 
 /** Rule 5: whether a rooted `.todo` is a planned test: one name, called directly. */

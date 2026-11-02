@@ -313,11 +313,90 @@ runCases(
       m("test.", "skip(isCI, body || (() => {\n  run();\n}));\n"),
       ["skip"],
     ],
+    // A logical assignment evaluates to its right side when it assigns, and a `.bind(` of a
+    // function is a function.
+    [
+      "a later nullish assignment of a function",
+      m(
+        "let body;\ntest.",
+        'skip(isCI, (body ??= async ({ page }) => {\n  await page.goto("/");\n}));\n',
+      ),
+      ["skip"],
+    ],
+    [
+      "a later or-assignment of a function",
+      m("let body;\ntest.", "skip(isCI, (body ||= () => {\n  run();\n}));\n"),
+      ["skip"],
+    ],
+    [
+      "a later and-assignment of a function",
+      m("let body = 1;\ntest.", "skip(isCI, (body &&= () => {\n  run();\n}));\n"),
+      ["skip"],
+    ],
+    [
+      "a later bound function",
+      m("test.", 'skip(isCI, (async ({ page }) => {\n  await page.goto("/");\n}).bind(null));\n'),
+      ["skip"],
+    ],
+    [
+      "a later function bound through call",
+      m("test.", "skip(isCI, (() => {\n  run();\n}).bind.call(null, null));\n"),
+      ["skip"],
+    ],
+    // Through `.call` or `.apply`, the function `.bind` binds is their first argument.
+    [
+      "a later function bound by bind.call",
+      m("test.", "skip(isCI, Function.prototype.bind.call(() => {\n  run();\n}, null));\n"),
+      ["skip"],
+    ],
+    [
+      "a later function bound by bind.apply",
+      m("test.", "skip(isCI, Function.prototype.bind.apply(() => {\n  run();\n}, [null]));\n"),
+      ["skip"],
+    ],
+    [
+      "a later function bound by bind.apply with a list by name",
+      m("test.", "skip(isCI, Function.prototype.bind.apply(() => {\n  run();\n}, args));\n"),
+      ["skip"],
+    ],
+    [
+      "a later name called with a function as this",
+      m("test.", "skip(isCI, body.call(() => {\n  run();\n}));\n"),
+      [],
+    ],
+    [
+      "a later name bound by bind.call",
+      m("test.", "skip(isCI, Function.prototype.bind.call(body, null));\n"),
+      [],
+    ],
+    [
+      "a later name bound with a function as this",
+      m("test.", "skip(isCI, body.bind(() => {\n  run();\n}));\n"),
+      [],
+    ],
+    [
+      "a later bound or-assignment of a function",
+      m("let body;\ntest.", "skip(isCI, (body ||= () => {\n  run();\n}).bind(null));\n"),
+      ["skip"],
+    ],
+    [
+      "a later nullish assignment of a reason",
+      m("let r;\ntest.", 'skip(isCI, (r ??= "r"));\n'),
+      [],
+    ],
+    // Residual (see the header): a function passed by name, bound or not, is no function here.
+    ["a later bound name", m("test.", "skip(isCI, body.bind(null));\n"), []],
     [
       "a later immediately invoked function",
       m("test.", "skip(isCI, (() => () => {\n  run();\n})());\n"),
       ["skip"],
     ],
+    [
+      "a later bound function invoked",
+      m("test.", "skip(isCI, (() => () => {\n  run();\n}).bind(null)());\n"),
+      ["skip"],
+    ],
+    ["a later bound name invoked", m("test.", 'skip(isCI, why.bind(null, "r")());\n'), []],
     [
       "a later function invoked through call",
       m("test.", "skip(isCI, (() => () => {\n  run();\n}).call(null));\n"),
@@ -1358,6 +1437,40 @@ describe("rule 8: the options object of a test call", () => {
       "a class in the placeholder's options",
       m('test("t", { ', "skip: true, __proto__: new (class {})() }, () => {});\n"),
       ["option"],
+    ],
+    // Vitest reads options.timeout off the caller's object, so a getter the object inherits
+    // registers a test with a real body (`u`), and the placeholder skips it (measured, vitest
+    // 5.0.5).
+    [
+      "an inherited getter on the placeholder",
+      m(
+        'import { test } from "vitest";\nlet done = false;\nconst proto = {\n',
+        "  get timeout() {\n    if (!done) {\n      done = true;\n",
+        '      test("u", this, () => {\n        throw new Error("real body");\n      });\n',
+        '    }\n    return 5000;\n  },\n};\ntest("t", { ',
+        "skip: true, __proto__: proto } as never, () => {});\n",
+      ),
+      ["option"],
+    ],
+    [
+      "a created prototype on the placeholder",
+      m('test("t", { ', "skip: true, __proto__: Object.create(p) }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a quoted prototype key on the placeholder",
+      m('test("t", { ', 'skip: true, "__proto__": proto }, () => {});\n'),
+      ["option"],
+    ],
+    [
+      "a prototype in a nested object on the placeholder",
+      m('test("t", { ', "skip: true, meta: { __proto__: proto } }, () => {});\n"),
+      ["option"],
+    ],
+    [
+      "a null prototype on the placeholder",
+      m('test("t", { ', "skip: true, __proto__: null }, () => {});\n"),
+      [],
     ],
     ["an awaited placeholder", m('test("t", await { ', "skip: true }, () => {});\n"), ["option"]],
     [
