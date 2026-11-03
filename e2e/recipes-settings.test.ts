@@ -360,25 +360,34 @@ describe("recipes on the settings page, in real Firefox", () => {
     assert.deepEqual(await storedRecipes(page), { "recipe:Alpha": elsewhere });
   });
 
-  /** Opens a settings page with exactly `recipes` stored, once it lists them. */
+  /**
+   * Stores exactly `recipes`, then opens a settings page once it lists them. The writes run in
+   * another page first: each storage change re-renders the list, and a render arriving after the
+   * rows show would replace the buttons a test is about to click.
+   */
   async function openWith(t: TestContext, recipes: Recipe[]): Promise<string> {
+    const writer = await harness.settingsPage();
+    try {
+      const entries = JSON.stringify(
+        JSON.stringify(
+          Object.fromEntries(recipes.map((stored) => [`recipe:${stored.name}`, stored])),
+        ),
+      );
+      const reset = await firefox.evaluate(
+        writer,
+        `browser.storage.local.get(null)
+          .then((items) => browser.storage.local.remove(
+            Object.keys(items).filter((key) => key.startsWith("recipe:")),
+          ))
+          .then(() => browser.storage.local.set(JSON.parse(${entries})))
+          .then(() => true)`,
+      );
+      assert.equal(reset, true);
+    } finally {
+      await firefox.closeContext(writer);
+    }
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
-    const entries = JSON.stringify(
-      JSON.stringify(
-        Object.fromEntries(recipes.map((stored) => [`recipe:${stored.name}`, stored])),
-      ),
-    );
-    const reset = await firefox.evaluate(
-      page,
-      `browser.storage.local.get(null)
-        .then((items) => browser.storage.local.remove(
-          Object.keys(items).filter((key) => key.startsWith("recipe:")),
-        ))
-        .then(() => browser.storage.local.set(JSON.parse(${entries})))
-        .then(() => true)`,
-    );
-    assert.equal(reset, true);
     await waitFor(
       page,
       `JSON.stringify([...document.querySelectorAll("#recipes li span")].map((span) => span.textContent))`,
