@@ -121,25 +121,36 @@ jobs:
           fi
 
           echo "All checks passed, merging PR #$PR"
-          # Merge only the commit that was checked: GitHub refuses the merge when the branch
-          # moved since $SHA, so an untested head is never merged on another commit's green run.
-          if gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
-            echo "merged=true" >> "$GITHUB_OUTPUT"
-          else
-            # Two steps, so a failing gh pr view fails the step instead of reading as no state.
-            PR_INFO=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid --jq '.state + " " + .headRefOid')
+          # A merge can fail with nothing to fix, as when another merge moved main at the same
+          # moment ("Base branch was modified"), and nothing else retries it: the head did not
+          # change, so no new CI run comes. So a PR still open on the checked sha, or whose state
+          # could not be read, is tried again. --match-head-commit binds every attempt to that sha:
+          # GitHub refuses the merge when the branch moved, so an untested head is never merged.
+          MERGE_ATTEMPTS=3
+          for ((ATTEMPT = 1; ATTEMPT <= MERGE_ATTEMPTS; ATTEMPT++)); do
+            if gh pr merge "$PR" --squash --delete-branch --match-head-commit "$SHA" --repo "$REPO"; then
+              echo "merged=true" >> "$GITHUB_OUTPUT"
+              break
+            fi
+            # A failed read leaves PR_STATE empty, which is retried and never reads as merged.
+            PR_INFO=$(gh pr view "$PR" --repo "$REPO" --json state,headRefOid --jq '.state + " " + .headRefOid') || PR_INFO=""
             read -r PR_STATE PR_HEAD <<< "$PR_INFO"
             if [ "$PR_STATE" = "MERGED" ]; then
               # gh can fail after this run's merge landed (deleting the branch, a lost response).
               echo "PR #$PR is merged."
               echo "merged=true" >> "$GITHUB_OUTPUT"
+              break
             elif [ "$PR_STATE" = "OPEN" ] && [ -n "$PR_HEAD" ] && [ "$PR_HEAD" != "$SHA" ]; then
               echo "::notice::PR #$PR's head moved to $PR_HEAD since its checks ran on $SHA; the new head's CI run retries the merge."
+              break
+            elif [ "$ATTEMPT" -lt "$MERGE_ATTEMPTS" ] && { [ "$PR_STATE" = "OPEN" ] || [ -z "$PR_STATE" ]; }; then
+              echo "Merging PR #$PR failed (state: ${PR_STATE:-unknown}); trying again in 15 seconds."
+              sleep 15
             else
-              echo "::error::Failed to merge PR #$PR (state: $PR_STATE)."
+              echo "::error::Failed to merge PR #$PR (state: ${PR_STATE:-unknown})."
               exit 1
             fi
-          fi
+          done
 
   # A merge made with GITHUB_TOKEN starts no push run on main; a workflow_dispatch made with it
   # does start one.
@@ -155,4 +166,18 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO: ${{ github.repository }}
-        run: gh workflow run ci.yml --ref main --repo "$REPO"
+        # A dispatch that started CI but lost its response starts a second run; ci.yml's
+        # concurrency group cancels the first.
+        run: |
+          DISPATCH_ATTEMPTS=3
+          for ((ATTEMPT = 1; ATTEMPT <= DISPATCH_ATTEMPTS; ATTEMPT++)); do
+            if gh workflow run ci.yml --ref main --repo "$REPO"; then
+              exit 0
+            fi
+            if [ "$ATTEMPT" -lt "$DISPATCH_ATTEMPTS" ]; then
+              echo "Starting CI on main failed; trying again in 15 seconds."
+              sleep 15
+            fi
+          done
+          echo "::error::Could not start CI on main. Re-run this failed job, or run: gh workflow run ci.yml --ref main"
+          exit 1

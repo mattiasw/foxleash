@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Linux, Node.js 24 or later (the version in `.nvmrc`), npm 11
+- Linux, Node.js 24 or later (the version in `.nvmrc`), npm 11, and `jq` for the unit tests
 - Firefox 142 or later for running the extension
 
 ## Setup
@@ -372,6 +372,9 @@ and one for production dependencies, and one per GitHub Action. It proposes a ne
 once it is 3 days old; security updates skip that wait. The `Auto-merge Dependabot` workflow
 squash-merges such a pull request once CI and all of its checks pass; one that fails stays open
 for a person to fix. A pull request whose branch moved after its checks ran is not merged on
-those checks; the CI run for its new head merges it. After merging, the workflow starts CI on
-`main` itself, because a merge made with its own token starts no push run. The CI run it starts
-tests the updates merged together.
+those checks; the CI run for its new head merges it. When GitHub refuses the merge while the
+pull request is still open on the checked commit, as when another merge moves `main` at the same
+moment, or the workflow then cannot read the pull request's state, the merge is tried twice more,
+15 seconds apart. After merging, the workflow starts CI on `main`
+itself, because a merge made with its own token starts no push run, and retries starting it the
+same way. The CI run it starts tests the updates merged together.
