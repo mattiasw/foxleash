@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agents are told that subagents and parallel agents sharing a session share its tab group and
   the sites you approved, and that a tab's `active` field is the active tab of its window.
 
+### Fixed
+
+- `navigate` no longer returns the previous page when the tab is slow to start loading the new
+  one, and `tab_open` no longer returns a tab before its page loaded: both wait for the page, and
+  report an error when no page loads within 30 seconds, as for a URL that Firefox downloads.
+
 ## [0.2.0] - 2026-10-31
 
 ### Added

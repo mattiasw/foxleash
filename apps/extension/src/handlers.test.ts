@@ -169,7 +169,7 @@ describe("tab_open", { timeout: 10000 }, () => {
     ]);
   });
 
-  it("watches no commits for an approved page and closes the tab it could not group", async () => {
+  it("watches commits for an approved page only during its load and closes the tab it could not group", async () => {
     const { fake, open, grant } = setup();
     await grant("https://example.com");
     const before = fake.committedListenerCount();
@@ -185,7 +185,7 @@ describe("tab_open", { timeout: 10000 }, () => {
       return update(tabId, properties);
     };
     const first = await open("s1", "https://example.com/");
-    assert.deepEqual(during, [before, before, before]);
+    assert.deepEqual(during, [before, before + 1, before]);
     assert.equal(fake.committedListenerCount(), before);
     fake.browser.tabGroups.update = async () => {
       throw new Error("No group with id: 2");
@@ -201,6 +201,30 @@ describe("tab_open", { timeout: 10000 }, () => {
       { tabId: first.id, url: "https://example.com/", loadReplace: true },
       { tabId: first.id, active: true },
     ]);
+  });
+
+  it("closes the tab when its page does not load", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://example.com");
+    const first = await open("s1", "https://example.com/");
+    const get = fake.browser.tabs.get;
+    // A response that loads no page, as a 204 or a URL Firefox downloads.
+    fake.browser.tabs.update = async (tabId) => {
+      fake.emitStatus(tabId, "loading");
+      fake.emitStatus(tabId, "complete");
+      return get(tabId);
+    };
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      await flush();
+      return remove(tabIds);
+    };
+    const opening = open("s1", "https://example.com/file");
+    opening.catch(() => {});
+    for (let turn = 0; turn < 50 && timers.pending() === 0; turn += 1) await flush();
+    timers.advance(LOAD_TIMEOUT_MS);
+    await assert.rejects(opening, { code: "navigation_timeout" });
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
   });
 
   it("keeps a tab in the window when tab_close runs while tab_open removes the tab it could not group", async () => {
@@ -511,6 +535,41 @@ describe("navigate", { timeout: 10000 }, () => {
       url: "https://b.example/",
       title: "Title of https://b.example/",
       active: true,
+    });
+  });
+
+  it("returns the new page when a background tab starts loading it after the grace", async () => {
+    const { fake, timers, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/");
+    const background = fake.openTab({ url: "https://a.example/issue" });
+    background.groupId = groupIdOf(fake, tab.id);
+    const update = fake.browser.tabs.update;
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      timers.setTimeout(() => {
+        void update(tabId, properties);
+      }, LOAD_GRACE_MS + 500);
+      return get(tabId);
+    };
+    let done = false;
+    const navigated = navigate("s1", {
+      tabId: background.id,
+      url: "https://b.example/search?q=x",
+    }).finally(() => {
+      done = true;
+    });
+    for (let turn = 0; turn < 50 && timers.pending() < 2; turn += 1) await flush();
+    timers.advance(LOAD_GRACE_MS);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(500);
+    assert.deepEqual(await navigated, {
+      id: background.id,
+      url: "https://b.example/search?q=x",
+      title: "Title of https://b.example/search?q=x",
+      active: false,
     });
   });
 
@@ -1828,10 +1887,11 @@ describe("navigate reload that Firefox lands on about:blank", { timeout: 10000 }
     reloadToBlank(fake);
     const updates: unknown[] = [];
     const get = fake.browser.tabs.get;
-    // The load never completes, nor commits.
+    // The load commits and never completes.
     fake.browser.tabs.update = async (tabId, properties) => {
       updates.push({ tabId, ...properties });
       fake.emitStatus(tabId, "loading");
+      fake.emitCommitted({ tabId, frameId: 0, url: "https://a.example/page" });
       return get(tabId);
     };
     let done = false;
@@ -1850,6 +1910,37 @@ describe("navigate reload that Firefox lands on about:blank", { timeout: 10000 }
     assert.equal(done, true);
     assert.equal(fake.tabs.get(tab.id)?.status, "loading");
     await reloaded;
+  });
+
+  it("fails when the page's load in place of the blank never commits", async () => {
+    const { fake, timers, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    reloadToBlank(fake);
+    const updates: unknown[] = [];
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      updates.push({ tabId, ...properties });
+      fake.emitStatus(tabId, "loading");
+      return get(tabId);
+    };
+    let done = false;
+    const reloaded = navigate("s1", { tabId: tab.id, action: "reload" }).finally(() => {
+      done = true;
+    });
+    reloaded.catch(() => {});
+    for (let turn = 0; turn < 50 && updates.length === 0; turn += 1) await flush();
+    assert.deepEqual(updates, [
+      { tabId: tab.id, url: "https://a.example/page", loadReplace: true },
+    ]);
+    timers.advance(BLANK_RELOAD_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(1);
+    await assert.rejects(reloaded, {
+      code: "navigation_timeout",
+      message: `Tab ${tab.id} did not load a page from that URL within 20 seconds.`,
+    });
   });
 });
 

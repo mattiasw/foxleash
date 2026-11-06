@@ -288,9 +288,15 @@ export function createHandlers<Handle>({
       await removeNewTab(session, tab.id);
       throw error;
     }
-    await waitForLoad(browser, timers, tab.id, url, () =>
-      browser.tabs.update(tab.id, { url, loadReplace: true }),
-    );
+    try {
+      await waitForLoad(browser, timers, tab.id, url, () =>
+        browser.tabs.update(tab.id, { url, loadReplace: true }),
+      );
+    } catch (error) {
+      // Never selected, it holds nothing the user saw.
+      await removeNewTab(session, tab.id);
+      throw error;
+    }
     const selected = await browser.tabs.update(tab.id, { active: true });
     const view = await access.view(session);
     return view.tabInfo(selected);
@@ -1369,7 +1375,7 @@ function waitTimeoutMs(params: Params): number {
 }
 
 /** "1 second", or "N seconds" with N in seconds, such as 0.1 or 10. */
-function secondsText(ms: number): string {
+export function secondsText(ms: number): string {
   return ms === 1000 ? "1 second" : `${ms / 1000} seconds`;
 }
 
