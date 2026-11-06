@@ -1,6 +1,6 @@
 {
   "name": "foxhand-monorepo",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Let an AI agent use your own Firefox through MCP tools",
   "type": "module",
