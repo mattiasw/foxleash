@@ -246,7 +246,7 @@ export function registerTools(
   registerWithoutArgs(
     "tabs_list",
     {
-      description: `List the tabs in this session's Foxhand tab group, with their ids, URLs, titles and which one is active. ${REDACTED_TABS}`,
+      description: `List the tabs in this session's Foxhand tab group, with their ids, URLs, titles and which one is active. Active means the active tab of its Firefox window, not the tab you used last; tabs opened by other agents that share this session appear too. ${REDACTED_TABS}`,
     },
     () => run(bridge, "tabs_list", {}),
   );

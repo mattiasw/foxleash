@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The built-in blocklist in the settings is in alphabetical order.
+- Agents are told that subagents and parallel agents sharing a session share its tab group and
+  the sites you approved, and that a tab's `active` field is the active tab of its window.
 
 ## [0.2.0] - 2026-10-31
 

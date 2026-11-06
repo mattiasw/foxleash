@@ -94,6 +94,15 @@ on tabs in that group, including tabs you move into it and tabs that a page in t
 opens, also after your own click. When the agent session ends, Foxhand closes its group if the
 group holds only blank tabs, so pages you may still be reading stay open.
 
+Subagents or parallel agents started from one agent session (for example Claude Code
+subagents) share that session's MCP connection, so Foxhand sees them as one session. They
+share its tab group and the sites you approved for it, and you are not asked again for a site
+already approved. Foxhand cannot tell them apart, so any of them can act on any tab in the
+group; each agent should keep to the tabs it opened, the tabs its own actions opened and the
+tabs you point it to, and leave the others alone. A tab's `active` field is Firefox's: it marks
+the active tab of its window, which changes whenever any tab in that window is opened or
+selected.
+
 The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
 never closes the last tab of a window. When a tab's page asks you to confirm leaving it,
 `tab_close` tells the agent so, and Firefox closes the tab once you choose to leave the page.

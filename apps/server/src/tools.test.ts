@@ -129,6 +129,12 @@ describe("tools", () => {
     }
     const tabsList = tools.find((tool) => tool.name === "tabs_list");
     assert.equal(tabsList?.description?.includes(ASKS_FIRST), false);
+    for (const words of [
+      "Active means the active tab of its Firefox window, not the tab you used last",
+      "tabs opened by other agents that share this session appear too.",
+    ]) {
+      assert.ok(tabsList?.description?.includes(words), words);
+    }
     const readPage = tools.find((tool) => tool.name === "read_page");
     assert.equal(readPage?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(readPage?.inputSchema.required, ["tabId"]);
