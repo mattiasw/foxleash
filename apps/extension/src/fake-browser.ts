@@ -89,8 +89,8 @@ export interface FakeBrowser {
   /** Makes the next `scripting.removeCSS` reject with `error`, once. */
   failNextRemoveCSS(error: unknown): void;
   /**
-   * Fires `webNavigation.onBeforeNavigate`. A load in a tab does not fire it: a test fires it
-   * where Firefox's order of events matters. Without a `timeStamp`, it gets one later than every
+   * Fires `webNavigation.onBeforeNavigate`. A load in a tab fires it for its top frame before its
+   * loading, at the latest `timeStamp` so far. Without a `timeStamp`, it gets one later than every
    * `timeStamp` fired so far.
    */
   emitBeforeNavigate(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
@@ -945,6 +945,8 @@ export function createFakeBrowser(): FakeBrowser {
 
   function load(tab: FakeTab, url: string): void {
     if (tab.discarded === true) tab.discarded = false;
+    // At the latest time stamp, so the time stamps fired after it stay as they were without it.
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url, timeStamp: latestTimeStamp });
     const changed = tab.url !== url;
     tab.url = url;
     dropContentScript(tab.id);

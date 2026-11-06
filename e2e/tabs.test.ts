@@ -133,6 +133,24 @@ describe("tabs in real Firefox", () => {
     }
   });
 
+  test("navigate loads a url with a fragment into a tab Firefox unloaded on that page", async () => {
+    // The query only makes the URL unique.
+    const stored = fixtures.url("/a?unloaded-fragment");
+    const unloaded = tabOf(await harness.ok(session, "tab_open", { url: stored }));
+    // Firefox does not unload the selected tab.
+    const other = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    try {
+      await firefox.discardTab(stored);
+      const url = `${stored}#part`;
+      const navigated = tabOf(await harness.ok(session, "navigate", { tabId: unloaded.id, url }));
+      assert.equal(navigated.url, url);
+      assert.equal(navigated.title, TITLES.a);
+    } finally {
+      for (const id of [unloaded.id, other.id])
+        await harness.ok(session, "tab_close", { tabId: id });
+    }
+  });
+
   test("a tab_open tab Firefox unloaded comes back with only its page in its history", async () => {
     // The query only makes the URL unique; /slow holds its answer past the load grace period.
     const url = fixtures.url("/slow?unloaded");
@@ -265,5 +283,29 @@ describe("tabs in real Firefox", () => {
     assert.ok(text.includes("did not load a page from that URL within 30 seconds"), text);
     const after = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
     assert.deepEqual(after, before);
+  });
+
+  test("tab_open of a url Firefox downloads with a fragment fails and leaves no tab", {
+    timeout: 90_000,
+  }, async () => {
+    const before = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    const text = await harness.refused(session, "tab_open", {
+      url: fixtures.url("/download/data.bin#x"),
+    });
+    assert.ok(text.includes("did not load a page from that URL within 30 seconds"), text);
+    const after = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    assert.deepEqual(after, before);
+  });
+
+  test("tab_open of a page url with a fragment returns the page", async () => {
+    // The query only makes the URL unique.
+    const url = fixtures.url("/a?fragment#part");
+    const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+    try {
+      assert.equal(tab.url, url);
+      assert.equal(tab.title, TITLES.a);
+    } finally {
+      await harness.ok(session, "tab_close", { tabId: tab.id });
+    }
   });
 });

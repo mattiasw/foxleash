@@ -289,8 +289,13 @@ export function createHandlers<Handle>({
       throw error;
     }
     try {
-      await waitForLoad(browser, timers, tab.id, url, () =>
-        browser.tabs.update(tab.id, { url, loadReplace: true }),
+      await waitForLoad(
+        browser,
+        timers,
+        tab.id,
+        url,
+        () => browser.tabs.update(tab.id, { url, loadReplace: true }),
+        { unloaded: true },
       );
     } catch (error) {
       // Never selected, it holds nothing the user saw.
@@ -389,6 +394,7 @@ export function createHandlers<Handle>({
               tabId,
               target.kind === "url" ? target.url : undefined,
               () => startNavigation(tabId, target),
+              { unloaded: tab.discarded === true },
             );
       const shown =
         history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
@@ -515,7 +521,7 @@ export function createHandlers<Handle>({
       tabId,
       undefined,
       () => browser.tabs.reload(tabId, { bypassCache: true }),
-      HISTORY_RELOAD_TIMEOUT_MS,
+      { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
     );
   }
 
@@ -1120,8 +1126,13 @@ export function createHandlers<Handle>({
     const loaded =
       target.kind === "action" && !onPrompt && tab.url === url
         ? await reloadPage(session, tab, url)
-        : await waitForLoad(browser, timers, tabId, url, () =>
-            browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
+        : await waitForLoad(
+            browser,
+            timers,
+            tabId,
+            url,
+            () => browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
+            { unloaded: tab.discarded === true },
           );
     const after = await access.view(session);
     return after.tabInfo(loaded);
@@ -1139,8 +1150,13 @@ export function createHandlers<Handle>({
   async function reloadPage(session: string, tab: Tab, url: string): Promise<Tab> {
     const tabId = tab.id;
     if (tab.discarded === true) {
-      return waitForLoad(browser, timers, tabId, url, () =>
-        browser.tabs.update(tabId, { url, loadReplace: true }),
+      return waitForLoad(
+        browser,
+        timers,
+        tabId,
+        url,
+        () => browser.tabs.update(tabId, { url, loadReplace: true }),
+        { unloaded: true },
       );
     }
     // No URL to wait for: the reload loads whichever entry Firefox reloads.
@@ -1170,7 +1186,7 @@ export function createHandlers<Handle>({
       tabId,
       url,
       () => browser.tabs.update(tabId, { url, loadReplace: true }),
-      BLANK_RELOAD_TIMEOUT_MS,
+      { timeoutMs: BLANK_RELOAD_TIMEOUT_MS },
     );
   }
 

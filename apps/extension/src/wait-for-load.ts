@@ -23,9 +23,13 @@ export const LOAD_TIMEOUT_MS = 30000;
  * Runs `navigate` and resolves with the tab once its load completes. `url` is the web URL the
  * navigation loads, or `undefined` when that is not known in advance (back, forward, reload).
  * Without it, the wait also ends after the grace period when no load starts, or with the tab as it
- * is after `timeoutMs`. With it, the wait resolves only once the tab's top frame committed a
- * document (a fragment navigation excepted), and fails with `navigation_timeout` when none did by
- * the timeout; a complete that leaves the tab on about:blank starts the grace period again.
+ * is after `timeoutMs` (default `LOAD_TIMEOUT_MS`). With it, the wait resolves only once the tab's
+ * top frame committed a document (a fragment navigation excepted), and fails with
+ * `navigation_timeout` when none did by the timeout; a complete that leaves the tab on about:blank
+ * starts the grace period again. `unloaded` says the tab was one Firefox had unloaded: then only a
+ * top-frame commit after the tab's onBeforeNavigate counts, since the restore commits the stored URL
+ * first, and no fragment navigation is assumed, since a load into a restored tab commits even when
+ * only the fragment differs.
  */
 export function waitForLoad<Handle>(
   browser: BrowserApi,
@@ -33,7 +37,10 @@ export function waitForLoad<Handle>(
   tabId: number,
   url: string | undefined,
   navigate: () => Promise<unknown>,
-  timeoutMs = LOAD_TIMEOUT_MS,
+  {
+    timeoutMs = LOAD_TIMEOUT_MS,
+    unloaded = false,
+  }: { timeoutMs?: number; unloaded?: boolean } = {},
 ): Promise<Tab> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -46,12 +53,15 @@ export function waitForLoad<Handle>(
     // tab's next navigation does.
     let committedBeforeLoad = false;
     let loadStarts = 0;
+    // Firefox restores a tab it unloaded, committing its stored URL, before the requested
+    // navigation begins.
+    let restoring = unloaded;
     let timeoutTimer: Handle | undefined;
 
     // Removed when the wait settles, so it never sees a settled wait.
     const listener: TabUpdatedListener = (_tabId, changeInfo, tab) => {
       // Firefox reports a fragment navigation as a status, loading while the page still loads.
-      if (url !== undefined && fragmentNavigation(tab, url)) arrived = true;
+      if (url !== undefined && !unloaded && fragmentNavigation(tab, url)) arrived = true;
       if (changeInfo.status === "loading") start();
       else if (changeInfo.status === "complete" && started) {
         // Firefox can report a complete on a new tab's about:blank before the navigation's page.
@@ -67,6 +77,7 @@ export function waitForLoad<Handle>(
     const onCommitted = (details: NavigationDetails) => {
       // Firefox's error page commits the URL that failed; a new tab's own about:blank is not the page.
       if (details.tabId !== tabId || details.frameId !== 0 || details.url === "about:blank") return;
+      if (restoring) return;
       // Before any loading, a commit of the URL can be a restore's, not this navigation's: it counts
       // only if loading comes next.
       if (loadStarts === 0) {
@@ -82,7 +93,10 @@ export function waitForLoad<Handle>(
     // Restoring a tab it unloaded, Firefox commits the tab's stored URL before the requested
     // navigation begins, so a commit an onBeforeNavigate follows was not this navigation's.
     const onBeforeNavigate = (details: NavigationDetails) => {
-      if (details.tabId === tabId && details.frameId === 0) committedBeforeLoad = false;
+      if (details.tabId !== tabId || details.frameId !== 0) return;
+      committedBeforeLoad = false;
+      // A load of about:blank in the tab is not the requested navigation; its restore may follow.
+      if (details.url !== "about:blank") restoring = false;
     };
 
     browser.tabs.onUpdated.addListener(listener, { tabId, properties: ["status"] });
@@ -130,7 +144,7 @@ export function waitForLoad<Handle>(
       const startsBefore = loadStarts;
       const tab = await currentTab();
       if (settled || loadStarts !== startsBefore) return;
-      if (url !== undefined && fragmentNavigation(tab, url)) arrived = true;
+      if (url !== undefined && !unloaded && fragmentNavigation(tab, url)) arrived = true;
       if (tab.status === "complete" && (url === undefined || arrived)) finish(tab);
       else start();
     }

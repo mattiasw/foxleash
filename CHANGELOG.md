@@ -9,8 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `tab_open` of a URL that Firefox downloads now reports an error, as `navigate` does, instead of
-  returning a tab with no page.
+- `tab_open` of a URL that Firefox downloads now reports an error, as `navigate` does, instead
+  of returning a tab with no page, also when the URL has a fragment. `navigate` now also reports
+  it for such a URL loaded into a tab Firefox unloaded to save memory.
 
 ## [0.3.0] - 2026-11-06
 

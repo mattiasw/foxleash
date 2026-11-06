@@ -227,6 +227,24 @@ describe("tab_open", { timeout: 10000 }, () => {
     assert.deepEqual([...fake.tabs.keys()], [first.id]);
   });
 
+  it("closes the tab when its page with a fragment does not load", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://example.com");
+    const first = await open("s1", "https://example.com/");
+    restoreThenLoadNothing(fake);
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      await flush();
+      return remove(tabIds);
+    };
+    const opening = open("s1", "https://example.com/file#x");
+    opening.catch(() => {});
+    for (let turn = 0; turn < 50 && timers.pending() === 0; turn += 1) await flush();
+    timers.advance(LOAD_TIMEOUT_MS);
+    await assert.rejects(opening, { code: "navigation_timeout" });
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
+  });
+
   it("keeps a tab in the window when tab_close runs while tab_open removes the tab it could not group", async () => {
     const { fake, call, open, grant } = setup();
     await grant("https://example.com");
@@ -2005,6 +2023,55 @@ describe("navigate reload of a tab Firefox unloaded", { timeout: 10000 }, () => 
     ]);
     assert.equal(otherTab.discarded, false);
     assert.deepEqual(otherTab.history, ["https://a.example/page"]);
+  });
+});
+
+describe("a load that commits nothing into a tab Firefox unloaded", { timeout: 10000 }, () => {
+  for (const [name, params] of [
+    ["navigate of its fragment URL", { url: "https://a.example/file#x" }],
+    ["navigate reload", { action: "reload" }],
+  ] as const) {
+    it(`fails with navigation_timeout on ${name}`, async () => {
+      const { fake, timers, call, open, sessions } = setup();
+      sessions.set("s1", state(["https://a.example"]));
+      const tab = await open("s1", "https://a.example/file#x");
+      await open("s1", "https://a.example/");
+      const fakeTab = fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      fakeTab.discarded = true;
+      restoreThenLoadNothing(fake);
+      const navigated = call("s1", "navigate", { tabId: tab.id, ...params });
+      navigated.catch(() => {});
+      for (let turn = 0; turn < 50 && fakeTab.discarded; turn += 1) await flush();
+      assert.equal(fakeTab.discarded, false, "the load did not start");
+      timers.advance(LOAD_TIMEOUT_MS);
+      await assert.rejects(navigated, { code: "navigation_timeout" });
+    });
+  }
+
+  it("fails with navigation_timeout on a load of its fragment URL after the answer", async () => {
+    const { fake, timers, call, open, timeOut } = setup();
+    const other = await open("s1");
+    const otherTab = fake.tabs.get(other.id);
+    assert.ok(otherTab);
+    otherTab.url = "https://a.example/file#x";
+    otherTab.history = ["https://a.example/file#x"];
+    otherTab.discarded = true;
+    const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+      code: "approval_timeout",
+    });
+    const shown = await timeOut("s1");
+    await first;
+    restoreThenLoadNothing(fake);
+    const navigated = call("s1", "navigate", { tabId: other.id, url: "https://a.example/file#x" });
+    navigated.catch(() => {});
+    await flush();
+    assert.equal(otherTab.discarded, true, "loaded before the answer");
+    shown.deliver({ type: "answer", answer: "once" });
+    for (let turn = 0; turn < 50 && otherTab.discarded; turn += 1) await flush();
+    assert.equal(otherTab.discarded, false, "the load did not start");
+    timers.advance(LOAD_TIMEOUT_MS);
+    await assert.rejects(navigated, { code: "navigation_timeout" });
   });
 });
 
@@ -6347,6 +6414,27 @@ function reportBlankLoadInUnloaded(fake: FakeBrowser): void {
       await flush();
     }
     return update(tabId, properties);
+  };
+}
+
+/**
+ * Makes a load of a URL into a tab Firefox unloaded show no page, as a URL Firefox downloads: the
+ * restore commits the tab's stored URL, then the requested navigation begins, loads and completes
+ * without a commit.
+ */
+function restoreThenLoadNothing(fake: FakeBrowser): void {
+  const update = fake.browser.tabs.update;
+  fake.browser.tabs.update = async (tabId, properties) => {
+    const tab = fake.tabs.get(tabId);
+    if (properties.url === undefined || tab?.discarded !== true) return update(tabId, properties);
+    fake.tabUpdates.push({ tabId, ...properties });
+    tab.discarded = false;
+    fake.emitCommitted({ tabId, frameId: 0, url: tab.url });
+    tab.url = properties.url;
+    fake.emitBeforeNavigate({ tabId, frameId: 0, url: properties.url });
+    fake.emitStatus(tabId, "loading");
+    fake.emitStatus(tabId, "complete");
+    return fake.browser.tabs.get(tabId);
   };
 }
 
