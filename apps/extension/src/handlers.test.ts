@@ -3586,21 +3586,66 @@ describe("get_page_text", { timeout: 10000 }, () => {
     assert.deepEqual(pageCalls, []);
   });
 
-  it("asks the page with maxChars only, the default when none is given", async () => {
+  it("refuses a bad offset with its sentence before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    for (const offset of [-1, 1.5, "10", null, 2 ** 53, Number.NaN]) {
+      await assert.rejects(call("s1", "get_page_text", { tabId: 3, offset }), {
+        code: "invalid_params",
+        message: "get_page_text needs offset to be a whole number of 0 or more.",
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page with maxChars and offset, the defaults when none are given", async () => {
     const { call, pageCalls, replyWith } = setup();
     replyWith(async () => text);
     await call("s1", "get_page_text", { tabId: 3 });
     await call("s2", "get_page_text", { tabId: 0, maxChars: 40, extra: true });
+    await call("s3", "get_page_text", { tabId: 4, offset: 7, extra: true });
     assert.deepEqual(pageCalls, [
-      { session: "s1", tabId: 3, type: "get_page_text", params: { maxChars: 50_000 } },
-      { session: "s2", tabId: 0, type: "get_page_text", params: { maxChars: 40 } },
+      {
+        session: "s1",
+        tabId: 3,
+        type: "get_page_text",
+        params: { maxChars: 50_000, offset: 0 },
+      },
+      { session: "s2", tabId: 0, type: "get_page_text", params: { maxChars: 40, offset: 0 } },
+      {
+        session: "s3",
+        tabId: 4,
+        type: "get_page_text",
+        params: { maxChars: 50_000, offset: 7 },
+      },
     ]);
   });
 
   it("returns only the five fields of the page's text", async () => {
     const { call, replyWith } = setup();
-    replyWith(async () => ({ ...text, extra: "page text" }));
+    replyWith(async () => ({ ...text, nextOffset: 3, extra: "page text" }));
     assert.deepEqual(await call("s1", "get_page_text", { tabId: 3 }), text);
+  });
+
+  it("gives a truncated reply its own next offset, after the request's offset", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ ...text, truncated: true, nextOffset: 1 }));
+    assert.deepEqual(await call("s1", "get_page_text", { tabId: 3, offset: 5 }), {
+      ...text,
+      truncated: true,
+      nextOffset: 14,
+    });
+  });
+
+  it("refuses a truncated reply when the next offset would not be a safe integer", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ ...text, truncated: true }));
+    await assert.rejects(
+      call("s1", "get_page_text", { tabId: 3, offset: Number.MAX_SAFE_INTEGER }),
+      {
+        code: "page_error",
+        message: "Foxhand could not complete the request in the page in tab 3.",
+      },
+    );
   });
 
   it("cuts a reply over maxChars again and marks it cut", async () => {
@@ -3611,6 +3656,7 @@ describe("get_page_text", { timeout: 10000 }, () => {
       main: "a".repeat(8),
       rest: "bb",
       truncated: true,
+      nextOffset: 10,
     });
   });
 

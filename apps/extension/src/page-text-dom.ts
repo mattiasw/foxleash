@@ -1,7 +1,7 @@
 // biome-ignore-all lint/performance/useDomNodeTextContent: page text omits CSS-hidden text
 import type { PageText, PageTextSource } from "@foxhand/protocol";
 import { flatParentOf, inDetailsContent, shadowRootOf } from "./flat-tree.ts";
-import { composePageText } from "./page-text.ts";
+import { composePageText, type PageTextOptions } from "./page-text.ts";
 import { clean, explicitRole, WHITESPACE } from "./page-tree.ts";
 import {
   childrenOf,
@@ -61,20 +61,20 @@ interface Lines {
 // element holding a shadow host or a filled slot is read through its flat-tree children instead.
 
 /** The rendered text of the document's top frame: its main content, then the rest. */
-export function readPageText(doc: Document, maxChars: number): PageText {
+export function readPageText(doc: Document, options: PageTextOptions): PageText {
   const body = doc.body;
-  if (body === null) return composePageText("body", "", "", maxChars);
+  if (body === null) return composePageText("body", "", "", options);
   const roots = authorShadowRoots();
   const shadowed = shadowedBy(roots, body);
   const found = findMain(body, candidatesOf(body, roots), shadowed);
   if (found.source === "body") {
-    return composePageText("body", bodyText(body, shadowed), "", maxChars);
+    return composePageText("body", bodyText(body, shadowed), "", options);
   }
   return composePageText(
     found.source,
     elementText(found.element, shadowed),
     flatText(body, found.element, mainPath(found.element, body), shadowed),
-    maxChars,
+    options,
   );
 }
 

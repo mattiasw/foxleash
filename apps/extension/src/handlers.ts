@@ -687,7 +687,7 @@ export function createHandlers<Handle>({
     const options = pageTextOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     const reply = await pages.request(session, tabId, "get_page_text", options);
-    const text = pageTextOf(reply, options.maxChars);
+    const text = pageTextOf(reply, options);
     if (text === undefined) {
       throw new ToolError(
         "page_error",

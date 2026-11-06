@@ -67,10 +67,15 @@ export interface PageText {
   source: PageTextSource;
   main: string;
   rest: string;
-  /** True when main or rest was cut. */
+  /** True when more text follows the returned part. */
   truncated: boolean;
-  /** The length, in UTF-16 units, of main plus rest after tidying and before the cut. */
+  /**
+   * The length, in UTF-16 units, of all of main plus rest after tidying, whatever the offset and
+   * the cut.
+   */
   totalChars: number;
+  /** The offset to read on from, present only when truncated is true. */
+  nextOffset?: number;
 }
 
 export const CONSOLE_LEVELS = ["debug", "log", "info", "warn", "error"] as const;
@@ -243,7 +248,10 @@ export interface Methods {
     params: { tabId: number; filter?: "all" | "interactive"; depth?: number; ref?: string };
     result: { tree: string; truncated: boolean };
   };
-  get_page_text: { params: { tabId: number; maxChars?: number }; result: PageText };
+  get_page_text: {
+    params: { tabId: number; maxChars?: number; offset?: number };
+    result: PageText;
+  };
   /** `data` is the base64 PNG, without a `data:` prefix. */
   screenshot: { params: { tabId: number; ref?: string }; result: { data: string } };
   /** Not an MCP tool: `upload_file` sends the files' bytes with it first. `data` is base64. */

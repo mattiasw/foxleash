@@ -152,13 +152,21 @@ describe("tools", () => {
     const getPageText = tools.find((tool) => tool.name === "get_page_text");
     assert.equal(getPageText?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(getPageText?.inputSchema.required, ["tabId"]);
+    assert.deepEqual(Object.keys(getPageText?.inputSchema.properties ?? {}), [
+      "tabId",
+      "maxChars",
+      "offset",
+    ]);
     for (const words of [
       "get_page_text never asks",
       "50,000 unless given and at most 200,000",
-      "when truncated is true and maxChars was below 200,000, a larger maxChars returns more",
+      "totalChars, truncated and, when truncated is true, nextOffset",
+      "When truncated is true, passing nextOffset as offset returns the text that follows",
+      "offsets count characters into main and rest together, and a page that changed between reads may shift them",
     ]) {
       assert.ok(getPageText?.description?.includes(words), words);
     }
+    assert.equal(getPageText?.description?.includes("a larger maxChars returns more"), false);
     const screenshot = tools.find((tool) => tool.name === "screenshot");
     assert.equal(screenshot?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(screenshot?.inputSchema.required, ["tabId"]);
@@ -737,9 +745,16 @@ describe("tools", () => {
     const { client, calls } = await start(() => page);
     await client.callTool({ name: "get_page_text", arguments: { tabId: 2 } });
     await client.callTool({ name: "get_page_text", arguments: { tabId: 0, maxChars: 200_000 } });
+    await client.callTool({ name: "get_page_text", arguments: { tabId: 1, offset: 7 } });
+    await client.callTool({
+      name: "get_page_text",
+      arguments: { tabId: 0, maxChars: 10, offset: 0 },
+    });
     assert.deepEqual(calls, [
       { method: "get_page_text", params: { tabId: 2 } },
       { method: "get_page_text", params: { tabId: 0, maxChars: 200_000 } },
+      { method: "get_page_text", params: { tabId: 1, offset: 7 } },
+      { method: "get_page_text", params: { tabId: 0, maxChars: 10, offset: 0 } },
     ]);
     assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
   });
@@ -753,6 +768,8 @@ describe("tools", () => {
       [{ tabId: 1, maxChars: 0 }, "Too small: expected number to be >=1 at maxChars"],
       [{ tabId: 1, maxChars: 200_001 }, "Too big: expected number to be <=200000 at maxChars"],
       [{ tabId: 1, maxChars: 1.5 }, "Invalid input: expected int, received number at maxChars"],
+      [{ tabId: 1, offset: -1 }, "Too small: expected number to be >=0 at offset"],
+      [{ tabId: 1, offset: 1.5 }, "Invalid input: expected int, received number at offset"],
     ];
     for (const [args, reason] of cases) {
       const output = await client.callTool({ name: "get_page_text", arguments: args });

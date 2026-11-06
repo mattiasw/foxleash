@@ -37,7 +37,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     get_page_text: (params) => {
       const options = pageTextOptions(params);
       if (typeof options === "string") throw new PageError("invalid_params", options);
-      return readPageText(document, options.maxChars);
+      return readPageText(document, options);
     },
     element_rect: (params) => elementRect(params, { refs }),
     password_fields: () => passwordFieldsRevealed({ passwordFields }),

@@ -14,10 +14,13 @@ const SOURCES: readonly unknown[] = [
   "body",
 ] satisfies PageTextSource[];
 
+/** The parsed options of a get_page_text request. */
+export type PageTextOptions = { maxChars: number; offset: number };
+
 /** The options of a get_page_text request, or the sentence that refuses them. */
-export function pageTextOptions(params: Record<string, unknown>): { maxChars: number } | string {
-  const maxChars = ownField(params, "maxChars");
-  if (maxChars === undefined) return { maxChars: DEFAULT_PAGE_TEXT_CHARS };
+export function pageTextOptions(params: Record<string, unknown>): PageTextOptions | string {
+  const given = ownField(params, "maxChars");
+  const maxChars = given === undefined ? DEFAULT_PAGE_TEXT_CHARS : given;
   if (
     typeof maxChars !== "number" ||
     !Number.isSafeInteger(maxChars) ||
@@ -26,14 +29,20 @@ export function pageTextOptions(params: Record<string, unknown>): { maxChars: nu
   ) {
     return `get_page_text needs maxChars to be a whole number from 1 to ${MAX_PAGE_TEXT_CHARS}.`;
   }
-  return { maxChars };
+  const offset = ownField(params, "offset");
+  if (offset === undefined) return { maxChars, offset: 0 };
+  if (typeof offset !== "number" || !Number.isSafeInteger(offset) || offset < 0) {
+    return "get_page_text needs offset to be a whole number of 0 or more.";
+  }
+  return { maxChars, offset };
 }
 
 /**
  * The content script's reply as page text, cut to `maxChars` again, or undefined when it is not
  * one: the reply comes from the page's content process, so only own fields of exact types count.
+ * `nextOffset` is computed from the request's offset, never read from the reply.
  */
-export function pageTextOf(value: unknown, maxChars: number): PageText | undefined {
+export function pageTextOf(value: unknown, options: PageTextOptions): PageText | undefined {
   if (!isRecord(value)) return undefined;
   const source = ownField(value, "source");
   const main = ownField(value, "main");
@@ -51,31 +60,36 @@ export function pageTextOf(value: unknown, maxChars: number): PageText | undefin
   ) {
     return undefined;
   }
-  const cut = cutToBudget(main, rest, maxChars);
-  return {
+  const cut = cutWindow(main, rest, 0, options.maxChars);
+  const text = {
     source,
     main: cut.main,
     rest: cut.rest,
     truncated: truncated || cut.truncated,
     totalChars,
   };
+  if (!text.truncated) return text;
+  const nextOffset = options.offset + cut.end;
+  if (!Number.isSafeInteger(nextOffset)) return undefined;
+  return { ...text, nextOffset };
 }
 
-/** Main and rest tidied and cut to one budget, main first. */
+/** The window of main and rest, tidied, that the options select. */
 export function composePageText(
   source: PageTextSource,
   main: string,
   rest: string,
-  maxChars: number,
+  options: PageTextOptions,
 ): PageText {
-  const cut = cutToBudget(tidyText(main), tidyText(rest), maxChars);
-  return {
+  const cut = cutWindow(tidyText(main), tidyText(rest), options.offset, options.maxChars);
+  const text = {
     source,
     main: cut.main,
     rest: cut.rest,
     truncated: cut.truncated,
     totalChars: cut.total,
   };
+  return cut.truncated ? { ...text, nextOffset: cut.end } : text;
 }
 
 /**
@@ -96,18 +110,23 @@ function isSource(value: unknown): value is PageTextSource {
   return SOURCES.includes(value);
 }
 
-/** A cut main leaves no budget for the rest, so a cut-off main is never followed by more text. */
-function cutToBudget(
+/**
+ * Positions [offset, offset + maxChars) of main followed by rest, and the position the window
+ * ends at. A cut main leaves no budget for the rest, so a cut-off main is never followed by more
+ * text.
+ */
+function cutWindow(
   main: string,
   rest: string,
+  offset: number,
   maxChars: number,
-): { main: string; rest: string; truncated: boolean; total: number } {
-  const m = capText(main, maxChars);
-  const r = capText(rest, m.truncated ? 0 : maxChars - m.text.length);
-  return {
-    main: m.text,
-    rest: r.text,
-    truncated: m.truncated || r.truncated,
-    total: m.total + r.total,
-  };
+): { main: string; rest: string; truncated: boolean; total: number; end: number } {
+  const m = capText(main.slice(offset), maxChars);
+  const r = capText(
+    rest.slice(Math.max(0, offset - main.length)),
+    m.truncated ? 0 : maxChars - m.text.length,
+  );
+  const total = main.length + rest.length;
+  const end = offset + m.text.length + r.text.length;
+  return { main: m.text, rest: r.text, truncated: end < total, total, end };
 }

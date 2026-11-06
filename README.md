@@ -127,8 +127,9 @@ The agent reads a page's text with `get_page_text`: the text as the page shows i
 content first (the page's main element or article, else its largest block of text), then the
 rest of the page. Text hidden with display, visibility or the hidden attribute and the values
 of form fields are left out, and frames are not read. The text is cut at 50,000 characters
-unless the agent asks for more (at most 200,000), and the agent is told when it was.
-`get_page_text` works only on a tab showing a site you approved, and never asks.
+unless the agent asks for more (at most 200,000), and the agent is told when it was; it can
+then read on from where the cut read stopped, without reading the start again. `get_page_text`
+works only on a tab showing a site you approved, and never asks.
 
 The agent reads what a page wrote to its console with `read_console`: its `console.log`,
 `info`, `warn`, `error` and `debug` calls, uncaught errors and unhandled promise rejections,

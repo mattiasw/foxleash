@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `get_page_text` can continue a long page where a cut read stopped, instead of reading it
+  again from the start.
+
 ### Changed
 
 - The built-in blocklist in the settings is in alphabetical order.
