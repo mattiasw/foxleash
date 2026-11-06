@@ -40,7 +40,9 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Develop the extension | `npm run dev` (persistent dev profile in `~/.cache/foxhand/dev-profile`, rebuilds on change) |
 
 Always run tests through the npm scripts, in CI too: the coverage floors live in the
-scripts, and calling `node --test` directly runs the suite with them switched off.
+scripts, and calling `node --test` directly runs the suite with them switched off. The
+scripts print each failure in full and, for a green run, only counts and coverage totals;
+`FOXHAND_TEST_REPORTER=spec` restores Node's per-test output.
 
 ## Conventions
 

@@ -36,6 +36,12 @@ The repository is an npm workspaces monorepo run by Turborepo:
 | Release checks | `npm run check:release -- <subcommand>` |
 | End-to-end tests | `npm run e2e` |
 
+The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
+line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
+printed in full with the output the tests wrote, and a missed coverage floor prints the
+per-file coverage table. Set `FOXHAND_TEST_REPORTER=spec` (or any other `--test-reporter`
+value) for Node's per-test output, for example `FOXHAND_TEST_REPORTER=spec npm test`.
+
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
 refuses to strip types from files it sees under `node_modules`.

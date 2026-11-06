@@ -26,9 +26,9 @@
     "doctor": "node apps/server/src/main.ts doctor",
     "probe": "node apps/server/src/main.ts probe",
     "check:test-integrity": "sh bin/check-test-integrity.sh",
-    "test:bin": "node --test 'bin/**/*.test.ts'",
+    "test:bin": "node --test --test-reporter=\"${FOXHAND_TEST_REPORTER:-./bin/test-reporter.ts}\" 'bin/**/*.test.ts'",
     "typecheck:bin": "tsc --noEmit -p bin",
-    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 'e2e/**/*.test.ts'",
+    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 --test-reporter=\"${FOXHAND_TEST_REPORTER:-./bin/test-reporter.ts}\" 'e2e/**/*.test.ts'",
     "typecheck:e2e": "tsc --noEmit -p e2e"
   },
   "lint-staged": {
