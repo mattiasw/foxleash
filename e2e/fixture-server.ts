@@ -646,6 +646,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         "Cache-Control": "no-store",
       });
       response.end(receiptPdf());
+    } else if (path === "/download/data.bin") {
+      // A type Firefox only saves: a PDF it also opens in a new tab once downloaded.
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="data.bin"',
+        "Cache-Control": "no-store",
+      });
+      response.end("data");
     } else if (path === "/download/login") {
       sendPage(response, TITLES.downloadLogin, {
         "Set-Cookie": `${DOWNLOAD_COOKIE.name}=${DOWNLOAD_COOKIE.value}; Path=/`,

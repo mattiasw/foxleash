@@ -102,6 +102,8 @@ export interface BrowserApi {
   webNavigation: {
     /** Null for a tab Firefox has discarded. */
     getAllFrames(details: { tabId: number }): Promise<FrameDetails[] | null>;
+    /** A frame of a tab, the top one included, is about to navigate. */
+    onBeforeNavigate: BrowserEvent<(details: NavigationDetails) => void>;
     /** A frame of a tab, the top one included, committed to a new document. */
     onCommitted: BrowserEvent<(details: NavigationDetails) => void>;
     /** A frame of a tab finished loading its document. */

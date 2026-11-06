@@ -254,4 +254,16 @@ describe("tabs in real Firefox", () => {
       [otherTab.id],
     );
   });
+
+  test("tab_open of a url Firefox downloads fails and leaves no tab", {
+    timeout: 90_000,
+  }, async () => {
+    const before = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    const text = await harness.refused(session, "tab_open", {
+      url: fixtures.url("/download/data.bin"),
+    });
+    assert.ok(text.includes("did not load a page from that URL within 30 seconds"), text);
+    const after = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    assert.deepEqual(after, before);
+  });
 });

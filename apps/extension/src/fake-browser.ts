@@ -89,6 +89,13 @@ export interface FakeBrowser {
   /** Makes the next `scripting.removeCSS` reject with `error`, once. */
   failNextRemoveCSS(error: unknown): void;
   /**
+   * Fires `webNavigation.onBeforeNavigate`. A load in a tab does not fire it: a test fires it
+   * where Firefox's order of events matters. Without a `timeStamp`, it gets one later than every
+   * `timeStamp` fired so far.
+   */
+  emitBeforeNavigate(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
+  beforeNavigateListenerCount(): number;
+  /**
    * Fires `webNavigation.onCommitted`. A load in a tab fires it for its top frame too. Without a
    * `timeStamp`, the commit gets one later than every `timeStamp` fired so far, as a commit comes
    * after the requests that led to it.
@@ -313,6 +320,7 @@ export function createFakeBrowser(): FakeBrowser {
   let insertHold: { promise: Promise<void>; css: string } | undefined;
   let removeHold: Promise<void> | undefined;
   let removeFailure: { error: unknown } | undefined;
+  const onBeforeNavigate = createEvent<(details: NavigationDetails) => void>();
   const onCommitted = createEvent<(details: NavigationDetails) => void>();
   // Not `onCompleted`: in this file that name is webRequest's.
   const onNavigationCompleted = createEvent<(details: NavigationDetails) => void>();
@@ -524,6 +532,7 @@ export function createFakeBrowser(): FakeBrowser {
         if (listed === null) return null;
         return (listed ?? [frameOf(tabId, 0)]).map((frame) => ({ ...frame }));
       },
+      onBeforeNavigate,
       onCommitted,
       onCompleted: onNavigationCompleted,
       onHistoryStateUpdated,
@@ -628,6 +637,8 @@ export function createFakeBrowser(): FakeBrowser {
     failNextRemoveCSS: (error) => {
       removeFailure = { error };
     },
+    emitBeforeNavigate: (details) => emitNavigation(onBeforeNavigate, details),
+    beforeNavigateListenerCount: () => onBeforeNavigate.listeners.size,
     emitCommitted: (details) => emitNavigation(onCommitted, details),
     committedListenerCount: () => onCommitted.listeners.size,
     commitOnCreate: true,

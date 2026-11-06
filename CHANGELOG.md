@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `tab_open` of a URL that Firefox downloads now reports an error, as `navigate` does, instead of
+  returning a tab with no page.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added
