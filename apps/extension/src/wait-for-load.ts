@@ -62,6 +62,14 @@ export function waitForLoad<Handle>(
     const onCommitted = (details: NavigationDetails) => {
       // Firefox's error page commits the URL that failed; a new tab's own about:blank is not the page.
       if (details.tabId !== tabId || details.frameId !== 0 || details.url === "about:blank") return;
+      // Restoring a tab it unloaded, Firefox commits the tab's stored URL, and reports a complete,
+      // before the requested load starts.
+      if (loadStarts === 0) {
+        if (url !== undefined && withoutFragment(details.url) === withoutFragment(url)) {
+          arrived = true;
+        }
+        return;
+      }
       arrived = true;
       start();
     };

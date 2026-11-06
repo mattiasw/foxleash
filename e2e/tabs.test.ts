@@ -115,6 +115,24 @@ describe("tabs in real Firefox", () => {
     }
   });
 
+  test("navigate loads a url into a tab Firefox unloaded to save memory", async () => {
+    // The query only makes the URL unique.
+    const stored = fixtures.url("/a?unloaded");
+    const unloaded = tabOf(await harness.ok(session, "tab_open", { url: stored }));
+    // Firefox does not unload the selected tab.
+    const other = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    try {
+      await firefox.discardTab(stored);
+      const url = fixtures.url("/b?navigated");
+      const navigated = tabOf(await harness.ok(session, "navigate", { tabId: unloaded.id, url }));
+      assert.equal(navigated.url, url);
+      assert.equal(navigated.title, TITLES.b);
+    } finally {
+      for (const id of [unloaded.id, other.id])
+        await harness.ok(session, "tab_close", { tabId: id });
+    }
+  });
+
   test("a tab_open tab Firefox unloaded comes back with only its page in its history", async () => {
     // The query only makes the URL unique; /slow holds its answer past the load grace period.
     const url = fixtures.url("/slow?unloaded");

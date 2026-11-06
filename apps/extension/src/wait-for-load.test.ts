@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Tab } from "./browser-api.ts";
-import { createFakeBrowser, createFakeTimers, type FakeBrowser, flush } from "./fake-browser.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  type FakeBrowser,
+  type FakeTab,
+  flush,
+} from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
 import { LOAD_GRACE_MS, LOAD_TIMEOUT_MS, waitForLoad } from "./wait-for-load.ts";
 
@@ -430,6 +436,73 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     assertCleanedUp(fake, timers);
   });
 
+  it("waits past the commit and complete of a tab Firefox restores for the page it loads", async () => {
+    const { fake, timers } = setup();
+    const url = "https://a.example/page";
+    const tab = fake.openTab({ url, discarded: true, title: "Stored title" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, url, async () => restore(fake, tab)),
+    );
+    await flush();
+    assert.equal(wait.done(), false);
+    await fake.browser.tabs.update(tab.id, { url });
+    await flush();
+    assert.equal(wait.tab()?.title, `Title of ${url}`);
+    assert.equal(wait.tab()?.status, "complete");
+    assertCleanedUp(fake, timers);
+  });
+
+  it("returns the page it loads into a tab Firefox restores on another page", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "https://a.example/old", discarded: true, title: "Old" });
+    const url = "https://b.example/new";
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, url, async () => restore(fake, tab)),
+    );
+    await flush();
+    assert.equal(wait.done(), false);
+    await fake.browser.tabs.update(tab.id, { url });
+    await flush();
+    assert.equal(wait.tab()?.url, url);
+    assert.equal(wait.tab()?.title, `Title of ${url}`);
+    assertCleanedUp(fake, timers);
+  });
+
+  it("fails with navigation_timeout when the load after a restore of another page commits nothing", async () => {
+    const { fake, timers } = setup();
+    const tab = fake.openTab({ url: "https://a.example/old", discarded: true, title: "Old" });
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, "https://b.example/new", async () => {
+        restore(fake, tab);
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      }),
+    );
+    await flush();
+    timers.advance(LOAD_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(wait.done(), false);
+    timers.advance(1);
+    await assert.rejects(wait.promise, { code: "navigation_timeout" });
+    assertCleanedUp(fake, timers);
+  });
+
+  it("finishes on the page's complete when its commit came before its loading", async () => {
+    const { fake, timers, tab } = setup();
+    const url = "https://b.example/";
+    const wait = track(
+      waitForLoad(fake.browser, timers, tab.id, url, async () => {
+        tab.url = url;
+        fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      }),
+    );
+    await flush();
+    assert.equal(wait.tab()?.url, url);
+    assertCleanedUp(fake, timers);
+  });
+
   for (const [timeoutMs, text] of [
     [undefined, "30 seconds"],
     [20000, "20 seconds"],
@@ -663,4 +736,14 @@ function track(promise: Promise<Tab>): {
     },
   );
   return { promise, done: () => done, tab: () => result };
+}
+
+/**
+ * What Firefox reports restoring a tab it unloaded, before the requested load starts: a commit of
+ * its stored URL and a complete.
+ */
+function restore(fake: FakeBrowser, tab: FakeTab): void {
+  tab.discarded = false;
+  fake.emitCommitted({ tabId: tab.id, frameId: 0, url: tab.url });
+  fake.emitStatus(tab.id, "complete");
 }
