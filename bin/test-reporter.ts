@@ -64,7 +64,7 @@ export default async function* report(source: AsyncIterable<TestEvent>): AsyncGe
   if (failures.length > 0 && output.length > 0) {
     yield `\n--- captured test output (stdout and stderr) ---\n${output.join("")}`;
   }
-  yield "\n";
+  if (failures.length > 0) yield "\n";
   if (coverage !== undefined && rootError) yield await coverageTable(coverage);
   yield* notes;
   yield `ℹ ${counts.join(", ")}\n`;

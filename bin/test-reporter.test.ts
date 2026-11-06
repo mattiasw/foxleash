@@ -90,8 +90,9 @@ describe("test reporter", () => {
   test("a green run prints only the counts and the coverage totals", () => {
     const result = run("--experimental-test-coverage", "green.test.ts");
     assert.equal(result.status, 0, result.stdout + result.stderr);
-    const lines = result.stdout.trim().split("\n");
-    assert.equal(lines.length, 2, result.stdout);
+    const lines = result.stdout.split("\n");
+    assert.equal(lines.length, 3, result.stdout);
+    assert.equal(lines[2], "");
     assert.match(
       lines[0] ?? "",
       /^ℹ tests 1, suites 0, pass 1, fail 0, cancelled 0, skipped 0, todo 0, duration_ms [\d.]+$/,
@@ -121,7 +122,7 @@ describe("test reporter", () => {
       /--- captured test output \(stdout and stderr\) ---\n(.|\n)*stderr from the failing test/,
     );
     assert.match(result.stdout, /chatter from a passing test/);
-    assert.match(result.stdout, /ℹ tests 3, suites 2, pass 2, fail 1,/);
+    assert.match(result.stdout, /\n\nℹ tests 3, suites 2, pass 2, fail 1,/);
   });
 
   test("a test file that crashes while loading shows the crash from its stderr", () => {
