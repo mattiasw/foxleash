@@ -155,6 +155,7 @@ describe("tools", () => {
       "stays protected only if a Foxhand tool read the page, took a screenshot of it or acted in it while it was a password field",
       "marked file field",
       "50,000 characters",
+      "A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it.",
       "read_page never asks",
     ]) {
       assert.ok(readPage?.description?.includes(words), words);
@@ -169,6 +170,7 @@ describe("tools", () => {
     ]);
     for (const words of [
       "get_page_text never asks",
+      "A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it.",
       "50,000 unless given and at most 200,000",
       "totalChars, truncated and, when truncated is true, nextOffset",
       "When truncated is true, passing nextOffset as offset returns the text that follows",
@@ -1306,6 +1308,7 @@ describe("wait_for", () => {
       "history.pushState or replaceState",
       "or navigation true, to wait until the next navigation in the tab finishes",
       "10 unless given, at most 30",
+      "With text or selector, a call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and checks it.",
       "wait_for never asks",
     ]) {
       assert.ok(tool?.description?.includes(words), words);

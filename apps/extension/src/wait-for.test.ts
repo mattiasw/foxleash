@@ -33,7 +33,8 @@ describe("waitForPage", { timeout: 10000 }, () => {
   it("retries a page in transition, then resolves once it answers true", async () => {
     const { timers, pages, requests, answer, fail, elapsed } = setup();
     const waiting = waitForPage({ pages, timers }, "s1", 4, { selector: "#done" }, 10_000);
-    for (const [index, code] of ["page_changed", "page_unreachable", "page_timeout"].entries()) {
+    const codes = ["page_changed", "page_unreachable", "page_timeout", "page_loading"];
+    for (const [index, code] of codes.entries()) {
       fail(new ToolError(code, "In transition."));
       await flush();
       tick(timers, elapsed, WAIT_POLL_MS - 1);
@@ -44,7 +45,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
     }
     answer(true);
     assert.equal(await waiting, true);
-    assert.equal(requests.length, 4);
+    assert.equal(requests.length, 5);
     assert.deepEqual(requests[0]?.params, { selector: "#done" });
     assert.equal(timers.pending(), 0);
   });

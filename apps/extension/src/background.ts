@@ -10,6 +10,7 @@ import { probePage } from "./probe-page.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { createSiteAccess } from "./site-access.ts";
+import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
 
 declare const browser: BrowserApi;
@@ -40,7 +41,8 @@ const access = createSiteAccess({
 const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });
 const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
-const pages = createPageScripts({ browser, groups, access, timers });
+const navigations = createTabNavigations({ browser, timers });
+const pages = createPageScripts({ browser, groups, access, timers, navigations });
 const uploads = createUploads(timers);
 // Wrapped for the same reason as the timers.
 const downloads = createDownloads({
@@ -60,6 +62,7 @@ const handleRequest = createHandlers({
   access,
   probe: probePage,
   pages,
+  navigations,
   uploads,
   recordings,
   network,

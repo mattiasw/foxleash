@@ -123,6 +123,10 @@ and frames are noted but not read. The agent can read only the interactive eleme
 The tree is cut at 50,000 characters, and the agent is told when it was. `read_page` works
 only on a tab showing a site you approved, and never asks.
 
+A read, an action or a screenshot made while the tab is loading another page, as right after a
+click on a link or a form submit, waits up to 10 seconds for that page and then works on it.
+When the page has not arrived by then, the agent is told the tab is still loading.
+
 The agent reads a page's text with `get_page_text`: the text as the page shows it, the main
 content first (the page's main element or article, else its largest block of text), then the
 rest of the page. Text hidden with display, visibility or the hidden attribute and the values
@@ -299,7 +303,9 @@ fields. A selector that contains `[` together with `value` or `ng-reflect` is re
 could test what a password field holds, which Angular development builds can copy into
 `ng-reflect` attributes. A page that changes its address with its own scripts
 (`history.pushState` or `replaceState`) counts as a navigation. Waiting for text or a selector
-works only on a tab showing a site you approved, and never asks.
+while the tab loads another page, as right after a click or a form submit, checks that page
+once it has arrived. Waiting for text or a selector works only on a tab showing a site you
+approved, and never asks.
 
 ## Faster tasks in Claude Code
 

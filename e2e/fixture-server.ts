@@ -65,7 +65,23 @@ export const TITLES = {
   autofillFramed: "Fixture autofill framed",
   cardAutofill: "Fixture card autofill",
   beforeUnload: "Fixture before unload",
+  navStart: "Fixture navigation start",
+  navMiddle: "Fixture navigation middle",
+  navTarget: "Fixture navigation target",
 } as const;
+
+/** The text only the navigation target page shows. */
+export const NAV_TARGET_TEXT = "Only the target page says this";
+
+/**
+ * How the navigation pages are served, given in their query: `delay` the ms the server holds the
+ * target page (0 or 400), `store` its caching, cacheable but asked again (`cache`) or never
+ * stored (`nostore`).
+ */
+export interface NavigationVariant {
+  delay: 0 | 400;
+  store: "cache" | "nostore";
+}
 
 /** The text the wait-late page adds, in an element with the id late, after WAIT_LATE_MS. */
 export const WAIT_LATE_TEXT = "The late text has arrived";
@@ -680,6 +696,16 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
+    } else if (path === "/nav/held-image") {
+      // Holds the middle page's load past its DOM ready, so a click lands on a page still loading.
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        response.writeHead(200, { "Content-Type": "image/gif", "Cache-Control": "no-store" });
+        response.end(Buffer.from(PIXEL_GIF, "base64"));
+      }, NAV_IMAGE_HOLD_MS);
+      timers.add(timer);
+    } else if (NAVIGATION_PAGES.includes(path)) {
+      sendNavigationPage(response, path, navigationVariant(request.url), timers);
     } else if (path === "/counter-no-cache") {
       // Cached, but a load asks again; a history load shows the cached copy.
       sendPage(response, counterTitle(hits.get(path) ?? 0), { "Cache-Control": "no-cache" });
@@ -715,6 +741,79 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       await closed.promise;
     },
   };
+}
+
+const NAVIGATION_PAGES: readonly string[] = ["/nav/start", "/nav/middle", "/nav/target"];
+const NAV_IMAGE_HOLD_MS = 3000;
+const PIXEL_GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+
+/** Sends a navigation page, the target after the variant's delay; 404 for another query. */
+function sendNavigationPage(
+  response: ServerResponse,
+  path: string,
+  variant: NavigationVariant | undefined,
+  timers: Set<NodeJS.Timeout>,
+): void {
+  if (variant === undefined) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("not found");
+    return;
+  }
+  const send = () =>
+    sendHtml(response, navigationPage(path, variant), {
+      "Cache-Control": variant.store === "cache" ? "no-cache" : "no-store",
+    });
+  if (path !== "/nav/target" || variant.delay === 0) {
+    send();
+    return;
+  }
+  const timer = setTimeout(() => {
+    timers.delete(timer);
+    send();
+  }, variant.delay);
+  timers.add(timer);
+}
+
+/** The variant a navigation page's URL asks for, or undefined for any other query. */
+function navigationVariant(url: string | undefined): NavigationVariant | undefined {
+  const query = new URL(url ?? "/", "http://127.0.0.1").searchParams;
+  const delay = query.get("delay");
+  const store = query.get("store");
+  if ((delay !== "0" && delay !== "400") || (store !== "cache" && store !== "nostore")) {
+    return undefined;
+  }
+  return { delay: delay === "0" ? 0 : 400, store };
+}
+
+/** The start, middle or target page of the navigation tests, linking on in the same variant. */
+function navigationPage(path: string, { delay, store }: NavigationVariant): string {
+  const query = `delay=${delay}&amp;store=${store}`;
+  const target = `/nav/target?${query}`;
+  const page = (title: string, body: string) =>
+    `<!doctype html>\n<html><head><meta charset="utf-8"><title>${title}</title></head>` +
+    `<body><main><h1>${title}</h1>\n${body}</main></body></html>\n`;
+  if (path === "/nav/target") return page(TITLES.navTarget, `<p>${NAV_TARGET_TEXT}</p>`);
+  if (path === "/nav/middle") {
+    return page(
+      TITLES.navMiddle,
+      `<p><a href="${target}">Go to target</a></p>\n<img src="/nav/held-image" alt="" width="1" height="1">`,
+    );
+  }
+  return page(
+    TITLES.navStart,
+    `<p><a href="${target}">Go to target</a></p>
+<p><a href="/nav/middle?${query}">Go to middle</a></p>
+<form action="/nav/target" method="get">
+<input type="hidden" name="delay" value="${delay}"><input type="hidden" name="store" value="${store}">
+<label>Search <input name="q"></label> <button type="submit">Search</button>
+</form>
+<p><a href="#far">Jump down</a></p>
+<p><button type="button" onclick="history.pushState(null, '', '/nav/start?${query}&amp;pushed=1')">Push state</button></p>
+<p><a href="/api/beacon-top">No content</a></p>
+<p><a href="/download/data.bin">Save data</a></p>
+<div style="height: 3000px"></div>
+<p id="far">Far down the start page</p>`,
+  );
 }
 
 /** A port on 127.0.0.1 that nothing listened on a moment ago. */

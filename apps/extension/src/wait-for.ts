@@ -5,7 +5,12 @@ import type { PageScripts } from "./page-scripts.ts";
 export const WAIT_POLL_MS = 250;
 
 // A document in transition, as during a navigation, fails a request with one of these.
-const RETRIED: readonly unknown[] = ["page_changed", "page_unreachable", "page_timeout"];
+const RETRIED: readonly unknown[] = [
+  "page_changed",
+  "page_unreachable",
+  "page_timeout",
+  "page_loading",
+];
 
 /**
  * Asks the content script in the tab whether the page shows the text or has an element matching

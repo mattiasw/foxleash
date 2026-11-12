@@ -71,6 +71,7 @@ import {
   type SiteAccess,
   siteBlocked,
 } from "./site-access.ts";
+import type { TabNavigations } from "./tab-navigations.ts";
 import type { Uploads } from "./uploads.ts";
 import { waitForNavigation, waitForPage } from "./wait-for.ts";
 import { waitForLoad } from "./wait-for-load.ts";
@@ -97,6 +98,8 @@ export interface HandlerDeps<Handle> {
   probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
   /** Requests to Foxhand's content script; `import type`, since page-scripts.ts imports this file. */
   pages: Pick<PageScripts, "request">;
+  /** The navigations under way in each tab, which a screenshot and read_console wait for. */
+  navigations: Pick<TabNavigations, "settled" | "underWay" | "begun">;
   /** The bytes upload_chunk stages; `import type`, since uploads.ts imports this file. */
   uploads: Pick<Uploads, "add" | "take">;
   /** Which tabs' console records may be read; `import type`, since it imports this file. */
@@ -157,6 +160,10 @@ const MAX_UPLOAD_NAME = 255;
 export const CAPTURE_TIMEOUT_MS = 20_000;
 /** Bounds a whole screenshot, its page requests included, below the host's 60 s request timeout. */
 export const SCREENSHOT_TIMEOUT_MS = 50_000;
+/** Bounds a whole read_console, its wait for a navigation included, as SCREENSHOT_TIMEOUT_MS does. */
+export const READ_CONSOLE_TIMEOUT_MS = 50_000;
+/** How long a page request or a screenshot waits for one navigation of the tab's top frame. */
+export const NAVIGATION_WAIT_MS = 10_000;
 /**
  * How long `navigate` waits, once going back or forward has loaded a page, for that page's own
  * request: Firefox can report it after the commit (ADR 0016 measured 211 ms). A page Firefox
@@ -188,6 +195,7 @@ export function createHandlers<Handle>({
   access,
   probe,
   pages,
+  navigations,
   uploads,
   recordings,
   network,
@@ -731,15 +739,8 @@ export function createHandlers<Handle>({
     ref: string | undefined,
     expired: () => boolean,
   ): Promise<Result<"screenshot">> {
-    // From before the first gate, so a tab that shows another site and comes back between the
-    // two gates, which see only their own moments, is caught too.
-    const visits = watchSites(tabId);
-    // A frame that loads a new document has no sheet, and a same-site load can bring back a
-    // revealed field the first check did not see.
-    const frames = watchFrames(tabId);
+    const { site, visits, frames } = await screenshotGate(session, tabId, true);
     try {
-      const gateDeps = { browser, groups, access };
-      const site = await allowedPageSite(gateDeps, session, tabId);
       const rect = ref === undefined ? undefined : await elementArea(session, tabId, ref);
       const revealed = await passwordRevealed(session, tabId);
       const dataUrl = await maskedCapture(tabId, rect, revealed, expired);
@@ -747,7 +748,7 @@ export function createHandlers<Handle>({
       if (!revealed && (await passwordRevealed(session, tabId))) throw pageChanged(tabId);
       // Nothing from the page reaches the agent once the user has withdrawn access.
       if (
-        (await allowedPageSite(gateDeps, session, tabId)) !== site ||
+        (await allowedPageSite({ browser, groups, access }, session, tabId)) !== site ||
         visits.left(site) ||
         frames.committed()
       ) {
@@ -759,6 +760,61 @@ export function createHandlers<Handle>({
     } finally {
       visits.stop();
       frames.stop();
+    }
+  }
+
+  /**
+   * The screenshot's first gate, once a navigation under way in the tab has ended, and the
+   * watchers of what the tab shows from then on. Started before the wait, the watchers would see
+   * that navigation's own commit. With `retry`, a gate that meets the about:blank of a document
+   * swap waits for its page and gates once more.
+   */
+  async function screenshotGate(
+    session: string,
+    tabId: number,
+    retry: boolean,
+  ): Promise<{
+    site: string;
+    visits: ReturnType<typeof watchSites>;
+    frames: ReturnType<typeof watchFrames>;
+  }> {
+    await navigationSettled(session, tabId);
+    // From before the first gate, so a tab that shows another site and comes back between the
+    // two gates, which see only their own moments, is caught too.
+    const visits = watchSites(tabId);
+    // A frame that loads a new document has no sheet, and a same-site load can bring back a
+    // revealed field the first check did not see.
+    const frames = watchFrames(tabId);
+    try {
+      return {
+        site: await allowedPageSite({ browser, groups, access }, session, tabId),
+        visits,
+        frames,
+      };
+    } catch (error: unknown) {
+      visits.stop();
+      frames.stop();
+      const swapping =
+        error instanceof ToolError && error.code === "page_not_web" && navigations.underWay(tabId);
+      if (retry && swapping) return screenshotGate(session, tabId, false);
+      throw error;
+    }
+  }
+
+  /**
+   * Waits for the navigation under way in the tab, when it is in the session's group, which it
+   * checks first: the time a refusal takes, whether or not the tab is loading, tells nothing
+   * about other tabs.
+   */
+  async function navigationSettled(session: string, tabId: number): Promise<void> {
+    try {
+      await groupTab(session, tabId);
+    } catch {
+      return;
+    }
+    if (!navigations.underWay(tabId)) return;
+    if ((await navigations.settled(tabId, NAVIGATION_WAIT_MS)) === "timeout") {
+      throw pageLoading(tabId);
     }
   }
 
@@ -934,6 +990,19 @@ export function createHandlers<Handle>({
   /** Reads what the page in a tab wrote to its console, through the content script. */
   async function readConsole(session: string, params: Params): Promise<Result<"read_console">> {
     const tabId = tabIdParam(params, "read_console");
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(() => reject(consoleTimeout(tabId)), READ_CONSOLE_TIMEOUT_MS);
+    try {
+      return await Promise.race([recordedConsole(session, tabId), timedOut]);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+
+  async function recordedConsole(session: string, tabId: number): Promise<Result<"read_console">> {
+    // The recording of the page a navigation under way brings, not of the page it replaces.
+    await navigationSettled(session, tabId);
+    const begun = navigations.begun(tabId);
     const live = recordings.liveRecording(session, tabId);
     const reply = await pages.request(session, tabId, "read_console", {});
     // The reply comes from the page's content process: own fields only, and the caps again.
@@ -946,6 +1015,8 @@ export function createHandlers<Handle>({
     }
     // Records from a document whose access was interrupted since it loaded are never returned.
     if (live === undefined || recordings.liveRecording(session, tabId) !== live) {
+      // The answer came from the page of a navigation that began during the read.
+      if (navigations.begun(tabId) > begun) throw pageChanged(tabId);
       return { recording: false, messages: [], dropped: 0 };
     }
     return result;
@@ -1458,6 +1529,13 @@ function screenshotRef(params: Params): string | undefined {
   return ref;
 }
 
+function consoleTimeout(tabId: number): ToolError {
+  return new ToolError(
+    "page_timeout",
+    `Foxhand did not finish reading the console of tab ${tabId} in time; try again.`,
+  );
+}
+
 function screenshotTimeout(tabId: number): ToolError {
   return new ToolError(
     "page_timeout",
@@ -1599,6 +1677,16 @@ function pageChanged(tabId: number): ToolError {
   return new ToolError(
     "page_changed",
     `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+  );
+}
+
+/** The refusal of a request that waited out a navigation of the tab; `ran` names an act sent. */
+export function pageLoading(tabId: number, ran?: string): ToolError {
+  return new ToolError(
+    "page_loading",
+    ran === undefined
+      ? `Tab ${tabId} is still loading a page; try again.`
+      : `Tab ${tabId} is still loading a page, and ${ran} may already have run; read the page before you repeat it.`,
   );
 }
 

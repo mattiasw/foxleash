@@ -27,8 +27,10 @@ import {
   createHandlers,
   HISTORY_RELOAD_TIMEOUT_MS,
   HISTORY_REQUEST_TIMEOUT_MS,
+  NAVIGATION_WAIT_MS,
   PROBE_CUTOFF_MS,
   PROBE_TIMEOUT_MS,
+  READ_CONSOLE_TIMEOUT_MS,
   SCREENSHOT_TIMEOUT_MS,
   ToolError,
 } from "./handlers.ts";
@@ -46,6 +48,7 @@ import {
   type SessionMemory,
   type SessionState,
 } from "./site-access.ts";
+import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
 import { LOAD_GRACE_MS, LOAD_TIMEOUT_MS } from "./wait-for-load.ts";
 
@@ -1675,9 +1678,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     const context = setup();
     const tab = await historyTab(context);
     const listeners: [string, number, number][] = [];
+    const committed = context.fake.committedListenerCount();
     const note = (label: string, tabId: number) => {
       const requests = send(context.fake, [frameRequest(tabId, "https://a.example/f")]);
-      listeners.push([label, requests, context.fake.committedListenerCount()]);
+      listeners.push([label, requests, context.fake.committedListenerCount() - committed]);
     };
     const reload = context.fake.browser.tabs.reload;
     context.fake.browser.tabs.reload = async (tabId, properties) => {
@@ -3460,6 +3464,7 @@ describe("wait_for", { timeout: 10000 }, () => {
     const { fake, call, open, grant } = setup();
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
+    const listeners = fake.navigationListenerCount();
     const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true });
     await flush();
     fake.navigateByUser(tab.id, "https://a.example/next");
@@ -3472,7 +3477,7 @@ describe("wait_for", { timeout: 10000 }, () => {
     assert.deepEqual(await away, {
       tab: { ...tab, url: "https://b.example", title: "" },
     });
-    assert.equal(fake.navigationListenerCount(), 0);
+    assert.equal(fake.navigationListenerCount(), listeners);
   });
 
   it("returns the tab after the page changes its address with the History API", async () => {
@@ -3489,6 +3494,7 @@ describe("wait_for", { timeout: 10000 }, () => {
     const { fake, call, open, timers } = setup();
     await open("s1");
     const tab = await open("s1");
+    const listeners = fake.navigationListenerCount();
     const timedOut = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
     await flush();
     timers.advance(2000);
@@ -3503,7 +3509,7 @@ describe("wait_for", { timeout: 10000 }, () => {
       code: "tab_not_found",
       message: `Tab ${tab.id} does not exist.`,
     });
-    assert.equal(fake.navigationListenerCount(), 0);
+    assert.equal(fake.navigationListenerCount(), listeners);
     assert.equal(timers.pending(), 0);
   });
 
@@ -3512,11 +3518,12 @@ describe("wait_for", { timeout: 10000 }, () => {
     await open("s1");
     const user = fake.openTab({ url: "https://user.example/" });
     const removed = fake.removedListenerCount();
+    const listeners = fake.navigationListenerCount();
     await rejectsWith(
       call("s1", "wait_for", { tabId: user.id, navigation: true }),
       "tab_not_in_group",
     );
-    assert.equal(fake.navigationListenerCount(), 0);
+    assert.equal(fake.navigationListenerCount(), listeners);
     assert.equal(fake.removedListenerCount(), removed);
   });
 });
@@ -3863,6 +3870,83 @@ describe("read_console", { timeout: 10000 }, () => {
       call("s1", "read_console", { tabId: 3 }),
       (error: unknown) => error === refusal,
     );
+  });
+
+  it("returns the records of the page a navigation under way brings", async () => {
+    const { fake, call, open, grant, replyWith, liveWith, pageCalls, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    // As live-documents.ts does, a commit in the top frame replaces the tab's recording.
+    let live = {};
+    fake.browser.webNavigation.onCommitted.addListener(({ frameId }) => {
+      if (frameId === 0) live = {};
+    });
+    liveWith(() => live);
+    replyWith(async () => recorded);
+    beginNavigation(fake, tab.id, "https://a.example/next");
+    const read = call("s1", "read_console", { tabId: tab.id });
+    await flush();
+    assert.deepEqual(pageCalls, []);
+    landNavigation(fake, tab.id, "https://a.example/next");
+    assert.deepEqual(await read, recorded);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
+  it("fails with page_changed, not as unrecorded, when a navigation began during the read", async () => {
+    const { fake, call, open, grant, replyWith, liveWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    let live = {};
+    fake.browser.webNavigation.onCommitted.addListener(({ frameId }) => {
+      if (frameId === 0) live = {};
+    });
+    liveWith(() => live);
+    replyWith(async () => {
+      // The next page lands while the read runs, and answers.
+      beginNavigation(fake, tab.id, "https://a.example/next");
+      landNavigation(fake, tab.id, "https://a.example/next");
+      return recorded;
+    });
+    await assert.rejects(call("s1", "read_console", { tabId: tab.id }), {
+      code: "page_changed",
+      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+    });
+  });
+
+  it("answers within READ_CONSOLE_TIMEOUT_MS, its wait for a navigation included", async () => {
+    assert.equal(READ_CONSOLE_TIMEOUT_MS, 50_000);
+    const { fake, call, open, grant, replyWith, liveWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    liveWith(() => ({}));
+    // The page never answers.
+    replyWith(() => new Promise(() => {}));
+    beginNavigation(fake, tab.id, "https://a.example/next");
+    let settled = false;
+    const read = call("s1", "read_console", { tabId: tab.id });
+    read.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flush();
+    timers.advance(NAVIGATION_WAIT_MS - 1);
+    landNavigation(fake, tab.id, "https://a.example/next");
+    await flush();
+    timers.advance(READ_CONSOLE_TIMEOUT_MS - NAVIGATION_WAIT_MS);
+    await flush();
+    assert.equal(settled, false);
+    timers.advance(1);
+    await assert.rejects(read, {
+      code: "page_timeout",
+      message: `Foxhand did not finish reading the console of tab ${tab.id} in time; try again.`,
+    });
+    assert.equal(timers.pending(), timersBefore);
   });
 });
 
@@ -4457,6 +4541,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
     const listeners = fake.listenerCount();
+    const committed = fake.committedListenerCount();
     for (const away of ["https://c.example/", "about:blank"]) {
       const release = fake.holdNextCapture();
       const shot = call("s1", "screenshot", { tabId: tab.id });
@@ -4471,7 +4556,7 @@ describe("screenshot", { timeout: 10000 }, () => {
         message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
       });
       assert.equal(fake.listenerCount(), listeners, away);
-      assert.equal(fake.committedListenerCount(), 0, away);
+      assert.equal(fake.committedListenerCount(), committed, away);
     }
   });
 
@@ -4564,6 +4649,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     };
     const timersBefore = timers.pending();
     const listeners = fake.listenerCount();
+    const committed = fake.committedListenerCount();
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
     await flush();
     assert.deepEqual(pageCalls, [
@@ -4576,7 +4662,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     assert.equal(cssAtCapture, 3);
     assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5, 9]);
     assert.equal(timers.pending(), timersBefore);
-    assert.equal(fake.committedListenerCount(), 0);
+    assert.equal(fake.committedListenerCount(), committed);
     assert.equal(fake.listenerCount(), listeners);
   });
 
@@ -5192,9 +5278,10 @@ describe("screenshot", { timeout: 10000 }, () => {
     fake.setFrames(tab.id, [0, 5]);
     const removals = settledRemovals(fake);
     const listeners = fake.listenerCount();
+    const committed = fake.committedListenerCount();
     const release = fake.holdNextRemoveCSS();
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
-    assert.equal(fake.committedListenerCount(), 0);
+    assert.equal(fake.committedListenerCount(), committed);
     assert.equal(fake.listenerCount(), listeners);
     await flush();
     assertMaskedAndRemoved(fake.cssCalls, tab.id, [0, 5]);
@@ -5300,6 +5387,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       await grant("https://a.example");
       const tab = await open("s1", "https://a.example/");
       fake.setFrames(tab.id, [0, 3]);
+      const committed = fake.committedListenerCount();
       const release = hold(ctx);
       const shot = call("s1", "screenshot", { tabId: tab.id });
       await flush();
@@ -5309,7 +5397,7 @@ describe("screenshot", { timeout: 10000 }, () => {
         code: "page_changed",
         message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
       });
-      assert.equal(fake.committedListenerCount(), 0);
+      assert.equal(fake.committedListenerCount(), committed);
     });
   }
 
@@ -5470,6 +5558,152 @@ describe("screenshot", { timeout: 10000 }, () => {
       );
     });
   }
+
+  describe("waits for a navigation under way", () => {
+    const NEXT = "https://a.example/next";
+
+    it("before its first gate, then captures the page the navigation brings", async () => {
+      const { fake, call, open, grant, pageCalls, timers } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const timersBefore = timers.pending();
+      beginNavigation(fake, tab.id, NEXT);
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      await flush();
+      assert.deepEqual(pageCalls, []);
+      assert.deepEqual(fake.captures, []);
+      assert.deepEqual(fake.cssCalls, []);
+      landNavigation(fake, tab.id, NEXT);
+      assert.deepEqual(await shot, { data: PNG });
+      assert.equal(fake.captures.length, 1);
+      assert.equal(pageCalls.length, 2);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("fails with page_loading when the tab is still loading at the bound", async () => {
+      const { fake, call, open, grant, pageCalls, timers } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const timersBefore = timers.pending();
+      const listeners = fake.listenerCount();
+      beginNavigation(fake, tab.id, NEXT);
+      let settled = false;
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      shot.then(
+        () => {
+          settled = true;
+        },
+        () => {
+          settled = true;
+        },
+      );
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      await flush();
+      assert.equal(settled, false);
+      timers.advance(1);
+      await assert.rejects(shot, {
+        code: "page_loading",
+        message: `Tab ${tab.id} is still loading a page; try again.`,
+      });
+      assert.deepEqual(pageCalls, []);
+      assert.deepEqual(fake.captures, []);
+      assert.equal(timers.pending(), timersBefore);
+      assert.equal(fake.listenerCount(), listeners);
+    });
+
+    it("waits once when the first gate meets the swap of a navigation that began during it", async (t) => {
+      const { fake, call, open, grant, pageCalls } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const listeners = fake.listenerCount();
+      const committed = fake.committedListenerCount();
+      const get = fake.browser.tabs.get;
+      let gets = 0;
+      t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
+        gets += 1;
+        // The first is the group check before any wait; the second, the first gate's.
+        if (gets === 2) {
+          beginNavigation(fake, tabId, NEXT);
+          swapDocument(fake, tabId);
+        }
+        return get(tabId);
+      });
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      assert.deepEqual(pageCalls, []);
+      landNavigation(fake, tab.id, NEXT);
+      assert.deepEqual(await shot, { data: PNG });
+      assert.equal(fake.captures.length, 1);
+      assert.equal(fake.listenerCount(), listeners);
+      assert.equal(fake.committedListenerCount(), committed);
+    });
+
+    it("refuses a second swap at its first gate", async (t) => {
+      const { fake, call, open, grant, pageCalls } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const listeners = fake.listenerCount();
+      const committed = fake.committedListenerCount();
+      const get = fake.browser.tabs.get;
+      let gets = 0;
+      t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
+        gets += 1;
+        // The first is the group check before any wait; the second, the first gate's.
+        if (gets === 2) {
+          beginNavigation(fake, tabId, NEXT);
+          swapDocument(fake, tabId);
+        }
+        return get(tabId);
+      });
+      const shot = call("s1", "screenshot", { tabId: tab.id });
+      await flush();
+      landNavigation(fake, tab.id, NEXT);
+      // The page's own script moves on as soon as it is parsed.
+      beginNavigation(fake, tab.id, "https://a.example/last");
+      swapDocument(fake, tab.id);
+      await rejectsWith(shot, "page_not_web");
+      assert.deepEqual(pageCalls, []);
+      assert.deepEqual(fake.captures, []);
+      assert.equal(fake.listenerCount(), listeners);
+      assert.equal(fake.committedListenerCount(), committed);
+    });
+
+    it("checks the group the same way whether or not a tab outside it is loading", async (t) => {
+      const { fake, call, open } = setup();
+      await open("s1");
+      const outside = fake.openTab({ url: "https://a.example/" });
+      const get = t.mock.method(fake.browser.tabs, "get");
+      await rejectsWith(call("s1", "screenshot", { tabId: outside.id }), "tab_not_in_group");
+      const idle = get.mock.callCount();
+      beginNavigation(fake, outside.id, NEXT);
+      await rejectsWith(call("s1", "screenshot", { tabId: outside.id }), "tab_not_in_group");
+      assert.equal(get.mock.callCount(), 2 * idle);
+    });
+
+    it("refuses a tab outside the session's group, or one that does not exist, without waiting", async () => {
+      const { fake, call, open, grant, pageCalls, timers } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const other = await open("s2", "https://a.example/");
+      const outside = fake.openTab({ url: "https://a.example/" });
+      const timersBefore = timers.pending();
+      for (const tabId of [tab.id, other.id, outside.id, 99]) beginNavigation(fake, tabId, NEXT);
+      for (const [session, tabId, code] of [
+        ["s1", other.id, "tab_not_in_group"],
+        ["s1", outside.id, "tab_not_in_group"],
+        ["s2", tab.id, "tab_not_in_group"],
+        ["s1", 99, "tab_not_found"],
+      ] as const) {
+        await rejectsWith(call(session, "screenshot", { tabId }), code, `${session} ${tabId}`);
+      }
+      assert.deepEqual(pageCalls, []);
+      assert.deepEqual(fake.captures, []);
+      assert.equal(timers.pending(), timersBefore);
+    });
+  });
 });
 
 describe("upload_chunk", { timeout: 10000 }, () => {
@@ -6221,6 +6455,7 @@ function setup() {
       return { path: `/downloads/${filename}`, bytes: 3 };
     },
   };
+  const navigations = createTabNavigations({ browser: fake.browser, timers });
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -6228,6 +6463,7 @@ function setup() {
     access,
     probe,
     pages,
+    navigations,
     uploads,
     recordings,
     network,
@@ -6565,6 +6801,26 @@ function sendOnLookup(
     if (fake.tabs.get(tabId)?.url === "https://a.example/a") send(fake, [late(tabId)]);
     return get(tabId);
   };
+}
+
+/** Firefox begins a navigation of the tab's top frame; the tab still shows its page. */
+function beginNavigation(fake: FakeBrowser, tabId: number, url: string): void {
+  fake.emitBeforeNavigate({ tabId, frameId: 0, url });
+  if (fake.tabs.has(tabId)) fake.emitStatus(tabId, "loading");
+}
+
+/** The tab shows about:blank, as while Firefox swaps the new document in. */
+function swapDocument(fake: FakeBrowser, tabId: number): void {
+  const shown = fake.tabs.get(tabId);
+  if (shown !== undefined) shown.url = "about:blank";
+}
+
+/** The navigation's document commits and is parsed. */
+function landNavigation(fake: FakeBrowser, tabId: number, url: string): void {
+  const shown = fake.tabs.get(tabId);
+  if (shown !== undefined) shown.url = url;
+  fake.emitCommitted({ tabId, frameId: 0, url });
+  fake.emitDOMContentLoaded({ tabId, frameId: 0, url });
 }
 
 /** Fires each request's onBeforeRequest; returns how many listeners the last one reached. */

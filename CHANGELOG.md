@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it for such a URL loaded into a tab Firefox unloaded to save memory.
 - In Claude Code, large page reads (`read_page` of a long page, `get_page_text`, and `batch`
   results holding them) now reach the agent as the page, not as a file the agent has to search.
+- A read or a wait right after a click or a form submit that loads another page now returns the
+  new page, instead of the previous one or an error saying the tab shows another kind of page.
+- An action after which its tab shows another site now says the action ran and to read the page
+  before repeating it, instead of asking to try again.
 
 ## [0.3.0] - 2026-11-06
 

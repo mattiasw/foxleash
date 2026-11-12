@@ -57,6 +57,7 @@ apps/extension/src/session-groups.ts
 apps/extension/src/settings.ts
 apps/extension/src/site-access.ts
 apps/extension/src/site.ts
+apps/extension/src/tab-navigations.ts
 apps/extension/src/uploads.ts
 apps/extension/src/wait-for-load.ts
 apps/extension/src/wait-for.ts

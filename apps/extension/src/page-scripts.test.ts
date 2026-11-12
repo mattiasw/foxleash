@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { MethodName, TabInfo } from "@foxhand/protocol";
 import { type ContentScript, createFakeBrowser, createFakeTimers, flush } from "./fake-browser.ts";
-import { createHandlers, ToolError } from "./handlers.ts";
+import { createHandlers, NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
 import {
   handlePageMessage,
   MAX_PAGE_REPLY_CHARS,
@@ -19,6 +19,7 @@ import {
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
 import { createSiteAccess, type OpenPrompt, type SessionMemory } from "./site-access.ts";
+import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
 
 const SITE = "https://a.example";
@@ -521,6 +522,444 @@ describe("page script requests", { timeout: 10000 }, () => {
     fake.setContentScript(tab.id, async () => undefined);
     await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_error");
   });
+
+  describe("waits for a navigation under way", () => {
+    const NEXT = `${SITE}/next`;
+    const LOADING = {
+      code: "page_loading",
+      message: (tabId: number) => `Tab ${tabId} is still loading a page; try again.`,
+    };
+    const ranChanged = (tabId: number, type: string) => ({
+      code: "page_changed",
+      message: `The page in tab ${tabId} changed after ${type} ran; read the page before you repeat it.`,
+    });
+    const ranLoading = (tabId: number, type: string) => ({
+      code: "page_loading",
+      message: `Tab ${tabId} is still loading a page, and ${type} may already have run; read the page before you repeat it.`,
+    });
+
+    it("waits, sending nothing, then runs in the page the navigation brings", async () => {
+      const { fake, pages, navigations, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      assert.equal(navigations.underWay(tab.id), false);
+      begin(fake, tab.id, NEXT);
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      assertNothingSent(fake);
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      await flush();
+      assert.equal(settled(), false);
+      assertNothingSent(fake);
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "new page");
+      assert.equal(fake.injections.length, 1);
+      assert.equal(fake.tabMessages.length, 1);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("fails with page_loading when the tab is still loading at the bound, sending nothing", async () => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      begin(fake, tab.id, NEXT);
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      await flush();
+      assert.equal(settled(), false);
+      timers.advance(1);
+      await assert.rejects(request, { code: LOADING.code, message: LOADING.message(tab.id) });
+      assertNothingSent(fake);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("still refuses about:blank with no navigation under way", async () => {
+      const { fake, pages, navigations, tab } = await grantedTab();
+      const shown = fake.tabs.get(tab.id);
+      assert.ok(shown !== undefined);
+      shown.url = "about:blank";
+      assert.equal(navigations.underWay(tab.id), false);
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_not_web");
+      assertNothingSent(fake);
+    });
+
+    it("waits when the first gate meets the swap of a navigation that began during it", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      const get = fake.browser.tabs.get;
+      let gets = 0;
+      t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
+        gets += 1;
+        // The first is the group check before any wait; the second, the first gate's.
+        if (gets === 2) {
+          begin(fake, tabId, NEXT);
+          swap(fake, tabId);
+        }
+        return get(tabId);
+      });
+      const request = pages.request("s1", tab.id, "echo", {});
+      await flush();
+      assertNothingSent(fake);
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "new page");
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("waits when the gate meets the swap of a navigation that began as the last one ended", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      begin(fake, tab.id, NEXT);
+      const request = pages.request("s1", tab.id, "echo", {});
+      await flush();
+      land(fake, tab.id, NEXT, answering("next page"));
+      // The page's own script moves on as soon as it is parsed.
+      begin(fake, tab.id, `${SITE}/last`);
+      swap(fake, tab.id);
+      await flush();
+      assertNothingSent(fake);
+      land(fake, tab.id, `${SITE}/last`, answering("last page"));
+      assert.equal(await request, "last page");
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("waits when the gate after the injection meets the swap, then runs again", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      let injections = 0;
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        injections += 1;
+        if (injections === 1) {
+          begin(fake, tab.id, NEXT);
+          swap(fake, tab.id);
+        }
+        return [{ frameId: 0, result: null }];
+      });
+      const request = pages.request("s1", tab.id, "echo", {});
+      await flush();
+      assert.deepEqual(fake.tabMessages, []);
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "new page");
+      assert.equal(injections, 2);
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("runs a read again when a navigation began while the page answered, never returning the old reply", async () => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        return { ok: true, site: SITE, result: "old page" };
+      });
+      const request = pages.request("s1", tab.id, "read_page", {});
+      await flush();
+      assert.equal(fake.tabMessages.length, 1);
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "new page");
+      assert.equal(fake.tabMessages.length, 2);
+      assert.equal(fake.injections.length, 2);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("runs a read at most twice", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      // Each answer comes from a page that has already moved on, and landed.
+      const movingOn = (): ContentScript => async () => {
+        begin(fake, tab.id, NEXT);
+        land(fake, tab.id, NEXT, movingOn());
+        return { ok: true, site: SITE, result: "old page" };
+      };
+      fake.setContentScript(tab.id, movingOn());
+      await rejectsWith(pages.request("s1", tab.id, "read_page", {}), "page_changed");
+      assert.equal(fake.tabMessages.length, 2);
+      // A page still loading the next one at the end of the second run.
+      let answers = 0;
+      const leaving: ContentScript = async () => {
+        answers += 1;
+        begin(fake, tab.id, `${NEXT}/${answers}`);
+        return { ok: true, site: SITE, result: "old page" };
+      };
+      fake.setContentScript(tab.id, leaving);
+      const request = pages.request("s1", tab.id, "read_page", {});
+      await flush();
+      land(fake, tab.id, NEXT, leaving);
+      await assert.rejects(request, { code: LOADING.code, message: LOADING.message(tab.id) });
+      assert.equal(answers, 2);
+    });
+
+    it("does not run a read again once NAVIGATION_WAIT_MS has passed", async (t) => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const { promise: injected, resolve } = Promise.withResolvers<void>();
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        await injected;
+        return [{ frameId: 0, result: null }];
+      });
+      const request = pages.request("s1", tab.id, "read_page", {});
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS);
+      begin(fake, tab.id, NEXT);
+      land(fake, tab.id, NEXT, answering("new page"));
+      resolve();
+      await rejectsWith(request, "page_changed");
+      assert.deepEqual(fake.tabMessages, []);
+    });
+
+    it("fails with page_loading when the navigation begun after NAVIGATION_WAIT_MS is still under way", async (t) => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const { promise: injected, resolve } = Promise.withResolvers<void>();
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        await injected;
+        return [{ frameId: 0, result: null }];
+      });
+      const request = pages.request("s1", tab.id, "read_page", {});
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS);
+      begin(fake, tab.id, NEXT);
+      resolve();
+      await assert.rejects(request, { code: LOADING.code, message: LOADING.message(tab.id) });
+      assert.deepEqual(fake.tabMessages, []);
+    });
+
+    it("sends an act once and returns its reply when its page begins loading another", async () => {
+      const { fake, pages, navigations, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      assert.equal(await pages.request("s1", tab.id, "click", {}), "clicked");
+      assert.equal(fake.tabMessages.length, 1);
+      assert.equal(navigations.underWay(tab.id), true);
+    });
+
+    it("waits after an act for the page of a swap, and returns the act's reply", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        swap(fake, tab.id);
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      await flush();
+      assert.equal(settled(), false);
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "clicked");
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("refuses an act's reply at once when its gate fails for another reason during a navigation", async () => {
+      const { fake, pages, navigations, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, "https://b.example/");
+        // The old document answers while the tab already reports its next URL.
+        const shown = fake.tabs.get(tab.id);
+        if (shown !== undefined) shown.url = "https://b.example/";
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      await flush();
+      assert.equal(settled(), true);
+      assert.equal(navigations.underWay(tab.id), true);
+      await assert.rejects(request, ranChanged(tab.id, "click"));
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("refuses an act's reply when the swap lands on another site", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, "https://b.example/");
+        swap(fake, tab.id);
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      const request = pages.request("s1", tab.id, "click", {});
+      await flush();
+      land(fake, tab.id, "https://b.example/", answering("other site"));
+      await assert.rejects(request, ranChanged(tab.id, "click"));
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("says an act may already have run when the swap's page is not there at the bound", async () => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        swap(fake, tab.id);
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      await flush();
+      assert.equal(settled(), false);
+      timers.advance(1);
+      await assert.rejects(request, ranLoading(tab.id, "click"));
+      assert.equal(fake.tabMessages.length, 1);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("says an act may already have run when its swap comes after NAVIGATION_WAIT_MS, without waiting", async (t) => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      const { promise: injected, resolve: inject } = Promise.withResolvers<void>();
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        await injected;
+        return [{ frameId: 0, result: null }];
+      });
+      const { promise: answered, resolve: answer } = Promise.withResolvers<void>();
+      fake.setContentScript(tab.id, async () => {
+        await answered;
+        begin(fake, tab.id, NEXT);
+        swap(fake, tab.id);
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      const request = pages.request("s1", tab.id, "click", {});
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS / 2);
+      inject();
+      await flush();
+      assert.equal(fake.tabMessages.length, 1);
+      timers.advance(NAVIGATION_WAIT_MS / 2);
+      answer();
+      await assert.rejects(request, ranLoading(tab.id, "click"));
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("sends an act in its second run when a navigation began before its message", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      let injections = 0;
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        injections += 1;
+        if (injections === 1) begin(fake, tab.id, NEXT);
+        return [{ frameId: 0, result: null }];
+      });
+      const request = pages.request("s1", tab.id, "click", {});
+      await flush();
+      assert.deepEqual(fake.tabMessages, []);
+      land(fake, tab.id, NEXT, answering("clicked"));
+      assert.equal(await request, "clicked");
+      assert.equal(injections, 2);
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("never sends an act twice, even when a navigation began while the page answered", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        land(fake, tab.id, NEXT, answering("new page"));
+        return { ok: true, site: "https://b.example", result: "clicked" };
+      });
+      await rejectsWith(pages.request("s1", tab.id, "type", {}), "page_changed");
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("refuses a page the navigation brings from a site the session may not act on", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, "https://c.example/");
+        return { ok: true, site: SITE, result: "old page" };
+      });
+      const request = pages.request("s1", tab.id, "read_page", {});
+      await flush();
+      land(fake, tab.id, "https://c.example/", async () => ({
+        ok: true,
+        site: "https://c.example",
+        result: "unapproved page",
+      }));
+      await rejectsWith(request, "site_not_approved");
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("refuses a tab outside the session's group, or one that does not exist, without waiting", async () => {
+      const { fake, pages, open, timers, tab } = await grantedTab();
+      const timersBefore = timers.pending();
+      const other = await open("s2", `${SITE}/`);
+      const outside = fake.openTab({ url: `${SITE}/` });
+      for (const tabId of [tab.id, other.id, outside.id, 99]) begin(fake, tabId, NEXT);
+      for (const [session, tabId, code] of [
+        ["s1", other.id, "tab_not_in_group"],
+        ["s1", outside.id, "tab_not_in_group"],
+        ["s2", tab.id, "tab_not_in_group"],
+        ["s1", 99, "tab_not_found"],
+      ] as const) {
+        await rejectsWith(pages.request(session, tabId, "echo", {}), code, `${session} ${tabId}`);
+      }
+      assertNothingSent(fake);
+      assert.equal(timers.pending(), timersBefore);
+    });
+
+    it("refuses a tab outside the session's group as it is, however often it navigates", async (t) => {
+      const { fake, pages } = await grantedTab();
+      const outside = fake.openTab({ url: `${SITE}/` });
+      const get = fake.browser.tabs.get;
+      let gets = 0;
+      t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
+        gets += 1;
+        // The page navigates again during every check of the tab.
+        if (tabId === outside.id) begin(fake, tabId, `${NEXT}/${gets}`);
+        return get(tabId);
+      });
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      assertNothingSent(fake);
+    });
+
+    it("checks the group the same way whether or not a tab outside it is loading", async (t) => {
+      const { fake, pages } = await grantedTab();
+      const outside = fake.openTab({ url: `${SITE}/` });
+      const get = t.mock.method(fake.browser.tabs, "get");
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      const idle = get.mock.callCount();
+      begin(fake, outside.id, NEXT);
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      assert.equal(get.mock.callCount(), 2 * idle);
+    });
+
+    it("runs in a committed page still parsing at the bound, and holds no later request", async () => {
+      const { fake, pages, navigations, timers, tab } = await grantedTab();
+      begin(fake, tab.id, NEXT);
+      commit(fake, tab.id, NEXT, answering("parsed so far"));
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      assert.equal(settled(), false);
+      timers.advance(NAVIGATION_WAIT_MS);
+      assert.equal(await request, "parsed so far");
+      assert.equal(navigations.underWay(tab.id), false);
+      assert.equal(await pages.request("s1", tab.id, "echo", {}), "parsed so far");
+    });
+
+    it("answers within 50 s in the worst case", async (t) => {
+      const { fake, pages, timers, tab } = await grantedTab();
+      begin(fake, tab.id, NEXT);
+      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}));
+      await flush();
+      timers.advance(NAVIGATION_WAIT_MS - 1);
+      // The page lands just before the cutoff and begins another navigation as it answers.
+      const { promise: injected, resolve: inject } = Promise.withResolvers<void>();
+      let injections = 0;
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        injections += 1;
+        if (injections === 2) await injected;
+        return [{ frameId: 0, result: null }];
+      });
+      land(fake, tab.id, NEXT, async () => {
+        begin(fake, tab.id, `${SITE}/last`);
+        commit(fake, tab.id, `${SITE}/last`, () => new Promise(() => {}));
+        return { ok: true, site: SITE, result: "old page" };
+      });
+      await flush();
+      // The second run waits out the bound, then the injection and the reply take theirs.
+      timers.advance(NAVIGATION_WAIT_MS);
+      await flush();
+      assert.equal(injections, 2);
+      timers.advance(PAGE_INJECTION_MS - 1);
+      inject();
+      await flush();
+      timers.advance(PAGE_REPLY_MS - 1);
+      await flush();
+      assert.equal(settled(), false);
+      timers.advance(1);
+      await rejectsWith(request, "page_timeout");
+    });
+
+    it("bounds a request with its waits below the host's 60 s request timeout", () => {
+      assert.equal(NAVIGATION_WAIT_MS, 10_000);
+      assert.equal(2 * NAVIGATION_WAIT_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS, 50_000);
+      assert.ok(2 * NAVIGATION_WAIT_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS < 60_000);
+    });
+  });
 });
 
 describe("parsePageReply", () => {
@@ -766,7 +1205,8 @@ function setup() {
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
-  const pages = createPageScripts({ browser: fake.browser, groups, access, timers });
+  const navigations = createTabNavigations({ browser: fake.browser, timers });
+  const pages = createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -774,6 +1214,7 @@ function setup() {
     access,
     probe: async () => null,
     pages,
+    navigations,
     uploads: createUploads(timers),
     recordings: { liveRecording: () => undefined },
     network: { read: () => ({ recording: false, requests: [], truncated: false }) },
@@ -808,7 +1249,7 @@ function setup() {
     assert.fail(`session ${session} has no prompt`);
   }
 
-  return { fake, timers, sessions, access, pages, call, open, grant, promptOf };
+  return { fake, timers, sessions, access, navigations, pages, call, open, grant, promptOf };
 }
 
 /** A content script on `site` that answers with Foxhand's dispatcher. */
@@ -852,3 +1293,34 @@ async function rejectsWith(promise: Promise<unknown>, code: string, label?: stri
 }
 
 function noop(): void {}
+
+/** A content script whose every answer is `result`, on SITE. */
+function answering(result: unknown): ContentScript {
+  return async () => ({ ok: true, site: SITE, result });
+}
+
+/** Firefox begins a navigation of the tab's top frame; the tab still shows its page. */
+function begin(fake: Env["fake"], tabId: number, url: string): void {
+  fake.emitBeforeNavigate({ tabId, frameId: 0, url });
+  if (fake.tabs.has(tabId)) fake.emitStatus(tabId, "loading");
+}
+
+/** The tab shows about:blank, as while Firefox swaps the new document in. */
+function swap(fake: Env["fake"], tabId: number): void {
+  const shown = fake.tabs.get(tabId);
+  if (shown !== undefined) shown.url = "about:blank";
+}
+
+/** The navigation's document commits, with `script` its content script, and is still parsing. */
+function commit(fake: Env["fake"], tabId: number, url: string, script: ContentScript): void {
+  const shown = fake.tabs.get(tabId);
+  if (shown !== undefined) shown.url = url;
+  fake.setContentScript(tabId, script);
+  fake.emitCommitted({ tabId, frameId: 0, url });
+}
+
+/** The navigation's document commits, with `script` its content script, and is parsed. */
+function land(fake: Env["fake"], tabId: number, url: string, script: ContentScript): void {
+  commit(fake, tabId, url, script);
+  fake.emitDOMContentLoaded({ tabId, frameId: 0, url });
+}

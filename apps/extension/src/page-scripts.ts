@@ -1,6 +1,6 @@
 import type { MethodName } from "@foxhand/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
-import { allowedPageSite, ToolError } from "./handlers.ts";
+import { allowedPageSite, NAVIGATION_WAIT_MS, pageLoading, ToolError } from "./handlers.ts";
 import {
   capText,
   MAX_ERROR_MESSAGE,
@@ -13,10 +13,16 @@ import {
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
 import type { SiteAccess } from "./site-access.ts";
+import type { TabNavigations } from "./tab-navigations.ts";
 
 /** The content script's bundle in the extension. */
 export const CONTENT_SCRIPT = "content.js";
-/** With PAGE_REPLY_MS, below the host's 60 s request timeout, which shuts the host down. */
+/**
+ * A request waits at most NAVIGATION_WAIT_MS for each navigation, and starts a wait or its second
+ * run only in its first NAVIGATION_WAIT_MS, so it answers within 2 * NAVIGATION_WAIT_MS +
+ * PAGE_INJECTION_MS + PAGE_REPLY_MS = 50 s, below the host's 60 s request timeout, which shuts the
+ * host down.
+ */
 export const PAGE_INJECTION_MS = 20_000;
 export const PAGE_REPLY_MS = 10_000;
 
@@ -39,12 +45,16 @@ export interface PageScriptsDeps<Handle> {
   groups: Pick<SessionGroups, "groupOf">;
   access: Pick<SiteAccess, "view" | "openPrompt">;
   timers: Timers<Handle>;
+  /** The navigations under way in each tab, which a request waits for. */
+  navigations: Pick<TabNavigations, "settled" | "underWay" | "begun">;
 }
 
 export interface PageScripts {
   /**
    * Sends a request to Foxhand's content script in the top frame of a tab the session may act
-   * in, injecting the script first, and returns the result of the request's page handler.
+   * in, injecting the script first, and returns the result of the request's page handler. Waits
+   * first for a navigation under way in the tab, and runs once more after one that began while
+   * it ran, unless it is an act already sent.
    */
   request(
     session: string,
@@ -55,7 +65,7 @@ export interface PageScripts {
 }
 
 export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageScripts {
-  const { browser, timers } = deps;
+  const { browser, groups, timers, navigations } = deps;
   return { request };
 
   async function request(
@@ -64,7 +74,95 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     type: string,
     params: Record<string, unknown>,
   ): Promise<unknown> {
-    const site = await allowedPageSite(deps, session, tabId);
+    let late = false;
+    const cutoff = timers.setTimeout(() => {
+      late = true;
+    }, NAVIGATION_WAIT_MS);
+    try {
+      return await run(session, tabId, type, params, () => late);
+    } finally {
+      timers.clearTimeout(cutoff);
+    }
+  }
+
+  /**
+   * Runs the request, and once more when a navigation of the tab began during the run, unless the
+   * message of an act was sent: a reply from such a run may be the leaving page's. A wait or a
+   * second run starts only before `late`.
+   */
+  async function run(
+    session: string,
+    tabId: number,
+    type: string,
+    params: Record<string, unknown>,
+    late: () => boolean,
+  ): Promise<unknown> {
+    const acting = ACTING_REQUEST_TYPES.includes(type);
+    for (let second = false; ; second = true) {
+      await settle(session, tabId, late);
+      const begun = navigations.begun(tabId);
+      // Above, not just different: a closed tab's count is dropped.
+      const moved = () => navigations.begun(tabId) > begun;
+      let sent = false;
+      try {
+        const site = await allowedPageSite(deps, session, tabId);
+        await inject(tabId);
+        await checkAgain(session, tabId, site);
+        if (moved()) throw pageChanged(tabId);
+        sent = true;
+        const message: PageRequest = { kind: PAGE_REQUEST_KIND, type, site, params };
+        const reply = await bounded(
+          () => browser.tabs.sendMessage(tabId, message, { frameId: 0 }),
+          PAGE_REPLY_MS,
+          // The document went away, or the reply could not be cloned.
+          pageChanged(tabId),
+          replyTimeout(tabId, type),
+        );
+        if (acting) await checkAfterAct(session, tabId, site, type, late);
+        else {
+          // Nothing from the page reaches the agent once the user has withdrawn access.
+          await checkAgain(session, tabId, site);
+          if (moved()) throw pageChanged(tabId);
+        }
+        return parsePageReply(reply, site, tabId);
+      } catch (error: unknown) {
+        // An act is never sent twice, and a tab that is not the session's is refused as it is.
+        if ((acting && sent) || isTabRefusal(error)) throw error;
+        // The about:blank of a document swap is the next page loading, not another kind of page.
+        if (!moved() && !(isPageNotWeb(error) && navigations.underWay(tabId))) throw error;
+        if (second || late()) throw navigations.underWay(tabId) ? pageLoading(tabId) : error;
+      }
+    }
+  }
+
+  /**
+   * Waits for the navigation under way in the tab, when the tab is in the session's group, which
+   * it checks first: a refusal comes at once, whether or not the tab is loading, so its timing
+   * tells nothing about other tabs. `ran` names an act already sent.
+   */
+  async function settle(
+    session: string,
+    tabId: number,
+    late: () => boolean,
+    ran?: string,
+  ): Promise<void> {
+    if (!(await inGroup(session, tabId)) || !navigations.underWay(tabId)) return;
+    if (late() || (await navigations.settled(tabId, NAVIGATION_WAIT_MS)) === "timeout") {
+      throw pageLoading(tabId, ran);
+    }
+  }
+
+  async function inGroup(session: string, tabId: number): Promise<boolean> {
+    try {
+      const tab = await browser.tabs.get(tabId);
+      const group = await groups.groupOf(session);
+      return group !== undefined && tab.groupId === group.id;
+    } catch {
+      return false;
+    }
+  }
+
+  async function inject(tabId: number): Promise<void> {
     const frames = await bounded(
       () =>
         browser.scripting.executeScript({
@@ -83,18 +181,26 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     );
     const top = frames.find((frame) => frame.frameId === 0);
     if (top === undefined || top.error !== undefined) throw pageUnreachable(tabId);
-    await checkAgain(session, tabId, site);
-    const message: PageRequest = { kind: PAGE_REQUEST_KIND, type, site, params };
-    const reply = await bounded(
-      () => browser.tabs.sendMessage(tabId, message, { frameId: 0 }),
-      PAGE_REPLY_MS,
-      // The document went away, or the reply could not be cloned.
-      pageChanged(tabId),
-      replyTimeout(tabId, type),
-    );
-    // Nothing from the page reaches the agent once the user has withdrawn access.
-    await checkAgain(session, tabId, site);
-    return parsePageReply(reply, site, tabId);
+  }
+
+  /**
+   * The gate after an act. When it meets the about:blank of a document swap, the gate applies to
+   * the page the swap brings; an act whose page merely began loading another is not held.
+   */
+  async function checkAfterAct(
+    session: string,
+    tabId: number,
+    site: string,
+    type: string,
+    late: () => boolean,
+  ): Promise<void> {
+    try {
+      await checkAgain(session, tabId, site, type);
+    } catch (error: unknown) {
+      if (!(isPageNotWeb(error) && navigations.underWay(tabId))) throw error;
+      await settle(session, tabId, late, type);
+      await checkAgain(session, tabId, site, type);
+    }
   }
 
   /**
@@ -118,10 +224,30 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     }
   }
 
-  /** The gate again, after a wait during which the user may have withdrawn access or the tab moved on. */
-  async function checkAgain(session: string, tabId: number, site: string): Promise<void> {
-    if ((await allowedPageSite(deps, session, tabId)) !== site) throw pageChanged(tabId);
+  /**
+   * The gate again, after a wait during which the user may have withdrawn access or the tab moved
+   * on. `ran` names an act already sent.
+   */
+  async function checkAgain(
+    session: string,
+    tabId: number,
+    site: string,
+    ran?: string,
+  ): Promise<void> {
+    if ((await allowedPageSite(deps, session, tabId)) !== site) throw pageChanged(tabId, ran);
   }
+}
+
+function isPageNotWeb(error: unknown): boolean {
+  return error instanceof ToolError && error.code === "page_not_web";
+}
+
+/** The gate's refusal of a tab that does not exist or is not in the session's group. */
+function isTabRefusal(error: unknown): boolean {
+  return (
+    error instanceof ToolError &&
+    (error.code === "tab_not_found" || error.code === "tab_not_in_group")
+  );
 }
 
 /**
@@ -204,10 +330,13 @@ function pageUnreachable(tabId: number): ToolError {
   );
 }
 
-function pageChanged(tabId: number): ToolError {
+/** `ran` names an act that was sent: it ran, so it is not to be repeated blindly. */
+function pageChanged(tabId: number, ran?: string): ToolError {
   return new ToolError(
     "page_changed",
-    `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+    ran === undefined
+      ? `The page in tab ${tabId} changed while Foxhand was working in it; try again.`
+      : `The page in tab ${tabId} changed after ${ran} ran; read the page before you repeat it.`,
   );
 }
 
