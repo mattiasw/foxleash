@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `tab_open` of a URL that Firefox downloads now reports an error, as `navigate` does, instead
   of returning a tab with no page, also when the URL has a fragment. `navigate` now also reports
   it for such a URL loaded into a tab Firefox unloaded to save memory.
+- In Claude Code, large page reads (`read_page` of a long page, `get_page_text`, and `batch`
+  results holding them) now reach the agent as the page, not as a file the agent has to search.
 
 ## [0.3.0] - 2026-11-06
 

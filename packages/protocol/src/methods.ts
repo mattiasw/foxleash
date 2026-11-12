@@ -52,6 +52,9 @@ export interface ProbeResult {
   checks: ProbeCheck[];
 }
 
+/** The longest tree read_page returns, in UTF-16 units. */
+export const READ_PAGE_MAX_CHARS = 50_000;
+
 /** get_page_text's cut when the request gives none. */
 export const DEFAULT_PAGE_TEXT_CHARS = 50_000;
 /**

@@ -4,7 +4,13 @@ import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from "node:fs
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, before, describe, it } from "node:test";
-import { type MethodName, type Params, UPLOAD_CHUNK_BYTES } from "@foxhand/protocol";
+import {
+  MAX_PAGE_TEXT_CHARS,
+  type MethodName,
+  type Params,
+  READ_PAGE_MAX_CHARS,
+  UPLOAD_CHUNK_BYTES,
+} from "@foxhand/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { BridgeError, HostError } from "./bridge.ts";
@@ -36,6 +42,10 @@ type Answer = (method: MethodName) => unknown;
 const SOME_ID = "0123456789abcdef";
 const BOTH_OR_NEITHER = "Give either url or action, not both and not neither.";
 const MAX_RESULT_BYTES = 8 * 1024 * 1024;
+const RESULT_SIZE_KEY = "anthropic/maxResultSizeChars";
+// Claude Code's default inline limit, and the largest value it accepts for RESULT_SIZE_KEY.
+const CLAUDE_CODE_DEFAULT = 50_000;
+const CLAUDE_CODE_CEILING = 500_000;
 const REDACTED_TABS = "A tab on a site the user has not approved shows only that site";
 const ASKS_FIRST =
   "On a site the user has not approved, Foxhand first asks the user in the tab and waits for the answer.";
@@ -893,6 +903,64 @@ describe("tools", () => {
       content: [{ type: "text", text: "The result from Firefox is too large to return." }],
       isError: true,
     });
+  });
+
+  it(
+    "declares Claude Code's result size on read_page, get_page_text and batch only",
+    LIMIT,
+    async () => {
+      const { client } = await start(() => ({}));
+      const sizes = await declaredSizes(client);
+      assert.deepEqual(sizes, { batch: 500_000, get_page_text: 401_000, read_page: 101_000 });
+      for (const [name, size] of Object.entries(sizes)) {
+        assert.ok(typeof size === "number", name);
+        assert.ok(size > CLAUDE_CODE_DEFAULT && size <= CLAUDE_CODE_CEILING, name);
+      }
+    },
+  );
+
+  it(
+    "keeps read_page's largest tree within its declared size as Claude Code measures it",
+    LIMIT,
+    async () => {
+      const { client } = await start(() => ({
+        tree: '"'.repeat(READ_PAGE_MAX_CHARS),
+        truncated: true,
+      }));
+      const declared = (await declaredSizes(client)).read_page;
+      assert.ok(typeof declared === "number");
+      const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+      const content = record(output).content;
+      assert.ok(Array.isArray(content) && content.length === 2);
+      const measured = pretty(content).length;
+      assert.ok(measured > CLAUDE_CODE_DEFAULT && measured <= declared, String(measured));
+    },
+  );
+
+  it("keeps get_page_text's largest ordinary text within its declared size", LIMIT, async () => {
+    const line = (index: number) =>
+      `Line ${index} of the article says "a quoted phrase" and more words.`;
+    const lines = Array.from({ length: MAX_PAGE_TEXT_CHARS / 40 }, (_, index) => line(index));
+    const all = lines.join("\n").slice(0, MAX_PAGE_TEXT_CHARS);
+    assert.equal(all.length, MAX_PAGE_TEXT_CHARS);
+    const page = {
+      source: "article",
+      main: all.slice(0, MAX_PAGE_TEXT_CHARS / 2),
+      rest: all.slice(MAX_PAGE_TEXT_CHARS / 2),
+      truncated: true,
+      totalChars: 2 * MAX_PAGE_TEXT_CHARS,
+      nextOffset: MAX_PAGE_TEXT_CHARS,
+    };
+    const { client } = await start(() => page);
+    const declared = (await declaredSizes(client)).get_page_text;
+    assert.ok(typeof declared === "number");
+    const output = await client.callTool({
+      name: "get_page_text",
+      arguments: { tabId: 1, maxChars: MAX_PAGE_TEXT_CHARS },
+    });
+    assert.equal(unframed(output), pretty(page));
+    const measured = pretty(record(output).content).length;
+    assert.ok(measured > CLAUDE_CODE_DEFAULT && measured <= declared, String(measured));
   });
 
   it("returns read_page's bridge and host errors as for the other tools", LIMIT, async () => {
@@ -3360,6 +3428,18 @@ async function start(
   await server.connect(serverTransport);
   await client.connect(clientTransport);
   return { client, calls };
+}
+
+/** Each tool's declared Claude Code result size, keyed by tool name, for the tools that declare one. */
+async function declaredSizes(client: Client): Promise<Record<string, unknown>> {
+  const { tools } = await client.listTools();
+  return Object.fromEntries(
+    tools.flatMap((tool) =>
+      tool._meta !== undefined && Object.hasOwn(tool._meta, RESULT_SIZE_KEY)
+        ? [[tool.name, tool._meta[RESULT_SIZE_KEY]]]
+        : [],
+    ),
+  );
 }
 
 function text(output: unknown): string {

@@ -1,7 +1,8 @@
+import { READ_PAGE_MAX_CHARS } from "@foxhand/protocol";
 import { capText, ownField } from "./page-messages.ts";
 
-/** The longest tree read_page returns, in UTF-16 units. */
-export const READ_PAGE_MAX_CHARS = 50_000;
+export { READ_PAGE_MAX_CHARS };
+
 /** The longest name, value, href or text a line holds, before quoting and the cut mark. */
 export const MAX_FIELD_CHARS = 200;
 

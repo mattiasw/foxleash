@@ -32,6 +32,7 @@ import {
   MIN_WAIT_FOR_MS,
   MIN_WINDOW_SIZE,
   type Params,
+  READ_PAGE_MAX_CHARS,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_MAX_BYTES,
 } from "@foxhand/protocol";
@@ -84,10 +85,9 @@ const NESTED = "The result from Firefox is nested too deeply to return.";
 const TOO_LARGE = "The result from Firefox is too large to return.";
 const ERROR_TOO_LARGE = "The error message from Firefox is too large to return.";
 const UNREADABLE_TREE = "Firefox returned a page tree Foxhand cannot read.";
-const TREE_CUT =
-  "The page tree was cut at 50,000 characters. Read a part of it with ref, or use filter interactive or a smaller depth.";
-const READ_PAGE =
-  "Read the page in a tab of this session's Foxhand tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxhand tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at 50,000 characters; read less with ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. The tab must show a site the user approved; read_page never asks.";
+const TREE_MAX = READ_PAGE_MAX_CHARS.toLocaleString("en-US");
+const TREE_CUT = `The page tree was cut at ${TREE_MAX} characters. Read a part of it with ref, or use filter interactive or a smaller depth.`;
+const READ_PAGE = `Read the page in a tab of this session's Foxhand tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxhand tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at ${TREE_MAX} characters; read less with ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. The tab must show a site the user approved; read_page never asks.`;
 const DEFAULT_TEXT = DEFAULT_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const MAX_TEXT = MAX_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const GET_PAGE_TEXT = `Read the text of the page in a tab of this session's Foxhand tab group, as the page shows it: first its main content (the page's main element or article, else its largest block of text), then the rest of the page. The result gives the source of the main content (main, role_main, article, largest_block, or body when the whole page is the main content), main, rest, totalChars, truncated and, when truncated is true, nextOffset. Main and rest together are cut to maxChars characters, ${DEFAULT_TEXT} unless given and at most ${MAX_TEXT}. When truncated is true, passing nextOffset as offset returns the text that follows; offsets count characters into main and rest together, and a page that changed between reads may shift them. Text hidden with display, visibility or the hidden attribute is left out, and so are the values of form fields; text made invisible another way (transparent, zero-sized or off screen) is included. Frames are not read. The tab must show a site the user approved; get_page_text never asks.`;
@@ -227,6 +227,18 @@ const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 const MAX_RESULT_BYTES = 8 * 1024 * 1024;
 // Room next to an image's base64 for the note, the saved line and the item's JSON.
 const IMAGE_ALLOWANCE = 64 * 1024;
+// Claude Code keeps a tool's result inline up to the length this key on the tool declares.
+const RESULT_SIZE_KEY = "anthropic/maxResultSizeChars";
+// The largest value Claude Code accepts for the key.
+const RESULT_SIZE_CEILING = 500_000;
+// Room for the frame lines, a cut note and the content array's JSON around the text.
+const RESULT_SIZE_ALLOWANCE = 1_000;
+// A tree at the cap stays inline even when every character escapes to two in the content's JSON.
+const READ_PAGE_RESULT_SIZE = 2 * READ_PAGE_MAX_CHARS + RESULT_SIZE_ALLOWANCE;
+// The same rule for the most text get_page_text returns when asked for its maximum.
+const PAGE_TEXT_RESULT_SIZE = 2 * MAX_PAGE_TEXT_CHARS + RESULT_SIZE_ALLOWANCE;
+// Up to MAX_BATCH_STEPS results, capped only at MAX_RESULT_BYTES: the ceiling comes closest.
+const BATCH_RESULT_SIZE = RESULT_SIZE_CEILING;
 
 /**
  * `upload` is what upload_file reads files with. `saveFolder` is where screenshot saves files,
@@ -368,6 +380,7 @@ export function registerTools(
     "read_page",
     {
       description: READ_PAGE,
+      _meta: { [RESULT_SIZE_KEY]: READ_PAGE_RESULT_SIZE },
       inputSchema: {
         tabId: z
           .number()
@@ -407,6 +420,7 @@ export function registerTools(
     "get_page_text",
     {
       description: GET_PAGE_TEXT,
+      _meta: { [RESULT_SIZE_KEY]: PAGE_TEXT_RESULT_SIZE },
       inputSchema: {
         tabId: z
           .number()
@@ -938,6 +952,7 @@ export function registerTools(
     "batch",
     {
       description: BATCH,
+      _meta: { [RESULT_SIZE_KEY]: BATCH_RESULT_SIZE },
       inputSchema: {
         steps: z
           .array(
@@ -969,7 +984,7 @@ export function registerTools(
 
   function register<Shape extends z.ZodRawShape>(
     name: string,
-    config: { description: string; inputSchema: Shape },
+    config: { description: string; inputSchema: Shape; _meta?: Record<string, unknown> },
     callback: ToolCallback<Shape>,
     failed?: (result: CallToolResult) => boolean,
   ): void {
