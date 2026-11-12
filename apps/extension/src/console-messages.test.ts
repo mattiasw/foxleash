@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MAX_CONSOLE_MESSAGES, MAX_CONSOLE_TEXT } from "@foxhand/protocol";
+import { MAX_CONSOLE_MESSAGES, MAX_CONSOLE_TEXT } from "@foxleash/protocol";
 import {
   CONSOLE_READ_EVENT,
   CONSOLE_RECORDS_EVENT,
@@ -22,8 +22,8 @@ describe("RECORDER_OPTIONS", () => {
       readEvent: CONSOLE_READ_EVENT,
       replyEvent: CONSOLE_RECORDS_EVENT,
     });
-    assert.equal(CONSOLE_READ_EVENT, "foxhand-console-read");
-    assert.equal(CONSOLE_RECORDS_EVENT, "foxhand-console-records");
+    assert.equal(CONSOLE_READ_EVENT, "foxleash-console-read");
+    assert.equal(CONSOLE_RECORDS_EVENT, "foxleash-console-records");
   });
 });
 
@@ -264,7 +264,7 @@ describe("parseConsoleResult", () => {
   });
 });
 
-/** A page with Foxhand's recorder running in it, with a console that does nothing. */
+/** A page with Foxleash's recorder running in it, with a console that does nothing. */
 function recordedPage(): EventTarget & { console: { error(...args: unknown[]): void } } {
   const target = new EventTarget();
   const page = Object.assign(target, {

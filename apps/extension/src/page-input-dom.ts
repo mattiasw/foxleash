@@ -1,4 +1,4 @@
-import type { KeyAction, Result } from "@foxhand/protocol";
+import type { KeyAction, Result } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import { flatParentOf } from "./flat-tree.ts";
 import { crossSiteDestination, formDestination, leavesSiteText } from "./page-actions.ts";
@@ -187,7 +187,7 @@ function focusTarget(target: TypeTarget, ref: string): void {
   if (!isFocused(element)) {
     throw new PageError(
       "not_editable",
-      `Foxhand could not focus element ${ref}, so type cannot type into it.`,
+      `Foxleash could not focus element ${ref}, so type cannot type into it.`,
     );
   }
 }

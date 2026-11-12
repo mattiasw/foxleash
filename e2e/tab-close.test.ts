@@ -144,7 +144,7 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     assert.ok(ids[0] === c.id || ids[0] === d.id, `tabs_list lists ${JSON.stringify(ids)}`);
   });
 
-  // Last: Foxhand counts a tab the user kept as still being removed, so it refuses to close the
+  // Last: Foxleash counts a tab the user kept as still being removed, so it refuses to close the
   // other tabs of its window from then on.
   test("refuses a close when the user chooses to stay on the page", async () => {
     const kept = tabOf(

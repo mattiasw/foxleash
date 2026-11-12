@@ -1,7 +1,7 @@
 .nvmrc
 README.md
 apps/extension/build.ts
-apps/extension/icons/foxhand.svg
+apps/extension/icons/foxleash.svg
 apps/extension/lint.ts
 apps/extension/manifest.json
 apps/extension/package.json

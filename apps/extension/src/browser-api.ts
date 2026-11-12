@@ -113,7 +113,7 @@ export interface BrowserApi {
     /** A frame's document finished parsing. */
     onDOMContentLoaded: BrowserEvent<(details: DocumentDetails) => void>;
   };
-  /** Non-blocking listeners only: Foxhand watches requests and never blocks or changes one. */
+  /** Non-blocking listeners only: Foxleash watches requests and never blocks or changes one. */
   webRequest: {
     onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
     onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>;

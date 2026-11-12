@@ -1,4 +1,4 @@
-import type { ClickButton, DragMode, Result, ScrollDirection } from "@foxhand/protocol";
+import type { ClickButton, DragMode, Result, ScrollDirection } from "@foxleash/protocol";
 import { REF } from "./element-refs.ts";
 import { isRecord, ownField } from "./page-messages.ts";
 import { siteOf } from "./site.ts";
@@ -232,8 +232,8 @@ export function crossSiteDestination(
 export function leavesSiteText(site: string, by: string): string {
   // A scheme always ends in ":"; a site, an origin and "an unknown site" never do.
   return site.endsWith(":")
-    ? `leads to an address outside the site (${site}), which Foxhand does not open ${by} or with navigate.`
-    : `leads to a page on ${site}, which Foxhand does not open ${by}; call navigate with that address, and Foxhand asks the user first if the site is not approved.`;
+    ? `leads to an address outside the site (${site}), which Foxleash does not open ${by} or with navigate.`
+    : `leads to a page on ${site}, which Foxleash does not open ${by}; call navigate with that address, and Foxleash asks the user first if the site is not approved.`;
 }
 
 /**

@@ -1,8 +1,8 @@
-import type { ProbeCheck } from "@foxhand/protocol";
+import type { ProbeCheck } from "@foxleash/protocol";
 
 export interface ProbeReport {
   date: string;
-  foxhand: string;
+  foxleash: string;
   userAgent: string | null;
   pages: PageReport[];
 }
@@ -22,10 +22,10 @@ export function renderJson(report: ProbeReport): string {
 
 export function renderMarkdown(report: ProbeReport): string {
   const lines = [
-    "# Foxhand probe report",
+    "# Foxleash probe report",
     "",
     `- Date: ${cell(report.date)}`,
-    `- Foxhand: ${cell(report.foxhand)}`,
+    `- Foxleash: ${cell(report.foxleash)}`,
     `- Browser: ${report.userAgent === null ? "unknown" : cell(report.userAgent)}`,
   ];
   for (const page of report.pages) {

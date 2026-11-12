@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
-import { PROTOCOL_VERSION, protocolMismatch } from "@foxhand/protocol";
+import { PROTOCOL_VERSION, protocolMismatch } from "@foxleash/protocol";
 import { SERVER_VERSION } from "../apps/server/src/version.ts";
 import { isRecord } from "./firefox.ts";
 import {
@@ -15,7 +15,7 @@ import {
 
 // Copied from apps/server/src/bridge.ts, where it is private.
 const NO_HOST =
-  "No Foxhand native host is running: start Firefox with the Foxhand extension installed, and run `npm run doctor` in your Foxhand folder if it still fails.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
 
 describe("without Firefox", () => {
   let harness: Harness;

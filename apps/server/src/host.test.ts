@@ -16,7 +16,7 @@ import path from "node:path";
 import { PassThrough, type Readable } from "node:stream";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { PROTOCOL_VERSION, protocolMismatch } from "@foxhand/protocol";
+import { PROTOCOL_VERSION, protocolMismatch } from "@foxleash/protocol";
 import { createFrameReader, encodeFrame, FRAME_LIMIT, NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { type Host, type HostProcess, hostCommand, runHost } from "./host.ts";
 import { SERVER_VERSION } from "./version.ts";
@@ -64,12 +64,12 @@ interface FakeProcess extends HostProcess {
 }
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const VERSION = "1.2.3";
 const EXTENSION_VERSION = "0.9.0";
 const REQUEST_TIMEOUT_MS = 50;
 const TIMEOUT_SENTENCE = `The extension did not answer within ${Math.round(REQUEST_TIMEOUT_MS / 1000)} s.`;
-const CLOSED_SENTENCE = "Firefox closed the connection to the Foxhand native host.";
+const CLOSED_SENTENCE = "Firefox closed the connection to the Foxleash native host.";
 const SOCKET_FRAME_LIMIT = NATIVE_MESSAGE_LIMIT + 64 * 1024;
 const LIMIT = { timeout: 3000 };
 const CHILD_LIMIT = { timeout: 15_000 };
@@ -381,7 +381,7 @@ describe("runHost, socket side", () => {
       errorResponse(
         "r1",
         "extension_disconnected",
-        "The Foxhand extension has not connected to the native host yet.",
+        "The Foxleash extension has not connected to the native host yet.",
       ),
     );
     await tick();
@@ -1048,7 +1048,7 @@ describe("hostCommand", () => {
     const proc = fakeProcess({}, false);
     assert.equal(await hostCommand(proc), 1);
     assert.deepEqual(proc.exitCodes, [1]);
-    assert.equal(proc.text(), "foxhand host: The Foxhand native host runs on Linux only.\n");
+    assert.equal(proc.text(), "foxleash host: The Foxleash native host runs on Linux only.\n");
     assert.equal(proc.listeners.size, 0);
   });
 
@@ -1061,7 +1061,7 @@ describe("hostCommand", () => {
     for (const set of proc.listeners.values()) {
       assert.equal(set.size, 1);
     }
-    const socketFile = path.join(xdg, "foxhand", `${proc.pid}.sock`);
+    const socketFile = path.join(xdg, "foxleash", `${proc.pid}.sock`);
     assert.equal(existsSync(socketFile), true);
     proc.emit("SIGTERM");
     assert.equal(await within(result), 0);
@@ -1070,7 +1070,7 @@ describe("hostCommand", () => {
       assert.equal(set.size, 0);
     }
     assert.equal(existsSync(socketFile), false);
-    assert.ok(proc.text().includes("foxhand host: closing: signal\n"));
+    assert.ok(proc.text().includes("foxleash host: closing: signal\n"));
   });
 
   for (const signal of ["SIGINT", "SIGHUP"]) {
@@ -1088,7 +1088,7 @@ describe("hostCommand", () => {
     const proc = fakeProcess({ XDG_RUNTIME_DIR: xdg });
     const result = hostCommand(proc);
     await until(() => proc.text().includes("listening on"));
-    const socketFile = path.join(xdg, "foxhand", `${proc.pid}.sock`);
+    const socketFile = path.join(xdg, "foxleash", `${proc.pid}.sock`);
     assert.equal(existsSync(socketFile), true);
     proc.emit("exit");
     assert.equal(existsSync(socketFile), false);
@@ -1120,12 +1120,14 @@ describe("hostCommand", () => {
     proc.emit("SIGTERM");
     await within(result);
     assert.ok(
-      proc.text().startsWith('foxhand host: skipped socket directory "XDG_RUNTIME_DIR is empty"\n'),
+      proc
+        .text()
+        .startsWith('foxleash host: skipped socket directory "XDG_RUNTIME_DIR is empty"\n'),
     );
   });
 });
 
-describe("foxhand host as a child process", () => {
+describe("foxleash host as a child process", () => {
   it("welcomes the extension, listens, and exits 0 when stdin ends", CHILD_LIMIT, async () => {
     const xdg = privateDir(`child-${nextId()}`);
     const child = spawnHost(xdg);
@@ -1133,7 +1135,7 @@ describe("foxhand host as a child process", () => {
     const exited = exitOf(child);
     child.stdin.write(encodeFrame(JSON.stringify(extensionHello())));
     await until(() => Buffer.concat(output).length > 0, CHILD_WAIT_MS);
-    const socketFile = path.join(xdg, "foxhand", `${child.pid}.sock`);
+    const socketFile = path.join(xdg, "foxleash", `${child.pid}.sock`);
     assert.equal(existsSync(socketFile), true);
     assert.equal(statSync(socketFile).mode & 0o777, 0o600);
     child.stdin.end();
@@ -1153,7 +1155,7 @@ describe("foxhand host as a child process", () => {
     await until(() => Buffer.concat(output).length > 0, CHILD_WAIT_MS);
     child.kill("SIGTERM");
     assert.deepEqual(await within(exited, CHILD_WAIT_MS), { code: 0, signal: null });
-    assert.equal(existsSync(path.join(xdg, "foxhand", `${child.pid}.sock`)), false);
+    assert.equal(existsSync(path.join(xdg, "foxleash", `${child.pid}.sock`)), false);
   });
 });
 
@@ -1373,7 +1375,7 @@ function privateDir(name: string): string {
 }
 
 function dirSentence(dir: string, reason: string): string {
-  return `The Foxhand socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
+  return `The Foxleash socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
 }
 
 function listenOn(server: net.Server, socket: string): Promise<void> {

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Recipe, RecipeFields, Result } from "@foxhand/protocol";
+import type { Recipe, RecipeFields, Result } from "@foxleash/protocol";
 import type { MessageSender } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -39,10 +39,10 @@ const RUN_URL =
   /^moz-extension:\/\/[0-9a-f-]+\/run\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const REFUSED = "The user did not allow the recipe's sites in this session.";
 const UNREADABLE =
-  "Firefox could not read Foxhand's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.";
+  "Firefox could not read Foxleash's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.";
 const ENDED_EARLY = "The session ended before the recipe page opened.";
 const BUDGET =
-  "Foxhand shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
+  "Foxleash shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
 
 describe("propose", { timeout: 10000 }, () => {
   it("opens one selected page in the session's group, drawing attention, and resolves with its tab", async () => {
@@ -102,7 +102,7 @@ describe("propose", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "recipe_prompt_open",
-      message: `Foxhand is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
+      message: `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
     });
     assert.deepEqual(created, []);
   });
@@ -135,11 +135,11 @@ describe("propose", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
     });
     assert.deepEqual(created, []);
     const { tabId } = await recipes.propose("s2", RECIPE);
-    const pending = `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`;
+    const pending = `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`;
     await assert.rejects(access.check("s2", "https://b.example/"), {
       code: "approval_pending",
       message: pending,
@@ -181,7 +181,7 @@ describe("propose", { timeout: 10000 }, () => {
     removal.resolve();
     await assert.rejects(proposing, {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
     });
     assert.equal(recipes.openPrompt("s1"), undefined);
     assert.deepEqual(
@@ -621,7 +621,7 @@ describe("saving", { timeout: 10000 }, () => {
     await saveAgain(fake, page);
   });
 
-  it("says how many recipes Foxhand keeps when storage is full", async () => {
+  it("says how many recipes Foxleash keeps when storage is full", async () => {
     const { fake, recipes } = setup();
     await seed(
       fake,
@@ -633,7 +633,7 @@ describe("saving", { timeout: 10000 }, () => {
     assert.deepEqual(page.posted.at(-1), {
       type: "problems",
       problems: [
-        { text: "Foxhand keeps at most 100 recipes. Delete one in Foxhand's settings first." },
+        { text: "Foxleash keeps at most 100 recipes. Delete one in Foxleash's settings first." },
       ],
     });
     assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
@@ -1084,7 +1084,7 @@ describe("run", { timeout: 10000 }, () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP, { ...TRIP, name: "Other" });
     const { tabId } = await openRun(fake, recipes);
-    const open = `Foxhand is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`;
+    const open = `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`;
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Other"), { code: "recipe_prompt_open", message: open });
     await assert.rejects(recipes.propose("s1", RECIPE), {
@@ -1094,7 +1094,7 @@ describe("run", { timeout: 10000 }, () => {
     const proposed = await recipes.propose("s2", RECIPE);
     await assert.rejects(recipes.run("s2", "Trip"), {
       code: "recipe_prompt_open",
-      message: `Foxhand is still showing the user a recipe page in tab ${proposed.tabId}. Try again after the user has answered there.`,
+      message: `Foxleash is still showing the user a recipe page in tab ${proposed.tabId}. Try again after the user has answered there.`,
     });
     assert.equal(created.length, 1);
   });
@@ -1107,11 +1107,11 @@ describe("run", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Trip"), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
     });
     assert.deepEqual(created, []);
     const { tabId } = await openRun(fake, recipes, "s2");
-    const pending = `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`;
+    const pending = `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`;
     await assert.rejects(access.check("s2", "https://e.example/"), {
       code: "approval_pending",
       message: pending,
@@ -1171,7 +1171,7 @@ describe("run", { timeout: 10000 }, () => {
     await assert.rejects(recipes.run("s1", "Trip"), {
       code: "site_refused",
       message:
-        "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.",
+        "Foxleash asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxleash's settings, or start a new session, to be asked again.",
     });
     assert.deepEqual(runTabs(fake), []);
     assert.equal(recipes.openPrompt("s1"), undefined);
@@ -1576,7 +1576,7 @@ describe("waiting for a run page", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxhand is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+      `Foxleash is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
     );
     assert.equal(joined.state, "pending");
     assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });

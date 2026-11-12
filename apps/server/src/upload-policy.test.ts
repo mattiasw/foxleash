@@ -16,12 +16,12 @@ import {
 const LIMIT = { timeout: 10_000 };
 const BUDGET = 10 * 1024 * 1024;
 const DOT =
-  "has a folder or file name starting with a dot below its upload folder; Foxhand never uploads those.";
-const KEY = "is named like a key file; Foxhand never uploads those.";
-const NOT_FILE = "is not a regular file; Foxhand uploads only files.";
+  "has a folder or file name starting with a dot below its upload folder; Foxleash never uploads those.";
+const KEY = "is named like a key file; Foxleash never uploads those.";
+const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
-const CHANGED = "changed while Foxhand read it; try again.";
+const CHANGED = "changed while Foxleash read it; try again.";
 const HOME_NOTE = "is your home folder or contains it, so it would cover your whole home folder";
 const DOT_NOTE = "is inside a folder whose name starts with a dot";
 const FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
@@ -61,7 +61,7 @@ describe("uploadFolders", () => {
       folders: [work, join(home, "Downloads")],
       notes: [],
     });
-    assert.deepEqual(uploadFolders({ env: { FOXHAND_UPLOAD_DIRS: "" }, cwd: work, home }), {
+    assert.deepEqual(uploadFolders({ env: { FOXLEASH_UPLOAD_DIRS: "" }, cwd: work, home }), {
       folders: [work, join(home, "Downloads")],
       notes: [],
     });
@@ -106,12 +106,14 @@ describe("uploadFolders", () => {
   it("notes a working folder that is gone and keeps ~/Downloads", () => {
     assert.deepEqual(uploadFolders({ env: {}, cwd: undefined, home }), {
       folders: [join(home, "Downloads")],
-      notes: [{ folder: "the folder Foxhand was started in", reason: "no longer exists" }],
+      notes: [{ folder: "the folder Foxleash was started in", reason: "no longer exists" }],
     });
   });
 
-  it("replaces the defaults with FOXHAND_UPLOAD_DIRS", () => {
-    const env = { FOXHAND_UPLOAD_DIRS: `~:~/x::/abs/y/../z:rel/dir:~user/z:${home}/.config/app:/` };
+  it("replaces the defaults with FOXLEASH_UPLOAD_DIRS", () => {
+    const env = {
+      FOXLEASH_UPLOAD_DIRS: `~:~/x::/abs/y/../z:rel/dir:~user/z:${home}/.config/app:/`,
+    };
     assert.deepEqual(uploadFolders({ env, cwd: work, home }), {
       folders: [home, join(home, "x"), "/abs/z", join(home, ".config", "app"), "/"],
       notes: [
@@ -121,8 +123,8 @@ describe("uploadFolders", () => {
     });
   });
 
-  it("leaves no folder when no entry of FOXHAND_UPLOAD_DIRS is usable", () => {
-    assert.deepEqual(uploadFolders({ env: { FOXHAND_UPLOAD_DIRS: "a:b" }, cwd: work, home }), {
+  it("leaves no folder when no entry of FOXLEASH_UPLOAD_DIRS is usable", () => {
+    assert.deepEqual(uploadFolders({ env: { FOXLEASH_UPLOAD_DIRS: "a:b" }, cwd: work, home }), {
       folders: [],
       notes: [
         { folder: "a", reason: "is not an absolute path" },
@@ -249,12 +251,12 @@ describe("readAllowedFile refuses", () => {
   it("a file outside every folder, naming the folders", LIMIT, async () => {
     assert.deepEqual(await read(join(outside, "x.txt"), [work, join(home, "Downloads")]), {
       ok: false,
-      reason: `is outside the upload folders (${work}, ${join(home, "Downloads")}); the user can change them with FOXHAND_UPLOAD_DIRS.`,
+      reason: `is outside the upload folders (${work}, ${join(home, "Downloads")}); the user can change them with FOXLEASH_UPLOAD_DIRS.`,
     });
     assert.deepEqual(await read(join(outside, "x.txt"), []), {
       ok: false,
       reason:
-        "is outside the upload folders (none); the user can change them with FOXHAND_UPLOAD_DIRS.",
+        "is outside the upload folders (none); the user can change them with FOXLEASH_UPLOAD_DIRS.",
     });
   });
 
@@ -314,7 +316,7 @@ describe("readAllowedFile refuses", () => {
   it("a file over what is left of the budget", LIMIT, async () => {
     assert.equal(
       reasonOf(await read(join(work, "ok.txt"), [work], { remaining: 7 })),
-      "would bring this upload over 10 MB, the most Foxhand uploads in one call.",
+      "would bring this upload over 10 MB, the most Foxleash uploads in one call.",
     );
   });
 
@@ -354,7 +356,7 @@ describe("readAllowedFile refuses", () => {
     );
     assert.equal(
       reasonOf(await read("ok.txt", [work], { cwd: undefined })),
-      "is a relative path, and the folder Foxhand was started in no longer exists; give an absolute path.",
+      "is a relative path, and the folder Foxleash was started in no longer exists; give an absolute path.",
     );
   });
 });

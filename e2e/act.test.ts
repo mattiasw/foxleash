@@ -240,7 +240,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const byRef = await harness.refused(session, "click", { tabId: links.tabId, ref });
     assert.ok(
       byRef.includes(
-        `Element ${ref} leads to a page on ${other}, which Foxhand does not open by clicking; call navigate with that address`,
+        `Element ${ref} leads to a page on ${other}, which Foxleash does not open by clicking; call navigate with that address`,
       ),
       byRef,
     );
@@ -287,7 +287,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       const text = await harness.refused(session, "click", { tabId: links.tabId, ref });
       assert.ok(
         text.includes(
-          `Element ${ref} leads to an address outside the site (mailto:), which Foxhand does not open by clicking or with navigate.`,
+          `Element ${ref} leads to an address outside the site (mailto:), which Foxleash does not open by clicking or with navigate.`,
         ),
         `${line}: ${text}`,
       );
@@ -658,7 +658,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       `tab ${tab.id} to show ${other}`,
     );
     const text = await harness.refused(session, "click", { tabId: tab.id, x: 70, y: 25 });
-    assert.ok(text.includes(`Foxhand is not allowed on ${other} in this session`), text);
+    assert.ok(text.includes(`Foxleash is not allowed on ${other} in this session`), text);
     const found = (await firefox.contexts()).find(({ url }) => url === `${other}/act`);
     assert.ok(found !== undefined, "no tab shows the act page on the other site");
     assert.deepEqual(

@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { stripTypeScriptTypes } from "node:module";
 import { describe, it } from "node:test";
 import vm from "node:vm";
-import type { ConsoleLevel } from "@foxhand/protocol";
+import type { ConsoleLevel } from "@foxleash/protocol";
 import { type RecorderOptions, type RecorderPage, recordConsole } from "./console-recorder.ts";
 
 const SITE = "https://a.example";
@@ -464,7 +464,7 @@ describe("recordConsole", () => {
       const before = { ...page.console };
       assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "elsewhere");
       assert.deepEqual(page.console, before);
-      assert.equal(Object.hasOwn(page, "__foxhandConsole"), false);
+      assert.equal(Object.hasOwn(page, "__foxleashConsole"), false);
       page.dispatchEvent(errorEvent({ message: "boom" }));
       assert.deepEqual(replies(page), []);
     });
@@ -494,7 +494,7 @@ describe("recordConsole", () => {
     assert.equal(page.calls.length, 1);
     assert.equal(replies(page).length, 1);
     assert.equal(read(page).messages.length, 1);
-    assert.deepEqual(Object.getOwnPropertyDescriptor(page, "__foxhandConsole"), {
+    assert.deepEqual(Object.getOwnPropertyDescriptor(page, "__foxleashConsole"), {
       value: true,
       writable: false,
       enumerable: false,
@@ -504,7 +504,7 @@ describe("recordConsole", () => {
 
   it("does nothing in a page that set its marker first", () => {
     const page = new FakePage();
-    Object.defineProperty(page, "__foxhandConsole", { value: false });
+    Object.defineProperty(page, "__foxleashConsole", { value: false });
     const before = { ...page.console };
     assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "present");
     assert.deepEqual(page.console, before);

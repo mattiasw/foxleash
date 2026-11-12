@@ -1,5 +1,5 @@
 {
-  "extends": "@foxhand/tsconfig/base.json",
+  "extends": "@foxleash/tsconfig/base.json",
   "compilerOptions": {
     "lib": ["es2024", "dom"],
     "types": ["node"]

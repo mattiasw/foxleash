@@ -13,7 +13,7 @@ that: code the extension did not ship. The `userScripts` API, which does run cod
 outside the package, is reserved for user-script managers. An add-on that breaks these
 policies gets disabled.
 
-In this record, v1 means Foxhand's current feature set. The decision holds until a later
+In this record, v1 means Foxleash's current feature set. The decision holds until a later
 record supersedes it.
 
 ## Decision
@@ -22,7 +22,7 @@ v1 has no `javascript_tool`. No parameter of any tool is evaluated as code, in t
 in the extension. The extension does not request the `userScripts` permission in
 `apps/extension/manifest.json`.
 
-Every action Foxhand takes in a page is code shipped in the extension package. A script
+Every action Foxleash takes in a page is code shipped in the extension package. A script
 that runs in the page's MAIN world is allowed when it is part of the package, such as the
 console wrapper behind `read_console`. What is not allowed is code that arrives at run
 time.

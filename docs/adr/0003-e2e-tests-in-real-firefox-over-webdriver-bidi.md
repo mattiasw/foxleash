@@ -4,7 +4,7 @@
 
 ## Context
 
-Foxhand works only in Firefox, and much of its logic depends on how a real browser
+Foxleash works only in Firefox, and much of its logic depends on how a real browser
 behaves: reading a page for `read_page`, or typing into rich text editors. That logic
 needs tests that run in Firefox with the extension installed.
 
@@ -17,16 +17,16 @@ outside its scope ([Playwright issue
 
 The end-to-end tests live in `e2e/`. Each run starts a pinned Firefox version headless,
 with a temporary HOME directory. That HOME holds the native host manifest, so Firefox
-finds `foxhand host` the way it does on a user's machine. Firefox and the test's
-`foxhand mcp` also get a temporary `XDG_RUNTIME_DIR`, so the test's host listens in its
-own socket directory, apart from any Foxhand the developer has running.
+finds `foxleash host` the way it does on a user's machine. Firefox and the test's
+`foxleash mcp` also get a temporary `XDG_RUNTIME_DIR`, so the test's host listens in its
+own socket directory, apart from any Foxleash the developer has running.
 
 The test installs the extension with the WebDriver BiDi command `webExtension.install`,
 sent over Node's built-in WebSocket. There is no geckodriver and no WebDriver client
 package.
 
 The test then acts as an MCP client: it uses the MCP SDK client over stdio to start
-`foxhand mcp` and calls the real tools. The tools act on local fixture pages served by a
+`foxleash mcp` and calls the real tools. The tools act on local fixture pages served by a
 Node HTTP server. A test therefore goes through the same path as a real MCP client, from
 the MCP server through the host to the extension and the page.
 

@@ -40,7 +40,7 @@ user moved the caret, and Save stored it.
   same, as 0036 rejected for the steps, and the user still edits in a field that hides text.
 - Keeping the inputs and refusing Save while `scrollWidth > clientWidth`: the user still cannot
   read the text without moving the caret, and every long description blocks Save.
-- CSS `field-sizing: content`: Firefox supports it from version 152, and Foxhand supports 142,
+- CSS `field-sizing: content`: Firefox supports it from version 152, and Foxleash supports 142,
   as in 0036.
 
 ## Consequences

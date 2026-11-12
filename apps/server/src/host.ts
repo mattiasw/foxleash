@@ -11,7 +11,7 @@ import {
   type ResponseMessage,
   type SessionEndMessage,
   type WelcomeMessage,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import {
   createFrameReader,
   encodeFrame,
@@ -95,14 +95,14 @@ export async function hostCommand(proc: HostProcess): Promise<number> {
   proc.stderr.on("error", () => {
     stderrBroken = true;
   });
-  const write = createLog("foxhand host:", proc.stderr);
+  const write = createLog("foxleash host:", proc.stderr);
   const log: Log = (message, detail) => {
     if (!stderrBroken) {
       write(message, detail);
     }
   };
   if (proc.getuid === undefined) {
-    log("The Foxhand native host runs on Linux only.");
+    log("The Foxleash native host runs on Linux only.");
     proc.exit(1);
     return 1;
   }
@@ -447,7 +447,7 @@ export function runHost(options: HostOptions): Host {
         conn,
         id,
         "extension_disconnected",
-        "The Foxhand extension has not connected to the native host yet.",
+        "The Foxleash extension has not connected to the native host yet.",
       );
       return;
     }
@@ -567,7 +567,7 @@ export function runHost(options: HostOptions): Host {
         entry.conn,
         entry.id,
         "extension_disconnected",
-        "Firefox closed the connection to the Foxhand native host.",
+        "Firefox closed the connection to the Foxleash native host.",
       );
     }
     for (const conn of connections) {

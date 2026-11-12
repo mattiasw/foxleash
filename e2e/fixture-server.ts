@@ -861,7 +861,7 @@ function sendHtml(
 }
 
 // The console pages with a Log button log only when it is clicked, so a test can wait until
-// Foxhand records the page first.
+// Foxleash records the page first.
 const CONSOLE_LOG_BUTTON = `<button id="log" style="position: fixed; left: 10px; top: 10px; width: 120px; height: 40px; margin: 0">Log</button>`;
 
 const WAIT_LATE_PAGE = `<!doctype html>

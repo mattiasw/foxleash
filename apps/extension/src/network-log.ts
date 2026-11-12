@@ -6,7 +6,7 @@ import {
   type NetworkHeader,
   type NetworkRequest,
   type Result,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type {
   BrowserApi,
   CompletedDetails,
@@ -308,7 +308,7 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
   }
 }
 
-/** The headers as Foxhand keeps them: capped, and the credential ones without their value. */
+/** The headers as Foxleash keeps them: capped, and the credential ones without their value. */
 export function redactHeaders(headers: readonly HttpHeader[] | undefined): NetworkHeader[] {
   return (headers ?? []).slice(0, MAX_NETWORK_HEADERS).map(({ name, value }) => ({
     name: capText(name, MAX_NETWORK_HEADER).text,

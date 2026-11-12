@@ -6,7 +6,7 @@
 
 Under 0017, `type` puts the caret at the end of an editable area before it inserts. In a Gmail
 compose body that already holds the user's signature, the typed text therefore went in after
-the signature, so an email written through Foxhand ended up below it. An agent cannot work
+the signature, so an email written through Foxleash ended up below it. An agent cannot work
 around that: `fill_form` takes only inputs and textareas, and synthetic keys and clicks do not
 move the caret.
 
@@ -82,7 +82,7 @@ synthetic keys and clicks do not move the caret (0014, 0017), so the text goes a
 also for a named paragraph. Text typed in two calls with another field focused in between comes
 out in reverse order, since focusing the field moves the caret out of the area; the tool
 description tells the agent to type a body in one call, after the other fields. Revisit when an
-agent needs either, for example with `press_key` moving the caret or with Foxhand remembering
+agent needs either, for example with `press_key` moving the caret or with Foxleash remembering
 where its last insertion ended.
 
 The end-to-end fixture models a body with an empty first line above a signature; whether

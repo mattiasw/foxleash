@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { PageText } from "@foxhand/protocol";
+import type { PageText } from "@foxleash/protocol";
 import {
   composePageText,
   type PageTextOptions,

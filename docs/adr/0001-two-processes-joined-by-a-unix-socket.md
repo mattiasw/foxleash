@@ -1,17 +1,17 @@
-# 0001: Foxhand runs as two processes joined by a Unix socket, with a protocol version handshake
+# 0001: Foxleash runs as two processes joined by a Unix socket, with a protocol version handshake
 
 **Status:** Accepted, 2026-10-17.
 
 ## Context
 
-Foxhand connects an MCP client to a Firefox extension:
+Foxleash connects an MCP client to a Firefox extension:
 
 ```
-MCP client --stdio--> foxhand mcp --Unix socket--> foxhand host --native messaging--> Firefox extension
+MCP client --stdio--> foxleash mcp --Unix socket--> foxleash host --native messaging--> Firefox extension
 ```
 
-Each end starts its own process. The MCP client starts `foxhand mcp` and uses its stdio as
-the MCP transport. Firefox starts `foxhand host` through `runtime.connectNative` and uses
+Each end starts its own process. The MCP client starts `foxleash mcp` and uses its stdio as
+the MCP transport. Firefox starts `foxleash host` through `runtime.connectNative` and uses
 its stdio as the native messaging channel. Neither parent can be handed a process the
 other one started, so there must be two processes. They are one Node program with two
 entry points.
@@ -25,14 +25,14 @@ versions.
 
 ## Decision
 
-The host listens on a Unix socket in `$XDG_RUNTIME_DIR/foxhand/`. It creates that
+The host listens on a Unix socket in `$XDG_RUNTIME_DIR/foxleash/`. It creates that
 directory with mode 0700, and refuses to use it if it belongs to another user or if other
 users can open it. This limits connections to the same user.
 
 Each Firefox instance starts its own host, with its own socket. The MCP server uses the
-most recently started host that answers. `foxhand doctor` lists all of them. When no host
+most recently started host that answers. `foxleash doctor` lists all of them. When no host
 is running, every tool fails with one sentence that tells the user to start Firefox and
-run `foxhand doctor`.
+run `foxleash doctor`.
 
 The extension opens the native port as soon as its background script runs and keeps it
 open, which also keeps its event page alive. When the port drops, the extension

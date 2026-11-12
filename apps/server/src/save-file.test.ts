@@ -115,19 +115,19 @@ describe("savePng", () => {
       ["shot.png.txt", "shot.png.txt does not end in .png; give a path ending in .png."],
       [
         "../shot.png",
-        `../shot.png is outside the folder Foxhand was started in, ${work}; give a path inside it.`,
+        `../shot.png is outside the folder Foxleash was started in, ${work}; give a path inside it.`,
       ],
       [
         "../work-x/shot.png",
-        `../work-x/shot.png is outside the folder Foxhand was started in, ${work}; give a path inside it.`,
+        `../work-x/shot.png is outside the folder Foxleash was started in, ${work}; give a path inside it.`,
       ],
       [
         join(outer, "shot.png"),
-        `${join(outer, "shot.png")} is outside the folder Foxhand was started in, ${work}; give a path inside it.`,
+        `${join(outer, "shot.png")} is outside the folder Foxleash was started in, ${work}; give a path inside it.`,
       ],
       [
         "out/shot.png",
-        `out/shot.png is outside the folder Foxhand was started in, ${work}; give a path inside it.`,
+        `out/shot.png is outside the folder Foxleash was started in, ${work}; give a path inside it.`,
       ],
       [
         ".shot.png",
@@ -159,11 +159,11 @@ describe("savePng", () => {
       ],
       [
         `${"a".repeat(300)}.png`,
-        `Foxhand could not save the screenshot to ${"a".repeat(300)}.png; choose another path.`,
+        `Foxleash could not save the screenshot to ${"a".repeat(300)}.png; choose another path.`,
       ],
       [
         "loop/shot.png",
-        "Foxhand could not save the screenshot to loop/shot.png; choose another path.",
+        "Foxleash could not save the screenshot to loop/shot.png; choose another path.",
       ],
     ];
     const before = await tree(outer);
@@ -177,7 +177,7 @@ describe("savePng", () => {
     const folder = join(work, "out.png");
     assert.equal(
       savePathProblem(folder, folder),
-      `${folder} is outside the folder Foxhand was started in, ${folder}; give a path inside it.`,
+      `${folder} is outside the folder Foxleash was started in, ${folder}; give a path inside it.`,
     );
   });
 
@@ -196,7 +196,7 @@ describe("savePng", () => {
     const name = fresh();
     assert.deepEqual(await withSlowUnlink(t, () => savePng(work, name, PNG)), {
       ok: false,
-      message: `Foxhand could not save the screenshot to ${name}; choose another path.`,
+      message: `Foxleash could not save the screenshot to ${name}; choose another path.`,
     });
     assert.throws(() => lstatSync(join(work, name)), { code: "ENOENT" });
   });
@@ -220,7 +220,7 @@ describe("savePng", () => {
     const name = fresh();
     assert.deepEqual(await withSlowUnlink(t, () => savePng(work, name, PNG)), {
       ok: false,
-      message: `Foxhand could not save the screenshot to ${name}; choose another path.`,
+      message: `Foxleash could not save the screenshot to ${name}; choose another path.`,
     });
     assert.equal(closeFailed, true);
     assert.throws(() => lstatSync(join(work, name)), { code: "ENOENT" });
@@ -237,7 +237,7 @@ describe("savePathProblem", () => {
   it("refuses a sibling folder that shares the folder's name as a prefix", () => {
     assert.equal(
       savePathProblem("/nonexistent/work", "/nonexistent/work-x/shot.png"),
-      "/nonexistent/work-x/shot.png is outside the folder Foxhand was started in, /nonexistent/work; give a path inside it.",
+      "/nonexistent/work-x/shot.png is outside the folder Foxleash was started in, /nonexistent/work; give a path inside it.",
     );
   });
 

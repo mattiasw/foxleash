@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import { PassThrough } from "node:stream";
 import { after, describe, it } from "node:test";
-import { PROTOCOL_VERSION } from "@foxhand/protocol";
+import { PROTOCOL_VERSION } from "@foxleash/protocol";
 import { Bridge } from "./bridge.ts";
 import { createFrameReader, encodeFrame, FRAME_LIMIT } from "./framing.ts";
 import { type Host, runHost } from "./host.ts";
@@ -16,7 +16,7 @@ interface FakeExtension {
 }
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const VERSION = "1.2.3";
 const SESSION = "session-1";
 const LIMIT = { timeout: 5000 };

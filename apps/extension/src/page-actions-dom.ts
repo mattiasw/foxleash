@@ -1,4 +1,4 @@
-import type { Result } from "@foxhand/protocol";
+import type { Result } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import { flatParentOf, shadowRootOf } from "./flat-tree.ts";
 import {
@@ -34,7 +34,7 @@ interface PageRealm {
   DataTransfer: typeof DataTransfer;
 }
 
-/** The element Foxhand's synthetic pointer is over in a document, held weakly. */
+/** The element Foxleash's synthetic pointer is over in a document, held weakly. */
 export interface PointerState {
   over: WeakRef<Element> | undefined;
 }
@@ -251,7 +251,7 @@ function pointOn(element: Element, ref: string, refs: ElementRefs<Element>): Loc
   if (point === undefined || hit === null) {
     throw new PageError(
       "element_not_visible",
-      `Element ${ref} has no visible part in the tab's viewport, so Foxhand cannot point at it.`,
+      `Element ${ref} has no visible part in the tab's viewport, so Foxleash cannot point at it.`,
     );
   }
   if (!isWithin(hit, element)) {
@@ -304,7 +304,7 @@ function refuseFrame(hit: Element, refs: ElementRefs<Element>): void {
   if (hit.namespaceURI === HTML && FRAMES.has(hit.localName)) {
     throw new PageError(
       "in_frame",
-      `Element ${refs.refFor(hit)} at that point is a frame (${hit.localName}); Foxhand acts only in the top page, not inside frames.`,
+      `Element ${refs.refFor(hit)} at that point is a frame (${hit.localName}); Foxleash acts only in the top page, not inside frames.`,
     );
   }
 }
@@ -606,7 +606,7 @@ function bringIntoView(ref: string, refs: ElementRefs<Element>): Result<"scroll"
   if (element.getClientRects().length === 0) {
     throw new PageError(
       "element_not_visible",
-      `Element ${ref} has no box on the page, so Foxhand cannot scroll it into view.`,
+      `Element ${ref} has no box on the page, so Foxleash cannot scroll it into view.`,
     );
   }
   const after = element.getBoundingClientRect();

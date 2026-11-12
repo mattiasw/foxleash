@@ -1,4 +1,4 @@
-import type { ConsoleKind, ConsoleLevel } from "@foxhand/protocol";
+import type { ConsoleKind, ConsoleLevel } from "@foxleash/protocol";
 
 export interface RecorderOptions {
   maxMessages: number;
@@ -45,10 +45,10 @@ export function recordConsole(
   const host = where.hostname.endsWith(".") ? where.hostname.slice(0, -1) : where.hostname;
   if (`${where.protocol}//${host}${where.port === "" ? "" : `:${where.port}`}` !== site)
     return "elsewhere";
-  if (Object.hasOwn(page, "__foxhandConsole")) return "present";
+  if (Object.hasOwn(page, "__foxleashConsole")) return "present";
   try {
     // Exactly { value: true }: Firefox's WindowProxy can throw on an explicit configurable: false.
-    Object.defineProperty(page, "__foxhandConsole", { value: true });
+    Object.defineProperty(page, "__foxleashConsole", { value: true });
   } catch {
     return "refused";
   }

@@ -38,14 +38,14 @@ export async function mcpCommand(proc: McpProcess): Promise<number> {
   proc.stderr.on("error", () => {
     stderrBroken = true;
   });
-  const write = createLog("foxhand mcp:", proc.stderr);
+  const write = createLog("foxleash mcp:", proc.stderr);
   const log: Log = (message, detail) => {
     if (!stderrBroken) {
       write(message, detail);
     }
   };
   if (proc.getuid === undefined) {
-    log("The Foxhand MCP server runs on Linux only.");
+    log("The Foxleash MCP server runs on Linux only.");
     return 1;
   }
   return runMcp({
@@ -121,7 +121,7 @@ export function createMcpServer(options: {
   saveFolder?: string;
 }): McpServer {
   const server = new McpServer(
-    { name: "foxhand", version: options.version },
+    { name: "foxleash", version: options.version },
     { instructions: INSTRUCTIONS },
   );
   registerTools(server, options.bridge, options.upload, options.saveFolder);

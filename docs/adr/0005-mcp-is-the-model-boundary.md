@@ -4,11 +4,11 @@
 
 ## Context
 
-Foxhand gives a model tools; it does not bring a model. The model lives in the MCP client
-the user already runs. Any MCP client should be able to use Foxhand unchanged: Claude
+Foxleash gives a model tools; it does not bring a model. The model lives in the MCP client
+the user already runs. Any MCP client should be able to use Foxleash unchanged: Claude
 Code, Codex, Gemini CLI, opencode or another one.
 
-In this record, v1 means Foxhand's current feature set. The decision holds until a later
+In this record, v1 means Foxleash's current feature set. The decision holds until a later
 record supersedes it.
 
 ## Decision
@@ -40,7 +40,7 @@ None of this is built now. This record exists so that v1 code does not rule it o
 
 ## Consequences
 
-There is no chat in v1. Users need an MCP client to use Foxhand at all.
+There is no chat in v1. Users need an MCP client to use Foxleash at all.
 
 v1 code must not assume a single client or a single session. Several clients can connect
 at once, each with its own session, and nothing in the host may depend on one of them

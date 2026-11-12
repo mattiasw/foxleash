@@ -1,5 +1,5 @@
 {
-  "name": "@foxhand/protocol",
+  "name": "@foxleash/protocol",
   "version": "0.3.0",
   "private": true,
   "type": "module",
@@ -8,10 +8,10 @@
   },
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=\"${FOXHAND_TEST_REPORTER:-../../bin/test-reporter.ts}\" --test-coverage-exclude='src/**/*.test.ts' 'src/**/*.test.ts'"
+    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=\"${FOXLEASH_TEST_REPORTER:-../../bin/test-reporter.ts}\" --test-coverage-exclude='src/**/*.test.ts' 'src/**/*.test.ts'"
   },
   "devDependencies": {
-    "@foxhand/tsconfig": "*",
+    "@foxleash/tsconfig": "*",
     "@types/node": "^26.6.6"
   }
 }

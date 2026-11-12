@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { TabInfo } from "@foxhand/protocol";
+import type { TabInfo } from "@foxleash/protocol";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -11,7 +11,7 @@ import {
   tabsOf,
 } from "./harness.ts";
 
-const BLOCKLIST_TEXT = "Foxhand's blocklist";
+const BLOCKLIST_TEXT = "Foxleash's blocklist";
 
 // One Firefox for the file: the tests run in order and share the tabs opened before them.
 describe("the blocklist, in real Firefox", () => {

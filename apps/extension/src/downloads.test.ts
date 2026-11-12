@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { DOWNLOAD_MAX_BYTES } from "@foxhand/protocol";
+import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
 import {
   createDownloads,
   DOWNLOAD_TIMEOUT_MS,
@@ -41,7 +41,7 @@ describe("download", { timeout: 10000 }, () => {
     const { downloads, fetchCalls } = await setup();
     await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf"), {
       code: "site_not_approved",
-      message: `Foxhand is not allowed on ${UNAPPROVED} in this session; open it with tab_open or navigate first, which asks the user.`,
+      message: `Foxleash is not allowed on ${UNAPPROVED} in this session; open it with tab_open or navigate first, which asks the user.`,
     });
     assert.deepEqual(fetchCalls, []);
   });
@@ -52,7 +52,7 @@ describe("download", { timeout: 10000 }, () => {
     await grantSite(fake.browser, BLOCKED);
     await assert.rejects(downloads.save("s1", `${BLOCKED}/x`, "x.pdf"), {
       code: "site_blocked",
-      message: `Foxhand does not act on ${BLOCKED}: it is on Foxhand's blocklist, which by default lists common financial and health sites.`,
+      message: `Foxleash does not act on ${BLOCKED}: it is on Foxleash's blocklist, which by default lists common financial and health sites.`,
     });
     assert.deepEqual(fetchCalls, []);
   });
@@ -120,7 +120,7 @@ describe("download", { timeout: 10000 }, () => {
     respondWith(() => response(`${UNAPPROVED}/elsewhere`, body.body));
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
       code: "site_not_approved",
-      message: `The link led to ${UNAPPROVED}, which Foxhand is not allowed on in this session; nothing was saved.`,
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
     assert.equal(body.pulled(), 0);
     assert.deepEqual(fake.downloadCalls, []);
@@ -163,7 +163,7 @@ describe("download", { timeout: 10000 }, () => {
     );
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
       code: "site_not_approved",
-      message: `The link led to ${SITE}, which Foxhand is not allowed on in this session; nothing was saved.`,
+      message: `The link led to ${SITE}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
     assert.deepEqual(fake.downloadCalls, []);
   });
@@ -185,7 +185,7 @@ describe("download", { timeout: 10000 }, () => {
     respondWith(() => response(`${UNAPPROVED}/missing`, "no", { status: 404 }));
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
       code: "site_not_approved",
-      message: `The link led to ${UNAPPROVED}, which Foxhand is not allowed on in this session; nothing was saved.`,
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
   });
 
@@ -379,7 +379,7 @@ describe("download", { timeout: 10000 }, () => {
     const first = downloads.save("s1", URL_A, "x.pdf");
     await assert.rejects(downloads.save("s2", URL_A, "y.pdf"), {
       code: "download_busy",
-      message: "Foxhand is already saving a file; try again when it has finished.",
+      message: "Foxleash is already saving a file; try again when it has finished.",
     });
     await until(() => fake.downloadCalls.length === 1);
     assert.equal(fetchCalls.length, 1);

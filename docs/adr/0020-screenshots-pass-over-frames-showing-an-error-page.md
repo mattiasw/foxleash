@@ -42,7 +42,7 @@ current document as its error page for the URL the frame now shows. Against the 
 screenshot's `getAllFrames` listing gives it, all of these must hold:
 
 1. the frame id is not 0;
-2. Foxhand recorded, for that tab and frame id, a `webNavigation.onDOMContentLoaded` event whose
+2. Foxleash recorded, for that tab and frame id, a `webNavigation.onDOMContentLoaded` event whose
    `url` starts with `about:neterror?`, keeping its `documentId` and the `decodeURIComponent` of
    its `u=` field;
 3. the recorded `documentId` equals the listing's `documentId` for the frame;

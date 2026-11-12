@@ -7,7 +7,7 @@ import {
   type RequestMessage,
   type ResponseMessage,
   type WelcomeMessage,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type { BrowserApi, Port, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
 import { warn } from "./log.ts";
@@ -117,7 +117,7 @@ export function createConnection<Handle>({
         ok: false,
         error: {
           code: "invalid_request",
-          message: `Foxhand could not read the request: ${parsed.error}.`,
+          message: `Foxleash could not read the request: ${parsed.error}.`,
         },
       });
       return;

@@ -66,7 +66,7 @@ export async function main(root: string): Promise<void> {
 
   // Outside the checkout, so no parent .git, package.json, node_modules or turbo state leaks in.
   // Both artifacts are written here and reach artifacts/ only once the two builds match.
-  const tmp = await mkdtemp(path.join(os.tmpdir(), "foxhand-amo-"));
+  const tmp = await mkdtemp(path.join(os.tmpdir(), "foxleash-amo-"));
   try {
     const sourceZip = path.join(tmp, "source.zip");
     // "." rather than "*" so top-level dotfiles are included; -y stores a symlink as one entry.
@@ -76,7 +76,7 @@ export async function main(root: string): Promise<void> {
     assertMatchesList(await listFiles(clean), run("git", ["show", `:${LIST}`], root));
 
     console.log("Building the extension in the checkout");
-    run("npm", ["run", "build", "-w", "@foxhand/extension"], root);
+    run("npm", ["run", "build", "-w", "@foxleash/extension"], root);
     assertNoNodeModulesAbove(await realpath(clean));
     console.log("Installing dependencies in a clean copy of the source archive");
     run("npm", ["ci"], clean);
@@ -90,8 +90,8 @@ export async function main(root: string): Promise<void> {
 
     const version = await readManifestVersion(cleanDist);
     await mkdir(artifacts, { recursive: true });
-    const sourceTarget = path.join(artifacts, `foxhand-source-${version}.zip`);
-    const xpiTarget = path.join(artifacts, `foxhand-${version}.xpi`);
+    const sourceTarget = path.join(artifacts, `foxleash-source-${version}.zip`);
+    const xpiTarget = path.join(artifacts, `foxleash-${version}.xpi`);
     await copyFile(sourceZip, sourceTarget);
     await copyFile(xpi, xpiTarget);
     console.log(`Source archive: ${sourceTarget}`);

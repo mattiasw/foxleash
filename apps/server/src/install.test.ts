@@ -39,18 +39,18 @@ const NODE = "/opt/my node/it's/node";
 const MAIN = "/src/fox 'hand'/main.ts";
 const QUOTED_NODE = "'/opt/my node/it'\\''s/node'";
 const QUOTED_MAIN = "'/src/fox '\\''hand'\\''/main.ts'";
-const REMOVE: Call = ["claude", ["mcp", "remove", "-s", "user", "foxhand"], { timeoutMs: 30000 }];
+const REMOVE: Call = ["claude", ["mcp", "remove", "-s", "user", "foxleash"], { timeoutMs: 30000 }];
 const ADD: Call = [
   "claude",
-  ["mcp", "add", "-s", "user", "foxhand", "--", NODE, MAIN, "mcp"],
+  ["mcp", "add", "-s", "user", "foxleash", "--", NODE, MAIN, "mcp"],
   { timeoutMs: 30000 },
 ];
 const OK: RunResult = { status: "ok", code: 0, stdout: "", stderr: "" };
 const RELEASE: ExtensionSource = { kind: "release", version: "1.2.3" };
 const GH_MISSING_HINT =
-  "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxhand .xpi";
+  "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxleash .xpi";
 const GH_AUTH_HINT =
-  "run gh auth login with an account that can read github.com/mattiasw/foxhand, pass --xpi <path> with a signed Foxhand .xpi, or skip the extension with --no-extension";
+  "run gh auth login with an account that can read github.com/mattiasw/foxleash, pass --xpi <path> with a signed Foxleash .xpi, or skip the extension with --no-extension";
 const temps: string[] = [];
 
 afterEach(() => {
@@ -87,18 +87,18 @@ describe("install", () => {
     for (const dir of [
       ".local",
       ".local/share",
-      ".local/share/foxhand",
+      ".local/share/foxleash",
       ".mozilla",
       ".mozilla/native-messaging-hosts",
     ]) {
       assert.equal(mode(join(home, dir)), 0o700, dir);
     }
     const expected = {
-      name: "foxhand",
-      description: "Foxhand native messaging host",
+      name: "foxleash",
+      description: "Foxleash native messaging host",
       path: t.launcher,
       type: "stdio",
-      allowed_extensions: ["foxhand@mattiasw.com"],
+      allowed_extensions: ["foxleash@mattiasw.com"],
     };
     const text = readFileSync(t.manifest, "utf8");
     assert.deepEqual(JSON.parse(text), expected);
@@ -113,7 +113,7 @@ describe("install", () => {
     assert.deepEqual(t.calls, [REMOVE, ADD]);
     assert.equal(
       t.output(),
-      `wrote ${t.launcher}\nwrote ${t.manifest}\nregistered Foxhand with Claude Code\nNext: npm run doctor\n`,
+      `wrote ${t.launcher}\nwrote ${t.manifest}\nregistered Foxleash with Claude Code\nNext: npm run doctor\n`,
     );
   });
 
@@ -145,8 +145,8 @@ describe("install", () => {
       [
         `wrote ${t.launcher}`,
         `wrote ${t.manifest}`,
-        "Claude Code (claude) was not found on PATH; to register Foxhand yourself, run:",
-        `'claude' 'mcp' 'add' '-s' 'user' 'foxhand' '--' ${QUOTED_NODE} ${QUOTED_MAIN} 'mcp'`,
+        "Claude Code (claude) was not found on PATH; to register Foxleash yourself, run:",
+        `'claude' 'mcp' 'add' '-s' 'user' 'foxleash' '--' ${QUOTED_NODE} ${QUOTED_MAIN} 'mcp'`,
         "Next: npm run doctor",
         "",
       ].join("\n"),
@@ -199,7 +199,7 @@ describe("install", () => {
 
   it("makes an existing launcher directory private again", async () => {
     const home = tempDir();
-    const dir = join(home, ".local", "share", "foxhand");
+    const dir = join(home, ".local", "share", "foxleash");
     mkdirSync(dir, { recursive: true });
     chmodSync(dir, 0o777);
     const t = setup(home, []);
@@ -211,11 +211,11 @@ describe("install", () => {
     const home = tempDir();
     const other = tempDir();
     mkdirSync(join(home, ".local", "share"), { recursive: true });
-    const link = join(home, ".local", "share", "foxhand");
+    const link = join(home, ".local", "share", "foxleash");
     symlinkSync(other, link);
     const t = setup(home, []);
     assert.equal(await install({ ...t.options, claude: false }), 0);
-    assert.equal(readFileSync(join(other, "foxhand-host"), "utf8"), launcherScript(NODE, MAIN));
+    assert.equal(readFileSync(join(other, "foxleash-host"), "utf8"), launcherScript(NODE, MAIN));
     const out = setup(home, []);
     assert.equal(await uninstall({ ...out.options, claude: false }), 0);
     assert.equal(out.output(), `removed ${t.manifest}\nremoved ${t.launcher}\n`);
@@ -237,7 +237,7 @@ describe("the extension step", () => {
       [
         `wrote ${t.launcher}`,
         `wrote ${t.manifest}`,
-        "registered Foxhand with Claude Code",
+        "registered Foxleash with Claude Code",
         `downloaded ${xpi}`,
         `opened ${xpi} in Firefox; confirm the installation there`,
         "Next: npm run doctor",
@@ -246,12 +246,12 @@ describe("the extension step", () => {
     );
     assert.equal(readFileSync(xpi, "utf8"), "signed");
     assert.equal(mode(join(home, ".cache")), 0o700);
-    assert.equal(mode(join(home, ".cache", "foxhand")), 0o700);
+    assert.equal(mode(join(home, ".cache", "foxleash")), 0o700);
   });
 
   it("leaves the mode of an existing cache directory alone", async () => {
     const home = tempDir();
-    const dir = join(home, ".cache", "foxhand");
+    const dir = join(home, ".cache", "foxleash");
     mkdirSync(dir, { recursive: true });
     chmodSync(dir, 0o755);
     const t = setup(home, [writingGh(OK)]);
@@ -294,7 +294,7 @@ describe("the extension step", () => {
   });
 
   it("opens a local file as given, without gh", async () => {
-    const xpi = join(tempDir(), "my foxhand.xpi");
+    const xpi = join(tempDir(), "my foxleash.xpi");
     writeFileSync(xpi, "signed");
     const t = setup(tempDir(), []);
     const extension: ExtensionSource = { kind: "file", path: xpi };
@@ -387,8 +387,8 @@ describe("the extension step", () => {
 });
 
 describe("extensionPath", () => {
-  it("puts the version's file in the Foxhand cache directory under HOME", () => {
-    assert.equal(extensionPath("/home/u", "4.5.6"), "/home/u/.cache/foxhand/foxhand-4.5.6.xpi");
+  it("puts the version's file in the Foxleash cache directory under HOME", () => {
+    assert.equal(extensionPath("/home/u", "4.5.6"), "/home/u/.cache/foxleash/foxleash-4.5.6.xpi");
   });
 });
 
@@ -438,9 +438,9 @@ describe("uninstall", () => {
         status: "failed",
         code: 1,
         stdout: "",
-        stderr: '  No MCP server named "foxhand" in user scope\n',
+        stderr: '  No MCP server named "foxleash" in user scope\n',
       },
-      'claude mcp remove: No MCP server named "foxhand" in user scope',
+      'claude mcp remove: No MCP server named "foxleash" in user scope',
     ],
     [{ status: "timeout" }, "claude mcp remove did not finish in 30 s; registration unknown"],
   ];
@@ -454,7 +454,7 @@ describe("uninstall", () => {
       assert.equal(t.output(), `${line}\nremoved ${t.manifest}\nremoved ${t.launcher}\n`);
       assert.equal(existsSync(t.manifest), false);
       assert.equal(existsSync(t.launcher), false);
-      assert.equal(existsSync(join(home, ".local", "share", "foxhand")), false);
+      assert.equal(existsSync(join(home, ".local", "share", "foxleash")), false);
       assert.ok(statSync(join(home, ".mozilla", "native-messaging-hosts")).isDirectory());
     });
   }
@@ -489,7 +489,7 @@ describe("uninstall", () => {
     const home = tempDir();
     await install({ ...setup(home, []).options, claude: false });
     const t = setup(home, []);
-    const kept = join(home, ".local", "share", "foxhand", "other");
+    const kept = join(home, ".local", "share", "foxleash", "other");
     writeFileSync(kept, "mine");
     assert.equal(await uninstall({ ...t.options, claude: false }), 0);
     assert.equal(existsSync(t.launcher), false);
@@ -499,7 +499,7 @@ describe("uninstall", () => {
   it("removes a dangling symlink at the launcher path", async () => {
     const home = tempDir();
     const t = setup(home, []);
-    mkdirSync(join(home, ".local", "share", "foxhand"), { recursive: true });
+    mkdirSync(join(home, ".local", "share", "foxleash"), { recursive: true });
     symlinkSync(join(home, "missing"), t.launcher);
     assert.equal(await uninstall({ ...t.options, claude: false }), 0);
     assert.equal(t.output(), `removed ${t.launcher}\n`);
@@ -516,7 +516,7 @@ describe("uninstall", () => {
   it("rethrows an error other than a missing or non-empty directory", async () => {
     const home = tempDir();
     const t = setup(home, []);
-    mkdirSync(join(home, ".local", "share", "foxhand"), { recursive: true });
+    mkdirSync(join(home, ".local", "share", "foxleash"), { recursive: true });
     chmodSync(join(home, ".local", "share"), 0o500);
     try {
       await assert.rejects(uninstall({ ...t.options, claude: false }), { code: "EACCES" });
@@ -544,8 +544,8 @@ describe("the install and uninstall commands", () => {
       assert.ok(installCommand !== undefined && uninstallCommand !== undefined);
       const out: string[] = [];
       const deps: CliDeps = { stdout: collector(out), stderr: collector(out), commands: COMMANDS };
-      const launcher = join(home, ".local", "share", "foxhand", "foxhand-host");
-      const manifest = join(home, ".mozilla", "native-messaging-hosts", "foxhand.json");
+      const launcher = join(home, ".local", "share", "foxleash", "foxleash-host");
+      const manifest = join(home, ".mozilla", "native-messaging-hosts", "foxleash.json");
       assert.equal(await installCommand({ noClaude: true, noExtension: true }, deps), 0);
       assert.equal(
         readFileSync(launcher, "utf8"),
@@ -644,7 +644,7 @@ describe("the install and uninstall commands", () => {
     const home = tempDir();
     const initCwd = tempDir();
     const bin = tempDir();
-    const xpi = join(initCwd, "foxhand.xpi");
+    const xpi = join(initCwd, "foxleash.xpi");
     writeFileSync(xpi, "signed");
     writeFileSync(
       join(bin, "firefox"),
@@ -656,7 +656,7 @@ describe("the install and uninstall commands", () => {
     process.env.INIT_CWD = initCwd;
     process.env.npm_lifecycle_event = "setup";
     try {
-      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "foxhand.xpi" });
+      const { code, output } = await runInstallCommand({ noClaude: true, xpi: "foxleash.xpi" });
       assert.equal(code, 0);
       assert.ok(
         output.endsWith(
@@ -708,7 +708,7 @@ function restoreEnv(saved: SavedEnv): void {
 }
 
 function tempDir(): string {
-  const dir = mkdtempSync(join(tmpdir(), "foxhand-install-"));
+  const dir = mkdtempSync(join(tmpdir(), "foxleash-install-"));
   temps.push(dir);
   return dir;
 }
@@ -747,8 +747,8 @@ function setup(home: string, results: Scripted[], launchResult: LaunchResult = {
   return {
     calls,
     launches,
-    launcher: join(home, ".local", "share", "foxhand", "foxhand-host"),
-    manifest: join(home, ".mozilla", "native-messaging-hosts", "foxhand.json"),
+    launcher: join(home, ".local", "share", "foxleash", "foxleash-host"),
+    manifest: join(home, ".mozilla", "native-messaging-hosts", "foxleash.json"),
     output: () => chunks.join(""),
     options: {
       home,
@@ -782,11 +782,11 @@ function gh(home: string, version = "1.2.3"): Call {
       "download",
       `v${version}`,
       "--repo",
-      "github.com/mattiasw/foxhand",
+      "github.com/mattiasw/foxleash",
       "--pattern",
-      `foxhand-${version}.xpi`,
+      `foxleash-${version}.xpi`,
       "--dir",
-      join(home, ".cache", "foxhand"),
+      join(home, ".cache", "foxleash"),
       "--clobber",
     ],
     { timeoutMs: 120000 },

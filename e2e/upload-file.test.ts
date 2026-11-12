@@ -75,7 +75,7 @@ describe("upload_file in real Firefox", () => {
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
-      session = await harness.connect({ FOXHAND_UPLOAD_DIRS: allowed });
+      session = await harness.connect({ FOXLEASH_UPLOAD_DIRS: allowed });
       await harness.waitUntilReady(session);
       const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/upload") }));
       assert.equal(tab.title, TITLES.upload);
@@ -224,7 +224,7 @@ describe("upload_file in real Firefox", () => {
       ref: refs.many,
       paths: [join(allowed, "notes.txt"), join(allowed, ".secret")],
     });
-    assert.ok(dot.startsWith("Foxhand uploaded nothing: "), dot);
+    assert.ok(dot.startsWith("Foxleash uploaded nothing: "), dot);
     assert.ok(dot.includes("starting with a dot"), dot);
     const out = await harness.refused(session, "upload_file", {
       tabId,
@@ -258,7 +258,7 @@ describe("upload_file in real Firefox", () => {
       ref: refs.single,
       paths: [join(allowed, "notes.txt")],
     });
-    assert.ok(text.includes(`Foxhand is not allowed on ${other} in this session`), text);
+    assert.ok(text.includes(`Foxleash is not allowed on ${other} in this session`), text);
     const prompt = firefox.extensionUrl("approve.html");
     const contexts = await firefox.contexts();
     assert.equal(contexts.length, before);

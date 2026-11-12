@@ -6,7 +6,7 @@
 
 Claude Code shows an MCP tool result inline only up to a default limit (25,000 tokens, about
 50,000 characters). A larger result is saved to a file, and the model gets only the file's path
-and has to search it. Foxhand's own caps let results cross that default: the `read_page` tree is
+and has to search it. Foxleash's own caps let results cross that default: the `read_page` tree is
 cut at 50,000 characters, and `get_page_text` returns 50,000 characters by default and up to
 200,000 when asked. On the Wikipedia article "Firefox", `read_page` with filter interactive
 reached the model as "result (53,091 characters) exceeds maximum allowed tokens", and the model
@@ -35,7 +35,7 @@ measure of the file it saves, except in the cases named below:
   it returns. Its text is already JSON inside the frame, so under the JSON measure it is escaped
   twice: ordinary prose with quotes and line breaks fits with room to spare, text made mostly of
   quotes, backslashes or line breaks does not.
-- `batch`: the ceiling, 500,000. A batch holds up to 20 results and Foxhand caps it only at
+- `batch`: the ceiling, 500,000. A batch holds up to 20 results and Foxleash caps it only at
   8 MiB, far above anything Claude Code accepts, so the ceiling comes closest to its largest
   result.
 
@@ -61,7 +61,7 @@ it changes no wording.
   they never reach, and the log tools are better served by the file.
 - **Declaring the ceiling everywhere.** It would hide the link between a tool's cap and its
   value, and let a log read flood the context where a file serves better.
-- **Shrinking Foxhand's own caps to fit Claude Code's default.** A long page would take more
+- **Shrinking Foxleash's own caps to fit Claude Code's default.** A long page would take more
   reads, other clients would lose the larger results for no reason, and the 50,000-character
   tree already passes the default once escaped.
 

@@ -3,9 +3,9 @@ import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
 
 const BADGE_ON = "ON";
-const TITLE_ON = "Foxhand: an agent session can use this tab";
+const TITLE_ON = "Foxleash: an agent session can use this tab";
 // The manifest's default_title.
-const TITLE_OFF = "Foxhand";
+const TITLE_OFF = "Foxleash";
 
 export interface Indicator {
   /** Sets the tab's badge and title from its current group; never rejects. */

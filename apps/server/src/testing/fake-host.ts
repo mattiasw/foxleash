@@ -2,12 +2,12 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import path from "node:path";
-import { PROTOCOL_VERSION } from "@foxhand/protocol";
+import { PROTOCOL_VERSION } from "@foxleash/protocol";
 import { createFrameReader, encodeFrame, FRAME_LIMIT } from "../framing.ts";
 import { SERVER_VERSION } from "../version.ts";
 
 export interface FakeHostOptions {
-  /** An existing private directory, e.g. from mkdtempSync("/tmp/foxhand-test-"). */
+  /** An existing private directory, e.g. from mkdtempSync("/tmp/foxleash-test-"). */
   dir: string;
   pid: number;
   /** The frame answering a hello; null never answers. */

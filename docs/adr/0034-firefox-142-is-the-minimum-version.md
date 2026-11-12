@@ -5,7 +5,7 @@
 ## Context
 
 [0006](0006-no-firefox-for-android-key-in-the-manifest.md) kept `gecko.strict_min_version`
-at `140.0` so Firefox ESR 140 could run Foxhand. Without a `gecko_android` key,
+at `140.0` so Firefox ESR 140 could run Foxleash. Without a `gecko_android` key,
 addons-linter checks Firefox for Android against `strict_min_version`, and Firefox for
 Android supports `browser_specific_settings.gecko.data_collection_permissions` only from
 142, so the linter warns `KEY_FIREFOX_ANDROID_UNSUPPORTED_BY_MIN_VERSION`. 0006 allowed
@@ -16,7 +16,7 @@ That now holds. Mozilla's product details
 (https://product-details.mozilla.org/1.0/firefox_versions.json, read 2026-10-28) list
 `FIREFOX_ESR` as 153.6.0esr and no ESR 140. The last 140 update was 140.17.0esr on
 2026-09-29; 153.5.0esr (2026-10-13) and 153.6.0esr (2026-10-27) shipped with no 140
-release. ESR 115 is still listed, but it was already below Foxhand's minimum.
+release. ESR 115 is still listed, but it was already below Foxleash's minimum.
 
 We built the extension, set `strict_min_version` in copies of `dist/` and ran
 `web-ext lint --output json --no-config-discovery` on each, with web-ext 10.8.0
@@ -61,7 +61,7 @@ followed by the minimum's major version.
 
 ## Consequences
 
-Firefox 140 and 141, ESR 140 included, cannot install Foxhand versions from this one on.
+Firefox 140 and 141, ESR 140 included, cannot install Foxleash versions from this one on.
 
 AMO's validation of an upload is expected to show no warning about Firefox for Android:
 the local addons-linter 10.14.0 reports none, but AMO runs its own linter version.

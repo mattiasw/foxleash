@@ -6,8 +6,8 @@ import { createLog } from "./log.ts";
 describe("createLog", () => {
   it("writes the prefix and the message as one line", () => {
     const { stream, chunks } = collector();
-    createLog("[foxhand host]", stream)("listening");
-    assert.deepEqual(chunks, ["[foxhand host] listening\n"]);
+    createLog("[foxleash host]", stream)("listening");
+    assert.deepEqual(chunks, ["[foxleash host] listening\n"]);
   });
 
   it("treats an explicit undefined detail as no detail", () => {

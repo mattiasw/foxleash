@@ -4,7 +4,7 @@
 
 ## Context
 
-A recipe is text the user keeps in Foxhand: a name, a one-line description, the sites it uses
+A recipe is text the user keeps in Foxleash: a name, a one-line description, the sites it uses
 (sites as [0007](0007-per-site-approval-and-tab-redaction.md) defines them) and steps, which an
 agent follows with the normal tools in a later session. Element refs belong to one document
 ([0009](0009-content-scripts-injected-per-tab.md)), so a recipe cannot be a recorded macro that
@@ -12,8 +12,8 @@ replays clicks; it is instructions.
 
 Instructions that persist are a target. An agent fooled by a page it read could write a recipe
 whose steps steer every later session that follows it: a prompt injection that outlives the
-page and the session, known as memory poisoning. [0002](0002-safeguards-live-in-foxhand-not-the-mcp-client.md)
-already puts every safeguard in Foxhand and lets only a user click grant anything, because the
+page and the session, known as memory poisoning. [0002](0002-safeguards-live-in-foxleash-not-the-mcp-client.md)
+already puts every safeguard in Foxleash and lets only a user click grant anything, because the
 MCP client's prompts can be switched off. Recipes need the same rule for writing text that a
 later session treats as the user's own, and for the sites a recipe lists.
 

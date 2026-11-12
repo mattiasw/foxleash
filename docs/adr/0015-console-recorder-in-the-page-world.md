@@ -7,7 +7,7 @@
 `read_console` returns what a page in the agent's tab group wrote to its console, its
 uncaught errors and its unhandled promise rejections. Those happen in the page's own world
 from the start of its load, so a recorder has to be in the page before the page's scripts
-run, and it has to wrap `console` as the page sees it, which Foxhand's isolated content script
+run, and it has to wrap `console` as the page sees it, which Foxleash's isolated content script
 (ADR 0009) cannot do.
 
 The add-on listing says page content, console messages included, "comes only from what a tab
@@ -43,7 +43,7 @@ and back, or blocklists and unblocks it). Records from such a gap must never rea
   2,000,000-character cap on page replies.
 - **Reading.** `read_console` goes through `pages.request` (ADR 0009: gated before the
   injection, before the message and after the reply). The content script dispatches a
-  `foxhand-console-read` event on the window and takes the first `foxhand-console-records`
+  `foxleash-console-read` event on the window and takes the first `foxleash-console-records`
   reply, dispatched synchronously by the recorder, whose `detail` is a JSON string: a string
   crosses into the content script's world as it is, an object would not. The content script,
   the background and the MCP server each check the shape again, the background and the server
@@ -95,7 +95,7 @@ and back, or blocklists and unblocks it). Records from such a gap must never rea
 - After any interruption of access, or for a page that loaded before the user approved its
   site, `read_console` says it is not recording until the page is loaded again.
 - The page can see, forge, clear or block its own records and the read events, and can tell
-  that its console is wrapped and when Foxhand reads it. It can reach nothing beyond its own
+  that its console is wrapped and when Foxleash reads it. It can reach nothing beyond its own
   document's bounded reply, which every later step treats as untrusted.
 - Formatting runs a logged object's getters and `toJSON` when it is logged; DevTools runs
   them only when it shows the object. Stringifying a plain object costs work in proportion to
@@ -103,4 +103,4 @@ and back, or blocklists and unblocks it). Records from such a gap must never rea
   documents (not checked in Firefox).
 - The page writes the text a pattern runs against, so it can make a backtracking pattern slow.
   Matching runs in a `node:vm` context with a one-second timeout, and a read that hits it
-  returns an error instead of stalling the agent's own `foxhand mcp` process.
+  returns an error instead of stalling the agent's own `foxleash mcp` process.

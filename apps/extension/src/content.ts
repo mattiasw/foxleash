@@ -18,7 +18,7 @@ import { siteOf } from "./site.ts";
 declare const browser: Pick<BrowserApi, "runtime">;
 
 // Set once per document on the content scripts' own global, which the page cannot see.
-const STARTED = "foxhandPageScript";
+const STARTED = "foxleashPageScript";
 
 // The background injects this on every request; only the first run in a document sets up.
 if (!Object.hasOwn(globalThis, STARTED)) {

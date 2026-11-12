@@ -1,19 +1,19 @@
 {
-  "name": "@foxhand/extension",
+  "name": "@foxleash/extension",
   "version": "0.3.0",
   "private": true,
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit -p .",
-    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=\"${FOXHAND_TEST_REPORTER:-../../bin/test-reporter.ts}\" --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='lint.test.ts' 'src/**/*.test.ts' 'lint.test.ts'",
+    "test": "node --test --experimental-test-coverage --test-coverage-lines=90 --test-coverage-branches=85 --test-coverage-functions=90 --test-reporter=\"${FOXLEASH_TEST_REPORTER:-../../bin/test-reporter.ts}\" --test-coverage-exclude='src/**/*.test.ts' --test-coverage-exclude='lint.test.ts' 'src/**/*.test.ts' 'lint.test.ts'",
     "build": "node build.ts && node lint.ts",
     "dev": "node dev.ts"
   },
   "dependencies": {
-    "@foxhand/protocol": "*"
+    "@foxleash/protocol": "*"
   },
   "devDependencies": {
-    "@foxhand/tsconfig": "*",
+    "@foxleash/tsconfig": "*",
     "@types/node": "^26.6.6",
     "esbuild": "^0.28.2",
     "web-ext": "^10.8.0"

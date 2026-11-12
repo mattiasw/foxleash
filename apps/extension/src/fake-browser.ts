@@ -282,7 +282,7 @@ export const ONE_PIXEL_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
 
 /** The extension's id in the fake, and the host of its `getURL` URLs. */
-export const FAKE_EXTENSION_ID = "foxhand@example.org";
+export const FAKE_EXTENSION_ID = "foxleash@example.org";
 const FAKE_EXTENSION_ORIGIN = "moz-extension://8a7f9c1e-2b3d-4e5f-a6b7-c8d9e0f1a2b3";
 
 export interface FakePort extends Port {

@@ -16,7 +16,7 @@ import {
 const PREFIX = "data:image/png;base64,";
 const PAGE_ERROR = {
   code: "page_error",
-  message: "Foxhand could not complete the request in the page in tab 7.",
+  message: "Foxleash could not complete the request in the page in tab 7.",
 };
 const NOT_VISIBLE = {
   code: "element_not_visible",

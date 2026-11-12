@@ -4,8 +4,8 @@ import { type Firefox, isRecord, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer } from "./fixture-server.ts";
 import { createHarness, EXTENSION_DIST, type Harness, type Session, tabOf } from "./harness.ts";
 
-const TITLE_ON = "Foxhand: an agent session can use this tab";
-const TITLE_OFF = "Foxhand";
+const TITLE_ON = "Foxleash: an agent session can use this tab";
+const TITLE_OFF = "Foxleash";
 const WAIT_MS = 10_000;
 
 interface TabState {

@@ -87,7 +87,7 @@ export type ConsoleLevel = (typeof CONSOLE_LEVELS)[number];
 export const CONSOLE_KINDS = ["console", "uncaught_error", "unhandled_rejection"] as const;
 export type ConsoleKind = (typeof CONSOLE_KINDS)[number];
 
-/** One message a page wrote; `time` is ms since the epoch, when Foxhand's recorder saw it. */
+/** One message a page wrote; `time` is ms since the epoch, when Foxleash's recorder saw it. */
 export interface ConsoleMessage {
   level: ConsoleLevel;
   kind: ConsoleKind;
@@ -306,12 +306,12 @@ export interface Methods {
     params: { tabId: number; fields: { ref: string; value: FillValue }[] };
     result: { fields: FillResult[] };
   };
-  /** `recording` is false when Foxhand has not recorded the page since it loaded. */
+  /** `recording` is false when Foxleash has not recorded the page since it loaded. */
   read_console: {
     params: { tabId: number };
     result: { recording: boolean; messages: ConsoleMessage[]; dropped: number };
   };
-  /** `recording` is false when Foxhand has not recorded the page since it loaded. */
+  /** `recording` is false when Foxleash has not recorded the page since it loaded. */
   read_network: {
     params: { tabId: number; pattern?: string; limit?: number };
     result: { recording: boolean; requests: NetworkRequest[]; truncated: boolean };
@@ -329,7 +329,7 @@ export interface Methods {
     params: { name: string };
     result: { asked: boolean; allowed: string[]; blocked: string[]; refused: string[] };
   };
-  /** Not an MCP tool: only `foxhand probe` calls it. */
+  /** Not an MCP tool: only `foxleash probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
 

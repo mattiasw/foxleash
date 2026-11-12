@@ -44,7 +44,7 @@ page and is the only way the tests write settings.
   `isTrusted`.
 - **A test hook or a native-messaging method in the extension that writes settings.** It would
   ship to users and give the agent's side a way to grant sites, which
-  [0002](0002-safeguards-live-in-foxhand-not-the-mcp-client.md) rules out.
+  [0002](0002-safeguards-live-in-foxleash-not-the-mcp-client.md) rules out.
 - **geckodriver or Selenium.** Still a binary or a package for what two sockets do (0003).
 
 ## Consequences

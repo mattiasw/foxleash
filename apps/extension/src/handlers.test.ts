@@ -7,7 +7,7 @@ import {
   type ProbeResult,
   type Result,
   type TabInfo,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type { FrameDetails, RequestDetails, Tab, TabChangeInfo } from "./browser-api.ts";
 import {
   type CssCall,
@@ -97,7 +97,7 @@ describe("tabs_list", { timeout: 10000 }, () => {
 const PROMPT_URL = /^moz-extension:\/\/[0-9a-f-]+\/approve\.html\?id=[0-9a-f-]{36}$/;
 
 describe("tab_open", { timeout: 10000 }, () => {
-  it("opens the url in a new active tab in an orange group titled Foxhand", async () => {
+  it("opens the url in a new active tab in an orange group titled Foxleash", async () => {
     const { fake, open, grant } = setup();
     await grant("https://example.com");
     fake.openTab({ active: true });
@@ -112,7 +112,7 @@ describe("tab_open", { timeout: 10000 }, () => {
     assert.deepEqual(fake.groups.get(group), {
       id: group,
       windowId: 1,
-      title: "Foxhand",
+      title: "Foxleash",
       color: "orange",
     });
     assert.equal(fake.tabs.get(1)?.active, false);
@@ -405,7 +405,7 @@ describe("tab_open", { timeout: 10000 }, () => {
     const second = await open("s1");
     const group = groupIdOf(fake, second.id);
     assert.notEqual(group, closed);
-    assert.equal(fake.groups.get(group)?.title, "Foxhand");
+    assert.equal(fake.groups.get(group)?.title, "Foxleash");
   });
 
   it("creates a new group when the user closes the group while the tab joins it", async () => {
@@ -462,7 +462,7 @@ describe("tab_open", { timeout: 10000 }, () => {
   it("names the allowed URLs without echoing the refused one", async () => {
     const { call } = setup();
     await assert.rejects(call("s1", "tab_open", { url: "file:///secret" }), {
-      message: "Foxhand opens only http and https URLs, or about:blank.",
+      message: "Foxleash opens only http and https URLs, or about:blank.",
     });
   });
 
@@ -732,7 +732,7 @@ describe("navigate", { timeout: 10000 }, () => {
       [{ tabId: 1 }, "navigate needs a url or an action."],
       [{ tabId: 1, action: "stop" }, "action must be back, forward or reload."],
       [{ tabId: 1, url: 1 }, "navigate needs url to be a string."],
-      [{ tabId: 1, url: "file:///x" }, "Foxhand navigates only to http and https URLs."],
+      [{ tabId: 1, url: "file:///x" }, "Foxleash navigates only to http and https URLs."],
     ];
     for (const [params, message] of messages) {
       await assert.rejects(call("s1", "navigate", params), { message });
@@ -970,7 +970,7 @@ describe("site access", { timeout: 10000 }, () => {
 
 describe("blocklist", { timeout: 10000 }, () => {
   const BLOCKED =
-    "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.";
+    "Foxleash does not act on https://www.paypal.com: it is on Foxleash's blocklist, which by default lists common financial and health sites.";
 
   it("refuses to open a blocked site before it creates a tab", async (t) => {
     const { fake, call } = setup();
@@ -1028,7 +1028,7 @@ describe("blocklist", { timeout: 10000 }, () => {
     await assert.rejects(call("s1", "navigate", { tabId: tab.id, action: "reload" }), {
       code: "site_blocked",
       message:
-        "Foxhand does not act on https://a.example: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+        "Foxleash does not act on https://a.example: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     });
     assert.equal(reload.mock.callCount(), 0);
   });
@@ -1052,7 +1052,7 @@ describe("blocklist", { timeout: 10000 }, () => {
     const fakeTab = fake.tabs.get(tab.id);
     assert.ok(fakeTab);
     const reload = t.mock.method(fake.browser.tabs, "reload");
-    const message = `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`;
+    const message = `Foxleash acts only on http and https pages, and tab ${tab.id} shows another kind of page.`;
     for (const url of ["file:///home/u/secret.txt", "about:newtab", "about:blank#x"]) {
       fakeTab.url = url;
       const error = await call("s1", "navigate", { tabId: tab.id, action: "reload" }).then(
@@ -1082,13 +1082,13 @@ describe("blocklist", { timeout: 10000 }, () => {
     const { fake, call, open } = setup();
     await assert.rejects(call("s1", "tab_open", { url: "http://./" }), {
       code: "invalid_url",
-      message: "Foxhand opens only http and https URLs, or about:blank.",
+      message: "Foxleash opens only http and https URLs, or about:blank.",
     });
     assert.equal(fake.tabs.size, 0);
     const tab = await open("s1");
     await assert.rejects(call("s1", "navigate", { tabId: tab.id, url: "http://./" }), {
       code: "invalid_url",
-      message: "Foxhand navigates only to http and https URLs.",
+      message: "Foxleash navigates only to http and https URLs.",
     });
     assert.equal(fake.tabs.get(tab.id)?.url, "about:blank");
   });
@@ -2149,7 +2149,7 @@ describe("approval", { timeout: 10000 }, () => {
             closed: 0,
           });
         },
-        /did not allow Foxhand on https:\/\/a\.example/,
+        /did not allow Foxleash on https:\/\/a\.example/,
       ],
       [
         "site_blocked",
@@ -2442,7 +2442,7 @@ describe("approval", { timeout: 10000 }, () => {
     held.resolve();
     await assert.rejects(approved, {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
     });
     assert.equal(prompt.tabId, tab.id);
     assert.equal(loadsOf(fake, "https://a.example/b"), 0);
@@ -2474,7 +2474,7 @@ describe("approval", { timeout: 10000 }, () => {
     held.resolve();
     await assert.rejects(answered, {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
     });
     assert.equal(second.site, "https://b.example");
     assert.equal(loadsOf(fake, "https://a.example/x"), 0);
@@ -2492,7 +2492,7 @@ describe("approval", { timeout: 10000 }, () => {
     });
     await page("s1");
     const { tabId } = await promptOf("s1");
-    const message = `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`;
+    const message = `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`;
     const refusals: Record<string, unknown>[] = [
       { url: "https://a.example/y" },
       { action: "reload" },
@@ -2644,7 +2644,7 @@ describe("approval", { timeout: 10000 }, () => {
     await assert.rejects(opened, {
       code: "site_blocked",
       message:
-        "Foxhand does not act on https://a.example: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+        "Foxleash does not act on https://a.example: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     });
     assert.equal(loadsOf(fake, "https://a.example/x"), 0);
   });
@@ -2792,7 +2792,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     const prompt = await promptOf("s1");
     await assert.rejects(call("s1", "probe_input", { tabId: prompt.tabId }), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${prompt.tabId} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${prompt.tabId} whether to allow https://a.example. Try again after the user has answered.`,
     });
     assert.deepEqual(fake.injections, []);
     void opened.catch(() => {});
@@ -2806,7 +2806,7 @@ describe("probe_input", { timeout: 10000 }, () => {
       await flush();
       await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
         code: "page_not_web",
-        message: `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
+        message: `Foxleash acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
       });
       assert.deepEqual(fake.injections, []);
     });
@@ -2820,7 +2820,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     const update = t.mock.method(fake.browser.tabs, "update");
     await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
       code: "site_not_approved",
-      message: `Foxhand is not allowed on https://a.example in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
+      message: `Foxleash is not allowed on https://a.example in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
     });
     await flush();
     assert.equal(access.openPrompt("s1"), undefined);
@@ -2837,7 +2837,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     const blocked = {
       code: "site_blocked",
       message:
-        "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+        "Foxleash does not act on https://www.paypal.com: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     };
     await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), blocked);
     await grant("https://www.paypal.com");
@@ -2884,7 +2884,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     fake.failNextInjection(new Error("Missing host permission for https://a.example/secret-path"));
     await assert.rejects(call("s1", "probe_input", { tabId: tab.id }), {
       code: "probe_failed",
-      message: `Foxhand could not run its input probe in tab ${tab.id}.`,
+      message: `Foxleash could not run its input probe in tab ${tab.id}.`,
     });
     fake.injectionResults = [{ frameId: 0, result: RESULT }];
     assert.deepEqual(await call("s1", "probe_input", { tabId: tab.id }), RESULT);
@@ -3046,7 +3046,7 @@ describe("tab_close", { timeout: 10000 }, () => {
     const { tabId } = await promptOf("s1");
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
   });
@@ -3607,7 +3607,7 @@ describe("read_page", { timeout: 10000 }, () => {
       replyWith(async () => reply);
       await assert.rejects(call("s1", "read_page", { tabId: 3 }), {
         code: "page_error",
-        message: "Foxhand could not complete the request in the page in tab 3.",
+        message: "Foxleash could not complete the request in the page in tab 3.",
       });
     }
   });
@@ -3717,7 +3717,7 @@ describe("get_page_text", { timeout: 10000 }, () => {
       call("s1", "get_page_text", { tabId: 3, offset: Number.MAX_SAFE_INTEGER }),
       {
         code: "page_error",
-        message: "Foxhand could not complete the request in the page in tab 3.",
+        message: "Foxleash could not complete the request in the page in tab 3.",
       },
     );
   });
@@ -3751,14 +3751,14 @@ describe("get_page_text", { timeout: 10000 }, () => {
       replyWith(async () => reply);
       await assert.rejects(call("s1", "get_page_text", { tabId: 3 }), {
         code: "page_error",
-        message: "Foxhand could not complete the request in the page in tab 3.",
+        message: "Foxleash could not complete the request in the page in tab 3.",
       });
     }
   });
 
   it("passes the page's refusal through unchanged", async () => {
     const { call, replyWith } = setup();
-    const refusal = new ToolError("site_not_approved", "Foxhand is not allowed on that site.");
+    const refusal = new ToolError("site_not_approved", "Foxleash is not allowed on that site.");
     replyWith(() => Promise.reject(refusal));
     await assert.rejects(
       call("s1", "get_page_text", { tabId: 3 }),
@@ -3856,7 +3856,7 @@ describe("read_console", { timeout: 10000 }, () => {
         replyWith(async () => reply);
         await assert.rejects(call("s1", "read_console", { tabId: 3 }), {
           code: "page_error",
-          message: "Foxhand could not complete the request in the page in tab 3.",
+          message: "Foxleash could not complete the request in the page in tab 3.",
         });
       }
     }
@@ -3864,7 +3864,7 @@ describe("read_console", { timeout: 10000 }, () => {
 
   it("passes the page's refusal through unchanged", async () => {
     const { call, replyWith } = setup();
-    const refusal = new ToolError("site_not_approved", "Foxhand is not allowed on that site.");
+    const refusal = new ToolError("site_not_approved", "Foxleash is not allowed on that site.");
     replyWith(() => Promise.reject(refusal));
     await assert.rejects(
       call("s1", "read_console", { tabId: 3 }),
@@ -3910,7 +3910,7 @@ describe("read_console", { timeout: 10000 }, () => {
     });
     await assert.rejects(call("s1", "read_console", { tabId: tab.id }), {
       code: "page_changed",
-      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
   });
 
@@ -3944,7 +3944,7 @@ describe("read_console", { timeout: 10000 }, () => {
     timers.advance(1);
     await assert.rejects(read, {
       code: "page_timeout",
-      message: `Foxhand did not finish reading the console of tab ${tab.id} in time; try again.`,
+      message: `Foxleash did not finish reading the console of tab ${tab.id} in time; try again.`,
     });
     assert.equal(timers.pending(), timersBefore);
   });
@@ -4222,7 +4222,7 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
         replyWith(async () => reply);
         await assert.rejects(call("s1", method, { tabId: 3, ...params }), {
           code: "page_error",
-          message: "Foxhand could not complete the request in the page in tab 3.",
+          message: "Foxleash could not complete the request in the page in tab 3.",
         });
       }
     }
@@ -4431,7 +4431,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     replyWith(boxReply({ ...BOX, scroll: undefined }));
     await assert.rejects(call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }), {
       code: "page_error",
-      message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
+      message: `Foxleash could not complete the request in the page in tab ${tab.id}.`,
     });
     assert.deepEqual(fake.cssCalls, []);
     assert.deepEqual(fake.captures, []);
@@ -4553,7 +4553,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       release();
       await assert.rejects(shot, {
         code: "page_changed",
-        message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+        message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
       });
       assert.equal(fake.listenerCount(), listeners, away);
       assert.equal(fake.committedListenerCount(), committed, away);
@@ -4574,7 +4574,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     release();
     await assert.rejects(shot, {
       code: "page_changed",
-      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
   });
 
@@ -4627,7 +4627,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     release();
     await assert.rejects(shot, {
       code: "page_changed",
-      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
   });
 
@@ -5104,7 +5104,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       ]);
     });
 
-    it("still refuses a frame of Foxhand's own pages that refuses the sheet, hiding nothing", async () => {
+    it("still refuses a frame of Foxleash's own pages that refuses the sheet, hiding nothing", async () => {
       const context = setup();
       const { fake, grant, open } = context;
       await grant("https://a.example");
@@ -5341,7 +5341,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     });
     await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
       code: "page_changed",
-      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
     await flush();
     assert.equal(checks, 2);
@@ -5354,7 +5354,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     const tab = await open("s1", "https://a.example/");
     const pageError = {
       code: "page_error",
-      message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
+      message: `Foxleash could not complete the request in the page in tab ${tab.id}.`,
     };
     for (const reply of [{}, { revealed: "true" }, Object.create({ revealed: false }), null]) {
       replyWith(async () => reply);
@@ -5395,7 +5395,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       release();
       await assert.rejects(shot, {
         code: "page_changed",
-        message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+        message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
       });
       assert.equal(fake.committedListenerCount(), committed);
     });
@@ -5440,7 +5440,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     const tab = await open("s1", "https://a.example/");
     const timeout = {
       code: "page_timeout",
-      message: `Foxhand did not finish the screenshot of tab ${tab.id} in time; try again.`,
+      message: `Foxleash did not finish the screenshot of tab ${tab.id} in time; try again.`,
     };
     const timersBefore = timers.pending();
     holdCheck(ctx, 2);
@@ -5488,7 +5488,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     timers.advance(5_000);
     await assert.rejects(shot, {
       code: "page_timeout",
-      message: `Foxhand did not finish the screenshot of tab ${tab.id} in time; try again.`,
+      message: `Foxleash did not finish the screenshot of tab ${tab.id} in time; try again.`,
     });
     release();
     await flush();
@@ -5508,7 +5508,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       change: ({ fake }, tabId) => fake.navigateByUser(tabId, "https://b.example/"),
       code: "page_changed",
       message: (tabId) =>
-        `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+        `The page in tab ${tabId} changed while Foxleash was working in it; try again.`,
     },
     {
       name: "the tab moving to an unapproved site",
@@ -5525,7 +5525,7 @@ describe("screenshot", { timeout: 10000 }, () => {
       change: ({ fake }, tabId) => fake.browser.tabs.reload(tabId),
       code: "page_changed",
       message: (tabId) =>
-        `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+        `The page in tab ${tabId} changed while Foxleash was working in it; try again.`,
     },
     {
       name: "the tab leaving the session's group",
@@ -5728,7 +5728,7 @@ describe("upload_chunk", { timeout: 10000 }, () => {
       ],
       [
         { upload: "u1", data: "AQID" },
-        "upload_chunk got a chunk out of order; Foxhand expected chunk 0 of that upload.",
+        "upload_chunk got a chunk out of order; Foxleash expected chunk 0 of that upload.",
       ],
       [{ upload: "u1", index: 0 }, "upload_chunk needs data to be base64."],
       [{ upload: "u1", index: 0, data: "A?ID" }, "upload_chunk needs data to be base64."],
@@ -5882,7 +5882,7 @@ describe("upload_file", { timeout: 10000 }, () => {
         }),
         {
           code: "invalid_params",
-          message: `The files of upload_file add up to ${size} bytes, but Foxhand holds ${held} for that upload.`,
+          message: `The files of upload_file add up to ${size} bytes, but Foxleash holds ${held} for that upload.`,
         },
       );
       assert.equal(uploads.take("s1", "u1"), undefined);
@@ -5895,7 +5895,7 @@ describe("upload_file", { timeout: 10000 }, () => {
     await call("s2", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
     await assert.rejects(call("s1", "upload_file", valid()), {
       code: "invalid_params",
-      message: "The files of upload_file add up to 1 bytes, but Foxhand holds 0 for that upload.",
+      message: "The files of upload_file add up to 1 bytes, but Foxleash holds 0 for that upload.",
     });
   });
 
@@ -5908,7 +5908,7 @@ describe("upload_file", { timeout: 10000 }, () => {
     replyWith(async () => ({ target: "input" }));
     await assert.rejects(call("s1", "upload_file", valid()), {
       code: "invalid_params",
-      message: "The files of upload_file add up to 1 bytes, but Foxhand holds 0 for that upload.",
+      message: "The files of upload_file add up to 1 bytes, but Foxleash holds 0 for that upload.",
     });
   });
 
@@ -5929,7 +5929,7 @@ describe("upload_file", { timeout: 10000 }, () => {
         call("s1", "upload_file", valid()),
         {
           code: "page_error",
-          message: "Foxhand could not complete the request in the page in tab 3.",
+          message: "Foxleash could not complete the request in the page in tab 3.",
         },
         String(reply),
       );
@@ -5955,7 +5955,7 @@ describe("download", { timeout: 10000 }, () => {
     for (const url of ["ftp://a.example/x", "file:///etc/passwd", "not a url", "about:blank"]) {
       await assert.rejects(call("s1", "download", { url, filename: "x.pdf" }), {
         code: "invalid_url",
-        message: "Foxhand downloads only http and https URLs.",
+        message: "Foxleash downloads only http and https URLs.",
       });
     }
     assert.deepEqual(saves, []);
@@ -6089,7 +6089,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     fake.openTab();
     const tabId = await proposed(env);
     await grant("https://a.example");
-    const keep = `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`;
+    const keep = `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`;
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
       message: keep,
@@ -6109,7 +6109,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     });
     await assert.rejects(call("s1", "navigate", { tabId, url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
     assert.match(fake.tabs.get(tabId)?.url ?? "", /propose\.html\?id=/);
@@ -6122,7 +6122,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     const tabs = fake.tabs.size;
     await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.size, tabs);
   });
@@ -6158,7 +6158,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     await proposing;
     await assert.rejects(opening, {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
     });
     await flush();
     assert.equal(fake.tabs.has(prompt.id), false);
@@ -6330,12 +6330,12 @@ describe("recipe_run", { timeout: 10000 }, () => {
     const tabs = fake.tabs.size;
     await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.size, tabs);
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
-      message: `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+      message: `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
   });

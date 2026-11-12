@@ -16,18 +16,18 @@ const UNREADABLE = {
   ok: false,
   site: SITE,
   code: "invalid_params",
-  message: "Foxhand's page script got a request it cannot read.",
+  message: "Foxleash's page script got a request it cannot read.",
 };
 const NO_SUCH_TYPE = {
   ok: false,
   site: SITE,
   code: "invalid_params",
-  message: "Foxhand's page script has no request of that type.",
+  message: "Foxleash's page script has no request of that type.",
 };
 const CHANGED = {
   ok: false,
   code: "page_changed",
-  message: "The page changed while Foxhand was working in it; try again.",
+  message: "The page changed while Foxleash was working in it; try again.",
 };
 const FAILED = {
   ok: false,
@@ -37,13 +37,13 @@ const FAILED = {
 };
 
 describe("handlePageMessage", () => {
-  it("answers nothing, synchronously, to a message that is not a Foxhand page request", () => {
+  it("answers nothing, synchronously, to a message that is not a Foxleash page request", () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     const messages: unknown[] = [
       undefined,
       null,
-      "foxhand-page",
+      "foxleash-page",
       42,
       [PAGE_REQUEST_KIND],
       {},
@@ -310,7 +310,7 @@ describe("the page constants", () => {
       "not_editable",
       "no_effect",
     ]);
-    assert.equal(PAGE_REQUEST_KIND, "foxhand-page");
+    assert.equal(PAGE_REQUEST_KIND, "foxleash-page");
     assert.equal(MAX_PAGE_REPLY_CHARS, 2_000_000);
   });
 });

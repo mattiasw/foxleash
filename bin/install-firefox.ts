@@ -185,7 +185,7 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** `${XDG_CACHE_HOME:-~/.cache}/foxhand-firefox`; an empty XDG_CACHE_HOME counts as unset. */
+/** `${XDG_CACHE_HOME:-~/.cache}/foxleash-firefox`; an empty XDG_CACHE_HOME counts as unset. */
 export function cacheRoot({
   env = process.env,
   homedir = osHomedir(),
@@ -194,7 +194,7 @@ export function cacheRoot({
   homedir?: string;
 } = {}): string {
   const base = env.XDG_CACHE_HOME || join(homedir, ".cache");
-  return join(base, "foxhand-firefox");
+  return join(base, "foxleash-firefox");
 }
 
 function defaultLog(message: string): void {
@@ -214,7 +214,7 @@ export function assertSupportedPlatform({
 } = {}): void {
   if (platform === "linux" && arch === "x64") return;
   throw new Error(
-    `Foxhand's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
+    `Foxleash's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
       "bin/firefox-version.json pins only the linux-x86_64 tarball. To extend it, pin a " +
       "second tarball's sha256 from Mozilla's releases/<version>/SHA256SUMS and teach " +
       "archiveUrl() in bin/install-firefox.ts to pick it (see docs/development.md).",

@@ -1,5 +1,5 @@
 {
-  "extends": "@foxhand/tsconfig/base.json",
+  "extends": "@foxleash/tsconfig/base.json",
   "compilerOptions": {
     "types": ["node"]
   },

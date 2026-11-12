@@ -44,7 +44,7 @@ from another site. The three page and kept in memory tests accept either of Fire
 keeping the page in memory or loading it again, and check the outcome that goes with it. The
 end-to-end tests also check the unloaded tab, since `tab_open` loads the page only after
 Firefox's own `about:blank` load in the new tab has committed. Before that, in the full test
-file, the session store's history for a tab Foxhand opened usually ended on an `about:blank`
+file, the session store's history for a tab Foxleash opened usually ended on an `about:blank`
 entry after the page, and the tab, selected again, showed `about:blank`. Session restore after
 a restart is out of the harness's reach.
 

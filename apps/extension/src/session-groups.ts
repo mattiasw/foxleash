@@ -32,7 +32,7 @@ export interface SessionGroups {
 /**
  * `onGrouped` runs after a tab joins a session's group, once the group is known to
  * `isSessionGroup`. It must not reject: a rejection would skip the title of a new group.
- * `blankPage` says whether a Foxhand page in one of the group's tabs may close with it.
+ * `blankPage` says whether a Foxleash page in one of the group's tabs may close with it.
  */
 export function createSessionGroups(
   browser: BrowserApi,
@@ -141,7 +141,7 @@ export function createSessionGroups(
     });
     groups.set(session, id);
     await onGrouped(tab.id);
-    await browser.tabGroups.update(id, { title: "Foxhand", color: "orange" });
+    await browser.tabGroups.update(id, { title: "Foxleash", color: "orange" });
     return id;
   }
 

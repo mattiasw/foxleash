@@ -48,6 +48,6 @@ jobs:
       - run: npm ci
       - uses: actions/cache@v6
         with:
-          path: ~/.cache/foxhand-firefox
+          path: ~/.cache/foxleash-firefox
           key: firefox-${{ runner.os }}-${{ hashFiles('bin/firefox-version.json') }}
       - run: npm run e2e

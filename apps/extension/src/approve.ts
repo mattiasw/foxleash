@@ -83,7 +83,7 @@ function receive(received: unknown): void {
 }
 
 function ask(site: string, url: string): void {
-  const question = `Allow Foxhand on ${site}?`;
+  const question = `Allow Foxleash on ${site}?`;
   document.title = question;
   heading.textContent = question;
   const shown = displayedUrl(url);

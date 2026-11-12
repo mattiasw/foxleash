@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { MethodName, TabInfo } from "@foxhand/protocol";
+import type { MethodName, TabInfo } from "@foxleash/protocol";
 import { type ContentScript, createFakeBrowser, createFakeTimers, flush } from "./fake-browser.ts";
 import { createHandlers, NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
 import {
@@ -61,7 +61,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const prompt = await promptOf("s1");
     await assert.rejects(pages.request("s1", prompt.tabId, "echo", {}), {
       code: "approval_pending",
-      message: `Foxhand is waiting for the user to answer in tab ${prompt.tabId} whether to allow ${SITE}. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer in tab ${prompt.tabId} whether to allow ${SITE}. Try again after the user has answered.`,
     });
     assertNothingSent(fake);
     void opened.catch(() => {});
@@ -76,7 +76,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       await flush();
       await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
         code: "page_not_web",
-        message: `Foxhand acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
+        message: `Foxleash acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
       });
     }
     assertNothingSent(fake);
@@ -90,7 +90,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const blocked = {
       code: "site_blocked",
       message:
-        "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+        "Foxleash does not act on https://www.paypal.com: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     };
     await assert.rejects(pages.request("s1", tab.id, "echo", {}), blocked);
     await grant("https://www.paypal.com");
@@ -105,7 +105,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     await flush();
     await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
       code: "site_not_approved",
-      message: `Foxhand is not allowed on ${SITE} in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
+      message: `Foxleash is not allowed on ${SITE} in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
     });
     await flush();
     assert.equal(access.openPrompt("s1"), undefined);
@@ -128,7 +128,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.deepEqual(fake.injections, [
       { tabId: tab.id, frameIds: [0], files: [CONTENT_SCRIPT], injectImmediately: true },
     ]);
-    const message = { kind: "foxhand-page", type: "echo", site: SITE, params };
+    const message = { kind: "foxleash-page", type: "echo", site: SITE, params };
     assert.deepEqual(fake.tabMessages, [{ tabId: tab.id, message, frameId: 0 }]);
     assert.deepEqual(seen, [message]);
     assert.equal(timers.pending(), timersBefore);
@@ -170,11 +170,11 @@ describe("page script requests", { timeout: 10000 }, () => {
     });
     await assert.rejects(pages.request("s1", tab.id, "secret", {}), {
       code: "page_error",
-      message: `Foxhand could not complete the request in the page in tab ${tab.id}.`,
+      message: `Foxleash could not complete the request in the page in tab ${tab.id}.`,
     });
     await assert.rejects(pages.request("s1", tab.id, "toString", {}), {
       code: "invalid_params",
-      message: "Foxhand's page script has no request of that type.",
+      message: "Foxleash's page script has no request of that type.",
     });
   });
 
@@ -190,7 +190,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       );
       await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
         code: "page_changed",
-        message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+        message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
       });
     }
     assert.deepEqual(calls, []);
@@ -319,7 +319,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     fake.failNextInjection(new Error(`Missing host permission for ${SITE}/secret-path`));
     await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
       code: "page_unreachable",
-      message: `Firefox did not let Foxhand into the page in tab ${tab.id}.`,
+      message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
     });
     assert.equal(fake.injections.length, 1);
     assert.deepEqual(fake.tabMessages, []);
@@ -335,7 +335,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     });
     await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
       code: "page_unreachable",
-      message: `Firefox did not let Foxhand into the page in tab ${tab.id}.`,
+      message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
     });
     assert.deepEqual(fake.tabMessages, []);
   });
@@ -382,7 +382,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     timers.advance(1);
     await assert.rejects(request, {
       code: "page_timeout",
-      message: `Foxhand could not get into the page in tab ${tab.id} in time; try again.`,
+      message: `Foxleash could not get into the page in tab ${tab.id} in time; try again.`,
     });
     assert.deepEqual(fake.tabMessages, []);
     assert.equal(timers.pending(), timersBefore);
@@ -403,7 +403,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     timers.advance(1);
     await assert.rejects(request, {
       code: "page_timeout",
-      message: `The page in tab ${tab.id} did not answer Foxhand within 10 seconds; try again.`,
+      message: `The page in tab ${tab.id} did not answer Foxleash within 10 seconds; try again.`,
     });
     assert.equal(timers.pending(), timersBefore);
   });
@@ -424,7 +424,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       timers.advance(1);
       await assert.rejects(request, {
         code: "page_timeout",
-        message: `The page in tab ${tab.id} did not answer Foxhand within 10 seconds, but ${type} may already have run; read the page before you repeat it.`,
+        message: `The page in tab ${tab.id} did not answer Foxleash within 10 seconds, but ${type} may already have run; read the page before you repeat it.`,
       });
       assert.equal(timers.pending(), timersBefore);
     });
@@ -442,7 +442,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       timers.advance(PAGE_REPLY_MS);
       await assert.rejects(request, {
         code: "page_timeout",
-        message: `The page in tab ${tab.id} did not answer Foxhand within 10 seconds; try again.`,
+        message: `The page in tab ${tab.id} did not answer Foxleash within 10 seconds; try again.`,
       });
       assert.equal(timers.pending(), timersBefore);
     });
@@ -460,7 +460,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const timersBefore = timers.pending();
     await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
       code: "page_changed",
-      message: `The page in tab ${tab.id} changed while Foxhand was working in it; try again.`,
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
     assert.equal(fake.tabMessages.length, 1);
     assert.equal(timers.pending(), timersBefore);
@@ -965,7 +965,7 @@ describe("page script requests", { timeout: 10000 }, () => {
 describe("parsePageReply", () => {
   const PAGE_ERROR = {
     code: "page_error",
-    message: "Foxhand could not complete the request in the page in tab 7.",
+    message: "Foxleash could not complete the request in the page in tab 7.",
   };
   const TOO_LARGE = {
     code: "page_reply_too_large",
@@ -983,7 +983,7 @@ describe("parsePageReply", () => {
     for (const site of ["https://b.example", `${SITE}.`, `${SITE}:443`, "https://A.example"]) {
       assert.throws(() => parsePageReply({ ok: true, site, result: 1 }, SITE, 7), {
         code: "page_changed",
-        message: "The page in tab 7 changed while Foxhand was working in it; try again.",
+        message: "The page in tab 7 changed while Foxleash was working in it; try again.",
       });
     }
   });
@@ -1252,7 +1252,7 @@ function setup() {
   return { fake, timers, sessions, access, navigations, pages, call, open, grant, promptOf };
 }
 
-/** A content script on `site` that answers with Foxhand's dispatcher. */
+/** A content script on `site` that answers with Foxleash's dispatcher. */
 function contentScript(site: string): ContentScript {
   const handlers: PageHandlers = {
     echo: (params) => ({ echoed: params }),

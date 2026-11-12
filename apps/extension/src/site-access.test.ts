@@ -203,7 +203,7 @@ describe("check", () => {
     await assert.rejects(access.check("s1", "https://www.paypal.com/x?y=1"), {
       code: "site_blocked",
       message:
-        "Foxhand does not act on https://www.paypal.com: it is on Foxhand's blocklist, which by default lists common financial and health sites.",
+        "Foxleash does not act on https://www.paypal.com: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     });
   });
 
@@ -235,7 +235,7 @@ describe("check", () => {
     for (const url of ["http://./", "about:blank", "file:///etc/passwd", ""]) {
       await assert.rejects(
         access.check("s1", url),
-        { code: "invalid_url", message: "Foxhand acts only on http and https URLs." },
+        { code: "invalid_url", message: "Foxleash acts only on http and https URLs." },
         url,
       );
     }
@@ -268,11 +268,11 @@ describe("check", () => {
 
 const PROMPT_URL =
   /^moz-extension:\/\/[0-9a-f-]+\/approve\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const REFUSED = "The user did not allow Foxhand on https://a.example in this session.";
+const REFUSED = "The user did not allow Foxleash on https://a.example in this session.";
 const BUDGET =
-  "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.";
+  "Foxleash asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxleash's settings, or start a new session, to be asked again.";
 const PENDING =
-  "Foxhand is waiting for the user to answer in tab 1 whether to allow https://a.example. Try again after the user has answered.";
+  "Foxleash is waiting for the user to answer in tab 1 whether to allow https://a.example. Try again after the user has answered.";
 
 describe("check with prompts", () => {
   it("refuses a site the session refused, and any site once the budget is spent", async () => {
@@ -323,7 +323,7 @@ describe("check with prompts", () => {
 
 describe("beside a recipe page", () => {
   const RECIPE_PENDING =
-    "Foxhand is waiting for the user to answer in tab 9 whether to save a recipe. Try again after the user has answered.";
+    "Foxleash is waiting for the user to answer in tab 9 whether to save a recipe. Try again after the user has answered.";
 
   it("refuses to check or ask for an unapproved site while the session's recipe page is open", async () => {
     const fake = createFakeBrowser();
@@ -367,7 +367,7 @@ describe("beside a recipe page", () => {
     await assert.rejects(access.check("s1", "https://b.example/"), {
       code: "approval_pending",
       message:
-        "Foxhand is waiting for the user to answer in tab 9 whether to allow the recipe's sites. Try again after the user has answered.",
+        "Foxleash is waiting for the user to answer in tab 9 whether to allow the recipe's sites. Try again after the user has answered.",
     });
   });
 
@@ -986,7 +986,7 @@ describe("waiting for the answer", () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxhand is still asking the user in tab ${tab.id} whether to allow https://a.example. Tell the user to answer there, then call navigate with tab ${tab.id} and action reload.`,
+      `Foxleash is still asking the user in tab ${tab.id} whether to allow https://a.example. Tell the user to answer there, then call navigate with tab ${tab.id} and action reload.`,
     );
     assert.deepEqual(access.openPrompt("s1"), {
       tabId: tab.id,

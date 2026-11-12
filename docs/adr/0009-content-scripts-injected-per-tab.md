@@ -1,4 +1,4 @@
-# 0009: Foxhand's content script is injected per tab and per request, never registered by URL
+# 0009: Foxleash's content script is injected per tab and per request, never registered by URL
 
 **Status:** Accepted, 2026-10-19.
 
@@ -6,7 +6,7 @@
 
 The page tools (reading a page, typing, clicking) need code in the page: a content script in
 Firefox's isolated world that can see the DOM and hand out references to its elements. The
-add-on listing (`docs/amo/listing.md`) says Foxhand's scripts run in the pages of the agent's
+add-on listing (`docs/amo/listing.md`) says Foxleash's scripts run in the pages of the agent's
 tabs, and Mozilla reviews the extension against that sentence. The manifest already has the
 `scripting` permission and `<all_urls>`, so any of Firefox's ways to run a content script is
 available without a permission change.
@@ -68,7 +68,7 @@ of the untrusted part of a tool result.
 
 - **`registerContentScripts` or manifest `content_scripts`.** They match URLs, not tabs: the
   script would run in the user's own tabs and the listing would be false.
-- **Refs in DOM attributes** (`data-foxhand-ref`). The page can read and forge them, and
+- **Refs in DOM attributes** (`data-foxleash-ref`). The page can read and forge them, and
   writing them changes the page the agent is reading.
 - **A bare counter as the ref.** The script's state dies with its document, so after a
   navigation a new counter would hand an old ref such as `5` to a different element. The

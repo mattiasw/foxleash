@@ -5,7 +5,7 @@ import { dirname, isAbsolute, join } from "node:path";
 import { context } from "esbuild";
 import { dist, esbuildOptions, prepareDist } from "./build.ts";
 
-const profile = join(cacheHome(), "foxhand", "dev-profile");
+const profile = join(cacheHome(), "foxleash", "dev-profile");
 // web-ext creates the profile folder, but not its parents.
 await mkdir(dirname(profile), { recursive: true });
 

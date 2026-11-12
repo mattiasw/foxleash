@@ -1,4 +1,4 @@
-import type { Recipe, RecipeFields } from "@foxhand/protocol";
+import type { Recipe, RecipeFields } from "@foxleash/protocol";
 import type { Port, Timers } from "./browser-api.ts";
 import { type DiffLine, lineDiff } from "./line-diff.ts";
 import {

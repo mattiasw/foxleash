@@ -53,7 +53,7 @@ COMMANDS.set("uninstall", (options, deps) =>
 COMMANDS.set("doctor", (_options, deps) => {
   const uid = process.getuid?.();
   if (uid === undefined) {
-    deps.stdout.write("FAIL platform: Foxhand runs on Linux only\n");
+    deps.stdout.write("FAIL platform: Foxleash runs on Linux only\n");
     return Promise.resolve(1);
   }
   const { dir, skipped } = resolveSocketDir(process.env, uid);
@@ -80,14 +80,14 @@ COMMANDS.set("probe", (options, deps) =>
   }),
 );
 
-export const USAGE = `Usage: foxhand <command>
+export const USAGE = `Usage: foxleash <command>
 
 Commands:
   mcp                      Run the MCP server (your MCP client starts it)
   host                     Run the native messaging host (Firefox starts it)
   install [--no-claude] [--no-extension | --xpi <path>]
                            Set up the native host, Claude Code and the extension
-  uninstall [--no-claude]  Remove the native host and Foxhand from Claude Code
+  uninstall [--no-claude]  Remove the native host and Foxleash from Claude Code
   doctor                   Check the installation and the connection to Firefox
   probe [--out <path>] <url>...
                            Measure which synthetic input works on each page
@@ -95,7 +95,7 @@ Commands:
 --no-claude leaves your Claude Code configuration unchanged.
 install downloads this version's signed extension with gh and opens it in
 Firefox; --xpi uses a local .xpi file instead, and --no-extension skips it.
-probe writes <path>.json and .md, by default ./foxhand-probe-<date>-<time>.
+probe writes <path>.json and .md, by default ./foxleash-probe-<date>-<time>.
 `;
 
 export async function runCli(args: string[], deps: CliDeps): Promise<number> {

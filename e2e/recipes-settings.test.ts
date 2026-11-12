@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, type TestContext, test } from "node:test";
-import type { Recipe } from "@foxhand/protocol";
+import type { Recipe } from "@foxleash/protocol";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { createHarness, EXTENSION_DIST, type Harness } from "./harness.ts";
 

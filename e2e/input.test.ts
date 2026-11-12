@@ -551,9 +551,9 @@ describe("type and press_key in real Firefox", () => {
 
   test("Enter that leads to another site is refused after the page's key listeners", async () => {
     const forms = await open("/input-forms", TITLES.inputForms);
-    const web = `leads to a page on ${other}, which Foxhand does not open with press_key; call navigate with that address`;
+    const web = `leads to a page on ${other}, which Foxleash does not open with press_key; call navigate with that address`;
     const mail =
-      "leads to an address outside the site (mailto:), which Foxhand does not open with press_key or with navigate.";
+      "leads to an address outside the site (mailto:), which Foxleash does not open with press_key or with navigate.";
     // A form posting there, one whose only field is named action, a default button with a
     // formaction there, a link there, a same-site form whose keydown listener points its
     // action there, and a one-field form and a link that lead to an email address.

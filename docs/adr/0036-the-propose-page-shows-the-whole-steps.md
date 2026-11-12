@@ -46,7 +46,7 @@ past to reach Save.
 - Folding every run of spaces in the steps: it changes spacing the steps keep on purpose, and
   long real steps hide text just the same in a fixed field.
 - CSS `field-sizing: content`: Firefox supports it from version 152 (`@mdn/browser-compat-data`
-  8.1.4, `css.properties.field-sizing`), and Foxhand supports 142
+  8.1.4, `css.properties.field-sizing`), and Foxleash supports 142
   ([0034](0034-firefox-142-is-the-minimum-version.md)).
 - A window `resize` listener alone: the page's own scrollbar appearing and text-only zoom
   change the fields' wrapping without a `resize` event.

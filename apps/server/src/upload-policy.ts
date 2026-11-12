@@ -60,20 +60,20 @@ const TYPES = new Map([
 
 const NUL = "contains a NUL character; give a path without one.";
 const RELATIVE_WITHOUT_CWD =
-  "is a relative path, and the folder Foxhand was started in no longer exists; give an absolute path.";
+  "is a relative path, and the folder Foxleash was started in no longer exists; give an absolute path.";
 const DOT_NAME =
-  "has a folder or file name starting with a dot below its upload folder; Foxhand never uploads those.";
-const KEY_NAME = "is named like a key file; Foxhand never uploads those.";
-const NOT_FILE = "is not a regular file; Foxhand uploads only files.";
+  "has a folder or file name starting with a dot below its upload folder; Foxleash never uploads those.";
+const KEY_NAME = "is named like a key file; Foxleash never uploads those.";
+const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
-const CHANGED = "changed while Foxhand read it; try again.";
-const TOO_LARGE = "would bring this upload over 10 MB, the most Foxhand uploads in one call.";
+const CHANGED = "changed while Foxleash read it; try again.";
+const TOO_LARGE = "would bring this upload over 10 MB, the most Foxleash uploads in one call.";
 
 /**
- * The folders uploads may read from, and a note for each folder left out. `FOXHAND_UPLOAD_DIRS`
+ * The folders uploads may read from, and a note for each folder left out. `FOXLEASH_UPLOAD_DIRS`
  * replaces the defaults, also when none of its entries is usable; the defaults are the folder
- * Foxhand was started in and `~/Downloads`, each unless it covers the whole home folder or lies
+ * Foxleash was started in and `~/Downloads`, each unless it covers the whole home folder or lies
  * in a folder whose name starts with a dot.
  */
 export function uploadFolders(ctx: {
@@ -81,7 +81,7 @@ export function uploadFolders(ctx: {
   cwd: string | undefined;
   home: string;
 }): UploadFolders {
-  const configured = ctx.env.FOXHAND_UPLOAD_DIRS;
+  const configured = ctx.env.FOXLEASH_UPLOAD_DIRS;
   if (configured !== undefined && configured !== "") {
     return configuredFolders(configured, ctx.home);
   }
@@ -155,7 +155,7 @@ function defaultFolders(cwd: string | undefined, home: string): UploadFolders {
   const notes: UploadFolders["notes"] = [];
   const candidates: string[] = [];
   if (cwd === undefined) {
-    notes.push({ folder: "the folder Foxhand was started in", reason: "no longer exists" });
+    notes.push({ folder: "the folder Foxleash was started in", reason: "no longer exists" });
   } else {
     candidates.push(path.resolve(cwd));
   }
@@ -317,7 +317,7 @@ function fileSystemProblem(error: unknown): string {
 
 function outside(folders: readonly string[]): string {
   const list = folders.length === 0 ? "none" : folders.join(", ");
-  return `is outside the upload folders (${list}); the user can change them with FOXHAND_UPLOAD_DIRS.`;
+  return `is outside the upload folders (${list}); the user can change them with FOXLEASH_UPLOAD_DIRS.`;
 }
 
 function refused(reason: string): ReadResult {

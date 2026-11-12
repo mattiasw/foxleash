@@ -3,7 +3,7 @@ import {
   MAX_PAGE_TEXT_CHARS,
   type PageText,
   type PageTextSource,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { capText, isRecord, ownField } from "./page-messages.ts";
 
 const SOURCES: readonly unknown[] = [

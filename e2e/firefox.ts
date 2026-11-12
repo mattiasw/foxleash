@@ -3,7 +3,7 @@ import { writeFileSync } from "node:fs";
 import { connect as connectTcp } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { EXTENSION_ID } from "@foxhand/protocol";
+import { EXTENSION_ID } from "@foxleash/protocol";
 
 /**
  * Firefox's own lifetime, enforced by a watchdog inside its process group (LIFETIME_WRAPPER).
@@ -220,7 +220,7 @@ export interface Firefox {
   navigate(context: string, url: string): Promise<void>;
   /** Evaluates `expression` in the tab's page, awaiting a promise, and returns a primitive. */
   evaluate(context: string, expression: string): Promise<unknown>;
-  /** The tab's viewport as Firefox draws it, a base64 PNG, taken without Foxhand. */
+  /** The tab's viewport as Firefox draws it, a base64 PNG, taken without Foxleash. */
   captureViewport(context: string): Promise<string>;
   /** Clicks the first element matching `cssSelector` with real (trusted) input. */
   click(context: string, cssSelector: string): Promise<void>;
@@ -348,7 +348,7 @@ export async function launchFirefox({
     [
       "-c",
       LIFETIME_WRAPPER,
-      "foxhand-e2e",
+      "foxleash-e2e",
       String(lifetimeSeconds),
       binary,
       "--headless",

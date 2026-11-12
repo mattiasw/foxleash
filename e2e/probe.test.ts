@@ -4,7 +4,7 @@ import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
-import type { ProbeCheck } from "@foxhand/protocol";
+import type { ProbeCheck } from "@foxleash/protocol";
 import type { Firefox } from "./firefox.ts";
 import { type FixtureServer, PROBE_SECRET, startFixtureServer } from "./fixture-server.ts";
 import { CHECKOUT, createHarness, EXTENSION_DIST, type Harness } from "./harness.ts";
@@ -15,7 +15,7 @@ const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
 const PROBE_KILL_MS = 90_000;
 
 // One Firefox for the file: the probe runs once, and the tests read its report and the page.
-describe("foxhand probe, in real Firefox", () => {
+describe("foxleash probe, in real Firefox", () => {
   let harness: Harness;
   let fixtures: FixtureServer;
   let firefox: Firefox;

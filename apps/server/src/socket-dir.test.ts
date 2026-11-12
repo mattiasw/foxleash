@@ -23,7 +23,7 @@ import {
 } from "./socket-dir.ts";
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const servers: net.Server[] = [];
 
 after(async () => {
@@ -35,7 +35,7 @@ describe("resolveSocketDir", () => {
   it("uses a private XDG_RUNTIME_DIR", () => {
     const xdg = privateDir("xdg-ok");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: xdg }, uid, missing("run-a")), {
-      dir: path.join(xdg, "foxhand"),
+      dir: path.join(xdg, "foxleash"),
       skipped: [],
     });
   });
@@ -43,7 +43,7 @@ describe("resolveSocketDir", () => {
   it("normalises a trailing slash in XDG_RUNTIME_DIR", () => {
     const xdg = privateDir("xdg-slash");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: `${xdg}/` }, uid, missing("run-b")), {
-      dir: `${xdg}/foxhand`,
+      dir: `${xdg}/foxleash`,
       skipped: [],
     });
   });
@@ -52,15 +52,15 @@ describe("resolveSocketDir", () => {
     const runUserBase = privateDir("run-c");
     const base = privateDir(path.join("run-c", String(uid)));
     assert.deepEqual(resolveSocketDir({}, uid, runUserBase), {
-      dir: path.join(base, "foxhand"),
+      dir: path.join(base, "foxleash"),
       skipped: [],
     });
   });
 
-  it("falls back to /tmp/foxhand-<uid> and lists the missing base", () => {
+  it("falls back to /tmp/foxleash-<uid> and lists the missing base", () => {
     const runUserBase = missing("run-d");
     assert.deepEqual(resolveSocketDir({}, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: [`${runUserBase}/${uid} does not exist`],
     });
   });
@@ -71,7 +71,7 @@ describe("resolveSocketDir", () => {
     const runUserBase = privateDir("run-e");
     const base = privateDir(path.join("run-e", String(uid)));
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: xdg }, uid, runUserBase), {
-      dir: path.join(base, "foxhand"),
+      dir: path.join(base, "foxleash"),
       skipped: [`XDG_RUNTIME_DIR ${xdg} is open to other users (mode 0755)`],
     });
   });
@@ -79,7 +79,7 @@ describe("resolveSocketDir", () => {
   it("skips a relative XDG_RUNTIME_DIR", () => {
     const runUserBase = missing("run-f");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: "run/xdg" }, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: [
         "XDG_RUNTIME_DIR run/xdg is not an absolute path",
         `${runUserBase}/${uid} does not exist`,
@@ -90,7 +90,7 @@ describe("resolveSocketDir", () => {
   it("skips an empty XDG_RUNTIME_DIR", () => {
     const runUserBase = missing("run-g");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: "" }, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: ["XDG_RUNTIME_DIR is empty", `${runUserBase}/${uid} does not exist`],
     });
   });
@@ -99,7 +99,7 @@ describe("resolveSocketDir", () => {
     const xdg = privateDir("xdg-dots");
     const runUserBase = missing("run-h");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: `${xdg}/../nope/.` }, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: [
         `XDG_RUNTIME_DIR ${path.join(root, "nope")} does not exist`,
         `${runUserBase}/${uid} does not exist`,
@@ -112,7 +112,7 @@ describe("resolveSocketDir", () => {
     symlinkSync(privateDir("xdg-link-target"), link);
     const runUserBase = missing("run-i");
     assert.deepEqual(resolveSocketDir({ XDG_RUNTIME_DIR: `${link}/` }, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: [
         `XDG_RUNTIME_DIR ${link} is not a directory`,
         `${runUserBase}/${uid} does not exist`,
@@ -131,7 +131,7 @@ describe("resolveSocketDir", () => {
     const runUserBase = missing("run-j");
     const env = { XDG_RUNTIME_DIR: `${hop}/../xdg-lexical` };
     assert.deepEqual(resolveSocketDir(env, uid, runUserBase), {
-      dir: `/tmp/foxhand-${uid}`,
+      dir: `/tmp/foxleash-${uid}`,
       skipped: [
         `XDG_RUNTIME_DIR ${lexical} is open to other users (mode 0755)`,
         `${runUserBase}/${uid} does not exist`,
@@ -225,7 +225,7 @@ describe("checkSocketDir", () => {
 
 describe("ensureSocketDir", () => {
   it("creates the directory with mode 0700, and accepts it on a second call", () => {
-    const dir = path.join(privateDir("ensure-new"), "foxhand");
+    const dir = path.join(privateDir("ensure-new"), "foxleash");
     ensureSocketDir(dir, uid);
     assert.equal(statSync(dir).mode & 0o777, 0o700);
     ensureSocketDir(dir, uid);
@@ -233,7 +233,7 @@ describe("ensureSocketDir", () => {
   });
 
   it("throws when the base does not exist", () => {
-    const dir = path.join(missing("ensure-missing"), "foxhand");
+    const dir = path.join(missing("ensure-missing"), "foxleash");
     assert.throws(
       () => ensureSocketDir(dir, uid),
       (error: unknown) => {
@@ -368,7 +368,7 @@ describe("listSockets", () => {
 
 describe("socketPath and isAlive", () => {
   it("names a socket <dir>/<pid>.sock", () => {
-    assert.equal(socketPath("/run/user/1000/foxhand", 4242), "/run/user/1000/foxhand/4242.sock");
+    assert.equal(socketPath("/run/user/1000/foxleash", 4242), "/run/user/1000/foxleash/4242.sock");
   });
 
   it("finds this process alive", () => {
@@ -408,7 +408,7 @@ function file(name: string): string {
 }
 
 function sentence(dir: string, reason: string): string {
-  return `The Foxhand socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
+  return `The Foxleash socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
 }
 
 async function listen(socket: string): Promise<string> {

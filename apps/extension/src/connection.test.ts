@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import { PROTOCOL_VERSION, type RequestMessage } from "@foxhand/protocol";
+import { PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
 import { createConnection } from "./connection.ts";
 import { createFakeBrowser, createFakeTimers, type FakePort, flush } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
@@ -165,7 +165,7 @@ describe("connection requests", { timeout: 10000 }, () => {
         ok: false,
         error: {
           code: "invalid_request",
-          message: "Foxhand could not read the request: invalid method.",
+          message: "Foxleash could not read the request: invalid method.",
         },
       },
     ]);
@@ -232,9 +232,9 @@ describe("connection welcome", { timeout: 10000 }, () => {
       {
         event: "protocol_mismatch",
         message:
-          `The Foxhand extension (version 0.1.0, protocol ${PROTOCOL_VERSION}) is older than ` +
-          `the Foxhand native host (version 9.0.0, protocol ${PROTOCOL_VERSION + 1}): run ` +
-          "`npm run setup` in your Foxhand folder and confirm the extension update in Firefox.",
+          `The Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}) is older than ` +
+          `the Foxleash native host (version 9.0.0, protocol ${PROTOCOL_VERSION + 1}): run ` +
+          "`npm run setup` in your Foxleash folder and confirm the extension update in Firefox.",
       },
     ]);
     host.deliver(request);
@@ -422,7 +422,7 @@ describe("connection reconnect", { timeout: 10000 }, () => {
     start();
     await flush();
     for (const [index, delay] of [500, 1000, 2000, 4000, 8000, 10000, 10000].entries()) {
-      port(fake.ports, index).drop("No such native application foxhand");
+      port(fake.ports, index).drop("No such native application foxleash");
       timers.advance(delay - 1);
       assert.equal(fake.ports.length, index + 1, `before ${delay} ms`);
       timers.advance(1);
@@ -432,7 +432,7 @@ describe("connection reconnect", { timeout: 10000 }, () => {
     }
     assert.deepEqual(warnings()[0], {
       event: "disconnected",
-      error: "No such native application foxhand",
+      error: "No such native application foxleash",
     });
   });
 
@@ -492,7 +492,7 @@ describe("connection reconnect", { timeout: 10000 }, () => {
     });
   });
 
-  it("connects to the foxhand native host", async (t) => {
+  it("connects to the foxleash native host", async (t) => {
     const { fake, start } = setup(t);
     const names: string[] = [];
     const connectNative = fake.browser.runtime.connectNative;
@@ -501,7 +501,7 @@ describe("connection reconnect", { timeout: 10000 }, () => {
       return connectNative(application);
     };
     start();
-    assert.deepEqual(names, ["foxhand"]);
+    assert.deepEqual(names, ["foxleash"]);
   });
 });
 

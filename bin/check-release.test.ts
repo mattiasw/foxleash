@@ -136,7 +136,7 @@ const CLAIMS = "docs/amo/listing-claims.json";
 const AMO_SOURCES = "bin/amo-source-files.txt";
 const FIXTURE_MANIFEST = {
   manifest_version: 3,
-  name: "Foxhand",
+  name: "Foxleash",
   browser_specific_settings: {
     gecko: { data_collection_permissions: { required: ["websiteContent"] } },
   },
@@ -148,21 +148,21 @@ const FIXTURE_LISTING = [
   "",
   "## Description",
   "",
-  "Foxhand lets an agent use Firefox.",
+  "Foxleash lets an agent use Firefox.",
   "",
   "The agent can:",
   "",
   "- open tabs and navigate them,",
   "- read pages.",
   "",
-  "Each session acts only on tabs in its group. Foxhand limits what a fooled agent can do:",
+  "Each session acts only on tabs in its group. Foxleash limits what a fooled agent can do:",
   "",
   "- The approval can only come from your click.",
   "- Tool results mark page content as untrusted.",
   "",
   "## Permissions",
   "",
-  "Why Foxhand requests each permission in its manifest:",
+  "Why Foxleash requests each permission in its manifest:",
   "",
   "- tabs: lists the agent's tabs.",
   "- storage: keeps the settings.",
@@ -378,9 +378,9 @@ function prePushTree(release: "first" | "second"): Tree {
   const tree = postBumpTree(release);
   const version = release === "first" ? "0.1.0" : "0.2.0";
   const tag = `v${version}`;
-  const xpi = `artifacts/foxhand-${version}.xpi`;
+  const xpi = `artifacts/foxleash-${version}.xpi`;
   tree.files[xpi] = "zip";
-  tree.files[`artifacts/foxhand-source-${version}.zip`] = "zip";
+  tree.files[`artifacts/foxleash-source-${version}.zip`] = "zip";
   const released = packageFiles("0.1.0");
   Object.assign(tree.commands, {
     [TAGS]: release === "first" ? "v0.1.0" : "v0.2.0\nv0.1.0",
@@ -1522,7 +1522,7 @@ describe("listing", () => {
       "Not a bullet, so the list ends here.",
       "- not in the list",
       "",
-      "A long paragraph that ends with the intro. Foxhand limits what a fooled agent can do:",
+      "A long paragraph that ends with the intro. Foxleash limits what a fooled agent can do:",
       "",
       "- One.",
       "- Two.",
@@ -1543,7 +1543,7 @@ describe("listing", () => {
       { line: 11, text: "read the console and network activity," },
       { line: 12, text: "upload files from allowed folders." },
     ]);
-    const safeguards = listingBullets(text, "Foxhand limits what a fooled agent can do:");
+    const safeguards = listingBullets(text, "Foxleash limits what a fooled agent can do:");
     assert.deepEqual(
       Array.isArray(safeguards) && safeguards.map((bullet) => [bullet.line, bullet.text]),
       [
@@ -1885,7 +1885,7 @@ describe("listing", () => {
 
   test("the Permissions section, each version's notes to reviewers, holds at most 3000 characters", () => {
     const body = (text: string) =>
-      text.slice(text.indexOf("Why Foxhand"), text.indexOf("\n\n## Data collection and handling"));
+      text.slice(text.indexOf("Why Foxleash"), text.indexOf("\n\n## Data collection and handling"));
     const last = "- <all_urls>: works on any approved site.";
     // One character, two UTF-16 code units.
     const padded = (length: number) => (text: string) =>
@@ -2442,23 +2442,23 @@ describe("pre-push", () => {
     [
       "a missing XPI",
       (t) => {
-        delete t.files["artifacts/foxhand-0.2.0.xpi"];
-        delete t.commands[unzipManifest("artifacts/foxhand-0.2.0.xpi")];
+        delete t.files["artifacts/foxleash-0.2.0.xpi"];
+        delete t.commands[unzipManifest("artifacts/foxleash-0.2.0.xpi")];
       },
-      /^artifacts\/foxhand-0\.2\.0\.xpi is missing; run npm run build:amo$/,
+      /^artifacts\/foxleash-0\.2\.0\.xpi is missing; run npm run build:amo$/,
     ],
     [
       "a missing source archive",
-      (t) => delete t.files["artifacts/foxhand-source-0.2.0.zip"],
-      /^artifacts\/foxhand-source-0\.2\.0\.zip is missing; run npm run build:amo$/,
+      (t) => delete t.files["artifacts/foxleash-source-0.2.0.zip"],
+      /^artifacts\/foxleash-source-0\.2\.0\.zip is missing; run npm run build:amo$/,
     ],
     [
       "an XPI of another version",
       (t) =>
-        (t.commands[unzipManifest("artifacts/foxhand-0.2.0.xpi")] = Buffer.from(
+        (t.commands[unzipManifest("artifacts/foxleash-0.2.0.xpi")] = Buffer.from(
           json({ version: "0.1.0" }),
         )),
-      /^artifacts\/foxhand-0\.2\.0\.xpi manifest\.json has version "0\.1\.0", expected 0\.2\.0$/,
+      /^artifacts\/foxleash-0\.2\.0\.xpi manifest\.json has version "0\.1\.0", expected 0\.2\.0$/,
     ],
     [
       "entries left in Unreleased",
@@ -2678,14 +2678,14 @@ describe("pre-push", () => {
 });
 
 describe("artifacts", () => {
-  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxhand-check-release-zip-")));
+  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-check-release-zip-")));
   after(() => rmSync(base, { recursive: true, force: true }));
   let counter = 0;
 
   const PAYLOAD: Record<string, string> = {
     "manifest.json": json({ manifest_version: 3, version: "1.0.0" }),
     "background.js": "console.log(1);\n",
-    "icons/foxhand.svg": "<svg/>\n",
+    "icons/foxleash.svg": "<svg/>\n",
   };
   const SIGNATURE: Record<string, string> = {
     "META-INF/mozilla.rsa": "rsa",
@@ -2709,8 +2709,8 @@ describe("artifacts", () => {
     directories: [boolean, boolean] = [true, true],
   ): string {
     const root = path.join(base, `root-${counter++}`);
-    zipInto(path.join(root, "artifacts/foxhand-1.0.0.xpi"), unsigned, directories[0]);
-    zipInto(path.join(root, "web-ext-artifacts/foxhand-1.0.0.xpi"), signed, directories[1]);
+    zipInto(path.join(root, "artifacts/foxleash-1.0.0.xpi"), unsigned, directories[0]);
+    zipInto(path.join(root, "web-ext-artifacts/foxleash-1.0.0.xpi"), signed, directories[1]);
     return root;
   }
 
@@ -2738,7 +2738,7 @@ describe("artifacts", () => {
     assert.equal(table[0], "entry | unsigned | signed");
     assert.deepEqual(
       table.slice(1).map((line) => line.split(" | ")[0]),
-      ["background.js", "icons/foxhand.svg", "manifest.json"],
+      ["background.js", "icons/foxleash.svg", "manifest.json"],
     );
     for (const line of table.slice(1)) {
       const [, unsigned, signed] = line.split(" | ");
@@ -2777,7 +2777,7 @@ describe("artifacts", () => {
       "a missing mozilla.rsa",
       PAYLOAD,
       { ...PAYLOAD, "META-INF/mozilla.sf": "sf", "META-INF/manifest.mf": "mf" },
-      /^web-ext-artifacts\/foxhand-1\.0\.0\.xpi lacks META-INF\/mozilla\.rsa$/,
+      /^web-ext-artifacts\/foxleash-1\.0\.0\.xpi lacks META-INF\/mozilla\.rsa$/,
     ],
     [
       "a differing entry",
@@ -2817,7 +2817,7 @@ describe("artifacts", () => {
       "another manifest version",
       { ...PAYLOAD, "manifest.json": json({ version: "1.0.1" }) },
       { ...PAYLOAD, ...SIGNATURE, "manifest.json": json({ version: "1.0.1" }) },
-      /^web-ext-artifacts\/foxhand-1\.0\.0\.xpi manifest\.json has version "1\.0\.1", expected 1\.0\.0$/,
+      /^web-ext-artifacts\/foxleash-1\.0\.0\.xpi manifest\.json has version "1\.0\.1", expected 1\.0\.0$/,
     ],
   ];
   for (const [name, unsigned, signed, pattern] of deviations) {
@@ -2884,10 +2884,10 @@ describe("artifacts", () => {
 
   test("compares entries by their raw names, not by a Unicode Path field", () => {
     const root = release();
-    craftedZip(path.join(root, "web-ext-artifacts/foxhand-1.0.0.xpi"), [
+    craftedZip(path.join(root, "web-ext-artifacts/foxleash-1.0.0.xpi"), [
       { name: "manifest.json", data: PAYLOAD["manifest.json"] ?? "" },
       { name: "background.js", data: "evil();\n", shown: "hidden/" },
-      { name: "icons/foxhand.svg", data: PAYLOAD["icons/foxhand.svg"] ?? "" },
+      { name: "icons/foxleash.svg", data: PAYLOAD["icons/foxleash.svg"] ?? "" },
       { name: "decoy.txt", data: PAYLOAD["background.js"] ?? "", shown: "background.js" },
       ...Object.entries(SIGNATURE).map(([name, data]) => ({ name, data })),
     ]);
@@ -2910,7 +2910,7 @@ describe("artifacts", () => {
       checkArtifacts(realEnv(release(rest, { ...rest, ...SIGNATURE })), "1.0.0", undefined),
       "FAIL",
     );
-    assert.deepEqual(fails, ["web-ext-artifacts/foxhand-1.0.0.xpi has no manifest.json"]);
+    assert.deepEqual(fails, ["web-ext-artifacts/foxleash-1.0.0.xpi has no manifest.json"]);
   });
 
   test("--unsigned is resolved against the root and used instead of the default", () => {
@@ -2922,7 +2922,7 @@ describe("artifacts", () => {
     assert.ok(env.calls.some((call) => call.includes(path.join(root, "elsewhere/plain.xpi"))));
     assertOnlyFail(
       checkArtifacts(realEnv(root), "1.0.0", undefined),
-      /^artifacts\/foxhand-1\.0\.0\.xpi does not exist$/,
+      /^artifacts\/foxleash-1\.0\.0\.xpi does not exist$/,
     );
   });
 
@@ -2954,8 +2954,8 @@ describe("artifacts", () => {
       const env = recording(root);
       const fails = texts(checkArtifacts(env, "1.0.0", undefined), "FAIL");
       assert.deepEqual(fails, [
-        `${path.join(root, "artifacts/foxhand-1.0.0.xpi").replace(`${root}/`, "")}: unsafe entry name ${JSON.stringify(name)}`,
-        `web-ext-artifacts/foxhand-1.0.0.xpi: unsafe entry name ${JSON.stringify(name)}`,
+        `${path.join(root, "artifacts/foxleash-1.0.0.xpi").replace(`${root}/`, "")}: unsafe entry name ${JSON.stringify(name)}`,
+        `web-ext-artifacts/foxleash-1.0.0.xpi: unsafe entry name ${JSON.stringify(name)}`,
       ]);
       assert.ok(!env.calls.some((call) => call.includes(name)));
       assert.ok(env.calls.some((call) => call.includes("background.js")));
@@ -2964,15 +2964,18 @@ describe("artifacts", () => {
 
   test("a duplicated entry name fails and is not hashed", () => {
     const tree: Tree = {
-      files: { "artifacts/foxhand-1.0.0.xpi": "zip", "web-ext-artifacts/foxhand-1.0.0.xpi": "zip" },
+      files: {
+        "artifacts/foxleash-1.0.0.xpi": "zip",
+        "web-ext-artifacts/foxleash-1.0.0.xpi": "zip",
+      },
       commands: {
-        [key("unzip", "-Z1", "-UU", "artifacts/foxhand-1.0.0.xpi")]: "manifest.json\nlib.js",
-        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxhand-1.0.0.xpi")]:
+        [key("unzip", "-Z1", "-UU", "artifacts/foxleash-1.0.0.xpi")]: "manifest.json\nlib.js",
+        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxleash-1.0.0.xpi")]:
           "manifest.json\nlib.js\nlib.js\nMETA-INF/mozilla.rsa\nMETA-INF/mozilla.sf\nMETA-INF/manifest.mf",
-        [key("unzip", "-UU", "-p", "artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
-        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
       },
@@ -2980,7 +2983,7 @@ describe("artifacts", () => {
     const env = fakeEnv(tree);
     const fails = texts(checkArtifacts(env, "1.0.0", undefined), "FAIL");
     assert.deepEqual(fails, [
-      "web-ext-artifacts/foxhand-1.0.0.xpi: the entry lib.js is listed twice",
+      "web-ext-artifacts/foxleash-1.0.0.xpi: the entry lib.js is listed twice",
     ]);
     assert.ok(!env.calls.some((call) => call.includes("lib.js")));
   });
@@ -2988,19 +2991,22 @@ describe("artifacts", () => {
   test("an entry name with a dot or empty segment fails and is not read", () => {
     const names = ["META-INF/../evil.js", "a/./b.js", "a//c.js", "x/.."];
     const tree: Tree = {
-      files: { "artifacts/foxhand-1.0.0.xpi": "zip", "web-ext-artifacts/foxhand-1.0.0.xpi": "zip" },
+      files: {
+        "artifacts/foxleash-1.0.0.xpi": "zip",
+        "web-ext-artifacts/foxleash-1.0.0.xpi": "zip",
+      },
       commands: {
-        [key("unzip", "-Z1", "-UU", "artifacts/foxhand-1.0.0.xpi")]: "manifest.json\nicons/",
-        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxhand-1.0.0.xpi")]: [
+        [key("unzip", "-Z1", "-UU", "artifacts/foxleash-1.0.0.xpi")]: "manifest.json\nicons/",
+        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxleash-1.0.0.xpi")]: [
           "manifest.json",
           "icons/",
           ...Object.keys(SIGNATURE),
           ...names,
         ].join("\n"),
-        [key("unzip", "-UU", "-p", "artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
-        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
       },
@@ -3009,7 +3015,7 @@ describe("artifacts", () => {
     assert.deepEqual(
       texts(checkArtifacts(env, "1.0.0", undefined), "FAIL"),
       names.map(
-        (name) => `web-ext-artifacts/foxhand-1.0.0.xpi: unsafe entry name ${JSON.stringify(name)}`,
+        (name) => `web-ext-artifacts/foxleash-1.0.0.xpi: unsafe entry name ${JSON.stringify(name)}`,
       ),
     );
     assert.ok(!env.calls.some((call) => names.some((name) => call.includes(name))));
@@ -3023,38 +3029,41 @@ describe("artifacts", () => {
       },
     };
     assert.deepEqual(texts(checkArtifacts(env, "1.0.0", undefined), "FAIL"), [
-      "artifacts/foxhand-1.0.0.xpi: EACCES: permission denied",
-      "web-ext-artifacts/foxhand-1.0.0.xpi: EACCES: permission denied",
+      "artifacts/foxleash-1.0.0.xpi: EACCES: permission denied",
+      "web-ext-artifacts/foxleash-1.0.0.xpi: EACCES: permission denied",
     ]);
     assert.deepEqual(env.calls, []);
   });
 
   test("an unreadable entry fails and the others are still compared", () => {
     const tree: Tree = {
-      files: { "artifacts/foxhand-1.0.0.xpi": "zip", "web-ext-artifacts/foxhand-1.0.0.xpi": "zip" },
+      files: {
+        "artifacts/foxleash-1.0.0.xpi": "zip",
+        "web-ext-artifacts/foxleash-1.0.0.xpi": "zip",
+      },
       commands: {
-        [key("unzip", "-Z1", "-UU", "artifacts/foxhand-1.0.0.xpi")]: "manifest.json\nlib.js",
-        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxhand-1.0.0.xpi")]:
+        [key("unzip", "-Z1", "-UU", "artifacts/foxleash-1.0.0.xpi")]: "manifest.json\nlib.js",
+        [key("unzip", "-Z1", "-UU", "web-ext-artifacts/foxleash-1.0.0.xpi")]:
           "manifest.json\nlib.js\nMETA-INF/mozilla.rsa\nMETA-INF/mozilla.sf\nMETA-INF/manifest.mf",
-        [key("unzip", "-UU", "-p", "artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
-        [key("unzip", "-UU", "-p", "artifacts/foxhand-1.0.0.xpi", "lib.js")]: "a",
-        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxhand-1.0.0.xpi", "manifest.json")]: json({
+        [key("unzip", "-UU", "-p", "artifacts/foxleash-1.0.0.xpi", "lib.js")]: "a",
+        [key("unzip", "-UU", "-p", "web-ext-artifacts/foxleash-1.0.0.xpi", "manifest.json")]: json({
           version: "1.0.0",
         }),
       },
     };
     const findings = checkArtifacts(fakeEnv(tree), "1.0.0", undefined);
     assert.deepEqual(texts(findings, "FAIL"), [
-      "web-ext-artifacts/foxhand-1.0.0.xpi lib.js: `unzip -UU -p web-ext-artifacts/foxhand-1.0.0.xpi lib.js` failed (status 1): not scripted in the test",
+      "web-ext-artifacts/foxleash-1.0.0.xpi lib.js: `unzip -UU -p web-ext-artifacts/foxleash-1.0.0.xpi lib.js` failed (status 1): not scripted in the test",
     ]);
     assert.ok(texts(findings, "INFO").some((line) => /^lib\.js \| [0-9a-f]{12} \| -$/.test(line)));
   });
 });
 
 describe("real git", () => {
-  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxhand-check-release-git-")));
+  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-check-release-git-")));
   // A git hook in a linked worktree exports GIT_DIR, which would point the fixture's git
   // commands at the real repository.
   const gitVariables = Object.keys(process.env).filter((name) => name.startsWith("GIT_"));
@@ -3180,7 +3189,7 @@ describe("real git", () => {
         error.message.startsWith("`git rev-parse refs/heads/nope` failed (status 128): "),
     );
     assert.throws(
-      () => realEnv(dir).sh("foxhand-no-such-command", []),
+      () => realEnv(dir).sh("foxleash-no-such-command", []),
       (error: unknown) =>
         error instanceof CommandError &&
         error.status === null &&
@@ -3281,10 +3290,10 @@ describe("real git", () => {
     const staging = path.join(base, `xpi-${counter++}`);
     write(staging, { "manifest.json": json({ manifest_version: 3, version: "0.2.0" }) });
     mkdirSync(path.join(dir, "artifacts"));
-    execFileSync("zip", ["-rqX", path.join(dir, "artifacts/foxhand-0.2.0.xpi"), "."], {
+    execFileSync("zip", ["-rqX", path.join(dir, "artifacts/foxleash-0.2.0.xpi"), "."], {
       cwd: staging,
     });
-    writeFileSync(path.join(dir, "artifacts/foxhand-source-0.2.0.zip"), "zip");
+    writeFileSync(path.join(dir, "artifacts/foxleash-source-0.2.0.zip"), "zip");
     return dir;
   }
 

@@ -5,14 +5,14 @@
 ## Context
 
 In a field test, four Claude Code forks running in parallel in one session all got the same
-Foxhand tab group. `tabs_list` and `tab_close` results listed every fork's tabs, any fork could
+Foxleash tab group. `tabs_list` and `tab_close` results listed every fork's tabs, any fork could
 act on another fork's tab by id, and a fork's tab turned `"active": false` as soon as another
 fork opened a tab in the same window.
 
-A session is one `foxhand mcp` process: `apps/server/src/mcp.ts` creates one `randomUUID()`
+A session is one `foxleash mcp` process: `apps/server/src/mcp.ts` creates one `randomUUID()`
 session per process, the bridge stamps it on every request, and `apps/server/src/host.ts` binds
 a connection to one session. An MCP tool call carries no caller identity, so agents that share
-one MCP connection are one session to Foxhand. That subagents and forks of Claude Code share
+one MCP connection are one session to Foxleash. That subagents and forks of Claude Code share
 their parent's MCP connection is from the field test and Claude Code's behaviour, not
 reproduced here. `active` is Firefox's `tab.active`, the active tab of the tab's window, so it
 changes whenever any tab in the window is opened or selected.
@@ -36,7 +36,7 @@ changes in tab handling, the protocol or the extension.
   asserts the label itself, so it is a convenience and not a safeguard against a page's injected
   instructions, and it adds a parameter to every tab-taking tool and per-tab state to the
   extension, for the same discipline as tracking ids.
-- A nested tab group per agent. Firefox tab groups do not nest, and Foxhand still could not tell
+- A nested tab group per agent. Firefox tab groups do not nest, and Foxleash still could not tell
   which agent a call comes from.
 
 ## Consequences

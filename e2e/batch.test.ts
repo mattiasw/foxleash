@@ -117,7 +117,7 @@ describe("batch in real Firefox", () => {
     assert.deepEqual(rest, []);
     assert.equal(first, "Step 1 of 3, click: ok");
     assert.equal(second, "Step 2 of 3, click: failed");
-    assert.ok(refused.includes(`Foxhand is not allowed on ${other} in this session`), refused);
+    assert.ok(refused.includes(`Foxleash is not allowed on ${other} in this session`), refused);
     assert.equal(notRun, "Step 3 (click) was not run because step 2 failed.");
     assert.deepEqual(await clicksIn(act), ["click:fixed:1"]);
     assert.equal(

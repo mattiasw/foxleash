@@ -58,7 +58,7 @@ describe("endSession", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.has(other.id), true);
   });
 
-  it("lets blankPage decide for a Foxhand page, and counts the prompt page as blank without it", async () => {
+  it("lets blankPage decide for a Foxleash page, and counts the prompt page as blank without it", async () => {
     for (const blank of [true, false]) {
       const fake = createFakeBrowser();
       fake.openTab({ url: "https://user.example/" });

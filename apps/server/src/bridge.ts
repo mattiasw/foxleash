@@ -6,7 +6,7 @@ import {
   parseMessage,
   protocolMismatch,
   type WelcomeMessage,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import {
   createFrameReader,
   encodeFrame,
@@ -74,8 +74,8 @@ interface Pending {
 }
 
 const NO_HOST =
-  "No Foxhand native host is running: start Firefox with the Foxhand extension installed, and run `npm run doctor` in your Foxhand folder if it still fails.";
-const TIMEOUT = "The Foxhand native host did not answer in time.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
+const TIMEOUT = "The Foxleash native host did not answer in time.";
 const CLOSING = "the MCP server is closing";
 const HOST_CLOSED = "the host closed the connection";
 const UNREADABLE = "the host sent an unreadable message";
@@ -294,7 +294,7 @@ export function connectToHost(
   let connected = false;
   const timer = setTimeout(() => {
     fail(
-      `The Foxhand native host at ${socketPath} did not answer within ${handshakeTimeoutMs} ms.`,
+      `The Foxleash native host at ${socketPath} did not answer within ${handshakeTimeoutMs} ms.`,
     );
   }, handshakeTimeoutMs).unref();
   socket.once("connect", onConnect);
@@ -320,14 +320,14 @@ export function connectToHost(
     }
     const welcome = welcomeOf(first);
     if (welcome === null) {
-      fail(`The Foxhand native host at ${socketPath} did not answer with a welcome.`);
+      fail(`The Foxleash native host at ${socketPath} did not answer with a welcome.`);
       return;
     }
     // Nothing was requested yet, so nothing may follow the welcome.
     for (const event of rest) {
       // As after the handshake, a frame that cannot be read ends the connection.
       if (!event.ok) {
-        fail(`The Foxhand native host at ${socketPath} sent an unreadable message.`);
+        fail(`The Foxleash native host at ${socketPath} sent an unreadable message.`);
         return;
       }
       log("ignored a message before any request", summary(event.value));
@@ -345,7 +345,7 @@ export function connectToHost(
     fail(
       connected
         ? closedEarly(socketPath)
-        : `Cannot connect to the Foxhand native host at ${socketPath}: ${code}.`,
+        : `Cannot connect to the Foxleash native host at ${socketPath}: ${code}.`,
       code,
     );
   }
@@ -376,11 +376,11 @@ function summary(value: unknown): string {
 }
 
 function closedEarly(socketPath: string): string {
-  return `The Foxhand native host at ${socketPath} closed the connection before answering.`;
+  return `The Foxleash native host at ${socketPath} closed the connection before answering.`;
 }
 
 function lost(reason: string): BridgeError {
-  return new BridgeError(`The connection to the Foxhand native host was lost: ${reason}.`);
+  return new BridgeError(`The connection to the Foxleash native host was lost: ${reason}.`);
 }
 
 function reasonOf(connection: Connection): string {

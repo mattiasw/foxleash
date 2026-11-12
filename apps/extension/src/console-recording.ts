@@ -35,7 +35,7 @@ interface Outcome {
 }
 
 /**
- * Starts Foxhand's console recorder in each live document (see live-documents.ts) and keeps, per
+ * Starts Foxleash's console recorder in each live document (see live-documents.ts) and keeps, per
  * tab, the recording of the one that is still live. Adds its listeners at once (call it at the
  * top level of the background script).
  */

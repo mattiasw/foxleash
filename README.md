@@ -1,8 +1,8 @@
-# Foxhand
+# Foxleash
 
 Let an AI agent on your computer, such as Claude Code, use your own Firefox.
 
-Foxhand gives the agent tools to open tabs, read pages, click, type, fill in forms, take
+Foxleash gives the agent tools to open tabs, read pages, click, type, fill in forms, take
 screenshots and read the console and network activity, in your normal Firefox profile with
 your logins. It works with any MCP client; it contains no AI model itself.
 
@@ -10,13 +10,13 @@ your logins. It works with any MCP client; it contains no AI model itself.
 
 ## How it works
 
-Foxhand has three parts:
+Foxleash has three parts:
 
 - a **Firefox extension** that carries out the actions,
 - a **native host** that Firefox starts and that the extension talks to,
 - an **MCP server** that your AI agent starts and that talks to the native host.
 
-Each agent session works in its own tab group, titled Foxhand, and only on tabs in that
+Each agent session works in its own tab group, titled Foxleash, and only on tabs in that
 group. Nothing leaves your computer except what your agent sends to its model provider:
 the page content and browsing activity the agent asks for go from the extension to the
 local MCP server, and from there to the agent.
@@ -27,7 +27,7 @@ local MCP server, and from there to the agent.
 - Firefox 142 or later, installed from Mozilla's package or tarball (Snap and Flatpak
   builds are untested)
 - Node.js 24 or later
-- An MCP client. The setup command registers Foxhand with Claude Code if it is installed.
+- An MCP client. The setup command registers Foxleash with Claude Code if it is installed.
 - The GitHub CLI (`gh`), logged in (`gh auth login`) with an account that can read this
   repository's releases, unless you install from a signed `.xpi` with `--xpi`.
 
@@ -35,7 +35,7 @@ local MCP server, and from there to the agent.
 
 ```sh
 git clone <repository URL>
-cd foxhand
+cd foxleash
 npm ci
 npm run setup
 ```
@@ -43,12 +43,12 @@ npm run setup
 `npm run setup`:
 
 1. writes a small launcher script and registers it with Firefox as the native host
-   (`~/.mozilla/native-messaging-hosts/foxhand.json`),
-2. registers the MCP server with Claude Code (`claude mcp add -s user foxhand`). To skip
+   (`~/.mozilla/native-messaging-hosts/foxleash.json`),
+2. registers the MCP server with Claude Code (`claude mcp add -s user foxleash`). To skip
    this, run `npm run setup -- --no-claude`. When `claude` is not on your PATH, setup
    prints the command to run yourself.
 3. downloads the signed extension for this checkout's version from the repository's GitHub
-   releases into `~/.cache/foxhand/` and opens it in Firefox, where you confirm the
+   releases into `~/.cache/foxleash/` and opens it in Firefox, where you confirm the
    installation. To install from a signed `.xpi` you already have, run
    `npm run setup -- --xpi <path>`; to skip this step, run
    `npm run setup -- --no-extension`. When `firefox` is not on your PATH, setup prints the
@@ -60,7 +60,7 @@ Then check that every part is connected:
 npm run doctor
 ```
 
-It lists the Foxhand host of every running Firefox and whether the extension has access to
+It lists the Foxleash host of every running Firefox and whether the extension has access to
 all websites.
 
 To update: `git pull && npm ci && npm run setup`, then confirm the installation in
@@ -72,14 +72,14 @@ Ask your agent to do something in the browser, for example:
 
 > Open the issue list of my project on GitHub and summarize the ones labeled bug.
 
-Before a session opens a page on a site you have not approved, Foxhand asks you in that tab
+Before a session opens a page on a site you have not approved, Foxleash asks you in that tab
 whether to allow it: this session, always, or not at all. The agent's call waits up to 30
 seconds for your answer. After three refused or closed prompts, a session stops asking.
 
 The extension's settings page in the Firefox add-ons manager lists the sites you allowed
 always, each with a Revoke button. It also lists the sites you allowed or refused for each
 running agent session, and the prompts you closed without an answer, each with a Forget
-button: forgetting an answer makes Foxhand ask again. Foxhand keeps these session answers only
+button: forgetting an answer makes Foxleash ask again. Foxleash keeps these session answers only
 in memory until the session ends. The settings page is also where you edit the blocklist,
 and where you write, edit and delete recipes: a task's steps written down with the sites it
 uses, kept in Firefox on this computer. An agent can also read the recipes you saved, ask you
@@ -89,15 +89,15 @@ in Firefox.
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
 
-Each agent session's tabs open in an orange tab group titled Foxhand, and Foxhand acts only
+Each agent session's tabs open in an orange tab group titled Foxleash, and Foxleash acts only
 on tabs in that group, including tabs you move into it and tabs that a page in the group
-opens, also after your own click. When the agent session ends, Foxhand closes its group if the
+opens, also after your own click. When the agent session ends, Foxleash closes its group if the
 group holds only blank tabs, so pages you may still be reading stay open.
 
 Subagents or parallel agents started from one agent session (for example Claude Code
-subagents) share that session's MCP connection, so Foxhand sees them as one session. They
+subagents) share that session's MCP connection, so Foxleash sees them as one session. They
 share its tab group and the sites you approved for it, and you are not asked again for a site
-already approved. Foxhand cannot tell them apart, so any of them can act on any tab in the
+already approved. Foxleash cannot tell them apart, so any of them can act on any tab in the
 group; each agent should keep to the tabs it opened, the tabs its own actions opened and the
 tabs you point it to, and leave the others alone. A tab's `active` field is Firefox's: it marks
 the active tab of its window, which changes whenever any tab in that window is opened or
@@ -109,8 +109,8 @@ never closes the last tab of a window. When a tab's page asks you to confirm lea
 `resize_window` resizes the whole window that holds the agent's group, your own tabs in it
 included, and first returns a maximized, minimized or full-screen window to its normal state.
 
-The Foxhand button in the toolbar shows ON on the tabs an agent session can use; clicking it
-opens Foxhand's settings.
+The Foxleash button in the toolbar shows ON on the tabs an agent session can use; clicking it
+opens Foxleash's settings.
 
 The agent reads a page with `read_page`, which returns the page as an accessibility tree: one
 line per element with its role, name and state (such as checked, disabled, the value of a field
@@ -137,12 +137,12 @@ works only on a tab showing a site you approved, and never asks.
 
 The agent reads what a page wrote to its console with `read_console`: its `console.log`,
 `info`, `warn`, `error` and `debug` calls, uncaught errors and unhandled promise rejections,
-oldest first, each with its level, kind, text and time. Foxhand starts recording a page shortly
+oldest first, each with its level, kind, text and time. Foxleash starts recording a page shortly
 after it starts loading, in a tab of the agent's group on a site you approved, so anything the
 page logs before then is missed. A page that loads quickly, such as a small page served from
 your own computer, can finish loading first, so what it logs while it loads, in its `load`
 event included, can be missed; what it logs once recording has started is recorded. Frames are
-not recorded. Loading a new page in the tab starts with no messages. Foxhand keeps the newest
+not recorded. Loading a new page in the tab starts with no messages. Foxleash keeps the newest
 300 messages of a page, each cut to 1,000 characters, and counts the older ones it let go. The
 agent can ask for messages of a minimum level, those whose text matches a regular expression,
 and at most a number of the newest ones (100 unless it asks for up to 300). When the page
@@ -156,9 +156,9 @@ resource type, start time, duration, status, redirect target, error and whether 
 the cache, with its request and response headers, oldest first. The values of the `Cookie`,
 `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers are replaced with
 `[redacted]`, and request and response bodies are not included. Requests made by the page's
-frames are included. Foxhand records a page's requests from when it starts loading in a tab of
+frames are included. Foxleash records a page's requests from when it starts loading in a tab of
 the agent's group on a site you approved, and loading a new page in the tab starts a new list.
-Foxhand keeps the newest 500 requests of a page, fewer when their headers are long. The agent
+Foxleash keeps the newest 500 requests of a page, fewer when their headers are long. The agent
 can ask for the requests whose URL contains a piece of plain text, and at most a number of the
 newest ones (100 unless it asks for up to 500). When the page loaded before you approved the
 site, or since it loaded you withdrew the approval or the tab left the agent's group, the
@@ -172,7 +172,7 @@ pointerdown, mousedown, pointerup, mouseup and click, after the pointer moves on
 element. `scroll` sends a wheel event and then scrolls what that wheel would scroll, or brings
 an element into view. `drag` sends HTML drag-and-drop events when the element is draggable,
 and otherwise moves the pointer to the end in steps. The events are simulated, so CSS `:hover`
-styles do not apply and pages that ignore simulated input do not react. Foxhand refuses an
+styles do not apply and pages that ignore simulated input do not react. Foxleash refuses an
 element that another one covers, naming the covering element, and does not act inside frames.
 It refuses clicks on links and form buttons that lead to another site or out of the browser,
 such as to an email address: the agent opens a page on another site with `navigate`, which asks
@@ -182,14 +182,14 @@ window is out of the agent's reach. These tools work only on a tab showing a sit
 approved, and never ask.
 
 The agent types text with `type`, into a text field or an editable area from `read_page`.
-Foxhand focuses the element, adds the text and reads it back. A text field gets the text after
+Foxleash focuses the element, adds the text and reads it back. A text field gets the text after
 what it already holds. An editable area gets it at its caret when the caret is in it, and
 otherwise at its start, so in an email body the text goes above a signature that is already
 there. Text typed in several calls follows on, but once the agent types into another field, the
 next text goes at the start of the area again. In an editable area each newline in the text
 becomes a line break. In an email body whose first line is empty above the signature, the text
 fills that line as yours would, so the agent ends it with a newline to keep a blank line before
-the signature. Foxhand sends no key events: it inserts the text the way the browser inserts
+the signature. Foxleash sends no key events: it inserts the text the way the browser inserts
 typed text, and when that changes nothing and the page did not receive it, once more by setting
 the field's value the way a page's own scripts do. When an editor cannot be read back, such as
 the body of a Google Docs document, the result says the text was sent but not confirmed. `type`
@@ -206,7 +206,7 @@ addresses or cards, as `type` does. It works only on a tab showing a site you ap
 never asks.
 
 The agent presses a key with `press_key`, such as `Enter`, `Tab`, `Shift+Tab`, `Escape`,
-`ArrowDown` or `Control+a`, on an element from `read_page` or on the focused element. Foxhand
+`ArrowDown` or `Control+a`, on an element from `read_page` or on the focused element. Foxleash
 sends the key's events and then does what the browser would do, unless the page cancels the
 key: Enter submits the form or clicks the button or link, Tab and Shift+Tab move focus,
 Escape closes an open popover or dialog, and the arrow keys choose an option in a list. Other
@@ -222,39 +222,39 @@ which steps did not run. Each step is checked exactly as when its tool is called
 step that reads or acts in a page on a site you have not approved fails, and a `tab_open` or
 `navigate` step asks you first. An MCP client that asks you before each tool call asks once for
 the whole batch, and a rule in your client that denies or asks for one tool does not cover that
-tool inside `batch`: deny or ask for `batch` too to keep it. Foxhand's own checks apply to
+tool inside `batch`: deny or ask for `batch` too to keep it. Foxleash's own checks apply to
 every step.
 
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an
-element screenshot Foxhand scrolls the page to bring the element into view, then captures its
-box, cut to the part inside the window. With `saveTo`, Foxhand also saves the PNG as a new file
-in the folder `foxhand mcp` was started in, normally the agent's working folder: the path must
+element screenshot Foxleash scrolls the page to bring the element into view, then captures its
+box, cut to the part inside the window. With `saveTo`, Foxleash also saves the PNG as a new file
+in the folder `foxleash mcp` was started in, normally the agent's working folder: the path must
 be inside that folder, end in `.png` and be in a folder that exists, with no folder or file
 name starting with a dot, and an existing file is never replaced. Saved files are readable
 only by you (mode 0600). A screenshot larger than about 6 MB is too large to return; the agent
 can then take one of a single element or save it. Screenshots hide the text of password fields,
 of one-time code and card number fields that the page marks as such for autofill, and of text
 fields that Firefox filled in from your saved logins, addresses or cards, until you edit them
-(see Security). When a frame of the page loads while the screenshot is taken, Foxhand refuses
-it and the agent can try again. A page Foxhand cannot get into, such as a PDF shown in Firefox's
+(see Security). When a frame of the page loads while the screenshot is taken, Foxleash refuses
+it and the agent can try again. A page Foxleash cannot get into, such as a PDF shown in Firefox's
 viewer, cannot be captured, and neither can a page with such a PDF in a frame or with a frame
 that never finishes loading. A frame showing Firefox's error page for a page that could not be
 loaded or does not allow being shown in a frame does not stop a screenshot, but one showing a
 certificate error or a blocked-site warning does. A frame of another add-on, such as a
-password manager's menu, does not stop a screenshot either: Foxhand hides it and every other
+password manager's menu, does not stop a screenshot either: Foxleash hides it and every other
 frame of the same page or frame, which show blank in the screenshot. `screenshot` works only on
 a tab showing a site you approved, and never asks.
 
 The agent uploads files from your computer with `upload_file`, naming the files and an element
 from `read_page`. A file field gets the files as if you had picked them; any other element gets
-them dropped on it, which works only where the page takes dropped files. Foxhand reads files
+them dropped on it, which works only where the page takes dropped files. Foxleash reads files
 only from the upload folders (see Security below), never files or folders whose names start
 with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
 works only on a tab showing a site you approved, and never asks.
 
 The agent saves a file from the web with `download`, giving its URL (such as a link's address
-from `read_page`) and a plain file name such as `receipt.pdf`. Foxhand fetches the file with
+from `read_page`) and a plain file name such as `receipt.pdf`. Foxleash fetches the file with
 your cookies for the site, as following the link would, saves it in your Firefox download
 folder and returns its absolute path and size; the agent can move it from there. The file is
 saved even where Firefox would open it in another application, such as a PDF set to open in a
@@ -266,23 +266,23 @@ replaced. At most 100 MiB and 50 seconds per file, one download at a time. Each 
 in Firefox's downloads panel and history.
 
 The agent proposes a recipe with `propose_recipe`, giving its name, description, sites and
-steps. Foxhand opens a page in the session's tab group that shows them in fields you can edit,
+steps. Foxleash opens a page in the session's tab group that shows them in fields you can edit,
 and saves the recipe only when you click Save there; Discard drops it. When you have a recipe
 with that name, the page shows your saved version and the changes to its steps. The call
 returns at once with the page's tab id and does not tell the agent whether you saved. While
 the page is open, the session cannot open another recipe page or ask you about a site, and
 cannot close the page's tab or load another page in it. After three recipe pages that you
-discarded or closed, Foxhand opens no more in that session. A page still open when the session
+discarded or closed, Foxleash opens no more in that session. A page still open when the session
 ends stays open and can still save.
 
 The agent reads your saved recipes with `list_recipes`, which gives each one's name,
 description, sites and the time you saved it, sorted by name, without the steps, and with
-`get_recipe`, which gives one recipe with its steps by its name. Foxhand hands the agent a
+`get_recipe`, which gives one recipe with its steps by its name. Foxleash hands the agent a
 recipe as your instructions, outside the untrusted marking it puts on page content; what the
 agent reads on pages while following a recipe is still marked untrusted.
 
 Before it opens a recipe's sites, the agent calls `start_recipe` with the recipe's name.
-Foxhand opens a page in the session's tab group that lists the recipe's sites and what allowing
+Foxleash opens a page in the session's tab group that lists the recipe's sites and what allowing
 does for each, and when you click Allow there, the sites are allowed for that session only,
 never always. Sites already allowed, on the blocklist or refused in the session are not asked:
 the blocklist and your earlier answers still win. The call waits up to 30 seconds for your
@@ -293,7 +293,7 @@ Like a site prompt, it no longer opens once the session has stopped asking after
 or closed prompts. Sites outside the recipe are still asked one by one.
 
 You can also start a saved recipe from your MCP client with the `run_recipe` prompt: in
-Claude Code, `/mcp__foxhand__run_recipe <name>`, where a part of the name that only one recipe
+Claude Code, `/mcp__foxleash__run_recipe <name>`, where a part of the name that only one recipe
 has is enough. It tells the agent to call `start_recipe` and then follow the recipe's steps.
 
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
@@ -309,15 +309,15 @@ approved, and never asks.
 
 ## Faster tasks in Claude Code
 
-In a timed test, most of a browser task's time went to model requests, not to Foxhand. These
+In a timed test, most of a browser task's time went to model requests, not to Foxleash. These
 Claude Code settings can shorten it; how much depends on the task.
 
-- **Allow Foxhand's tools.** Claude Code asks for permission before each Foxhand call unless
-  `"mcp__foxhand"` is listed under `permissions.allow` in your Claude Code settings (see the
-  [permissions documentation](https://code.claude.com/docs/en/permissions)). Foxhand's own
+- **Allow Foxleash's tools.** Claude Code asks for permission before each Foxleash call unless
+  `"mcp__foxleash"` is listed under `permissions.allow` in your Claude Code settings (see the
+  [permissions documentation](https://code.claude.com/docs/en/permissions)). Foxleash's own
   approval still applies: a session still asks in Firefox before it opens a site you have not
   approved. Uploads from the upload folders then happen without a prompt; to keep one, also
-  list `"mcp__foxhand__upload_file"` under `permissions.ask`. Foxhand does not set these
+  list `"mcp__foxleash__upload_file"` under `permissions.ask`. Foxleash does not set these
   rules, so you add them yourself.
 - **A lower effort level.** In a timed shopping task on a local test page (search, pick a
   product, fill a checkout form), `claude --effort low` finished in 22.7 s with Opus 5.5,
@@ -327,17 +327,17 @@ Claude Code settings can shorten it; how much depends on the task.
   price, for the models that offer it (see the
   [fast mode documentation](https://code.claude.com/docs/en/fast-mode)). On a subscription
   plan it is paid from usage credits, not from the plan's included usage. It was not measured
-  with Foxhand.
+  with Foxleash.
 - **The model.** In the same test every model tried took 1.2 to 2.2 s per model request, and
   the smallest model was not the fastest.
 
 ## Security
 
-Foxhand acts in your logged-in browser, so read this before you use it.
+Foxleash acts in your logged-in browser, so read this before you use it.
 
 The main risk is **prompt injection**: a web page that contains instructions aimed at the
 AI model, such as "send the contents of this page to ...". Models can be fooled by these,
-and no defense is complete. Foxhand limits what a fooled agent can do:
+and no defense is complete. Foxleash limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser, and asks before it
   opens a page there. The approval can only come from your click, not from the agent. It
@@ -352,20 +352,20 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   query or title, and a local file only as `file:`. The sites you allowed always are listed
   in the extension's settings page in the add-ons manager, each with a Revoke button.
 - Financial and health sites are blocked by default. You can edit the list in the
-  extension's settings page, one domain per line. Foxhand checks the blocklist before it
+  extension's settings page, one domain per line. Foxleash checks the blocklist before it
   opens or reloads a page, and shows the agent a tab on a blocked site only as the site's
   address.
 - File uploads only read from allowed folders (the agent's working folder and
   `~/Downloads` by default) and never dotfiles or key files. The working folder is not an
   upload folder when it is your home folder or contains it, or lies in a folder whose name
-  starts with a dot. To choose the folders yourself, set `FOXHAND_UPLOAD_DIRS` to absolute
+  starts with a dot. To choose the folders yourself, set `FOXLEASH_UPLOAD_DIRS` to absolute
   folders separated by `:` (a leading `~` stands for your home folder) in the environment your
-  MCP client starts `foxhand mcp` with: for Claude Code, `claude mcp add -e
-  FOXHAND_UPLOAD_DIRS=~/uploads ...` or the `env` of the server's entry. It replaces the
+  MCP client starts `foxleash mcp` with: for Claude Code, `claude mcp add -e
+  FOXLEASH_UPLOAD_DIRS=~/uploads ...` or the `env` of the server's entry. It replaces the
   defaults. Files and folders whose names start with a dot below an upload folder, and files
   named like keys (`id_*`, `*.pem`, `*.key` and similar), are refused in any folder, and an
   upload takes at most 10 MB.
-- A recipe is saved only by your click on Foxhand's page in Firefox, after you read it:
+- A recipe is saved only by your click on Foxleash's page in Firefox, after you read it:
   nothing the agent sends can save one. Later agent sessions read a saved recipe as your
   instructions, so read it before you save it.
 - Allowing a recipe's sites takes your click too, grants them for the session only, never
@@ -380,7 +380,7 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   turns into another kind of field stays protected only if the agent read the page, took a
   screenshot of it or acted in it while it was still a password field, and a text field that
   the page puts in its place shows its value.
-  When the agent reloads a page, Foxhand loads it without the browser's cache, so Firefox puts
+  When the agent reloads a page, Foxleash loads it without the browser's cache, so Firefox puts
   back no field value. It does the same after the agent goes back or forward to a page that
   Firefox loads again instead of keeping it in memory, except a page that a form sent with
   POST or that holds a frame a form sent with POST, and a page on a site the agent may not act
@@ -393,14 +393,14 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   frame changes; after a tab that was unloaded, by you or by Firefox to save memory, is loaded
   again; and after Firefox restores your windows and tabs when it starts again. Possibly also
   after you reopen a tab or window you closed; after the agent goes back or forward and the
-  page delays that, or Firefox delays telling Foxhand about the page's request, by more than a
+  page delays that, or Firefox delays telling Foxleash about the page's request, by more than a
   second, or the computer's clock is set back meanwhile; and to another tool call that reads
   the page while the agent goes back or forward to it.
   Screenshots hide the text of these fields, also in frames from other sites, with a style
-  sheet Foxhand adds to each frame, and Foxhand takes no screenshot when a frame does not take
+  sheet Foxleash adds to each frame, and Foxleash takes no screenshot when a frame does not take
   it, such as a PDF in a frame. There are two exceptions: a frame showing Firefox's error page
   for a page that could not be loaded or does not allow being shown in a frame, and a frame of
-  another add-on, such as a password manager's menu, which Foxhand hides together with every
+  another add-on, such as a password manager's menu, which Foxleash hides together with every
   other frame of the same page or frame, so none of their content is in the screenshot. When
   the page turns a password field into another kind of field after the agent read the page,
   took a screenshot of it or acted in it while it was a password field, a screenshot hides the
@@ -408,16 +408,16 @@ and no defense is complete. Foxhand limits what a fooled agent can do:
   that is none of these still shows its value.
 - Saved screenshots go only into the agent's working folder, as new files, and never over
   an existing file.
-- Downloads save only a file served by a site you approved, after any redirects: Foxhand
+- Downloads save only a file served by a site you approved, after any redirects: Foxleash
   checks the address before the request, and the final address before it reads or saves
   anything. They go only into your Firefox download folder, under a plain file name, never
   over an existing file. The file's content reaches the agent only when it reads the file
-  with its own tools, outside Foxhand's untrusted marking.
+  with its own tools, outside Foxleash's untrusted marking.
 
 Your agent's own permission settings still apply on top of this, but do not rely on them
 alone: many people run agents with prompts turned off.
 
-Avoid using Foxhand on sites where a mistake is costly (banking, health records, admin
+Avoid using Foxleash on sites where a mistake is costly (banking, health records, admin
 panels with destructive actions), and stay nearby while it works.
 
 ## Limits
@@ -431,6 +431,11 @@ are simulated. Some things therefore do not work:
 - sites that ignore simulated events.
 
 The agent is told about these limits and asks you to take such steps yourself.
+
+## The name
+
+The agent works in your Firefox on a leash that you hold. A leash is also an old collective
+noun for foxes: a leash of foxes.
 
 ## Development
 

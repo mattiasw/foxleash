@@ -19,7 +19,7 @@ Biome, and the pre-push hook runs the type check and the unit tests.
 The repository is an npm workspaces monorepo run by Turborepo:
 
 - `apps/extension/`: the Firefox extension
-- `apps/server/`: the `foxhand` command (MCP server, native host, installer)
+- `apps/server/`: the `foxleash` command (MCP server, native host, installer)
 - `packages/protocol/`: messages and contracts shared by both
 - `packages/tsconfig/`: shared TypeScript configuration
 - `e2e/`: end-to-end tests in a real, headless Firefox
@@ -39,8 +39,8 @@ The repository is an npm workspaces monorepo run by Turborepo:
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
 printed in full with the output the tests wrote, and a missed coverage floor prints the
-per-file coverage table. Set `FOXHAND_TEST_REPORTER=spec` (or any other `--test-reporter`
-value) for Node's per-test output, for example `FOXHAND_TEST_REPORTER=spec npm test`.
+per-file coverage table. Set `FOXLEASH_TEST_REPORTER=spec` (or any other `--test-reporter`
+value) for Node's per-test output, for example `FOXLEASH_TEST_REPORTER=spec npm test`.
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
@@ -50,12 +50,12 @@ refuses to strip types from files it sees under `node_modules`.
 
 `npm run e2e` builds the extension, then starts a pinned Firefox headless with a temporary
 home directory and a temporary `XDG_RUNTIME_DIR`, so it never touches your own Firefox or
-Foxhand. It installs the native host into that home, installs the extension over WebDriver
+Foxleash. It installs the native host into that home, installs the extension over WebDriver
 BiDi, serves fixture pages from a local HTTP server, and calls the real MCP tools through
-`foxhand mcp`, as an MCP client would.
+`foxleash mcp`, as an MCP client would.
 
 The suite runs on linux x64 only. The first run downloads Firefox into
-`${XDG_CACHE_HOME:-~/.cache}/foxhand-firefox` and checks it against the sha256 pinned in
+`${XDG_CACHE_HOME:-~/.cache}/foxleash-firefox` and checks it against the sha256 pinned in
 `bin/firefox-version.json`; later runs reuse it. To raise the pin, set the new version in
 that file together with the sha256 of `linux-x86_64/en-US/firefox-<version>.tar.xz` from
 Mozilla's `https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`, as a change
@@ -117,7 +117,7 @@ trusted, and the prompt ignores it.
 
 `npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
 version from `apps/extension/package.json`, unminified `background.js`, `options.js`,
-`approve.js`, `propose.js`, `run.js` and `content.js`, the script Foxhand injects into the
+`approve.js`, `propose.js`, `run.js` and `content.js`, the script Foxleash injects into the
 pages of the agent's tabs, the settings page `options.html`, the approval prompt
 `approve.html`, the recipe page `propose.html` and `run.html`, the page where the user allows a
 recipe's sites for a session, with their shared `pages.css`, and the icon. It then lints that
@@ -128,16 +128,16 @@ fails on any error or warning.
 `content.js` whenever their TypeScript source changes and runs Firefox through `web-ext run`,
 which reloads the extension after each rebuild. It writes the manifest, the icon and the
 pages (`src/*.html` and `src/*.css`) once at start, so restart it after changing them. Firefox
-uses a persistent profile in `$XDG_CACHE_HOME/foxhand/dev-profile` (by default
-`~/.cache/foxhand/dev-profile`), so what you set up there, such as logins, stays between
+uses a persistent profile in `$XDG_CACHE_HOME/foxleash/dev-profile` (by default
+`~/.cache/foxleash/dev-profile`), so what you set up there, such as logins, stays between
 runs. It needs a desktop with Firefox 142 or later.
 
 ## AMO source archive
 
 Mozilla reviewers rebuild the extension from a source archive. `npm run build:amo` builds
-`artifacts/foxhand-source-<version>.zip`, then extracts it into a temporary directory and
+`artifacts/foxleash-source-<version>.zip`, then extracts it into a temporary directory and
 runs `npm ci && npm run build` there, as a reviewer would. From that clean copy it builds
-`artifacts/foxhand-<version>.xpi`. It fails unless:
+`artifacts/foxleash-<version>.xpi`. It fails unless:
 
 - every tracked file matches a ship or exclude rule in `bin/build-amo.ts`;
 - the archive's files are exactly the ones in `bin/amo-source-files.txt`, read from the git
@@ -205,7 +205,7 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   that version.
 - `artifacts <version> [--unsigned <path>]`: the signed XPI in `web-ext-artifacts/` holds the
   signature files and exactly the files of the unsigned XPI (default
-  `artifacts/foxhand-<version>.xpi`), byte for byte except `manifest.json`, which may differ
+  `artifacts/foxleash-<version>.xpi`), byte for byte except `manifest.json`, which may differ
   only in its JSON formatting (AMO's signed copy drops the final newline), and its manifest
   has `<version>`.
 
@@ -239,10 +239,10 @@ taking its version from `apps/extension/package.json`.
    run `npm run check:release -- post-bump x.y.z` and commit the six version files as
    `Bump version to x.y.z`. The first release has no bump and no such commit.
 4. Run `npm run lint`, `npx turbo run typecheck test --force` and `npm run build:amo`, which
-   builds `artifacts/foxhand-source-x.y.z.zip` and `artifacts/foxhand-x.y.z.xpi`.
+   builds `artifacts/foxleash-source-x.y.z.zip` and `artifacts/foxleash-x.y.z.xpi`.
 5. Create the annotated tag with `git tag -a vx.y.z -m "vx.y.z"` and run
    `npm run check:release -- pre-push`. Then check that every entry of
-   `artifacts/foxhand-x.y.z.xpi` survives the trip to `web-ext sign`: none that web-ext's
+   `artifacts/foxleash-x.y.z.xpi` survives the trip to `web-ext sign`: none that web-ext's
    default ignores would leave out (a path component that starts with `.`, is
    `node_modules`, or ends in `.xpi` or `.zip`) and none the `artifacts` check refuses as
    unsafe. On a match, stop before pushing: the tag is still local, so deleting it and the
@@ -252,21 +252,21 @@ taking its version from `apps/extension/package.json`.
    Then move local `main` to the pushed commit with `git switch main`,
    `git merge --ff-only release/x.y.z` and `git branch -d release/x.y.z`.
 6. Once CI has passed on the pushed commit, sign the XPI from the clean copy,
-   `artifacts/foxhand-x.y.z.xpi`, as an unlisted version on addons.mozilla.org.
+   `artifacts/foxleash-x.y.z.xpi`, as an unlisted version on addons.mozilla.org.
    `web-ext sign` takes a directory, so extract the XPI and pass that directory as
    `--source-dir`. Before extracting, check the entry names again as in step 5. Then
    extract it, stop on any unzip warning, and check that the folder holds exactly the XPI's
    files, as regular files (web-ext follows a symbolic link).
    Run `web-ext sign` with `--channel unlisted`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
-   attached by `--upload-source-code artifacts/foxhand-source-x.y.z.zip`, and with
+   attached by `--upload-source-code artifacts/foxleash-source-x.y.z.zip`, and with
    `--amo-metadata` naming a JSON file whose `version` object carries
    `"compatibility": ["firefox"]` and `approval_notes`. The approval notes are the body of the
    Permissions section of `docs/amo/listing.md`, which goes with every version; the
    compatibility follows its Compatibility section.
-7. Put the signed XPI in `web-ext-artifacts/foxhand-x.y.z.xpi` and run
+7. Put the signed XPI in `web-ext-artifacts/foxleash-x.y.z.xpi` and run
    `npm run check:release -- artifacts x.y.z`.
-8. Create a draft GitHub release for the tag `vx.y.z` with `foxhand-x.y.z.xpi` attached,
+8. Create a draft GitHub release for the tag `vx.y.z` with `foxleash-x.y.z.xpi` attached,
    review it and publish it.
 
 ## Server
@@ -274,16 +274,16 @@ taking its version from `apps/extension/package.json`.
 Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
 
 `npm run setup` (the `install` subcommand) writes the launcher to
-`~/.local/share/foxhand/foxhand-host` and the native manifest to
-`~/.mozilla/native-messaging-hosts/foxhand.json`; both paths derive from `$HOME` only. The
+`~/.local/share/foxleash/foxleash-host` and the native manifest to
+`~/.mozilla/native-messaging-hosts/foxleash.json`; both paths derive from `$HOME` only. The
 launcher runs this checkout's `main.ts` with the absolute path of the Node that ran setup,
 so rerun setup after moving or switching checkouts or Node versions.
 `npm run setup -- --no-claude` and `npm run teardown -- --no-claude` leave Claude Code's
 user configuration unchanged, for a checkout that should not touch it.
 
 Setup's last step installs the extension. It runs
-`gh release download v<version> --repo github.com/mattiasw/foxhand --pattern foxhand-<version>.xpi`
-into `~/.cache/foxhand/foxhand-<version>.xpi` (from `$HOME` only, like the other paths) and
+`gh release download v<version> --repo github.com/mattiasw/foxleash --pattern foxleash-<version>.xpi`
+into `~/.cache/foxleash/foxleash-<version>.xpi` (from `$HOME` only, like the other paths) and
 opens that file in Firefox, which asks you to confirm the installation. The repository names
 its host, so `GH_HOST` or a gh login to another host cannot change where the file comes from.
 `<version>` is this checkout's version, not GitHub's latest release, so the extension matches
@@ -294,11 +294,11 @@ against the directory `npm run` was started from. `npm run setup -- --no-extensi
 step. Firefox is started detached, so setup neither waits for it nor stops it.
 
 The host listens on `<socket directory>/<pid>.sock`. The socket directory is the first of
-`$XDG_RUNTIME_DIR/foxhand` and `/run/user/<uid>/foxhand` whose base directory (that is,
+`$XDG_RUNTIME_DIR/foxleash` and `/run/user/<uid>/foxleash` whose base directory (that is,
 `$XDG_RUNTIME_DIR` or `/run/user/<uid>`) is a real directory owned by you with no group or
-other permission bits, else `/tmp/foxhand-<uid>`.
+other permission bits, else `/tmp/foxleash-<uid>`.
 
-Foxhand creates the socket directory with mode 0700. It refuses one that is a symlink, belongs
+Foxleash creates the socket directory with mode 0700. It refuses one that is a symlink, belongs
 to another user, or has group or other permission bits, and it never changes an existing
 directory's mode or owner.
 
@@ -319,14 +319,14 @@ To run the MCP server by hand, start `node apps/server/src/main.ts mcp`. It spea
 host only on the first tool call, and exits when stdin ends. An MCP client built on the SDK's
 `StdioClientTransport` must pass `XDG_RUNTIME_DIR` (and `HOME`) in its `env` when it wants a
 private socket directory: the SDK's default environment leaves `XDG_RUNTIME_DIR` out, and the
-server then falls back to `/run/user/<uid>/foxhand`, the running user's real Firefox.
+server then falls back to `/run/user/<uid>/foxleash`, the running user's real Firefox.
 
 `npm run doctor` (the `doctor` subcommand) changes nothing in your setup. It reads the native
 manifest and checks its name, type, allowed extension and launcher path. It runs the launcher
 the way Firefox does, but with only `HOME`, `PATH=/usr/bin:/bin` and a private temporary
 `XDG_RUNTIME_DIR` in its environment, so the host it starts never joins the real socket
 directory: it sends one extension hello, expects a welcome, ends stdin and expects a clean
-exit, then removes the temporary directory. It runs `claude mcp get foxhand` and compares the
+exit, then removes the temporary directory. It runs `claude mcp get foxleash` and compares the
 registered command with this checkout. It checks the socket directory with the same rules as
 the host, and makes one `mcp` hello and welcome round trip over each socket of a running
 process, reading the extension's state from the welcome. The extension reports its access to
@@ -336,16 +336,16 @@ that line shows the current state.
 ## Probing synthetic input
 
 `npm run probe -- <url>...` (the `probe` subcommand) measures which kinds of synthetic input
-work on real pages, to tune how Foxhand clicks and types. With Firefox running and the
-extension connected, it opens each URL in a new tab in the probe's own Foxhand tab group.
+work on real pages, to tune how Foxleash clicks and types. With Firefox running and the
+extension connected, it opens each URL in a new tab in the probe's own Foxleash tab group.
 When Firefox asks in that tab whether to allow the site, answer there; the probe waits up to
 10 minutes per URL. It then runs a fixed check bundled in the extension in the page and moves
 on to the next URL.
 
 It writes two reports, `<path>.json` and `<path>.md`, and never replaces an existing file.
 `--out <path>` sets the path without its extension; by default it is
-`foxhand-probe-<date>-<time>` in the current folder. Through npm, the current folder and so a
-relative `--out` path are the Foxhand folder.
+`foxleash-probe-<date>-<time>` in the current folder. Through npm, the current folder and so a
+relative `--out` path are the Foxleash folder.
 
 What the probe does in a page:
 
@@ -369,7 +369,7 @@ To run it in your everyday Firefox profile, for example against your own logged-
 2. In Firefox, open `about:debugging`, choose This Firefox, then Load Temporary Add-on, and
    pick `apps/extension/dist/manifest.json`. Firefox removes the add-on again when it
    restarts.
-3. Run `npm run probe -- <url>...` and allow each site in its tab when Foxhand asks.
+3. Run `npm run probe -- <url>...` and allow each site in its tab when Foxleash asks.
 
 ## Dependency updates
 

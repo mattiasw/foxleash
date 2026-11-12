@@ -10,7 +10,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The README describes Claude Code settings that can make browser tasks faster: allowing
-  Foxhand's tools without a prompt, a lower effort level and fast mode.
+  Foxleash's tools without a prompt, a lower effort level and fast mode.
+
+### Changed
+
+- Foxhand is now named Foxleash, because another Firefox add-on is named Foxhand. Everything
+  that carried the name changed with it: the extension and its add-on id, the native host, the
+  MCP server name (`foxleash`), the `FOXLEASH_UPLOAD_DIRS` variable and the install paths. An
+  installation of 0.3.0 or earlier is not updated in place: run `npm run teardown` before you
+  update the checkout, remove the Foxhand extension in Firefox, then run `npm run setup`.
+  Approved sites, blocklist edits and recipes stay with the old extension and have to be
+  entered again.
 
 ### Fixed
 
@@ -49,23 +59,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - A Recipes section on the settings page, where you write, edit and delete recipes: a task's
   steps written down with the sites it uses. A deleted recipe can be restored with Undo.
-- Agents can propose a recipe: Foxhand opens it on a page in the session's tab group, where you
+- Agents can propose a recipe: Foxleash opens it on a page in the session's tab group, where you
   read it, edit it, and save or discard it. The page shows all of the recipe, its name and
   description included, with no scrolling inside the fields. Proposing the name of a saved
   recipe shows the saved version and the changes to its steps.
 - Agents can read the recipes you saved: the list of their names, descriptions and sites, and
-  one recipe with its steps. Foxhand gives the agent a recipe as your instructions, while page
+  one recipe with its steps. Foxleash gives the agent a recipe as your instructions, while page
   content stays marked as untrusted.
 - Agents can ask you to allow a saved recipe's sites for their session in one click, on a
-  Foxhand page that lists the sites. Nothing is allowed always this way, and sites on your
+  Foxleash page that lists the sites. Nothing is allowed always this way, and sites on your
   blocklist or that you refused in the session stay so.
 - A `run_recipe` prompt starts a saved recipe from your agent: in Claude Code,
-  `/mcp__foxhand__run_recipe <name>`.
+  `/mcp__foxleash__run_recipe <name>`.
 
 ### Removed
 
 - Support for Firefox 140 and 141, including Firefox ESR 140, which Mozilla no longer
-  updates. Foxhand now requires Firefox 142 or later.
+  updates. Foxleash now requires Firefox 142 or later.
 
 ### Fixed
 
@@ -87,7 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- A tab in which Foxhand asked you to approve a site no longer gets a Forward button that
+- A tab in which Foxleash asked you to approve a site no longer gets a Forward button that
   leads to a blank page after Firefox unloads it to save memory and you select it again.
 - `read_page` shows the text in an editable area, such as an email's message body, as its
   value, as it does for a text field, also when the agent reads only the interactive elements.
@@ -102,36 +112,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - The Firefox extension opens and navigates tabs for your agent, keeping each session's tabs
-  in its own orange "Foxhand" tab group.
-- When an agent session ends, its Foxhand tab group closes if it holds only blank tabs;
+  in its own orange "Foxleash" tab group.
+- When an agent session ends, its Foxleash tab group closes if it holds only blank tabs;
   groups with pages stay open.
-- Firefox can now start the Foxhand native host, which relays your agent's requests to the
+- Firefox can now start the Foxleash native host, which relays your agent's requests to the
   extension.
 - An MCP server gives your agent the `tabs_list`, `tab_open` and `navigate` tools, so it can
-  list, open and navigate the tabs in its Foxhand tab group in your Firefox. `navigate`
+  list, open and navigate the tabs in its Foxleash tab group in your Firefox. `navigate`
   reloads a page without the browser's cache, also after going back or forward to a page that
   Firefox loads again instead of keeping it in memory, unless a form sent it with POST or its
   site is not approved, so Firefox puts back no value it filled in from your saved logins,
   addresses or cards, and the page's fields lose what was typed into them.
-- `npm run setup` installs the signed Foxhand extension in Firefox (you confirm once),
-  connects Firefox to Foxhand and registers Foxhand with Claude Code; `npm run teardown`
+- `npm run setup` installs the signed Foxleash extension in Firefox (you confirm once),
+  connects Firefox to Foxleash and registers Foxleash with Claude Code; `npm run teardown`
   removes the native host and the registration.
-- `npm run doctor` checks your setup, the Foxhand host of every running Firefox and the
+- `npm run doctor` checks your setup, the Foxleash host of every running Firefox and the
   extension, and says what to do about each problem it finds.
 - Tabs on sites you have not approved show your agent only the site's address, not the
   page's path, query or title, and tabs showing a local file only that they are local files.
 - The extension's settings page lists the sites you allowed always and lets you revoke each
   one.
-- Financial and health sites on a built-in blocklist are refused before Foxhand opens or
+- Financial and health sites on a built-in blocklist are refused before Foxleash opens or
   reloads them, even if you approved the site, and a tab showing one shows your agent only
   the site's address.
-- Before your agent opens a page on a site you have not approved, Foxhand asks you in that
+- Before your agent opens a page on a site you have not approved, Foxleash asks you in that
   tab: for this session, always, or not at all. Only your click can allow it.
-- The Foxhand toolbar button shows ON on the tabs your agent session can use; clicking it
+- The Foxleash toolbar button shows ON on the tabs your agent session can use; clicking it
   opens the settings.
 - The settings page lets you edit the blocklist, and see and forget what you allowed or
   refused for each running agent session, and the prompts you closed without an answer.
-- `npm run probe -- <url>...` opens each page in its own Foxhand tab group after you allow
+- `npm run probe -- <url>...` opens each page in its own Foxleash tab group after you allow
   the site, and writes a JSON and a Markdown report of which synthetic clicks, typing and key
   presses work there.
 - Tool results put page content between a start line and an end line that carry the same
@@ -155,7 +165,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   folder, never over an existing file.
 - Your agent can upload files from your computer with the `upload_file` tool, into a page's
   file field or dropped on the page, on sites you approved. It reads only from the upload
-  folders (its working folder and `~/Downloads` unless you set `FOXHAND_UPLOAD_DIRS`), never
+  folders (its working folder and `~/Downloads` unless you set `FOXLEASH_UPLOAD_DIRS`), never
   dotfiles or files named like keys, and at most 10 MB per upload.
 - Your agent can click, hover, scroll and drag in a page with the `click`, `hover`, `scroll`
   and `drag` tools, on an element from `read_page` or at a point, on sites you approved.
@@ -163,7 +173,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an email address, are refused; your agent opens a page on another site with `navigate`,
   which asks you first. A link or form button that opens a new tab, clicked or pressed with
   Enter, opens nothing while Firefox's pop-up blocker stops it, as it does unless you allow
-  pop-ups for the site; a new tab that a page in the agent's Foxhand tab group opens, also
+  pop-ups for the site; a new tab that a page in the agent's Foxleash tab group opens, also
   after your own click, joins that group.
 - Your agent can read a page's console messages, uncaught errors and unhandled promise
   rejections with the `read_console` tool, filtered by level and pattern, only from pages
@@ -173,7 +183,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Authorization and Proxy-Authorization values hidden and no bodies, only from pages that
   loaded on sites you approved.
 - Your agent can wait for text, an element or a navigation in a page (`wait_for`), switch
-  between and close the tabs in its Foxhand tab group (`tab_select`, `tab_close`), and resize
+  between and close the tabs in its Foxleash tab group (`tab_select`, `tab_close`), and resize
   the window that holds the group (`resize_window`).
 - Your agent can type into text fields and editable areas with `type`, and press keys with
   `press_key`, which submits forms with Enter, moves focus with Tab, closes popovers and

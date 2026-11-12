@@ -1,19 +1,19 @@
-# Foxhand - Agent Guide
+# Foxleash - Agent Guide
 
-Foxhand lets an AI agent on your computer, such as Claude Code, use your own Firefox
+Foxleash lets an AI agent on your computer, such as Claude Code, use your own Firefox
 through MCP tools. It has three parts:
 
 ```
-MCP client --stdio--> foxhand mcp --Unix socket--> foxhand host --native messaging--> Firefox extension
+MCP client --stdio--> foxleash mcp --Unix socket--> foxleash host --native messaging--> Firefox extension
 ```
 
-`foxhand mcp` is started by the MCP client, `foxhand host` by Firefox. The host relays
+`foxleash mcp` is started by the MCP client, `foxleash host` by Firefox. The host relays
 requests from MCP servers to the extension and routes the responses back. Firefox only.
 
 ## Project Structure
 
 - `apps/extension/` - Firefox MV3 extension (TypeScript, bundled with esbuild, unminified)
-- `apps/server/` - the `foxhand` CLI: `mcp`, `host`, `install`, `uninstall`, `doctor`, `probe`;
+- `apps/server/` - the `foxleash` CLI: `mcp`, `host`, `install`, `uninstall`, `doctor`, `probe`;
   runs TypeScript directly on Node 24 (type stripping), no build step
 - `packages/protocol/` - messages and method contracts shared by both, plus the protocol
   version
@@ -37,12 +37,12 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Fast gate (run before every commit) | `npm run lint && npx turbo run typecheck test --force` |
 | Install on this machine | `npm run setup` |
 | Check the installation | `npm run doctor` |
-| Develop the extension | `npm run dev` (persistent dev profile in `~/.cache/foxhand/dev-profile`, rebuilds on change) |
+| Develop the extension | `npm run dev` (persistent dev profile in `~/.cache/foxleash/dev-profile`, rebuilds on change) |
 
 Always run tests through the npm scripts, in CI too: the coverage floors live in the
 scripts, and calling `node --test` directly runs the suite with them switched off. The
 scripts print each failure in full and, for a green run, only counts and coverage totals;
-`FOXHAND_TEST_REPORTER=spec` restores Node's per-test output.
+`FOXLEASH_TEST_REPORTER=spec` restores Node's per-test output.
 
 ## Conventions
 
@@ -105,7 +105,7 @@ Entries describe what a user notices, not how the code changed.
 
 ## Documentation
 
-README.md and `docs/development.md` describe how to install, use and develop Foxhand.
+README.md and `docs/development.md` describe how to install, use and develop Foxleash.
 Update them in the same commit as the behaviour they describe: a new tool, a changed
 command, a new requirement or limit.
 
@@ -142,8 +142,8 @@ reads, update the list in the same commit; the build fails on any file it cannot
 
 ## Security
 
-Foxhand acts in the user's logged-in browser, so a web page that injects instructions into
-the model is the main threat. The safeguards live in Foxhand, not in the MCP client, whose
+Foxleash acts in the user's logged-in browser, so a web page that injects instructions into
+the model is the main threat. The safeguards live in Foxleash, not in the MCP client, whose
 permission prompts can be switched off:
 
 - A session acts on a site only after the user approved that site in the browser, before the

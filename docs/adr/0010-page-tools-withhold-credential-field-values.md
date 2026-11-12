@@ -53,7 +53,7 @@ numbers, which pages mark with `autocomplete` tokens.
 - A field that the page switched from password to text before the first read_page in that
   document shows its value, as any text field does, and so does a new text field that a page
   puts in place of a password field, copying its value. Catching these would need watching the
-  page from the start of every load, which Foxhand does not do.
+  page from the start of every load, which Foxleash does not do.
 - A credential field that the page marks with neither type `password` nor one of the tokens
   (a custom PIN field, for example) is read like any text field. Page text outside fields can
   still carry account details, as the add-on listing says.

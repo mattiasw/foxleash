@@ -4,8 +4,8 @@
 
 ## Context
 
-Foxhand cannot work on Firefox for Android: it has no `nativeMessaging` or `tabGroups` API,
-and there is no local Foxhand program for the extension to talk to.
+Foxleash cannot work on Firefox for Android: it has no `nativeMessaging` or `tabGroups` API,
+and there is no local Foxleash program for the extension to talk to.
 
 AMO takes Firefox for Android compatibility from the manifest's
 `browser_specific_settings.gecko_android` key. A version whose manifest has the key is

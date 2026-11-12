@@ -106,7 +106,7 @@ const CLAIMS = "docs/amo/listing-claims.json";
 const MANIFEST = "apps/extension/manifest.json";
 const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const CAPABILITIES_INTRO = "The agent can:";
-const SAFEGUARDS_INTRO = "Foxhand limits what a fooled agent can do:";
+const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
 const PERMISSIONS_HEADING = "## Permissions";
 const APPROVAL_NOTES_MAX = 3000;
 const DATA_HEADING = "## Data collection and handling";
@@ -952,9 +952,9 @@ export function checkPrePush(env: Env): Finding[] {
 
 export function checkArtifacts(env: Env, version: string, unsigned: string | undefined): Finding[] {
   const findings: Finding[] = [];
-  const signedPath = `web-ext-artifacts/foxhand-${version}.xpi`;
+  const signedPath = `web-ext-artifacts/foxleash-${version}.xpi`;
   const unsignedPath =
-    unsigned === undefined ? `artifacts/foxhand-${version}.xpi` : path.resolve(env.root, unsigned);
+    unsigned === undefined ? `artifacts/foxleash-${version}.xpi` : path.resolve(env.root, unsigned);
   const usable = [unsignedPath, signedPath].map(
     (file) => attempt(findings, file, () => archiveUsable(env, file, findings)) === true,
   );
@@ -1917,8 +1917,8 @@ function checkReleaseTag(env: Env, tag: string, findings: Finding[]): void {
 }
 
 function checkBuiltArtifacts(env: Env, version: string, findings: Finding[]): void {
-  const xpi = `artifacts/foxhand-${version}.xpi`;
-  const source = `artifacts/foxhand-source-${version}.zip`;
+  const xpi = `artifacts/foxleash-${version}.xpi`;
+  const source = `artifacts/foxleash-source-${version}.zip`;
   if (!env.exists(source)) findings.push(fail(`${source} is missing; run npm run build:amo`));
   if (!env.exists(xpi)) {
     findings.push(fail(`${xpi} is missing; run npm run build:amo`));

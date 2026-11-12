@@ -4,8 +4,8 @@
 
 ## Context
 
-Foxhand acts in the user's logged-in Firefox, and a page can carry instructions aimed at the
-model ([0002](0002-safeguards-live-in-foxhand-not-the-mcp-client.md)). The first safeguard is
+Foxleash acts in the user's logged-in Firefox, and a page can carry instructions aimed at the
+model ([0002](0002-safeguards-live-in-foxleash-not-the-mcp-client.md)). The first safeguard is
 that an agent session acts on a site only after the user approved it in the browser. That needs
 a definition of a site, a place to keep the user's answers, a moment at which to ask, and a rule
 for what the agent may learn about tabs on sites nobody approved. A tab's URL and title can
@@ -32,7 +32,7 @@ Approvals for one session only live in the background's memory, keyed by the MCP
 
 **Who may write a grant.** `storage.local` is writable from every extension context, including
 content scripts the extension injects into web pages. So, next to the per-frame rule below:
-scripts Foxhand injects into web pages never read or write `storage`; grants are written only
+scripts Foxleash injects into web pages never read or write `storage`; grants are written only
 by the extension's own pages and its background. Nothing in the extension is test-only, and no
 native-messaging method writes settings; the end-to-end tests seed settings through the
 settings page ([0008](0008-e2e-tests-act-in-extension-pages-through-bidi-and-marionette.md)).

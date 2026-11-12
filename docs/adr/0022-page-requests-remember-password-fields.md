@@ -54,7 +54,7 @@ switches before the first read does not cover it.
 
 ## Consequences
 
-- A field the page switches before the first Foxhand request in a document still shows its
+- A field the page switches before the first Foxleash request in a document still shows its
   value, and so do a new text field the page puts in place of a password field and a password
   field the page creates and switches between two requests.
 - Each page request walks the whole document once more. wait_for polls every 250 ms, so a wait

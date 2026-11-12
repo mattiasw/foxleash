@@ -9,7 +9,7 @@ element. Page content can steer the agent to name any path, so ADR 0002 (invaria
 uploads read only from allowed folders and never dotfiles or key files. That leaves open which
 folders are allowed, what counts as a dotfile, and where and when the check runs.
 
-The process that reads the file is `foxhand mcp`, started by the MCP client in its working
+The process that reads the file is `foxleash mcp`, started by the MCP client in its working
 folder. Many clients start it in the home folder, which would allow everything below it.
 Credentials often sit under a dot folder with a plain file name (`~/.aws/credentials`,
 `~/.mozilla/firefox/<profile>/logins.json`). Between a check on a path and the read, a symlink
@@ -22,11 +22,11 @@ host refuse a larger request. The host relays requests unchanged (ADR 0001).
 ## Decision
 
 - **Folders** (`uploadFolders` in `apps/server/src/upload-policy.ts`, computed once when
-  `foxhand mcp` starts). By default the folder `foxhand mcp` was started in and `~/Downloads`.
+  `foxleash mcp` starts). By default the folder `foxleash mcp` was started in and `~/Downloads`.
   A default whose real path is the home folder or one of its ancestors (`/`, `/home`), or
   that has a component starting with a dot, is left out with a note on stderr, so a symlinked
   `~/Downloads -> ~` or a client started in `~/.config` does not open the home folder or a dot
-  folder. `FOXHAND_UPLOAD_DIRS`, colon-separated absolute folders with a leading `~` expanded,
+  folder. `FOXLEASH_UPLOAD_DIRS`, colon-separated absolute folders with a leading `~` expanded,
   replaces the defaults; an explicit home folder or dot folder is allowed there, and when no
   entry is usable no upload is possible. No tool parameter or message changes the folders.
 - **Names**. A file is refused when any name below the folder that holds it starts with a dot
@@ -64,7 +64,7 @@ host refuse a larger request. The host relays requests unchanged (ADR 0001).
 ## Alternatives rejected
 
 - **`realpath`, then open, as the deciding check.** A symlink swapped between the two would
-  change what is read. `realpath` and `stat` still run first, but only so Foxhand does not
+  change what is read. `realpath` and `stat` still run first, but only so Foxleash does not
   open what it would refuse; the descriptor decides.
 - **`O_PATH` with a check before the read.** Node does not expose it, and its value differs
   between architectures.

@@ -21,7 +21,7 @@ one-time code field, or a password field the page shows as text, appears with it
 fields usually sit in frames from another site.
 
 read_page's rule cannot simply be reused. It decides per element in the top document, through
-the content script, but a screenshot is pixels of every frame, and Foxhand's content script runs
+the content script, but a screenshot is pixels of every frame, and Foxleash's content script runs
 only in the top frame (ADR 0009). The fields read_page remembers as password fields live in a
 `WeakSet` in the content script, which CSS cannot select, and ADR 0010 rejects marking them in
 the DOM.
@@ -69,7 +69,7 @@ returns no image when that cannot be put in place.
   input mask goes into the top frame too. When it does not, the request is made again after the
   capture, and a field revealed in between refuses the screenshot as a page change. The reply is
   read as untrusted input: an own boolean `revealed`, anything else is `page_error`.
-- **One insertion per frame** (`handlers.ts`): Foxhand lists the tab's frames with
+- **One insertion per frame** (`handlers.ts`): Foxleash lists the tab's frames with
   `webNavigation.getAllFrames` and inserts the field mask into each with its own
   `frameIds: [id]` target, then captures with `tabs.captureTab` exactly as before. A frame that
   refuses the sheet, a list Firefox cannot give, or one without the top frame refuses the
@@ -82,7 +82,7 @@ returns no image when that cannot be put in place.
   with a random id to the text it inserts, and removes exactly that text. Nothing from the request
   or the page goes into the CSS.
 - **Removal is started, not awaited.** After the capture settles, and after a failed list,
-  insertion or timeout, Foxhand removes every sheet the screenshot tried to insert, each once
+  insertion or timeout, Foxleash removes every sheet the screenshot tried to insert, each once
   its own insertion settled, without waiting for the removals. A removal that fails does not withhold
   the image: it was taken with the sheets in place.
 - **Frame loads refuse the screenshot.** From before the first site gate until after the
@@ -92,7 +92,7 @@ returns no image when that cannot be put in place.
   the top document, which the site watch does not see.
 - **One deadline.** The screenshot may now make up to three page requests, so a whole
   screenshot is bounded by `SCREENSHOT_TIMEOUT_MS` (50 s), below the host's 60 s request timeout,
-  and answers `page_timeout` when it passes. Once it has passed, Foxhand inserts no sheet and
+  and answers `page_timeout` when it passes. Once it has passed, Foxleash inserts no sheet and
   starts no capture.
 
 ## Alternatives rejected
@@ -111,7 +111,7 @@ returns no image when that cannot be put in place.
 - **Awaiting the removal**: Firefox removes a sheet only once the frame is idle, so a frame
   that never becomes idle would hold the tool result and its listeners.
 - **Injecting a script into every frame** to confirm each took the sheet: ADR 0009 keeps
-  Foxhand's scripts to the top frame.
+  Foxleash's scripts to the top frame.
 
 ## Consequences
 
@@ -131,7 +131,7 @@ returns no image when that cannot be put in place.
   seen by the frame watch.
 - A page whose frames keep loading documents, such as rotating ads, refuses some screenshots
   with "try again".
-- A page holding a frame Foxhand cannot enter, such as another add-on's frame (a password
+- A page holding a frame Foxleash cannot enter, such as another add-on's frame (a password
   manager's inline menu) or a site Mozilla keeps add-ons off, cannot be captured.
 - Every screenshot now injects the content script, so a page Firefox keeps extensions out of
   cannot be captured.

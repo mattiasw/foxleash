@@ -1,5 +1,5 @@
 {
-  "name": "foxhand-monorepo",
+  "name": "foxleash-monorepo",
   "version": "0.3.0",
   "private": true,
   "description": "Let an AI agent use your own Firefox through MCP tools",
@@ -20,15 +20,15 @@
     "build": "turbo run build",
     "build:amo": "node bin/build-amo.ts",
     "check:release": "node bin/check-release.ts",
-    "dev": "npm run dev -w @foxhand/extension",
+    "dev": "npm run dev -w @foxleash/extension",
     "setup": "node apps/server/src/main.ts install",
     "teardown": "node apps/server/src/main.ts uninstall",
     "doctor": "node apps/server/src/main.ts doctor",
     "probe": "node apps/server/src/main.ts probe",
     "check:test-integrity": "sh bin/check-test-integrity.sh",
-    "test:bin": "node --test --test-reporter=\"${FOXHAND_TEST_REPORTER:-./bin/test-reporter.ts}\" 'bin/**/*.test.ts'",
+    "test:bin": "node --test --test-reporter=\"${FOXLEASH_TEST_REPORTER:-./bin/test-reporter.ts}\" 'bin/**/*.test.ts'",
     "typecheck:bin": "tsc --noEmit -p bin",
-    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 --test-reporter=\"${FOXHAND_TEST_REPORTER:-./bin/test-reporter.ts}\" 'e2e/**/*.test.ts'",
+    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 --test-reporter=\"${FOXLEASH_TEST_REPORTER:-./bin/test-reporter.ts}\" 'e2e/**/*.test.ts'",
     "typecheck:e2e": "tsc --noEmit -p e2e"
   },
   "lint-staged": {

@@ -312,7 +312,7 @@ type JobRun = {
 function runJob(job: string, overrides: Scenario): JobRun {
   const jq = spawnSync("jq", ["--version"], { encoding: "utf8" });
   assert.equal(jq.status, 0, "jq is required: the auto-merge tests run the workflow's jq filters");
-  const dir = mkdtempSync(path.join(tmpdir(), "foxhand-automerge-"));
+  const dir = mkdtempSync(path.join(tmpdir(), "foxleash-automerge-"));
   try {
     const bin = path.join(dir, "bin");
     const home = path.join(dir, "home");

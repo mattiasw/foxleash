@@ -35,7 +35,7 @@ const RULE_ERROR = /Add a ship or exclude rule/;
 const SHIPPED = [
   ".nvmrc",
   "apps/extension/build.ts",
-  "apps/extension/icons/foxhand.svg",
+  "apps/extension/icons/foxleash.svg",
   "apps/extension/manifest.json",
   "apps/extension/src/background.ts",
   "apps/extension/tsconfig.json",
@@ -349,12 +349,12 @@ describe("run", () => {
   });
 
   test("throws for a command that cannot start", () => {
-    assert.throws(() => run("foxhand-no-such-command", [], cwd), /error: .*ENOENT/);
+    assert.throws(() => run("foxleash-no-such-command", [], cwd), /error: .*ENOENT/);
   });
 });
 
 describe("files in the checkout", () => {
-  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxhand-build-amo-test-")));
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-build-amo-test-")));
   after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(path.join(root, "src", "deep"), { recursive: true });
   writeFileSync(path.join(root, "src", "a.ts"), "");
@@ -391,7 +391,7 @@ describe("childEnv", () => {
 
   test("drops every node_modules folder from PATH", () => {
     const PATH = [
-      "/work/foxhand/node_modules/.bin",
+      "/work/foxleash/node_modules/.bin",
       "/usr/bin",
       "/node/lib/node_modules/npm/node_modules/@npmcli/run-script/lib/node-gyp-bin",
       "/home/u/node_modules_old/bin",
@@ -408,7 +408,7 @@ describe("childEnv", () => {
 });
 
 describe("assertNoNodeModulesAbove", () => {
-  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxhand-build-amo-test-")));
+  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-build-amo-test-")));
   after(() => rmSync(base, { recursive: true, force: true }));
 
   test("refuses a node_modules folder in a folder above", () => {
@@ -431,7 +431,7 @@ describe("assertNoNodeModulesAbove", () => {
 
 // A repository whose build needs no packages, so the whole run works offline.
 describe("main", () => {
-  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxhand-build-amo-test-")));
+  const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-build-amo-test-")));
   // A private TMPDIR, so a temporary directory left behind is seen.
   const tmpdir = path.join(base, "tmp");
   mkdirSync(tmpdir);
@@ -472,7 +472,7 @@ describe("main", () => {
       name: "fixture",
       private: true,
       workspaces: ["apps/*"],
-      scripts: { build: "npm run build -w @foxhand/extension" },
+      scripts: { build: "npm run build -w @foxleash/extension" },
     }),
     "package-lock.json": JSON.stringify({
       name: "fixture",
@@ -480,12 +480,12 @@ describe("main", () => {
       requires: true,
       packages: {
         "": { name: "fixture", workspaces: ["apps/*"] },
-        "apps/extension": { name: "@foxhand/extension", version: "1.2.3" },
-        "node_modules/@foxhand/extension": { resolved: "apps/extension", link: true },
+        "apps/extension": { name: "@foxleash/extension", version: "1.2.3" },
+        "node_modules/@foxleash/extension": { resolved: "apps/extension", link: true },
       },
     }),
     "apps/extension/package.json": JSON.stringify({
-      name: "@foxhand/extension",
+      name: "@foxleash/extension",
       version: "1.2.3",
       private: true,
       type: "module",
@@ -494,7 +494,7 @@ describe("main", () => {
     "apps/extension/build.ts": [
       'import { cpSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";',
       // Through the workspace link, so the build fails without npm ci.
-      'const pkg = "../../node_modules/@foxhand/extension/package.json";',
+      'const pkg = "../../node_modules/@foxleash/extension/package.json";',
       'const { version } = JSON.parse(readFileSync(pkg, "utf8"));',
       'rmSync("dist", { recursive: true, force: true });',
       'mkdirSync("dist");',
@@ -522,7 +522,7 @@ describe("main", () => {
 
   // npm keeps its own compile cache in TMPDIR.
   function leftovers(): string[] {
-    return readdirSync(tmpdir).filter((name) => name.startsWith("foxhand-amo-"));
+    return readdirSync(tmpdir).filter((name) => name.startsWith("foxleash-amo-"));
   }
 
   function zipEntries(file: string): string[] {
@@ -537,14 +537,14 @@ describe("main", () => {
     await main(root);
     const artifacts = path.join(root, "artifacts");
     assert.deepEqual(readdirSync(artifacts).sort(), [
-      "foxhand-1.2.3.xpi",
-      "foxhand-source-1.2.3.zip",
+      "foxleash-1.2.3.xpi",
+      "foxleash-source-1.2.3.zip",
     ]);
-    const sourceZip = path.join(artifacts, "foxhand-source-1.2.3.zip");
+    const sourceZip = path.join(artifacts, "foxleash-source-1.2.3.zip");
     assert.deepEqual(zipEntries(sourceZip), list);
     const readme = execFileSync("unzip", ["-p", sourceZip, "README.md"], { encoding: "utf8" });
     assert.match(readme, /^Node \d+\.\d+\.\d+, npm \d+\.\d+\.\d+\n$/);
-    const xpi = path.join(artifacts, "foxhand-1.2.3.xpi");
+    const xpi = path.join(artifacts, "foxleash-1.2.3.xpi");
     assert.deepEqual(zipEntries(xpi), ["icons/icon.svg", "manifest.json"]);
     assert.equal(existsSync(path.join(root, "amo-dist")), false);
     assert.deepEqual(leftovers(), []);
@@ -554,7 +554,7 @@ describe("main", () => {
     const root = fixture("unlisted");
     write(root, "apps/extension/icons/extra.svg", "<svg/>");
     execFileSync("git", ["add", "-A"], { cwd: root });
-    write(root, "artifacts/foxhand-1.2.3.xpi", "from an earlier run");
+    write(root, "artifacts/foxleash-1.2.3.xpi", "from an earlier run");
     await assert.rejects(
       main(root),
       /In the archive but not listed:\n {2}"apps\/extension\/icons\/extra\.svg"/,
@@ -565,7 +565,7 @@ describe("main", () => {
 
   test("refuses a checkout build that reads an untracked file and writes no artifacts", async () => {
     const root = fixture("untracked");
-    write(root, "artifacts/foxhand-1.2.3.xpi", "from an earlier run");
+    write(root, "artifacts/foxleash-1.2.3.xpi", "from an earlier run");
     write(root, "apps/extension/icons/extra.svg", "<svg/>");
     await assert.rejects(main(root), /Only in .*icons: extra\.svg/);
     assert.equal(existsSync(path.join(root, "artifacts")), false);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { PageText } from "@foxhand/protocol";
+import type { PageText } from "@foxleash/protocol";
 import {
   type FixtureServer,
   READ_HIDDEN,
@@ -305,7 +305,7 @@ describe("get_page_text in real Firefox", () => {
   test("a blank tab is refused as not a web page", async () => {
     const blank = tabOf(await harness.ok(session, "tab_open")).id;
     const text = await harness.refused(session, "get_page_text", { tabId: blank });
-    assert.ok(text.includes("Foxhand acts only on http and https pages"), text);
+    assert.ok(text.includes("Foxleash acts only on http and https pages"), text);
   });
 
   async function open(path: string, title: string): Promise<number> {

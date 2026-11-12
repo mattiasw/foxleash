@@ -15,7 +15,7 @@ export type PageReply =
 /** The content script's requests by type; a handler may return a promise. */
 export type PageHandlers = Record<string, (params: Record<string, unknown>) => unknown>;
 
-export const PAGE_REQUEST_KIND = "foxhand-page";
+export const PAGE_REQUEST_KIND = "foxleash-page";
 
 /** The codes the background passes through from a content script's error reply. */
 export const PAGE_ERROR_CODES: readonly string[] = [
@@ -57,7 +57,7 @@ export function ownField(value: object, key: string): unknown {
 
 /**
  * The content script's answer to a message: undefined, synchronously, for anything that is not
- * a Foxhand page request, so Firefox sends no reply; else a reply promise that never rejects.
+ * a Foxleash page request, so Firefox sends no reply; else a reply promise that never rejects.
  * `before` runs right before every handler, so memory the handlers share sees the page before the
  * handler changes it; a throw from it fails the request.
  */
@@ -72,18 +72,22 @@ export function handlePageMessage(
   const params = ownField(message, "params");
   if (typeof type !== "string" || typeof requestSite !== "string" || !isRecord(params)) {
     return Promise.resolve(
-      failure(site, "invalid_params", "Foxhand's page script got a request it cannot read."),
+      failure(site, "invalid_params", "Foxleash's page script got a request it cannot read."),
     );
   }
   if (ctx.site !== requestSite) {
     return Promise.resolve(
-      failure(site, "page_changed", "The page changed while Foxhand was working in it; try again."),
+      failure(
+        site,
+        "page_changed",
+        "The page changed while Foxleash was working in it; try again.",
+      ),
     );
   }
   const handler = Object.hasOwn(ctx.handlers, type) ? ctx.handlers[type] : undefined;
   if (handler === undefined) {
     return Promise.resolve(
-      failure(site, "invalid_params", "Foxhand's page script has no request of that type."),
+      failure(site, "invalid_params", "Foxleash's page script has no request of that type."),
     );
   }
   return run(handler, params, site, ctx.before);

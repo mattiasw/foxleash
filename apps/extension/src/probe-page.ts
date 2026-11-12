@@ -1,4 +1,4 @@
-import type { ProbeCheck, ProbeCheckName, ProbeOutcome, ProbeResult } from "@foxhand/protocol";
+import type { ProbeCheck, ProbeCheckName, ProbeOutcome, ProbeResult } from "@foxleash/protocol";
 
 /**
  * Measures which kinds of synthetic input work in the page, in its isolated world. Returns null,
@@ -157,7 +157,7 @@ export async function probePage(site: string, cutoff: number): Promise<ProbeResu
     container.append(link);
     for (const strategy of ["click_event", "pointer_sequence"]) {
       linkCount += 1;
-      link.href = `${withoutFragment(location.href)}#foxhand-probe-${linkCount}`;
+      link.href = `${withoutFragment(location.href)}#foxleash-probe-${linkCount}`;
       await attemptLink("probe", link, strategy);
     }
 

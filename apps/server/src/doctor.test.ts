@@ -18,7 +18,7 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { EXTENSION_ID, PROTOCOL_VERSION, protocolMismatch } from "@foxhand/protocol";
+import { EXTENSION_ID, PROTOCOL_VERSION, protocolMismatch } from "@foxleash/protocol";
 import { type DoctorOptions, doctor, type Spawn } from "./doctor.ts";
 import { createFrameReader, encodeFrame, FRAME_LIMIT } from "./framing.ts";
 import { type ExtensionSource, install, installPaths } from "./install.ts";
@@ -58,7 +58,7 @@ interface SpawnRecorder {
 }
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const VERSION = "1.2.3";
 const HOST_VERSION = "2.0.0";
 const EXTENSION_VERSION = "0.9.0";
@@ -92,7 +92,7 @@ describe("doctor, everything in order", () => {
     assert.deepEqual(result.lines, [
       `ok native manifest: ${f.manifest}`,
       `ok launcher: ${f.launcher} runs host version ${SERVER_VERSION}, protocol ${PROTOCOL_VERSION}`,
-      "ok claude code: foxhand is registered",
+      "ok claude code: foxleash is registered",
       `  Command: ${process.execPath}`,
       `  Args: ${MAIN} mcp`,
       `ok socket directory: ${f.socketDir}`,
@@ -183,11 +183,11 @@ describe("doctor, the native manifest", () => {
 
   it("reports each bad field and skips a relative launcher path", LIMIT, async () => {
     const f = await fixture();
-    rewriteManifest(f, { name: "other", type: "pipe", path: "relative/foxhand-host" });
+    rewriteManifest(f, { name: "other", type: "pipe", path: "relative/foxleash-host" });
     const recorder = recordingSpawn();
     const result = await runDoctor(f, { spawn: recorder.spawn });
     assert.deepEqual(section(result, ["native manifest", "launcher"]), [
-      `FAIL native manifest: ${f.manifest} has a name other than "foxhand"; ${SETUP}`,
+      `FAIL native manifest: ${f.manifest} has a name other than "foxleash"; ${SETUP}`,
       `FAIL native manifest: ${f.manifest} has a type other than "stdio"; ${SETUP}`,
       `FAIL native manifest: ${f.manifest} has no absolute path to the launcher; ${SETUP}`,
     ]);
@@ -200,7 +200,7 @@ describe("doctor, the native manifest", () => {
     writeFileSync(f.manifest, "{}");
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["native manifest", "launcher"]), [
-      `FAIL native manifest: ${f.manifest} has a name other than "foxhand"; ${SETUP}`,
+      `FAIL native manifest: ${f.manifest} has a name other than "foxleash"; ${SETUP}`,
       `FAIL native manifest: ${f.manifest} has a type other than "stdio"; ${SETUP}`,
       `FAIL native manifest: ${f.manifest} does not allow the extension ${EXTENSION_ID}; ${SETUP}`,
       `FAIL native manifest: ${f.manifest} has no absolute path to the launcher; ${SETUP}`,
@@ -258,7 +258,7 @@ describe("doctor, running the launcher", () => {
       PATH: "/usr/bin:/bin",
       XDG_RUNTIME_DIR: xdg,
     });
-    assert.ok(xdg.startsWith("/tmp/foxhand-doctor-"), xdg);
+    assert.ok(xdg.startsWith("/tmp/foxleash-doctor-"), xdg);
     assert.equal(existsSync(xdg), false);
   });
 
@@ -566,12 +566,12 @@ describe("doctor, running the launcher", () => {
 });
 
 describe("doctor, Claude Code", () => {
-  it("asks claude mcp get for foxhand with a 15 s limit", LIMIT, async () => {
+  it("asks claude mcp get for foxleash with a 15 s limit", LIMIT, async () => {
     const f = await fixture();
     const claude = fakeRun(claudeOk(SH, f.main));
     const result = await runDoctor(f, { run: claude.run });
     assert.deepEqual(claude.calls, [
-      { command: "claude", args: ["mcp", "get", "foxhand"], options: { timeoutMs: 15_000 } },
+      { command: "claude", args: ["mcp", "get", "foxleash"], options: { timeoutMs: 15_000 } },
     ]);
     assert.deepEqual(section(result, ["claude code"]), claudeLines(f));
   });
@@ -588,13 +588,13 @@ describe("doctor, Claude Code", () => {
   it("shows the one line it found", LIMIT, async () => {
     const f = await fixture();
     for (const [stdout, line] of [
-      ["foxhand:\n  Command: npx\n", "  Command: npx"],
-      ["foxhand:\n  Args: x y\n", "  Args: x y"],
+      ["foxleash:\n  Command: npx\n", "  Command: npx"],
+      ["foxleash:\n  Args: x y\n", "  Args: x y"],
     ] as const) {
       const claude = fakeRun({ status: "ok", code: 0, stdout, stderr: "" });
       const result = await runDoctor(f, { run: claude.run });
       assert.deepEqual(section(result, ["claude code"]), [
-        "ok claude code: foxhand is registered",
+        "ok claude code: foxleash is registered",
         line,
       ]);
     }
@@ -602,9 +602,9 @@ describe("doctor, Claude Code", () => {
 
   it("shows no lines when it found none, and uses the first of each", LIMIT, async () => {
     const f = await fixture();
-    const none = fakeRun({ status: "ok", code: 0, stdout: "foxhand:\n", stderr: "" });
+    const none = fakeRun({ status: "ok", code: 0, stdout: "foxleash:\n", stderr: "" });
     assert.deepEqual(section(await runDoctor(f, { run: none.run }), ["claude code"]), [
-      "ok claude code: foxhand is registered",
+      "ok claude code: foxleash is registered",
     ]);
     const twice = fakeRun({
       status: "ok",
@@ -656,7 +656,7 @@ describe("doctor, the socket directory", () => {
       `ok native manifest: ${f.manifest}`,
       launcherOk(f),
       ...claudeLines(f),
-      `FAIL socket directory: no host has started yet in ${missing}; is Firefox running with the Foxhand extension?`,
+      `FAIL socket directory: no host has started yet in ${missing}; is Firefox running with the Foxleash extension?`,
       "4 checks, 1 failed",
     ]);
     assert.equal(result.code, 1);
@@ -696,7 +696,7 @@ describe("doctor, the hosts", () => {
     chmodSync(f.socketDir, 0o700);
     assert.deepEqual(section(result, ["socket directory", "hosts"]), [
       `ok socket directory: ${f.socketDir}`,
-      `FAIL hosts: The Foxhand socket directory ${f.socketDir} cannot be read: EACCES; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`,
+      `FAIL hosts: The Foxleash socket directory ${f.socketDir} cannot be read: EACCES; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`,
     ]);
     assert.equal(result.code, 1);
   });
@@ -750,7 +750,7 @@ describe("doctor, the hosts", () => {
     const host = await fakeHost(f.socketDir, process.pid, { type: "nope" });
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["hosts", "extension"]), [
-      `FAIL host ${host.path}: The Foxhand native host at ${host.path} did not answer with a welcome.`,
+      `FAIL host ${host.path}: The Foxleash native host at ${host.path} did not answer with a welcome.`,
       noHost(f),
     ]);
     assert.equal(result.code, 1);
@@ -855,7 +855,7 @@ describe("doctor, the extension", () => {
       const result = await runDoctor(f);
       assert.deepEqual(section(result, ["hosts", "extension"]), [
         hostOk(host, process.pid),
-        `FAIL extension: not connected to the host at ${host.path}; is the Foxhand extension installed and enabled?`,
+        `FAIL extension: not connected to the host at ${host.path}; is the Foxleash extension installed and enabled?`,
       ]);
       assert.equal(result.code, 1);
     });
@@ -887,7 +887,7 @@ describe("doctor, the extension", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["extension", "extension permissions"]), [
       extensionOk(),
-      "FAIL extension permissions: access to all websites is not granted; open about:addons, Foxhand, Permissions, and allow it",
+      "FAIL extension permissions: access to all websites is not granted; open about:addons, Foxleash, Permissions, and allow it",
     ]);
     assert.equal(result.code, 1);
   });
@@ -972,7 +972,7 @@ function assertShape(lines: string[], code: number): void {
       continue;
     }
     assert.match(line, /^(ok|warn|FAIL) [^:]+: /);
-    continues = line === "ok claude code: foxhand is registered";
+    continues = line === "ok claude code: foxleash is registered";
   }
   const checks = statuses.filter((line) => !line.startsWith("  "));
   const failed = checks.filter((line) => line.startsWith("FAIL ")).length;
@@ -1082,7 +1082,7 @@ function claudeOk(node: string, main: string): RunResult {
   return {
     status: "ok",
     code: 0,
-    stdout: `foxhand:\n  Scope: User config\n  Type: stdio\n  Command: ${node}\n  Args: ${main} mcp\n  Environment:\n`,
+    stdout: `foxleash:\n  Scope: User config\n  Type: stdio\n  Command: ${node}\n  Args: ${main} mcp\n  Environment:\n`,
     stderr: "",
   };
 }
@@ -1129,7 +1129,7 @@ function launcherOk(f: Fixture): string {
 }
 
 function claudeLines(f: Fixture): string[] {
-  return ["ok claude code: foxhand is registered", `  Command: ${SH}`, `  Args: ${f.main} mcp`];
+  return ["ok claude code: foxleash is registered", `  Command: ${SH}`, `  Args: ${f.main} mcp`];
 }
 
 function hostOk(host: FakeHost, pid: number, protocol = PROTOCOL_VERSION): string {
@@ -1141,7 +1141,7 @@ function extensionOk(): string {
 }
 
 function noHost(f: Fixture): string {
-  return `FAIL hosts: no running host answered in ${f.socketDir}; is Firefox running with the Foxhand extension?`;
+  return `FAIL hosts: no running host answered in ${f.socketDir}; is Firefox running with the Foxleash extension?`;
 }
 
 function age(socketPath: string, seconds: number): void {

@@ -39,13 +39,13 @@ those fields only, in the requested order with the requested refs, and caps mess
   one `type` uses (`refuseLockedField` in `page-input-dom.ts`), checked again after `focus()`,
   since the page's focus listeners run there. A value the browser would sanitize on an input of
   the field's type and `multiple` (checked on a detached input in the field's document) is
-  refused with `invalid_params`, as is text longer than the field's maxlength. Foxhand selects the field's content and runs execCommand
+  refused with `invalid_params`, as is text longer than the field's maxlength. Foxleash selects the field's content and runs execCommand
   `insertText`, or `delete` for an empty string; with no trusted `input` it falls back once to
   the native setter plus an `input` event. It then blurs the field. Firefox sends its own
   `change` at the blur when the value differs from the one it recorded at focus, which its value
   setter moves along when the field still held it; a field that has focus when its turn comes is
-  blurred first, so that Firefox records it at Foxhand's focus. Where Firefox will send none,
-  Foxhand sends `change` just before the blur, and after the blur only when Firefox sent none
+  blurred first, so that Firefox records it at Foxleash's focus. Where Firefox will send none,
+  Foxleash sends `change` just before the blur, and after the blur only when Firefox sent none
   after all, so the page sees exactly one, in the same order whatever the field held. Its type,
   maxlength and the sanitization check are read again after `focus()`. It reads the value back
   once more, so a field that clears itself on blur, such as a suggesting box, is `no_effect`. The

@@ -511,7 +511,7 @@ describe("read_page in real Firefox", () => {
   test("a blank tab is refused as not a web page", async () => {
     const blank = tabOf(await harness.ok(session, "tab_open")).id;
     const text = await refused(blank);
-    assert.ok(text.includes("Foxhand acts only on http and https pages"), text);
+    assert.ok(text.includes("Foxleash acts only on http and https pages"), text);
   });
 
   test("a tab redirected to a site the user has not approved is refused", async () => {
@@ -532,7 +532,7 @@ describe("read_page in real Firefox", () => {
       `tab ${tab.id} to show ${other}`,
     );
     const text = await refused(tab.id);
-    assert.ok(text.includes(`Foxhand is not allowed on ${other} in this session`), text);
+    assert.ok(text.includes(`Foxleash is not allowed on ${other} in this session`), text);
   });
 
   test("another session's tab is refused", async () => {
@@ -1154,7 +1154,7 @@ describe("read_page in real Firefox", () => {
     const before = fixtures.hits("/autofill");
     await goBack(tabId, 3);
     // Firefox sometimes keeps the page in memory over three steps, mark intact (Navigation Timing
-    // still reports back_forward), and Foxhand then does not reload it.
+    // still reports back_forward), and Foxleash then does not reload it.
     if ((await firefox.evaluate(await contextOf(fixtures.url(path)), AUTOFILLED)) === true) {
       assert.equal(fixtures.hits("/autofill"), before, "requests for /autofill");
       await assertProtected(tabId);
@@ -1176,7 +1176,7 @@ describe("read_page in real Firefox", () => {
     const path = "/autofill?kept";
     const tabId = await filledTab(path);
     const context = await contextOf(fixtures.url(path));
-    // No Foxhand page tool before leaving: the page stays as Firefox would keep it. The note in
+    // No Foxleash page tool before leaving: the page stays as Firefox would keep it. The note in
     // sessionStorage outlives a reload in the tab, so it tells whether Firefox showed this
     // document again from memory, whatever happened after.
     assert.equal(
@@ -1202,7 +1202,7 @@ describe("read_page in real Firefox", () => {
     assert.equal(
       await firefox.evaluate(context, "window.kept === true"),
       true,
-      "Foxhand reloaded a page Firefox showed again from memory",
+      "Foxleash reloaded a page Firefox showed again from memory",
     );
     assert.equal(fixtures.hits("/autofill"), before, "requests for /autofill");
     assert.equal(await firefox.evaluate(context, AUTOFILLED), true);
@@ -1283,7 +1283,7 @@ describe("read_page in real Firefox", () => {
     await harness.seedSettings({ blocklist: ["127.0.0.1", "localhost"] });
     const text = await refused(formTab);
     assert.ok(text.includes(fixtures.site), text);
-    assert.ok(text.includes("Foxhand's blocklist"), text);
+    assert.ok(text.includes("Foxleash's blocklist"), text);
   });
 
   async function open(path: string, title: string): Promise<number> {
@@ -1360,7 +1360,7 @@ describe("read_page in real Firefox", () => {
 
   /**
    * Runs `steps` and asserts they requested `path` from the server once: Firefox loads the page
-   * again from its cache, so the one request is Foxhand's reload without the cache.
+   * again from its cache, so the one request is Foxleash's reload without the cache.
    */
   async function reloadedOnce(path: string, steps: () => Promise<unknown>): Promise<void> {
     const before = fixtures.hits(path);

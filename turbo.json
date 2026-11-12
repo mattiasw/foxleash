@@ -10,7 +10,7 @@
     },
     "test": {
       "dependsOn": ["//#test:bin"],
-      "env": ["FOXHAND_TEST_REPORTER"]
+      "env": ["FOXLEASH_TEST_REPORTER"]
     },
     "//#typecheck:bin": {
       "inputs": ["bin/**", "packages/tsconfig/base.json", "package-lock.json"]
@@ -28,7 +28,7 @@
       ]
     },
     "//#test:bin": {
-      "env": ["FOXHAND_TEST_REPORTER"],
+      "env": ["FOXLEASH_TEST_REPORTER"],
       "inputs": [
         "bin/**",
         ".github/workflows/dependabot-automerge.yml",

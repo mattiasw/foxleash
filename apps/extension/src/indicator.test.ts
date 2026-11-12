@@ -4,7 +4,7 @@ import { createFakeBrowser, type FakeBrowser, flush } from "./fake-browser.ts";
 import { createIndicator } from "./indicator.ts";
 import { createSessionGroups } from "./session-groups.ts";
 
-const TITLE_ON = "Foxhand: an agent session can use this tab";
+const TITLE_ON = "Foxleash: an agent session can use this tab";
 
 describe("indicator", { timeout: 10000 }, () => {
   it("shows ON on a tab added to a session's group", async () => {
@@ -21,7 +21,7 @@ describe("indicator", { timeout: 10000 }, () => {
     const tab = fake.openTab({ url: "https://example.com/" });
     await flush();
     assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxhand");
+    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
   });
 
   it("shows ON again after a navigation cleared it", async () => {
@@ -51,19 +51,19 @@ describe("indicator", { timeout: 10000 }, () => {
     fake.ungroup(tab.id);
     await flush();
     assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxhand");
+    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
     assert.equal(fake.groups.has(groupId), false);
   });
 
-  it("shows no badge on a tab in a group the user made, even one titled Foxhand", async () => {
+  it("shows no badge on a tab in a group the user made, even one titled Foxleash", async () => {
     const { fake } = setup();
     const tab = fake.openTab({ url: "https://example.com/" });
     const groupId = await fake.browser.tabs.group({ tabIds: [tab.id] });
-    await fake.browser.tabGroups.update(groupId, { title: "Foxhand", color: "orange" });
+    await fake.browser.tabGroups.update(groupId, { title: "Foxleash", color: "orange" });
     await flush();
     assert.equal(fake.tabs.get(tab.id)?.groupId, groupId);
     assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxhand");
+    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
   });
 
   it("shows ON on a tab created in a session's group", async () => {

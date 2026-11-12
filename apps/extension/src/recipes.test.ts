@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import type { Recipe, RecipeFields } from "@foxhand/protocol";
+import type { Recipe, RecipeFields } from "@foxleash/protocol";
 import { createFakeBrowser, type FakeBrowser } from "./fake-browser.ts";
 import {
   checkRecipe,

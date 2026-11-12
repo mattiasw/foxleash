@@ -3,7 +3,7 @@ import { z } from "zod";
 
 /** The most steps one batch call takes. */
 export const MAX_BATCH_STEPS = 20;
-/** Room in the result for one of Foxhand's own headers or notes, in bytes of JSON. */
+/** Room in the result for one of Foxleash's own headers or notes, in bytes of JSON. */
 export const NOTE_ALLOWANCE = 1024;
 
 /** A tool a batch step can call: its input shape and the callback a direct call runs. */

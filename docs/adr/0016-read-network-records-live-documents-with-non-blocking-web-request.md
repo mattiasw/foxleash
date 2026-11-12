@@ -7,7 +7,7 @@
 `read_network` returns the network requests of a page in the agent's tab group: URL, method,
 resource type, status, timing, redirect target, error, cache flag and headers. The manifest
 already has `webRequest`, `webNavigation` and `<all_urls>`, and no `webRequestBlocking`; the
-add-on listing says "Foxhand does not block or change any request" and that page content,
+add-on listing says "Foxleash does not block or change any request" and that page content,
 network requests included, "comes only from what a tab showed or loaded while its page was on a
 site you approved". Firefox calls `webRequest` listeners for every request in the browser, the
 user's own tabs and the browser itself included, and the request's own headers carry the
@@ -72,7 +72,7 @@ commit's.
 
 - **Response bodies.** They need `webRequestBlocking` and `webRequestFilterResponse`, measured on
   Firefox 156, and a filter intercepts every response from the moment capture starts; the listing
-  promises Foxhand does not block or change any request.
+  promises Foxleash does not block or change any request.
 - **Deciding only at the commit and recording until the next one.** The three leaks above.
 - **Sharing `read_console`'s live recordings.** Its injection can fail (Firefox's PDF or JSON
   viewer), which would stop network recording too.

@@ -13,7 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
-import { EXTENSION_ID, type TabInfo } from "@foxhand/protocol";
+import { EXTENSION_ID, type TabInfo } from "@foxleash/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { UNTRUSTED_FRAME } from "../apps/server/src/tools.ts";
@@ -32,7 +32,7 @@ export const CHECKOUT = join(import.meta.dirname, "..");
 export const EXTENSION_DIST = join(CHECKOUT, "apps", "extension", "dist");
 const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
 const SETTINGS_PAGE = "options.html";
-const SETTINGS_TITLE = "Foxhand settings";
+const SETTINGS_TITLE = "Foxleash settings";
 const PROMPT_PAGE = "approve.html";
 // With the focus and visibility the arming reads, so a prompt that never arms says which one
 // is missing.
@@ -45,7 +45,7 @@ const ARMED_STATE = `(() => {
 
 // The longest socket path the host can make must fit in sun_path (108 bytes with its NUL).
 const MAX_SOCKET_PATH_BYTES = 107;
-const LONGEST_SOCKET_TAIL = join("fh-e2e-XXXXXX", "run", "foxhand", "2147483647.sock");
+const LONGEST_SOCKET_TAIL = join("fh-e2e-XXXXXX", "run", "foxleash", "2147483647.sock");
 const SOCKET_NAME = /^[1-9][0-9]*\.sock$/;
 const TAIL_BYTES = 8 * 1024;
 const POLL_MS = 100;
@@ -98,7 +98,7 @@ export interface Harness {
   seedSettings(entries: Record<string, unknown>): Promise<void>;
   /** Opens the settings page in a new tab, waits for its first render, and returns the tab. */
   settingsPage(): Promise<string>;
-  /** Starts `foxhand mcp`, in `options.cwd` when given. */
+  /** Starts `foxleash mcp`, in `options.cwd` when given. */
   connect(overrides?: Record<string, string>, options?: { cwd?: string }): Promise<Session>;
   /** Waits for a tab showing the approval prompt, other than the tabs in `except`. */
   promptContext(except?: readonly string[]): Promise<string>;
@@ -124,7 +124,7 @@ export interface Harness {
 /**
  * One temp root per test file: `home/` (HOME), `run/` (XDG_RUNTIME_DIR, mode 0700) and
  * `profile/` (Firefox's). Every child gets the same env, so the install, Firefox, the native host
- * Firefox starts and every `foxhand mcp` meet in this root and never in the developer's own.
+ * Firefox starts and every `foxleash mcp` meet in this root and never in the developer's own.
  */
 export function createHarness(): Harness {
   const root = mkdtempSync(join(tempBase(), "fh-e2e-"));
@@ -153,7 +153,7 @@ export function createHarness(): Harness {
     const parts: string[] = [];
     if (session !== undefined) {
       parts.push(
-        `\n--- foxhand mcp stderr (last ${TAIL_BYTES} bytes) ---\n${session.stderr() || "(empty)"}`,
+        `\n--- foxleash mcp stderr (last ${TAIL_BYTES} bytes) ---\n${session.stderr() || "(empty)"}`,
       );
     }
     for (const firefox of firefoxes) parts.push(describeOutput(firefox.output()));
@@ -204,7 +204,7 @@ export function createHarness(): Harness {
 
   async function waitForHost(): Promise<number> {
     const deadline = Date.now() + HOST_TIMEOUT_MS;
-    const socketDir = join(run, "foxhand");
+    const socketDir = join(run, "foxleash");
     for (;;) {
       const pid = newestHost(socketDir);
       if (pid !== undefined) {
@@ -213,7 +213,7 @@ export function createHarness(): Harness {
       }
       if (Date.now() > deadline) {
         throw new Error(
-          `no foxhand host socket appeared in ${socketDir} within ${HOST_TIMEOUT_MS} ms${diagnostics()}`,
+          `no foxleash host socket appeared in ${socketDir} within ${HOST_TIMEOUT_MS} ms${diagnostics()}`,
         );
       }
       await sleep(POLL_MS);
@@ -273,7 +273,7 @@ export function createHarness(): Harness {
       assert.equal(
         result.status,
         0,
-        `foxhand install --no-claude --no-extension failed (${result.error?.message ?? `status ${result.status}`}):\n${result.stdout}${result.stderr}`,
+        `foxleash install --no-claude --no-extension failed (${result.error?.message ?? `status ${result.status}`}):\n${result.stdout}${result.stderr}`,
       );
     },
 
@@ -340,7 +340,7 @@ export function createHarness(): Harness {
       transport.stderr?.on("data", (chunk: Buffer | string) => {
         stderr = (stderr + chunk.toString()).slice(-TAIL_BYTES);
       });
-      const client = new Client({ name: "foxhand-e2e", version: "0" });
+      const client = new Client({ name: "foxleash-e2e", version: "0" });
       const session: Session = {
         client,
         stderr: () => stderr,

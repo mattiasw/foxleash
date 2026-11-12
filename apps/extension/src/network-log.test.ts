@@ -7,7 +7,7 @@ import {
   MAX_NETWORK_URL,
   type NetworkRequest,
   type Result,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type { HttpHeader, RequestDetails } from "./browser-api.ts";
 import { createFakeBrowser, createFakeTimers, type FakeTab, flush } from "./fake-browser.ts";
 import {

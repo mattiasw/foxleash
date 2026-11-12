@@ -1,4 +1,4 @@
-import { MAX_RECIPES, type Recipe, type RecipeFields } from "@foxhand/protocol";
+import { MAX_RECIPES, type Recipe, type RecipeFields } from "@foxleash/protocol";
 import type { BrowserApi } from "./browser-api.ts";
 import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
 import {
@@ -32,7 +32,7 @@ import type { SessionAnswers } from "./site-access.ts";
 
 declare const browser: SettingsBrowser & { runtime: Pick<BrowserApi["runtime"], "sendMessage"> };
 
-const READ_FAILED = "Could not read Foxhand's settings.";
+const READ_FAILED = "Could not read Foxleash's settings.";
 const ANSWERS_FAILED = "Could not read the answers of running sessions.";
 const RECIPES_READ_FAILED = "Could not read the recipes.";
 const RECIPE_FIELDS = ["name", "description", "sites", "steps"] as const;
@@ -514,7 +514,7 @@ function save(): void {
       fillBlocklist(text);
       announce(
         blocklistStatus,
-        patterns.length === 0 ? "Saved. Foxhand blocks no sites now." : "Saved",
+        patterns.length === 0 ? "Saved. Foxleash blocks no sites now." : "Saved",
       );
     },
     () => announce(blocklistStatus, "Could not save the blocklist."),
@@ -562,7 +562,7 @@ function saveEditor(event: Event): void {
         announce(recipesStatus, `Saved ${recipe.name}`);
         render();
       } else if (result.reason === "full") {
-        announce(recipesStatus, `Foxhand keeps at most ${MAX_RECIPES} recipes. Delete one first.`);
+        announce(recipesStatus, `Foxleash keeps at most ${MAX_RECIPES} recipes. Delete one first.`);
       } else if (result.reason === "exists" || opened === undefined) {
         // A new recipe whose name is stored is "changed": nothing was shown under that name.
         const taken = result.current?.name ?? recipe.name;
@@ -618,7 +618,7 @@ function undo(event: Event): void {
       announce(
         recipesStatus,
         result.reason === "full"
-          ? `Foxhand keeps at most ${MAX_RECIPES} recipes, so ${name} was not restored.`
+          ? `Foxleash keeps at most ${MAX_RECIPES} recipes, so ${name} was not restored.`
           : `A recipe named ${name} was saved meanwhile; nothing was restored.`,
       );
       recipesHeading.focus();

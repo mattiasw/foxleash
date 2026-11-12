@@ -17,17 +17,17 @@ export function protocolMismatch(a: PartInfo, b: PartInfo): string | null {
   );
 }
 
-const UPDATE = "update Foxhand with `git pull && npm ci && npm run setup` if you have not yet";
+const UPDATE = "update Foxleash with `git pull && npm ci && npm run setup` if you have not yet";
 
 const NAME: Record<Part, string> = {
-  extension: "Foxhand extension",
-  host: "Foxhand native host",
-  mcp: "Foxhand MCP server",
+  extension: "Foxleash extension",
+  host: "Foxleash native host",
+  mcp: "Foxleash MCP server",
 };
 
 const FIX: Record<Part, string> = {
   extension:
-    "run `npm run setup` in your Foxhand folder and confirm the extension update in Firefox",
+    "run `npm run setup` in your Foxleash folder and confirm the extension update in Firefox",
   host: `Firefox is still running the old native host, so ${UPDATE} and then restart Firefox`,
   mcp: `your MCP client is still running the old MCP server, so ${UPDATE} and then restart your MCP client`,
 };

@@ -187,7 +187,7 @@ function finiteField(value: object, key: string): number | undefined {
 function pageError(tabId: number): Refusal {
   return {
     code: "page_error",
-    message: `Foxhand could not complete the request in the page in tab ${tabId}.`,
+    message: `Foxleash could not complete the request in the page in tab ${tabId}.`,
   };
 }
 

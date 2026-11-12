@@ -43,14 +43,14 @@ describe("runCli usage", () => {
     assert.equal(
       USAGE,
       [
-        "Usage: foxhand <command>",
+        "Usage: foxleash <command>",
         "",
         "Commands:",
         "  mcp                      Run the MCP server (your MCP client starts it)",
         "  host                     Run the native messaging host (Firefox starts it)",
         "  install [--no-claude] [--no-extension | --xpi <path>]",
         "                           Set up the native host, Claude Code and the extension",
-        "  uninstall [--no-claude]  Remove the native host and Foxhand from Claude Code",
+        "  uninstall [--no-claude]  Remove the native host and Foxleash from Claude Code",
         "  doctor                   Check the installation and the connection to Firefox",
         "  probe [--out <path>] <url>...",
         "                           Measure which synthetic input works on each page",
@@ -58,7 +58,7 @@ describe("runCli usage", () => {
         "--no-claude leaves your Claude Code configuration unchanged.",
         "install downloads this version's signed extension with gh and opens it in",
         "Firefox; --xpi uses a local .xpi file instead, and --no-extension skips it.",
-        "probe writes <path>.json and .md, by default ./foxhand-probe-<date>-<time>.",
+        "probe writes <path>.json and .md, by default ./foxleash-probe-<date>-<time>.",
         "",
       ].join("\n"),
     );
@@ -145,7 +145,10 @@ describe("runCli subcommands", () => {
 
   it("runs host and ignores the arguments Firefox appends", async () => {
     const { deps, calls } = setup();
-    assert.equal(await runCli(["host", "/path/to/foxhand.json", "foxhand@mattiasw.com"], deps), 7);
+    assert.equal(
+      await runCli(["host", "/path/to/foxleash.json", "foxleash@mattiasw.com"], deps),
+      7,
+    );
     assert.deepEqual(calls, [{ name: "host", options: { noClaude: false }, deps }]);
   });
 

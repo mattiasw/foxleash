@@ -11,7 +11,7 @@ export interface ForeignFramePlan {
 /**
  * The plan for one screenshot's listing, or undefined when it must refuse: another add-on's frame
  * whose way up to the top frame is broken or goes round, or such a frame in a listing that names a
- * frame id twice. `ownUrl` is a URL of Foxhand's own pages.
+ * frame id twice. `ownUrl` is a URL of Foxleash's own pages.
  */
 export function foreignFramePlan(
   frames: readonly FrameDetails[],
@@ -56,7 +56,7 @@ function topForeignFrame(
   return hideIn === undefined ? undefined : "broken";
 }
 
-/** Whether the frame shows a page of another add-on than Foxhand, whose host is `ownHost`. */
+/** Whether the frame shows a page of another add-on than Foxleash, whose host is `ownHost`. */
 function isForeignFrame(frame: FrameDetails, ownHost: string): boolean {
   if (frame.frameId === 0 || ownHost === "" || typeof frame.url !== "string") return false;
   const url = URL.parse(frame.url);

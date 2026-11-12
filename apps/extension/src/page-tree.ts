@@ -1,4 +1,4 @@
-import { READ_PAGE_MAX_CHARS } from "@foxhand/protocol";
+import { READ_PAGE_MAX_CHARS } from "@foxleash/protocol";
 import { capText, ownField } from "./page-messages.ts";
 
 export { READ_PAGE_MAX_CHARS };

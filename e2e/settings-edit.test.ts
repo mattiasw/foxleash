@@ -21,7 +21,7 @@ const ANSWER = {
 const SITE_A = "https://a.example";
 // Sorts between the seeded fixture site and SITE_A (":" before "s").
 const SITE_B = "http://b.example";
-const BLOCKLIST_TEXT = "Foxhand's blocklist";
+const BLOCKLIST_TEXT = "Foxleash's blocklist";
 
 // The answers section: its rows, whether the list and the empty state are visible, the live
 // region's text, and the accessible name of the focused element, or "heading".
@@ -136,7 +136,7 @@ describe("editing the settings, in real Firefox", () => {
     await harness.waitForArmed(refusal);
     await firefox.click(refusal, ANSWER.no);
     const refused = await refusing;
-    assert.ok(refused.includes(`did not allow Foxhand on ${unseeded.site}`), refused);
+    assert.ok(refused.includes(`did not allow Foxleash on ${unseeded.site}`), refused);
 
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
@@ -272,8 +272,8 @@ describe("editing the settings, in real Firefox", () => {
       assert.ok(text.includes("was closed without an answer"), text);
     }
     const text = await harness.refused(session, "tab_open", { url: unseeded.url("/a") });
-    assert.ok(text.includes("Foxhand asks no more in this session"), text);
-    assert.ok(text.includes("Foxhand's settings"), text);
+    assert.ok(text.includes("Foxleash asks no more in this session"), text);
+    assert.ok(text.includes("Foxleash's settings"), text);
     assert.deepEqual(await promptContexts(), []);
 
     const page = await harness.settingsPage();
@@ -396,7 +396,7 @@ describe("editing the settings, in real Firefox", () => {
     await waitFor(
       context,
       "document.querySelector('h1').textContent",
-      `Allow Foxhand on ${name}?`,
+      `Allow Foxleash on ${name}?`,
       "the prompt's question",
     );
   }

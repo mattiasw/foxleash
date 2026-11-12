@@ -1,4 +1,4 @@
-import { UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES } from "@foxhand/protocol";
+import { UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES } from "@foxleash/protocol";
 import type { Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
 import { BASE64 } from "./screenshot.ts";
@@ -111,7 +111,7 @@ function checkedChunk<Handle>(
   if (index !== expected) {
     throw new ToolError(
       "invalid_params",
-      `upload_chunk got a chunk out of order; Foxhand expected chunk ${expected} of that upload.`,
+      `upload_chunk got a chunk out of order; Foxleash expected chunk ${expected} of that upload.`,
     );
   }
   const bytes = decodeChunk(data);
@@ -120,7 +120,7 @@ function checkedChunk<Handle>(
   if (held + bytes.length > UPLOAD_MAX_BYTES) {
     throw new ToolError(
       "invalid_params",
-      "Foxhand holds at most 10 MB of uploads per session; an earlier upload may still be held for up to a minute.",
+      "Foxleash holds at most 10 MB of uploads per session; an earlier upload may still be held for up to a minute.",
     );
   }
   return bytes;

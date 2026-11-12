@@ -109,7 +109,7 @@ function refused(message: string): SaveResult {
 }
 
 function outside(requested: string, folder: string): string {
-  return `${requested} is outside the folder Foxhand was started in, ${folder}; give a path inside it.`;
+  return `${requested} is outside the folder Foxleash was started in, ${folder}; give a path inside it.`;
 }
 
 function dotPart(requested: string): string {
@@ -117,5 +117,5 @@ function dotPart(requested: string): string {
 }
 
 function couldNotSave(requested: string): string {
-  return `Foxhand could not save the screenshot to ${requested}; choose another path.`;
+  return `Foxleash could not save the screenshot to ${requested}; choose another path.`;
 }

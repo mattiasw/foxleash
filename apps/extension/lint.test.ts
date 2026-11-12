@@ -143,7 +143,7 @@ describe("outputFailures", () => {
   });
 
   test("fails when web-ext cannot be started", () => {
-    const result = spawnSync("foxhand-no-such-command", [], {
+    const result = spawnSync("foxleash-no-such-command", [], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
     });
@@ -180,7 +180,7 @@ describe("lint.ts as a program", () => {
   let dir = "";
 
   before(async () => {
-    dir = await mkdtemp(join(tmpdir(), "foxhand-lint-"));
+    dir = await mkdtemp(join(tmpdir(), "foxleash-lint-"));
     const script = [
       "#!/bin/sh",
       'printf \'%s\\n\' "$@" > "$FAKE_ARGS"',

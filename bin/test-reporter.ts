@@ -1,5 +1,5 @@
 // A `node --test` reporter that prints failures in full and passing tests not at all. A green
-// run ends in one line of counts and one of coverage totals. Set FOXHAND_TEST_REPORTER=spec
+// run ends in one line of counts and one of coverage totals. Set FOXLEASH_TEST_REPORTER=spec
 // for the stock per-test output.
 //
 // Test stdout and stderr are replayed only when something failed: a test file that crashes

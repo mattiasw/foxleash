@@ -14,7 +14,7 @@ describe("test reporter", () => {
   let dir = "";
 
   before(() => {
-    dir = mkdtempSync(join(tmpdir(), "foxhand-test-reporter-"));
+    dir = mkdtempSync(join(tmpdir(), "foxleash-test-reporter-"));
     writeFileSync(
       join(dir, "lib.ts"),
       [

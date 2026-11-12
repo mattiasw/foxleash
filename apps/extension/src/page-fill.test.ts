@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { MAX_FILL_CHARS, MAX_FILL_FIELDS, MAX_TYPE_CHARS } from "@foxhand/protocol";
+import { MAX_FILL_CHARS, MAX_FILL_FIELDS, MAX_TYPE_CHARS } from "@foxleash/protocol";
 import {
   type FillFormOptions,
   fillFormOptions,

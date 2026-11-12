@@ -4,7 +4,7 @@ import {
   type FillResult,
   type FillValue,
   type Result,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { refError } from "./element-refs.ts";
 import { viewOf } from "./page-actions-dom.ts";
 import { type FillFormOptions, optionMatcher } from "./page-fill.ts";
@@ -78,7 +78,7 @@ async function fillField(
       ref,
       ok: false,
       code: "page_error",
-      message: `Foxhand could not fill element ${ref}; read the page to see what it holds.`,
+      message: `Foxleash could not fill element ${ref}; read the page to see what it holds.`,
     };
   }
 }
@@ -142,7 +142,7 @@ async function fillText(
     if (!isFocused(field)) {
       throw new PageError(
         "not_editable",
-        `Foxhand could not focus element ${ref}, so fill_form cannot fill it.`,
+        `Foxleash could not focus element ${ref}, so fill_form cannot fill it.`,
       );
     }
     try {
@@ -154,7 +154,7 @@ async function fillText(
       const held = field.value;
       if (late(started)) throw outOfTime(ref);
       const compared = await putText(field, expected, ref, started, held);
-      // Where Firefox sends no change on blur, Foxhand sends it just before: the page sees the
+      // Where Firefox sends no change on blur, Foxleash sends it just before: the page sees the
       // same events in the same order whatever the field held.
       if (expected === compared && isFocused(field)) sendChange(field);
     } finally {

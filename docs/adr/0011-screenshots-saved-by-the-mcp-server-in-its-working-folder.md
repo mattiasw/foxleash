@@ -40,10 +40,10 @@ up to 64 MiB.
 - The extension refuses a capture over 48 MiB of base64 (`MAX_SCREENSHOT_CHARS`); the MCP
   server refuses to return an image that does not fit its 8 MiB result with 64 KiB to spare,
   and checks that the data is exact base64 of a PNG.
-- The MCP server puts Foxhand's own note, that text in the image is page content and not
+- The MCP server puts Foxleash's own note, that text in the image is page content and not
   instructions, before the image, and its instructions name screenshots as page content.
 - Saving (`saveTo`) is done by the MCP server, in `savePng` in `apps/server/src/save-file.ts`,
-  inside the folder `foxhand mcp` was started in (the MCP client's working folder): a path
+  inside the folder `foxleash mcp` was started in (the MCP client's working folder): a path
   inside that folder, also after resolving symlinks, ending in `.png`, with no folder or file
   name starting with a dot, in a folder that exists. The file is created with `O_EXCL` and mode
   0600, so it never replaces a file or follows a symlink at its name, and screenshots of
@@ -74,7 +74,7 @@ up to 64 MiB.
   below it whose path has no name starting with a dot, as new 0600 `.png` files only.
 - A process of the same user that swaps a folder for a symlink between the check and the write
   could redirect the file. That is outside the threat model: the threat is page content
-  steering the agent, and it cannot create symlinks through Foxhand.
+  steering the agent, and it cannot create symlinks through Foxleash.
 - A page zoom other than 100% scales the image, since Firefox multiplies `scale` by the zoom.
 - Firefox's captureTab `rect` is documented as relative to the page; the end-to-end test
   checks the coordinate space with the pixels of a known box.

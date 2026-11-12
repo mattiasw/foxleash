@@ -28,7 +28,7 @@ style, inline style or animation can override.
 
 ## Decision
 
-When this screenshot's frame listing holds another add-on's frame, Foxhand inserts, with the
+When this screenshot's frame listing holds another add-on's frame, Foxleash inserts, with the
 masks, into the frame whose document holds it, the sheet
 
 ```css
@@ -41,14 +41,14 @@ capture, so nothing of the other add-on's frame, or of any frame inside it, is i
 The rule, decided from the listing before anything is inserted:
 
 1. A frame is **another add-on's frame** when its id is not 0, its `url` parses, its protocol is
-   `moz-extension:`, its host is not empty, and its host differs from Foxhand's own
+   `moz-extension:`, its host is not empty, and its host differs from Foxleash's own
    (`runtime.getURL("")`). Protocol and host are compared, not the origin, which URL parsers
-   outside Firefox give as `"null"` for this scheme. When Foxhand's own host cannot be read, no
+   outside Firefox give as `"null"` for this scheme. When Foxleash's own host cannot be read, no
    frame is another add-on's.
-2. From each frame, Foxhand walks up `parentFrameId` through the listing to frame 0, at most as
+2. From each frame, Foxleash walks up `parentFrameId` through the listing to frame 0, at most as
    many steps as the listing has frames. The parent of the top-most other add-on's frame on the
    walk takes the hiding sheet, once per document. That parent is never itself another add-on's
-   frame or inside one, so Foxhand can style it. A walk that met another add-on's frame and then
+   frame or inside one, so Foxleash can style it. A walk that met another add-on's frame and then
    meets a parent missing from the listing, or goes round, refuses the screenshot before any
    insert; so does a listing naming a frame id twice beside such a frame.
 3. A frame is **hidden** when it, or a frame on its walk, is another add-on's frame. A walk that
@@ -119,7 +119,7 @@ deadline):
 
 - The top frame refusing the sheet.
 - A rejected subframe that is neither showing Firefox's error page nor hidden: an https,
-  `about:blank`, `data:` or PDF frame, a frame of Foxhand's own pages, and a PDF frame in the same
+  `about:blank`, `data:` or PDF frame, a frame of Foxleash's own pages, and a PDF frame in the same
   document as another add-on's frame.
 - Another add-on's frame whose way up to the top frame is broken or goes round in the listing.
 - A hiding sheet rejected, or still pending at the capture timeout.
@@ -158,5 +158,5 @@ measured not to draw another add-on's page in an `object` or `embed` that the ad
 script adds to a web page, so the tests cannot show such a frame being hidden.
 
 Revisit when a Firefox version paints hidden subdocuments or stops applying user sheets in shadow
-trees (the end-to-end tests would fail), or to widen the excuse to other frames Foxhand cannot
+trees (the end-to-end tests would fail), or to widen the excuse to other frames Foxleash cannot
 enter.

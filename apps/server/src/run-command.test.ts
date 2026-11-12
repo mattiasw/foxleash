@@ -6,7 +6,7 @@ import { after, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { launchDetached, runCommand } from "./run-command.ts";
 
-const root = mkdtempSync(join(tmpdir(), "foxhand-run-"));
+const root = mkdtempSync(join(tmpdir(), "foxleash-run-"));
 const LIMIT = { timeout: 10_000 };
 
 after(() => {

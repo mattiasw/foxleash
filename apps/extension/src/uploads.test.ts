@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES } from "@foxhand/protocol";
+import { UPLOAD_CHUNK_BYTES, UPLOAD_MAX_BYTES } from "@foxleash/protocol";
 import { createFakeTimers } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
 import { createUploads, UPLOAD_IDLE_MS } from "./uploads.ts";
@@ -28,13 +28,13 @@ describe("uploads", () => {
     const { uploads } = setup();
     refuses(
       () => uploads.add("s1", "u1", 1, base64([1])),
-      "upload_chunk got a chunk out of order; Foxhand expected chunk 0 of that upload.",
+      "upload_chunk got a chunk out of order; Foxleash expected chunk 0 of that upload.",
     );
     for (const index of [0, 2, "1", 1.5, null]) {
       uploads.add("s1", "u1", 0, base64([1]));
       refuses(
         () => uploads.add("s1", "u1", index, base64([2])),
-        "upload_chunk got a chunk out of order; Foxhand expected chunk 1 of that upload.",
+        "upload_chunk got a chunk out of order; Foxleash expected chunk 1 of that upload.",
       );
       assert.equal(uploads.take("s1", "u1"), undefined, String(index));
     }
@@ -94,7 +94,7 @@ describe("uploads", () => {
     assert.equal(uploads.add("s1", "b", 0, FULL), UPLOAD_CHUNK_BYTES);
     refuses(
       () => uploads.add("s1", "c", 0, base64([1])),
-      "Foxhand holds at most 10 MB of uploads per session; an earlier upload may still be held for up to a minute.",
+      "Foxleash holds at most 10 MB of uploads per session; an earlier upload may still be held for up to a minute.",
     );
     assert.equal(uploads.add("s2", "c", 0, base64([1])), 1);
     refuses(() => uploads.add("s1", "b", 1, base64([1])), /at most 10 MB/);

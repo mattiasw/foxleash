@@ -556,7 +556,7 @@ describe("crossSiteDestination", () => {
 describe("leavesSiteText", () => {
   it("tells the agent to navigate to a page on another site", () => {
     const tail =
-      "which Foxhand does not open by clicking; call navigate with that address, and Foxhand asks the user first if the site is not approved.";
+      "which Foxleash does not open by clicking; call navigate with that address, and Foxleash asks the user first if the site is not approved.";
     assert.equal(
       leavesSiteText("https://example.org", "by clicking"),
       `leads to a page on https://example.org, ${tail}`,
@@ -570,7 +570,7 @@ describe("leavesSiteText", () => {
   it("names only the scheme of an address outside the web", () => {
     assert.equal(
       leavesSiteText("mailto:", "with press_key"),
-      "leads to an address outside the site (mailto:), which Foxhand does not open with press_key or with navigate.",
+      "leads to an address outside the site (mailto:), which Foxleash does not open with press_key or with navigate.",
     );
   });
 });

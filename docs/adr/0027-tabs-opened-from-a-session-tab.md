@@ -7,7 +7,7 @@
 `click` and `press_key` Enter refuse only destinations on another site or outside the web
 ([0014](0014-act-tools-synthesize-pointer-input-in-the-page.md),
 [0018](0018-click-and-enter-refuse-destinations-outside-the-web.md)), so a same-site link or
-form with target `_blank` is clicked. Foxhand reads no `openerTabId` and reaches only tabs in
+form with target `_blank` is clicked. Foxleash reads no `openerTabId` and reaches only tabs in
 the session's group (`tabs_list` and the act tools), so a new tab outside the group would be
 out of the agent's reach and a stray tab for the user.
 
@@ -23,7 +23,7 @@ Measured in the pinned end-to-end Firefox, 156.0.1, headless. A session tab open
   `popupAndRedirectBlocker.getBlockedPopupCount()` was 1 within 15 ms of the click result.
   `press_key` Enter on the link and on the form button did the same, and its result still said
   `{"action":"clicked","prevented":false}`. A page script's `window.open` returned `null`. A
-  trusted click in the page (WebDriver) right before Foxhand's click let the tab through, by
+  trusted click in the page (WebDriver) right before Foxleash's click let the tab through, by
   the transient user activation it gives the page.
 - **Pop-up blocker off**, the value Firefox's remote agent sets as recommended when the
   profile sets none (so the end-to-end profile ran with it until now): each click opened one
@@ -65,7 +65,7 @@ nothing.
 - **Report the new tab in click's result.** Firefox creates the tab after the click event has
   been dispatched and nothing ties a created tab to one click, so the result would race
   `tabs.onCreated`. It is not needed once the tab is in the group.
-- **Group the tabs Foxhand sees open from a session tab** (`tabs.onCreated` with
+- **Group the tabs Foxleash sees open from a session tab** (`tabs.onCreated` with
   `openerTabId`, then the session's group). Firefox already does this for every same-window
   tab measured. The tabs that escape are in new windows, which such a listener would leave
   alone too; moving them into the group's window would undo the window the page or the

@@ -14,7 +14,7 @@ import {
   parseMessage,
   protocolMismatch,
   type WelcomeMessage,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { BridgeError, connectToHost } from "./bridge.ts";
 import { createFrameReader, encodeFrame, NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { installPaths, launcherScript } from "./install.ts";
@@ -73,8 +73,8 @@ type Probe =
   | { ok: false; code: string | undefined; message: string };
 
 const SETUP = "run npm run setup";
-const NO_FIREFOX = "is Firefox running with the Foxhand extension?";
-const TEMP_PREFIX = "/tmp/foxhand-doctor-";
+const NO_FIREFOX = "is Firefox running with the Foxleash extension?";
+const TEMP_PREFIX = "/tmp/foxleash-doctor-";
 const LAUNCHER_PATH = "/usr/bin:/bin";
 const CLAUDE_TIMEOUT_MS = 15_000;
 const OTHER_LIMIT = 200;
@@ -404,7 +404,7 @@ function launcherCommand(text: string): string {
 }
 
 async function checkClaude(options: DoctorOptions, report: Report): Promise<void> {
-  const result = await options.run("claude", ["mcp", "get", "foxhand"], {
+  const result = await options.run("claude", ["mcp", "get", "foxleash"], {
     timeoutMs: CLAUDE_TIMEOUT_MS,
   });
   switch (result.status) {
@@ -421,7 +421,7 @@ async function checkClaude(options: DoctorOptions, report: Report): Promise<void
         );
         return;
       }
-      report.line("ok", "claude code", "foxhand is registered");
+      report.line("ok", "claude code", "foxleash is registered");
       if (command !== undefined) {
         report.continuation(`Command: ${command}`);
       }
@@ -554,7 +554,7 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     report.line(
       "FAIL",
       "extension",
-      `not connected to the host at ${path}; is the Foxhand extension installed and enabled?`,
+      `not connected to the host at ${path}; is the Foxleash extension installed and enabled?`,
     );
     return;
   }
@@ -571,7 +571,7 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     report.line(
       "FAIL",
       "extension permissions",
-      "access to all websites is not granted; open about:addons, Foxhand, Permissions, and allow it",
+      "access to all websites is not granted; open about:addons, Foxleash, Permissions, and allow it",
     );
   } else if (allUrls === true) {
     report.line("ok", "extension permissions", "access to all websites granted");

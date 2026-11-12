@@ -14,7 +14,7 @@ import {
   type RequestMessage,
   type Result,
   type TabInfo,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type {
   BrowserApi,
   CaptureArea,
@@ -96,7 +96,7 @@ export interface HandlerDeps<Handle> {
    * the epoch) after which it must not act.
    */
   probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
-  /** Requests to Foxhand's content script; `import type`, since page-scripts.ts imports this file. */
+  /** Requests to Foxleash's content script; `import type`, since page-scripts.ts imports this file. */
   pages: Pick<PageScripts, "request">;
   /** The navigations under way in each tab, which a screenshot and read_console wait for. */
   navigations: Pick<TabNavigations, "settled" | "underWay" | "begun">;
@@ -374,7 +374,7 @@ export function createHandlers<Handle>({
     const tab = await existingTab(tabId);
     const group = await groups.groupOf(session);
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
-    // A request on the prompt's own tab goes through the prompt, so Foxhand never leaves it.
+    // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
     const prompt = access.openPrompt(session);
     if (prompt?.tabId === tabId) {
       const url = retryUrl(prompt, target);
@@ -689,7 +689,7 @@ export function createHandlers<Handle>({
     ) {
       throw new ToolError(
         "page_error",
-        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+        `Foxleash could not complete the request in the page in tab ${tabId}.`,
       );
     }
     return { tree, truncated };
@@ -705,7 +705,7 @@ export function createHandlers<Handle>({
     if (text === undefined) {
       throw new ToolError(
         "page_error",
-        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+        `Foxleash could not complete the request in the page in tab ${tabId}.`,
       );
     }
     return text;
@@ -941,7 +941,7 @@ export function createHandlers<Handle>({
     if (total !== staged.length) {
       throw new ToolError(
         "invalid_params",
-        `The files of upload_file add up to ${total} bytes, but Foxhand holds ${staged.length} for that upload.`,
+        `The files of upload_file add up to ${total} bytes, but Foxleash holds ${staged.length} for that upload.`,
       );
     }
     let offset = 0;
@@ -956,7 +956,7 @@ export function createHandlers<Handle>({
     if (target !== "input" && target !== "drop") {
       throw new ToolError(
         "page_error",
-        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+        `Foxleash could not complete the request in the page in tab ${tabId}.`,
       );
     }
     return { target, files: files.map(({ name, size }) => ({ name, size })) };
@@ -981,7 +981,7 @@ export function createHandlers<Handle>({
     if (result === undefined) {
       throw new ToolError(
         "page_error",
-        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+        `Foxleash could not complete the request in the page in tab ${tabId}.`,
       );
     }
     return result;
@@ -1010,7 +1010,7 @@ export function createHandlers<Handle>({
     if (result === undefined) {
       throw new ToolError(
         "page_error",
-        `Foxhand could not complete the request in the page in tab ${tabId}.`,
+        `Foxleash could not complete the request in the page in tab ${tabId}.`,
       );
     }
     // Records from a document whose access was interrupted since it loaded are never returned.
@@ -1022,7 +1022,7 @@ export function createHandlers<Handle>({
     return result;
   }
 
-  /** Reads the network requests Foxhand recorded for the page in a tab. */
+  /** Reads the network requests Foxleash recorded for the page in a tab. */
   async function readNetwork(session: string, params: Params): Promise<Result<"read_network">> {
     const tabId = tabIdParam(params, "read_network");
     const options = networkOptions(params);
@@ -1039,7 +1039,7 @@ export function createHandlers<Handle>({
     if (typeof url !== "string") {
       throw new ToolError("invalid_params", "download needs url to be a string.");
     }
-    const href = webUrl(url, "Foxhand downloads only http and https URLs.");
+    const href = webUrl(url, "Foxleash downloads only http and https URLs.");
     const filename = own(params, "filename");
     const problem = downloadNameProblem(filename);
     if (problem !== undefined) throw new ToolError("invalid_params", problem);
@@ -1274,7 +1274,7 @@ export function createHandlers<Handle>({
     if (recipes.openPrompt(session)?.tabId === tabId) {
       throw new ToolError(
         "recipe_prompt_open",
-        `Foxhand is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+        `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
       );
     }
   }
@@ -1355,7 +1355,7 @@ function tabOpenUrl(params: Params): string | undefined {
     throw new ToolError("invalid_params", "tab_open needs url to be a string.");
   }
   if (url === "about:blank") return undefined;
-  return webUrl(url, "Foxhand opens only http and https URLs, or about:blank.");
+  return webUrl(url, "Foxleash opens only http and https URLs, or about:blank.");
 }
 
 function tabIdParam(params: Params, method: string): number {
@@ -1532,14 +1532,14 @@ function screenshotRef(params: Params): string | undefined {
 function consoleTimeout(tabId: number): ToolError {
   return new ToolError(
     "page_timeout",
-    `Foxhand did not finish reading the console of tab ${tabId} in time; try again.`,
+    `Foxleash did not finish reading the console of tab ${tabId} in time; try again.`,
   );
 }
 
 function screenshotTimeout(tabId: number): ToolError {
   return new ToolError(
     "page_timeout",
-    `Foxhand did not finish the screenshot of tab ${tabId} in time; try again.`,
+    `Foxleash did not finish the screenshot of tab ${tabId} in time; try again.`,
   );
 }
 
@@ -1627,7 +1627,7 @@ function navigationTarget(params: Params): NavigationTarget {
     if (typeof url !== "string") {
       throw new ToolError("invalid_params", "navigate needs url to be a string.");
     }
-    return { kind: "url", url: webUrl(url, "Foxhand navigates only to http and https URLs.") };
+    return { kind: "url", url: webUrl(url, "Foxleash navigates only to http and https URLs.") };
   }
   if (!hasAction) throw new ToolError("invalid_params", "navigate needs a url or an action.");
   const action = params.action;
@@ -1662,21 +1662,21 @@ function tabNotFound(tabId: number): ToolError {
 function siteNotApproved(site: string, tabId: number): ToolError {
   return new ToolError(
     "site_not_approved",
-    `Foxhand is not allowed on ${site} in this session; call navigate with tab ${tabId} and action reload to ask the user.`,
+    `Foxleash is not allowed on ${site} in this session; call navigate with tab ${tabId} and action reload to ask the user.`,
   );
 }
 
 function pageNotWeb(tabId: number): ToolError {
   return new ToolError(
     "page_not_web",
-    `Foxhand acts only on http and https pages, and tab ${tabId} shows another kind of page.`,
+    `Foxleash acts only on http and https pages, and tab ${tabId} shows another kind of page.`,
   );
 }
 
 function pageChanged(tabId: number): ToolError {
   return new ToolError(
     "page_changed",
-    `The page in tab ${tabId} changed while Foxhand was working in it; try again.`,
+    `The page in tab ${tabId} changed while Foxleash was working in it; try again.`,
   );
 }
 
@@ -1691,7 +1691,7 @@ export function pageLoading(tabId: number, ran?: string): ToolError {
 }
 
 function probeFailed(tabId: number): ToolError {
-  return new ToolError("probe_failed", `Foxhand could not run its input probe in tab ${tabId}.`);
+  return new ToolError("probe_failed", `Foxleash could not run its input probe in tab ${tabId}.`);
 }
 
 function notInGroup(tabId: number): ToolError {

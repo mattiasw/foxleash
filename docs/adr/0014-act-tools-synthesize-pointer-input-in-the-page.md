@@ -5,11 +5,11 @@
 ## Context
 
 Firefox gives extensions no way to produce trusted input, so `click`, `hover`, `scroll` and
-`drag` can only dispatch synthetic events (`isTrusted` false) from Foxhand's content script in
+`drag` can only dispatch synthetic events (`isTrusted` false) from Foxleash's content script in
 the tab's top frame (ADR 0009). What a page reacts to then depends on which events arrive and
 in what order.
 
-Measured with `foxhand probe` in Firefox 159: Google Docs' title-bar menu button (a Closure
+Measured with `foxleash probe` in Firefox 159: Google Docs' title-bar menu button (a Closure
 `goog-flat-menu-button`) ignored a lone `click` event, but opened and closed with pointerdown,
 mousedown, pointerup, mouseup, click.
 
@@ -60,7 +60,7 @@ checks and every pure rule below are in `apps/extension/src/page-actions.ts`.
   part (a scrolling box around it that clips it, a fixed header over it), then acted on at the
   centre of the visible part of its first client rect that shows. The element at that point,
   found with `elementFromPoint` and descending into shadow roots, closed ones included, must be
-  the element or inside it in the flat tree; else Foxhand refuses with `element_covered`,
+  the element or inside it in the flat tree; else Foxleash refuses with `element_covered`,
   naming the covering element. An element with no visible part gives `element_not_visible`, a
   point with nothing gives `no_element_at_point`, and an `iframe`, `frame`, `object` or `embed`
   gives `in_frame`; `scroll` with no target sends its wheel to a frame at the viewport's centre
@@ -71,7 +71,7 @@ checks and every pure rule below are in `apps/extension/src/page-actions.ts`.
   the draggable search, scroll boxes, the cross-site check) uses `flatParentOf` in
   `flat-tree.ts`, which finds the slot of a closed shadow root by its assigned nodes.
 - **No cross-site navigation by click.** Before a left click, and again just before each
-  `click` event, Foxhand collects where the click could navigate from the hit's flat-tree
+  `click` event, Foxleash collects where the click could navigate from the hit's flat-tree
   chain: HTML `a` and `area` with `href`; SVG `a` by its animated `href`, its `href` and its
   `xlink:href`, an empty one leading to the base URL; MathML elements with `href`; submit buttons and image inputs through their form
   owner, by the button's `formaction` attribute, else the form's `action` attribute read

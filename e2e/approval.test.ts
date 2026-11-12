@@ -116,7 +116,7 @@ describe("the approval prompt, in real Firefox", () => {
   test("the end of a session ends its open prompt", async () => {
     const hits = other.hits("/a");
     const existing = await promptContexts();
-    // Closing its session fails the call before Foxhand answers it.
+    // Closing its session fails the call before Foxleash answers it.
     const asked = harness.refused(allowing, "tab_open", { url: other.url("/a") }).catch(() => "");
     const prompt = await harness.promptContext(existing);
     await waitForQuestion(prompt, other.site);
@@ -139,7 +139,7 @@ describe("the approval prompt, in real Firefox", () => {
     await harness.waitForArmed(prompt);
     await firefox.click(prompt, ANSWER.no);
     const text = await opening;
-    assert.ok(text.includes(`The user did not allow Foxhand on ${site.site}`), text);
+    assert.ok(text.includes(`The user did not allow Foxleash on ${site.site}`), text);
     assert.equal(site.hits("/a"), hits);
     await waitForStatus(prompt, "Not allowed. The agent was told.");
     assert.deepEqual(await promptContexts(), [prompt]);
@@ -283,7 +283,7 @@ describe("the approval prompt, in real Firefox", () => {
       assert.ok((await opening).includes("was closed without an answer"));
     }
     const text = await harness.refused(session, "tab_open", { url: other.url("/a") });
-    assert.ok(text.includes("Foxhand asks no more in this session"), text);
+    assert.ok(text.includes("Foxleash asks no more in this session"), text);
     assert.deepEqual(await promptContexts(), []);
     assert.equal(site.hits("/a"), hits);
     assert.deepEqual(tabsOf(await harness.ok(session, "tabs_list")), []);
@@ -342,7 +342,11 @@ describe("the approval prompt, in real Firefox", () => {
 
   /** Waits until the prompt page names the site, which it does once it has connected. */
   async function waitForQuestion(context: string, name: string): Promise<void> {
-    await waitFor(context, "document.querySelector('h1').textContent", `Allow Foxhand on ${name}?`);
+    await waitFor(
+      context,
+      "document.querySelector('h1').textContent",
+      `Allow Foxleash on ${name}?`,
+    );
   }
 
   async function waitForStatus(context: string, text: string): Promise<void> {

@@ -13,7 +13,7 @@ import {
 import path from "node:path";
 import { Writable } from "node:stream";
 import { after, describe, it } from "node:test";
-import type { ProbeCheck, ProbeResult } from "@foxhand/protocol";
+import type { ProbeCheck, ProbeResult } from "@foxleash/protocol";
 import { parseProbeResult, probeCommand, runProbe } from "./probe.ts";
 import { type ProbeReport, renderMarkdown } from "./probe-report.ts";
 import { type FakeHost, startFakeHost } from "./testing/fake-host.ts";
@@ -40,7 +40,7 @@ interface Run {
 }
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const LIMIT = { timeout: 5000 };
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const START = new Date("2026-10-19T08:30:00.000Z");
@@ -59,7 +59,7 @@ const CHECK: ProbeCheck = {
 };
 const RESULT: ProbeResult = { userAgent: "Mozilla/5.0 Firefox/150.0", checks: [CHECK] };
 const TIMEOUT_MESSAGE =
-  "Foxhand is still asking the user in tab 5 whether to allow https://a.example.";
+  "Foxleash is still asking the user in tab 5 whether to allow https://a.example.";
 
 after(async () => {
   await Promise.all(hosts.map((host) => host.close()));
@@ -88,7 +88,7 @@ describe("runProbe", () => {
     const report = readReport(`${out}.json`);
     assert.deepEqual(report, {
       date: START.toISOString(),
-      foxhand: SERVER_VERSION,
+      foxleash: SERVER_VERSION,
       userAgent: RESULT.userAgent,
       pages: [
         { url: "HTTPS://A.example", checks: [CHECK] },
@@ -98,7 +98,7 @@ describe("runProbe", () => {
     assert.equal(readFileSync(`${out}.md`, "utf8"), renderMarkdown(report));
     assert.ok(
       run.stderr.includes(
-        "foxhand probe: opening HTTPS://A.example; Firefox may ask in the new tab whether to allow its site\n",
+        "foxleash probe: opening HTTPS://A.example; Firefox may ask in the new tab whether to allow its site\n",
       ),
       run.stderr,
     );
@@ -144,7 +144,7 @@ describe("runProbe", () => {
       ]);
       assert.ok(
         run.stderr.includes(
-          "foxhand probe: answer Foxhand's question in tab 5 in Firefox to allow https://a.example\n",
+          "foxleash probe: answer Foxleash's question in tab 5 in Firefox to allow https://a.example\n",
         ),
         run.stderr,
       );
@@ -176,7 +176,7 @@ describe("runProbe", () => {
     const notProbed = {
       code: "not_probed",
       message:
-        "Foxhand's question in tab 5 is still open; answer or close it, then run the probe again.",
+        "Foxleash's question in tab 5 is still open; answer or close it, then run the probe again.",
     };
     assert.deepEqual(report.pages, [
       { url: urls[0], error: { code: "approval_timeout", message: TIMEOUT_MESSAGE } },
@@ -199,7 +199,7 @@ describe("runProbe", () => {
     assert.equal(run.code, 0, run.stderr);
     const methods = sent(host).map(({ method }) => method);
     assert.deepEqual(methods, ["tab_open", ...Array.from({ length: 25 }, () => "navigate")]);
-    assert.equal(run.stderr.match(/answer Foxhand's question/g)?.length, 24);
+    assert.equal(run.stderr.match(/answer Foxleash's question/g)?.length, 24);
     const report = readReport(onlyReport(base.dir, ".json"));
     assert.deepEqual(
       report.pages.map((page) => ("error" in page ? page.error.code : "checks")),
@@ -211,7 +211,7 @@ describe("runProbe", () => {
     const base = privateBase();
     const refusals = [
       { code: "site_refused", message: "The user refused https://a.example." },
-      { code: "site_blocked", message: "Foxhand does not act on https://bank.example." },
+      { code: "site_blocked", message: "Foxleash does not act on https://bank.example." },
     ];
     const host = await fakeHost(
       base.socketDir,
@@ -222,7 +222,9 @@ describe("runProbe", () => {
         },
         probe_input: (calls) =>
           calls === 1
-            ? { error: { code: "probe_failed", message: "Foxhand could not run its input probe." } }
+            ? {
+                error: { code: "probe_failed", message: "Foxleash could not run its input probe." },
+              }
             : { result: { ...RESULT, userAgent: `agent ${calls}` } },
       }),
     );
@@ -237,11 +239,11 @@ describe("runProbe", () => {
       },
       {
         url: urls[1],
-        error: { code: "site_blocked", message: "Foxhand does not act on https://bank.example." },
+        error: { code: "site_blocked", message: "Foxleash does not act on https://bank.example." },
       },
       {
         url: urls[2],
-        error: { code: "probe_failed", message: "Foxhand could not run its input probe." },
+        error: { code: "probe_failed", message: "Foxleash could not run its input probe." },
       },
       { url: "https://d.example/", checks: [CHECK] },
       { url: "https://e.example/", checks: [CHECK] },
@@ -271,7 +273,10 @@ describe("runProbe", () => {
     mkdirSync(base.socketDir, { mode: 0o700 });
     const run = await probe(base, ["https://a.example/"]);
     assert.equal(run.code, 1);
-    assert.ok(run.stderr.includes("foxhand probe: No Foxhand native host is running"), run.stderr);
+    assert.ok(
+      run.stderr.includes("foxleash probe: No Foxleash native host is running"),
+      run.stderr,
+    );
     assert.equal(run.stdout, "");
     assert.deepEqual(readdirSync(base.dir), []);
   });
@@ -297,7 +302,7 @@ describe("runProbe", () => {
         "https://c.example/",
       ]);
       assert.equal(run.code, 1);
-      assert.ok(run.stderr.endsWith(`foxhand probe: ${message}\n`), run.stderr);
+      assert.ok(run.stderr.endsWith(`foxleash probe: ${message}\n`), run.stderr);
       assert.equal(run.stdout, "");
       assert.deepEqual(readdirSync(base.dir), []);
       assert.equal(sent(host).length, 6);
@@ -312,7 +317,7 @@ describe("runProbe", () => {
         probe_input: () => ({
           error: {
             code: "invalid_request",
-            message: "Foxhand could not read the request: invalid method.",
+            message: "Foxleash could not read the request: invalid method.",
           },
         }),
       }),
@@ -321,7 +326,7 @@ describe("runProbe", () => {
     assert.equal(run.code, 1);
     assert.ok(
       run.stderr.endsWith(
-        "foxhand probe: The Foxhand extension in Firefox is older than this command and cannot run the probe; load the current build.\n",
+        "foxleash probe: The Foxleash extension in Firefox is older than this command and cannot run the probe; load the current build.\n",
       ),
       run.stderr,
     );
@@ -382,11 +387,11 @@ describe("runProbe", () => {
       const now = (): Date => new Date(start.getTime() + 60_000 * readings++);
       const run = await probe(base, ["https://a.example/"], { now });
       assert.equal(run.code, 0, run.stderr);
-      const name = path.join(base.dir, "foxhand-probe-20260102-030405");
+      const name = path.join(base.dir, "foxleash-probe-20260102-030405");
       assert.equal(run.stdout, `${name}.json\n${name}.md\n`);
       assert.deepEqual(readdirSync(base.dir).sort(), [
-        "foxhand-probe-20260102-030405.json",
-        "foxhand-probe-20260102-030405.md",
+        "foxleash-probe-20260102-030405.json",
+        "foxleash-probe-20260102-030405.md",
       ]);
       assert.equal(readReport(`${name}.json`).date, start.toISOString());
     },
@@ -417,7 +422,7 @@ describe("runProbe", () => {
       assert.equal(run.stdout, "");
       assert.ok(
         run.stderr.endsWith(
-          `foxhand probe: cannot write the report to ${name}: ${folder} is not a folder\n`,
+          `foxleash probe: cannot write the report to ${name}: ${folder} is not a folder\n`,
         ),
         run.stderr,
       );
@@ -436,7 +441,7 @@ describe("runProbe", () => {
       assert.equal(run.stdout, "");
       assert.ok(
         run.stderr.endsWith(
-          `foxhand probe: cannot write the report to ${out}: ${out}${extension} already exists\n`,
+          `foxleash probe: cannot write the report to ${out}: ${out}${extension} already exists\n`,
         ),
         run.stderr,
       );
@@ -456,7 +461,7 @@ describe("runProbe", () => {
       assert.equal(run.code, 1);
       assert.equal(run.stdout, "");
       assert.ok(
-        run.stderr.endsWith(`foxhand probe: cannot write the report to ${out} "EACCES"\n`),
+        run.stderr.endsWith(`foxleash probe: cannot write the report to ${out} "EACCES"\n`),
         run.stderr,
       );
     } finally {
@@ -479,7 +484,7 @@ describe("probeCommand", () => {
       { env: {}, cwd: () => root },
     );
     assert.equal(code, 1);
-    assert.equal(stderr.text(), "foxhand probe runs on Linux only.\n");
+    assert.equal(stderr.text(), "foxleash probe runs on Linux only.\n");
     assert.equal(stdout.text(), "");
   });
 
@@ -702,7 +707,7 @@ function privateBase(): Base {
   chmodSync(base, 0o700);
   const dir = path.join(root, `work-${counter}`);
   mkdirSync(dir);
-  return { env: { XDG_RUNTIME_DIR: base }, socketDir: path.join(base, "foxhand"), dir };
+  return { env: { XDG_RUNTIME_DIR: base }, socketDir: path.join(base, "foxleash"), dir };
 }
 
 async function fakeHost(

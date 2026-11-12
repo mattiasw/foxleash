@@ -1,6 +1,6 @@
-# Foxhand source
+# Foxleash source
 
-Foxhand is a Firefox extension that lets an AI agent on the user's computer use their
+Foxleash is a Firefox extension that lets an AI agent on the user's computer use their
 Firefox through MCP tools. The extension talks to a native host, a separate program that
 is not part of this archive.
 

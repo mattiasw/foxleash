@@ -1,4 +1,4 @@
-import { DOWNLOAD_MAX_BYTES } from "@foxhand/protocol";
+import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
 import type { BrowserApi, DownloadDelta, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
 import { siteOf } from "./site.ts";
@@ -47,7 +47,7 @@ export function createDownloads<Handle>({
     if (busy) {
       throw new ToolError(
         "download_busy",
-        "Foxhand is already saving a file; try again when it has finished.",
+        "Foxleash is already saving a file; try again when it has finished.",
       );
     }
     busy = true;
@@ -203,14 +203,14 @@ async function readBody(response: Response): Promise<{ blob: Blob; bytes: number
 function notApproved(site: string): ToolError {
   return new ToolError(
     "site_not_approved",
-    `Foxhand is not allowed on ${site} in this session; open it with tab_open or navigate first, which asks the user.`,
+    `Foxleash is not allowed on ${site} in this session; open it with tab_open or navigate first, which asks the user.`,
   );
 }
 
 function ledElsewhere(site: string): ToolError {
   return new ToolError(
     "site_not_approved",
-    `The link led to ${site}, which Foxhand is not allowed on in this session; nothing was saved.`,
+    `The link led to ${site}, which Foxleash is not allowed on in this session; nothing was saved.`,
   );
 }
 

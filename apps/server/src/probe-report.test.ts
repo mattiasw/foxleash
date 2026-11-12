@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { ProbeCheck } from "@foxhand/protocol";
+import type { ProbeCheck } from "@foxleash/protocol";
 import { type ProbeReport, renderJson, renderMarkdown } from "./probe-report.ts";
 
 const CHECK: ProbeCheck = {
@@ -16,7 +16,7 @@ const CHECK: ProbeCheck = {
 
 const REPORT: ProbeReport = {
   date: "2026-10-19T08:30:00.000Z",
-  foxhand: "0.1.0",
+  foxleash: "0.1.0",
   userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
   pages: [
     {
@@ -36,7 +36,7 @@ const REPORT: ProbeReport = {
     },
     {
       url: "https://bank.example/",
-      error: { code: "site_blocked", message: "Foxhand does not act on https://bank.example." },
+      error: { code: "site_blocked", message: "Foxleash does not act on https://bank.example." },
     },
   ],
 };
@@ -46,10 +46,10 @@ describe("renderMarkdown", () => {
     assert.equal(
       renderMarkdown(REPORT),
       [
-        "# Foxhand probe report",
+        "# Foxleash probe report",
         "",
         "- Date: 2026-10-19T08:30:00.000Z",
-        "- Foxhand: 0.1.0",
+        "- Foxleash: 0.1.0",
         "- Browser: Mozilla/5.0 (X11; Linux x86\\_64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "",
         "## https://a.example/",
@@ -61,7 +61,7 @@ describe("renderMarkdown", () => {
         "",
         "## https://bank.example/",
         "",
-        "Not probed: site\\_blocked. Foxhand does not act on https://bank.example.",
+        "Not probed: site\\_blocked. Foxleash does not act on https://bank.example.",
         "",
       ].join("\n"),
     );
@@ -114,10 +114,10 @@ describe("renderMarkdown", () => {
     const markdown = renderMarkdown({
       ...REPORT,
       date: HOSTILE,
-      foxhand: HOSTILE,
+      foxleash: HOSTILE,
       pages: [{ url: HOSTILE, error: { code: HOSTILE, message: HOSTILE } }],
     });
-    assert.ok(markdown.includes(`- Date: ${ESCAPED}\n- Foxhand: ${ESCAPED}\n`), markdown);
+    assert.ok(markdown.includes(`- Date: ${ESCAPED}\n- Foxleash: ${ESCAPED}\n`), markdown);
     assert.ok(markdown.includes(`\n## ${ESCAPED}\n`), markdown);
     assert.ok(markdown.includes(`\nNot probed: ${ESCAPED}. ${ESCAPED}\n`), markdown);
   });

@@ -6,7 +6,7 @@
 
 Firefox handles some files by a per-user setting: a PDF, for example, can be set to open in an
 external application instead of being saved. An agent that follows a link to a receipt then
-gets no file, and Foxhand had no way to save one. The file is needed in the folder where Firefox
+gets no file, and Foxleash had no way to save one. The file is needed in the folder where Firefox
 puts the user's downloads, where the agent's own file tools can pick it up.
 
 The save has to keep the site gate (ADR 0007): the agent may only get content from sites the
@@ -82,7 +82,7 @@ The `download` tool (`apps/extension/src/downloads.ts`) takes a URL and a file n
 
 - The extension holds up to 100 MiB of a file in memory while it saves it, one call at a time.
 - The download history shows a `blob:` source, not the link.
-- The file's content reaches the agent through its own file tools, outside Foxhand's untrusted
+- The file's content reaches the agent through its own file tools, outside Foxleash's untrusted
   framing; the tool description tells it to treat the content as data.
 - Redirect hops, and a final URL the gate then refuses, are requested with their own sites'
   cookies, as for `navigate`; only the final response's body is read, and only on an approved

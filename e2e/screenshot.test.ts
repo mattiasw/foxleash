@@ -186,7 +186,7 @@ describe("screenshot in real Firefox", () => {
     assert.deepEqual(await readFile(file), saved);
 
     const up = await harness.refused(saving, "screenshot", { tabId: tab, saveTo: "../shot.png" });
-    assert.ok(up.includes("outside the folder Foxhand was started in"), up);
+    assert.ok(up.includes("outside the folder Foxleash was started in"), up);
     await assert.rejects(lstat(join(outer, "shot.png")), { code: "ENOENT" });
     const dot = await harness.refused(saving, "screenshot", { tabId: tab, saveTo: ".shot.png" });
     assert.ok(dot.includes("starting with a dot"), dot);
@@ -201,7 +201,7 @@ describe("screenshot in real Firefox", () => {
     const result = await harness.call(session, "screenshot", { tabId: tab.id });
     assert.equal(result.isError, true, result.text);
     assert.ok(
-      result.text.includes(`Foxhand is not allowed on ${other} in this session`),
+      result.text.includes(`Foxleash is not allowed on ${other} in this session`),
       result.text,
     );
     assert.deepEqual(result.images, []);
@@ -288,7 +288,7 @@ describe("screenshot in real Firefox", () => {
       })()`,
     );
     try {
-      // Firefox paints the snapshot, unmasked, into a capture taken without Foxhand.
+      // Firefox paints the snapshot, unmasked, into a capture taken without Foxleash.
       assertDrawn(decodePng(await firefox.captureViewport(context)), PROTECTED, "snapshot");
       const png = await shotOf({ tabId: fieldsTab });
       assertNone(png, PROTECTED, "protected");
@@ -333,7 +333,7 @@ describe("screenshot in real Firefox", () => {
     );
   });
 
-  test("a page with a frame Foxhand cannot enter is refused with no image", async () => {
+  test("a page with a frame Foxleash cannot enter is refused with no image", async () => {
     const tab = await open(session, "/shot-pdf-frame", TITLES.shotPdfFrame);
     const result = await harness.call(session, "screenshot", { tabId: tab });
     assert.equal(result.isError, true, result.text);
@@ -368,7 +368,7 @@ describe("screenshot in real Firefox", () => {
     const result = await harness.call(session, "screenshot", { tabId: tab.id });
     assert.equal(result.isError, true, result.text);
     assert.ok(
-      result.text.includes(`Firefox did not let Foxhand into the page in tab ${tab.id}.`),
+      result.text.includes(`Firefox did not let Foxleash into the page in tab ${tab.id}.`),
       result.text,
     );
     assert.deepEqual(result.images, [], result.text);
@@ -396,7 +396,7 @@ describe("screenshot in real Firefox", () => {
     } finally {
       await firefox.removeLogins();
     }
-    // Firefox draws the autofilled text in the page's fill colour without Foxhand.
+    // Firefox draws the autofilled text in the page's fill colour without Foxleash.
     assertDrawn(
       decodePng(await firefox.captureViewport(context)),
       AUTOFILL_COLOURS.filled,
@@ -422,7 +422,7 @@ describe("screenshot in real Firefox", () => {
       PAGE_TIMEOUT_MS,
       "Firefox to fill the card",
     );
-    // Firefox draws the autofilled number in the page's fill colour without Foxhand.
+    // Firefox draws the autofilled number in the page's fill colour without Foxleash.
     assertDrawn(
       decodePng(await firefox.captureViewport(context)),
       CARD_AUTOFILL_COLOURS.filled,
@@ -476,7 +476,7 @@ describe("screenshot in real Firefox", () => {
     const tabId = await open(session, "/shot-foreign-frames-hostile", TITLES.shotForeignHostile);
     const context = await contextOf(fixtures.url("/shot-foreign-frames-hostile"));
     const [x, y] = centre(SHOT_HOSTILE_SLOTS.shadow);
-    // The filter's copy of the frame in the closed shadow root, without Foxhand.
+    // The filter's copy of the frame in the closed shadow root, without Foxleash.
     await addonFramesDrawn(context, [
       ...Object.values(SHOT_HOSTILE_SLOTS).map(centre),
       [x, y + COPY_OFFSET],
@@ -519,7 +519,7 @@ describe("screenshot in real Firefox", () => {
   }
 
   /**
-   * Waits until Firefox, capturing without Foxhand, draws the other add-on's frame at each point
+   * Waits until Firefox, capturing without Foxleash, draws the other add-on's frame at each point
    * and the page's own frame, so the frames have loaded and the page shows them.
    */
   async function addonFramesDrawn(

@@ -5,10 +5,10 @@
 ## Context
 
 Firefox gives extensions no trusted input (ADR 0014), so `type` and `press_key` can only work
-from Foxhand's content script in the tab's top frame (ADR 0009), with DOM calls and synthetic
+from Foxleash's content script in the tab's top frame (ADR 0009), with DOM calls and synthetic
 events.
 
-Measured with `foxhand probe` in Firefox 159 on a plain input, a contenteditable, Gmail's search
+Measured with `foxleash probe` in Firefox 159 on a plain input, a contenteditable, Gmail's search
 box and compose body, Google Docs' title input and its document body:
 
 - Synthetic key events never insert text, in any of them.

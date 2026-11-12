@@ -1,4 +1,4 @@
-import type { TabInfo } from "@foxhand/protocol";
+import type { TabInfo } from "@foxleash/protocol";
 import type { BrowserApi, MessageSender, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
 import type { SessionGroups } from "./session-groups.ts";
@@ -25,7 +25,7 @@ export const PROMPT_PAGE = "approve.html";
 export const OPTIONS_PAGE = "options.html";
 
 const PORT_NAME = "approve";
-// Refused and closed prompts a session may have before Foxhand stops asking.
+// Refused and closed prompts a session may have before Foxleash stops asking.
 const PROMPT_BUDGET = 3;
 
 /** What a session may do with a site: load it, never, never in this session, or ask the user. */
@@ -108,7 +108,7 @@ export interface SiteAccess {
     stillOpen: () => boolean,
   ): Promise<string[]>;
   /**
-   * Refuses once the session's refused and closed prompts reach the budget: from then on Foxhand
+   * Refuses once the session's refused and closed prompts reach the budget: from then on Foxleash
    * asks the user nothing about sites in that session.
    */
   refuseIfStoppedAsking(session: string): void;
@@ -275,7 +275,7 @@ export function createSiteAccess<Handle>({
     // No await from here until the prompt is recorded, so parallel requests see one prompt.
     if (current.blocked(url)) throw siteBlocked(site);
     const open = prompts.get(session);
-    // Before the approved check: Foxhand must not navigate away from its own live prompt.
+    // Before the approved check: Foxleash must not navigate away from its own live prompt.
     if (open?.tabId === tabId) return join(joinable(open, site), tabId);
     if (current.allowed(url)) return { answer: Promise.resolve(), promptInTab: false };
     refuseIfAnswered(session, site);
@@ -383,7 +383,7 @@ export function createSiteAccess<Handle>({
   function webSite(url: string): string {
     const site = siteOf(url);
     if (site === undefined) {
-      throw new ToolError("invalid_url", "Foxhand acts only on http and https URLs.");
+      throw new ToolError("invalid_url", "Foxleash acts only on http and https URLs.");
     }
     return site;
   }
@@ -394,7 +394,7 @@ export function createSiteAccess<Handle>({
     if (state.refused.has(site)) {
       throw new ToolError(
         "site_refused",
-        `The user did not allow Foxhand on ${site} in this session.`,
+        `The user did not allow Foxleash on ${site} in this session.`,
       );
     }
     refuseIfStoppedAsking(session);
@@ -405,7 +405,7 @@ export function createSiteAccess<Handle>({
     if (state !== undefined && state.refused.size + state.closed >= PROMPT_BUDGET) {
       throw new ToolError(
         "site_refused",
-        "Foxhand asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxhand's settings, or start a new session, to be asked again.",
+        "Foxleash asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxleash's settings, or start a new session, to be asked again.",
       );
     }
   }
@@ -505,7 +505,7 @@ export function createSiteAccess<Handle>({
       waiter.reject(
         new ToolError(
           "approval_timeout",
-          `Foxhand is still asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}. Tell the user to answer there, then call navigate with tab ${prompt.tabId} and action reload.`,
+          `Foxleash is still asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}. Tell the user to answer there, then call navigate with tab ${prompt.tabId} and action reload.`,
         ),
       );
     }
@@ -619,7 +619,7 @@ export function createSiteAccess<Handle>({
       waiter?.reject(
         new ToolError(
           "site_refused",
-          `The user did not allow Foxhand on ${prompt.site} in this session.`,
+          `The user did not allow Foxleash on ${prompt.site} in this session.`,
         ),
       );
     }
@@ -685,14 +685,14 @@ export function portShowsPage(
 export function approvalPending(tabId: number, question: string): ToolError {
   return new ToolError(
     "approval_pending",
-    `Foxhand is waiting for the user to answer in tab ${tabId} ${question}. Try again after the user has answered.`,
+    `Foxleash is waiting for the user to answer in tab ${tabId} ${question}. Try again after the user has answered.`,
   );
 }
 
 export function siteBlocked(site: string): ToolError {
   return new ToolError(
     "site_blocked",
-    `Foxhand does not act on ${site}: it is on Foxhand's blocklist, which by default lists common financial and health sites.`,
+    `Foxleash does not act on ${site}: it is on Foxleash's blocklist, which by default lists common financial and health sites.`,
   );
 }
 

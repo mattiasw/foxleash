@@ -6,7 +6,7 @@ import {
   MAX_RECIPES,
   type Recipe,
   type RecipeFields,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { warn } from "./log.ts";
 import { isRecord, RECIPE_KEY_PREFIX, type SettingsBrowser } from "./settings.ts";
 import { siteOf } from "./site.ts";

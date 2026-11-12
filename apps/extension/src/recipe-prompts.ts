@@ -1,4 +1,4 @@
-import { MAX_RECIPES, type RecipeFields, type Result } from "@foxhand/protocol";
+import { MAX_RECIPES, type RecipeFields, type Result } from "@foxleash/protocol";
 import type { BrowserApi, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { recipeNotFound, ToolError } from "./handlers.ts";
 import { checkRecipe, findRecipe, lookOf, readRecipes, saveRecipe } from "./recipes.ts";
@@ -21,7 +21,7 @@ export const RUN_PAGE = "run.html";
 
 const PORT_NAME = "recipe";
 // Recipe pages discarded, refused or closed without an answer that a session may have before
-// Foxhand stops opening them.
+// Foxleash stops opening them.
 const RECIPE_PROMPT_BUDGET = 3;
 const READ_FAILED = "Firefox could not read the stored recipes. Reload the page to try again.";
 
@@ -307,7 +307,7 @@ export function createRecipePrompts<Handle>({
     if ((budget.get(session) ?? 0) >= RECIPE_PROMPT_BUDGET) {
       throw new ToolError(
         "recipe_prompt_refused",
-        "Foxhand shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
+        "Foxleash shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
       );
     }
   }
@@ -348,7 +348,7 @@ export function createRecipePrompts<Handle>({
       waiter.reject(
         new ToolError(
           "approval_timeout",
-          `Foxhand is still asking the user in tab ${prompt.tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+          `Foxleash is still asking the user in tab ${prompt.tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
         ),
       );
     }
@@ -547,7 +547,7 @@ export function createRecipePrompts<Handle>({
         type: "problems",
         problems: [
           {
-            text: `Foxhand keeps at most ${MAX_RECIPES} recipes. Delete one in Foxhand's settings first.`,
+            text: `Foxleash keeps at most ${MAX_RECIPES} recipes. Delete one in Foxleash's settings first.`,
           },
         ],
       });
@@ -573,7 +573,7 @@ export function createRecipePrompts<Handle>({
         prompt,
         new ToolError(
           "recipe_prompt_closed",
-          "Firefox could not read Foxhand's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.",
+          "Firefox could not read Foxleash's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.",
         ),
       );
       postTo(prompt, { type: "ended" });
@@ -652,7 +652,7 @@ export function createRecipePrompts<Handle>({
 function recipePromptOpen(tabId: number): ToolError {
   return new ToolError(
     "recipe_prompt_open",
-    `Foxhand is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
+    `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
   );
 }
 

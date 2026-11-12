@@ -1,4 +1,4 @@
-import type { MethodName } from "@foxhand/protocol";
+import type { MethodName } from "@foxleash/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { allowedPageSite, NAVIGATION_WAIT_MS, pageLoading, ToolError } from "./handlers.ts";
 import {
@@ -51,7 +51,7 @@ export interface PageScriptsDeps<Handle> {
 
 export interface PageScripts {
   /**
-   * Sends a request to Foxhand's content script in the top frame of a tab the session may act
+   * Sends a request to Foxleash's content script in the top frame of a tab the session may act
    * in, injecting the script first, and returns the result of the request's page handler. Waits
    * first for a navigation under way in the tab, and runs once more after one that began while
    * it ran, unless it is an act already sent.
@@ -176,7 +176,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       pageUnreachable(tabId),
       new ToolError(
         "page_timeout",
-        `Foxhand could not get into the page in tab ${tabId} in time; try again.`,
+        `Foxleash could not get into the page in tab ${tabId} in time; try again.`,
       ),
     );
     const top = frames.find((frame) => frame.frameId === 0);
@@ -314,7 +314,7 @@ function costOf(value: unknown, key: string | undefined): number {
 }
 
 function replyTimeout(tabId: number, type: string): ToolError {
-  const silence = `The page in tab ${tabId} did not answer Foxhand within ${PAGE_REPLY_MS / 1000} seconds`;
+  const silence = `The page in tab ${tabId} did not answer Foxleash within ${PAGE_REPLY_MS / 1000} seconds`;
   return new ToolError(
     "page_timeout",
     ACTING_REQUEST_TYPES.includes(type)
@@ -326,7 +326,7 @@ function replyTimeout(tabId: number, type: string): ToolError {
 function pageUnreachable(tabId: number): ToolError {
   return new ToolError(
     "page_unreachable",
-    `Firefox did not let Foxhand into the page in tab ${tabId}.`,
+    `Firefox did not let Foxleash into the page in tab ${tabId}.`,
   );
 }
 
@@ -335,7 +335,7 @@ function pageChanged(tabId: number, ran?: string): ToolError {
   return new ToolError(
     "page_changed",
     ran === undefined
-      ? `The page in tab ${tabId} changed while Foxhand was working in it; try again.`
+      ? `The page in tab ${tabId} changed while Foxleash was working in it; try again.`
       : `The page in tab ${tabId} changed after ${ran} ran; read the page before you repeat it.`,
   );
 }
@@ -343,7 +343,7 @@ function pageChanged(tabId: number, ran?: string): ToolError {
 function pageError(tabId: number): ToolError {
   return new ToolError(
     "page_error",
-    `Foxhand could not complete the request in the page in tab ${tabId}.`,
+    `Foxleash could not complete the request in the page in tab ${tabId}.`,
   );
 }
 

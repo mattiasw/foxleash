@@ -74,5 +74,5 @@ Firefox marks each field it fills with its autofill state, which the CSS pseudo-
   `e2e/screenshot.test.ts`): login autofill sets `:autofill` on a username field without an
   `autocomplete` token; read_page reads it as `protected filled`; `type` is refused and the mark
   stays; a `navigate` reload brings back no value; Firefox's own capture draws its text while
-  Foxhand's screenshot does not, and a plain field's text is drawn. Card and address autofill are
+  Foxleash's screenshot does not, and a plain field's text is drawn. Card and address autofill are
   not covered by the end-to-end tests: they need the user's pick in Firefox's popup.

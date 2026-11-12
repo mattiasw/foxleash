@@ -4,7 +4,7 @@ import { chmodSync, mkdirSync, mkdtempSync, renameSync, rmSync, utimesSync } fro
 import net from "node:net";
 import path from "node:path";
 import { after, describe, it } from "node:test";
-import { PROTOCOL_VERSION } from "@foxhand/protocol";
+import { PROTOCOL_VERSION } from "@foxleash/protocol";
 import { Bridge, BridgeError, connectToHost, HostError } from "./bridge.ts";
 import { createFrameReader, encodeFrame, FRAME_LIMIT, NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { type FakeHost, type FakeHostOptions, startFakeHost } from "./testing/fake-host.ts";
@@ -35,7 +35,7 @@ interface Peer {
 type OnFrame = (socket: net.Socket, value: unknown, index: number) => void;
 
 const uid = currentUid();
-const root = mkdtempSync("/tmp/foxhand-test-");
+const root = mkdtempSync("/tmp/foxleash-test-");
 const VERSION = "1.2.3";
 const SESSION = "session-1";
 // As in production: a stall in the test process must not skip a live host.
@@ -45,13 +45,13 @@ const SHORT_HANDSHAKE_MS = 200;
 const REQUEST_MS = 100;
 const LIMIT = { timeout: 3000 };
 const NO_HOST =
-  "No Foxhand native host is running: start Firefox with the Foxhand extension installed, and run `npm run doctor` in your Foxhand folder if it still fails.";
-const TIMEOUT = "The Foxhand native host did not answer in time.";
-const CLOSING = "The connection to the Foxhand native host was lost: the MCP server is closing.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
+const TIMEOUT = "The Foxleash native host did not answer in time.";
+const CLOSING = "The connection to the Foxleash native host was lost: the MCP server is closing.";
 const HOST_CLOSED =
-  "The connection to the Foxhand native host was lost: the host closed the connection.";
+  "The connection to the Foxleash native host was lost: the host closed the connection.";
 const UNREADABLE =
-  "The connection to the Foxhand native host was lost: the host sent an unreadable message.";
+  "The connection to the Foxleash native host was lost: the host sent an unreadable message.";
 const bridges: Bridge[] = [];
 const hosts: FakeHost[] = [];
 const servers: net.Server[] = [];
@@ -102,7 +102,7 @@ describe("Bridge, finding the host", () => {
       message: "skipped a socket",
       detail: {
         path: stale,
-        error: `Cannot connect to the Foxhand native host at ${stale}: ECONNREFUSED.`,
+        error: `Cannot connect to the Foxleash native host at ${stale}: ECONNREFUSED.`,
       },
     });
   });
@@ -121,7 +121,7 @@ describe("Bridge, finding the host", () => {
       message: "skipped a socket",
       detail: {
         path: silent.path,
-        error: `The Foxhand native host at ${silent.path} did not answer within ${SHORT_HANDSHAKE_MS} ms.`,
+        error: `The Foxleash native host at ${silent.path} did not answer within ${SHORT_HANDSHAKE_MS} ms.`,
       },
     });
   });
@@ -179,7 +179,7 @@ describe("Bridge, finding the host", () => {
     const h = start(dir);
     await rejectsWith(
       h.bridge.call("tabs_list", {}),
-      `The Foxhand socket directory ${dir} is open to other users (mode 0755); remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`,
+      `The Foxleash socket directory ${dir} is open to other users (mode 0755); remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`,
     );
   });
 
@@ -216,9 +216,9 @@ describe("Bridge, finding the host", () => {
     });
     const h = start(dir);
     const sentence =
-      `The Foxhand MCP server (version ${VERSION}, protocol ${PROTOCOL_VERSION}) is older than the ` +
-      `Foxhand native host (version 9.9.9, protocol ${PROTOCOL_VERSION + 1}): your MCP client is ` +
-      "still running the old MCP server, so update Foxhand with `git pull && npm ci && npm run setup` " +
+      `The Foxleash MCP server (version ${VERSION}, protocol ${PROTOCOL_VERSION}) is older than the ` +
+      `Foxleash native host (version 9.9.9, protocol ${PROTOCOL_VERSION + 1}): your MCP client is ` +
+      "still running the old MCP server, so update Foxleash with `git pull && npm ci && npm run setup` " +
       "if you have not yet and then restart your MCP client.";
     await rejectsWith(h.bridge.call("tabs_list", {}), sentence);
     await rejectsWith(h.bridge.call("tabs_list", {}), sentence);
@@ -234,7 +234,7 @@ describe("Bridge, the handshake", () => {
     const error = await caught(connectToHost(stale, { version: VERSION, log: () => {} }));
     assertBridgeError(
       error,
-      `Cannot connect to the Foxhand native host at ${stale}: ECONNREFUSED.`,
+      `Cannot connect to the Foxleash native host at ${stale}: ECONNREFUSED.`,
     );
     assert.ok(error instanceof BridgeError);
     assert.equal(error.code, "ECONNREFUSED");
@@ -252,7 +252,7 @@ describe("Bridge, the handshake", () => {
     const error = await caught(connectToHost(peerPath, { version: VERSION, log: () => {} }));
     assertBridgeError(
       error,
-      `The Foxhand native host at ${peerPath} closed the connection before answering.`,
+      `The Foxleash native host at ${peerPath} closed the connection before answering.`,
     );
     assert.ok(error instanceof BridgeError);
     assert.equal(error.code, undefined);
@@ -264,7 +264,7 @@ describe("Bridge, the handshake", () => {
     const error = await caught(connectToHost(peer.path, { version: VERSION, log: () => {} }));
     assertBridgeError(
       error,
-      `The Foxhand native host at ${peer.path} did not answer with a welcome.`,
+      `The Foxleash native host at ${peer.path} did not answer with a welcome.`,
     );
     assert.ok(error instanceof BridgeError);
     assert.equal(error.code, undefined);
@@ -575,7 +575,7 @@ describe("Bridge, requests", () => {
     socket.destroy();
     await rejectsWith(
       call,
-      "The connection to the Foxhand native host was lost: the socket failed with ECONNRESET.",
+      "The connection to the Foxleash native host was lost: the socket failed with ECONNRESET.",
     );
   });
 
@@ -752,7 +752,7 @@ function header(length: number): Buffer {
 function skipped(socketPath: string, ending: string): LogLine {
   return {
     message: "skipped a socket",
-    detail: { path: socketPath, error: `The Foxhand native host at ${socketPath} ${ending}.` },
+    detail: { path: socketPath, error: `The Foxleash native host at ${socketPath} ${ending}.` },
   };
 }
 

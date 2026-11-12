@@ -7,7 +7,7 @@ import {
   MAX_FILL_FIELDS,
   MAX_TYPE_CHARS,
   type Result,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { capText, isRecord, MAX_ERROR_MESSAGE, ownField } from "./page-messages.ts";
 
 export type FillFormOptions = { fields: { ref: string; value: FillValue }[] };

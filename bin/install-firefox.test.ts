@@ -272,22 +272,22 @@ describe("bin/install-firefox.ts paths", () => {
   test("caches under XDG_CACHE_HOME when it is set", () => {
     assert.equal(
       cacheRoot({ env: { XDG_CACHE_HOME: "/xdg" }, homedir: "/home/u" }),
-      "/xdg/foxhand-firefox",
+      "/xdg/foxleash-firefox",
     );
   });
 
   test("falls back to ~/.cache when XDG_CACHE_HOME is unset or empty", () => {
-    assert.equal(cacheRoot({ env: {}, homedir: "/home/u" }), "/home/u/.cache/foxhand-firefox");
+    assert.equal(cacheRoot({ env: {}, homedir: "/home/u" }), "/home/u/.cache/foxleash-firefox");
     assert.equal(
       cacheRoot({ env: { XDG_CACHE_HOME: "" }, homedir: "/home/u" }),
-      "/home/u/.cache/foxhand-firefox",
+      "/home/u/.cache/foxleash-firefox",
     );
   });
 
   test("puts the binary under a per-version directory", () => {
     assert.equal(
-      firefoxBinaryPath("/c/foxhand-firefox", "156.0.1"),
-      "/c/foxhand-firefox/156.0.1/firefox/firefox",
+      firefoxBinaryPath("/c/foxleash-firefox", "156.0.1"),
+      "/c/foxleash-firefox/156.0.1/firefox/firefox",
     );
   });
 });
@@ -305,7 +305,7 @@ describe("bin/install-firefox.ts platform check", () => {
     test(`refuses ${platform} ${arch} with a message saying why and how to extend it`, () => {
       assert.throws(() => assertSupportedPlatform({ platform, arch }), {
         message:
-          `Foxhand's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
+          `Foxleash's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
           "bin/firefox-version.json pins only the linux-x86_64 tarball. To extend it, pin a " +
           "second tarball's sha256 from Mozilla's releases/<version>/SHA256SUMS and teach " +
           "archiveUrl() in bin/install-firefox.ts to pick it (see docs/development.md).",
@@ -336,7 +336,7 @@ describe("bin/install-firefox.ts platform check", () => {
 describe("bin/install-firefox.ts ensureFirefox", () => {
   test("downloads, verifies, extracts and returns the binary, leaving no temp files", async () => {
     const fixture = makeFixtureArchive();
-    const root = join(makeTempDirectory("install-firefox-root-"), "cache", "foxhand-firefox");
+    const root = join(makeTempDirectory("install-firefox-root-"), "cache", "foxleash-firefox");
     const { download, calls } = copyingDownload(fixture.archive);
     const { log, lines } = silentLog();
 
@@ -846,7 +846,7 @@ describe("bin/install-firefox.ts as a script", {
   test("prints the installed binary path, from the cache under XDG_CACHE_HOME", () => {
     // An installed pin, so the script runs end to end without the network.
     const cache = makeTempDirectory("install-firefox-xdg-");
-    const binary = makeInstalled(join(cache, "foxhand-firefox"), readPin().version, "");
+    const binary = makeInstalled(join(cache, "foxleash-firefox"), readPin().version, "");
 
     const result = spawnSync(process.execPath, [SCRIPT], {
       env: scriptEnv(cache),

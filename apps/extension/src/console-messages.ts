@@ -5,12 +5,12 @@ import {
   MAX_CONSOLE_MESSAGES,
   MAX_CONSOLE_TEXT,
   type Result,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import type { RecorderOptions } from "./console-recorder.ts";
 import { capText, isRecord, MAX_PAGE_REPLY_CHARS, ownField } from "./page-messages.ts";
 
-export const CONSOLE_READ_EVENT = "foxhand-console-read";
-export const CONSOLE_RECORDS_EVENT = "foxhand-console-records";
+export const CONSOLE_READ_EVENT = "foxleash-console-read";
+export const CONSOLE_RECORDS_EVENT = "foxleash-console-records";
 
 export const RECORDER_OPTIONS: RecorderOptions = {
   maxMessages: MAX_CONSOLE_MESSAGES,

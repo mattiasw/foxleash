@@ -7,7 +7,7 @@ import type {
   ProbeCheckName,
   ProbeOutcome,
   ProbeResult,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { Bridge, BridgeError, HostError } from "./bridge.ts";
 import { createLog, type Log } from "./log.ts";
 import { type PageReport, type ProbeReport, renderJson, renderMarkdown } from "./probe-report.ts";
@@ -75,7 +75,7 @@ export async function probeCommand(
 ): Promise<number> {
   const uid = proc.getuid?.();
   if (uid === undefined) {
-    options.stderr.write("foxhand probe runs on Linux only.\n");
+    options.stderr.write("foxleash probe runs on Linux only.\n");
     return 1;
   }
   return runProbe({ ...options, env: proc.env, uid, cwd: proc.cwd(), now: () => new Date() });
@@ -84,7 +84,7 @@ export async function probeCommand(
 export async function runProbe(options: ProbeOptions): Promise<number> {
   const { urls, out, env, uid, cwd, now, stdout, stderr } = options;
   const date = now();
-  const log = createLog("foxhand probe:", stderr);
+  const log = createLog("foxleash probe:", stderr);
   const base = path.resolve(cwd, out ?? defaultName(date));
   // Before any tab opens, so the user's answers are not spent on a report with nowhere to go.
   const unusable = await unusableOutput(base);
@@ -123,7 +123,7 @@ export async function runProbe(options: ProbeOptions): Promise<number> {
 
   const report: ProbeReport = {
     date: date.toISOString(),
-    foxhand: SERVER_VERSION,
+    foxleash: SERVER_VERSION,
     userAgent,
     pages,
   };
@@ -153,7 +153,7 @@ async function unusableOutput(base: string): Promise<string | undefined> {
 interface Probed {
   page: PageReport;
   userAgent?: string;
-  /** The tab where Foxhand's question is still open, which blocks every later URL. */
+  /** The tab where Foxleash's question is still open, which blocks every later URL. */
   openQuestion?: number;
 }
 
@@ -192,7 +192,7 @@ async function probeUrl(bridge: Bridge, url: string, now: () => Date, log: Log):
       if (attempt >= MAX_ATTEMPTS || now().getTime() - start >= MAX_WAIT_MS) {
         return { page: errorPage(url, error.code, error.message), openQuestion: tabId };
       }
-      log(`answer Foxhand's question in tab ${tabId} in Firefox to allow ${originOf(url)}`);
+      log(`answer Foxleash's question in tab ${tabId} in Firefox to allow ${originOf(url)}`);
       params = { tabId, action: "reload" };
     }
   }
@@ -212,7 +212,7 @@ async function callProbe(bridge: Bridge, tabId: number): Promise<unknown> {
     // Only an extension older than this command cannot read the request, so no page would do.
     if (error instanceof HostError && error.code === "invalid_request") {
       throw new BridgeError(
-        "The Foxhand extension in Firefox is older than this command and cannot run the probe; load the current build.",
+        "The Foxleash extension in Firefox is older than this command and cannot run the probe; load the current build.",
         error.code,
       );
     }
@@ -268,7 +268,7 @@ function errorPage(url: string, code: string, message: string): PageReport {
 function notProbed(tabId: number): { code: string; message: string } {
   return {
     code: "not_probed",
-    message: `Foxhand's question in tab ${tabId} is still open; answer or close it, then run the probe again.`,
+    message: `Foxleash's question in tab ${tabId} is still open; answer or close it, then run the probe again.`,
   };
 }
 
@@ -277,11 +277,11 @@ function isFatal(error: unknown): error is BridgeError | HostError {
   return error instanceof HostError && FATAL_CODES.includes(error.code);
 }
 
-/** `foxhand-probe-YYYYMMDD-HHMMSS`, in local time. */
+/** `foxleash-probe-YYYYMMDD-HHMMSS`, in local time. */
 function defaultName(date: Date): string {
   const day = `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}`;
   const time = `${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
-  return `foxhand-probe-${day}-${time}`;
+  return `foxleash-probe-${day}-${time}`;
 }
 
 function pad(value: number): string {

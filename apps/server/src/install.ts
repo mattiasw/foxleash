@@ -1,12 +1,12 @@
 import { chmodSync, mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { EXTENSION_ID, NATIVE_HOST_NAME } from "@foxhand/protocol";
+import { EXTENSION_ID, NATIVE_HOST_NAME } from "@foxleash/protocol";
 import type { Launch, Run, RunResult } from "./run-command.ts";
 
-const CLAUDE_SERVER_NAME = "foxhand";
+const CLAUDE_SERVER_NAME = "foxleash";
 const CLAUDE_TIMEOUT_MS = 30_000;
 const REMOVE_ARGS = ["mcp", "remove", "-s", "user", CLAUDE_SERVER_NAME];
-const RELEASE_REPO = "github.com/mattiasw/foxhand";
+const RELEASE_REPO = "github.com/mattiasw/foxleash";
 const GH_TIMEOUT_MS = 120_000;
 
 export type ExtensionSource =
@@ -43,7 +43,7 @@ export async function install(options: InstallOptions): Promise<number> {
   }
   const { launcher, manifest } = installPaths(home);
   mkdirSync(dirname(launcher), { recursive: true, mode: 0o700 });
-  // Only Foxhand uses this directory; the shared native-messaging-hosts one keeps its mode.
+  // Only Foxleash uses this directory; the shared native-messaging-hosts one keeps its mode.
   chmodSync(dirname(launcher), 0o700);
   writeFileSync(launcher, launcherScript(node, main), { mode: 0o700 });
   // writeFileSync's mode applies only when it creates the file; this repairs an existing one.
@@ -63,9 +63,11 @@ export async function install(options: InstallOptions): Promise<number> {
     const addArgs = claudeAddArgs(node, main);
     const added = await run("claude", addArgs, { timeoutMs: CLAUDE_TIMEOUT_MS });
     if (added.status === "ok") {
-      out.write("registered Foxhand with Claude Code\n");
+      out.write("registered Foxleash with Claude Code\n");
     } else if (added.status === "missing") {
-      out.write("Claude Code (claude) was not found on PATH; to register Foxhand yourself, run:\n");
+      out.write(
+        "Claude Code (claude) was not found on PATH; to register Foxleash yourself, run:\n",
+      );
       out.write(`${["claude", ...addArgs].map(shellQuote).join(" ")}\n`);
     } else if (added.status === "failed") {
       out.write(`claude mcp add: ${detail(added)}\n`);
@@ -121,7 +123,7 @@ async function downloadExtension(
 ): Promise<string | undefined> {
   const path = extensionPath(home, version);
   const dir = dirname(path);
-  // No chmod: an existing ~/.cache/foxhand may hold the development profile, and keeps its mode.
+  // No chmod: an existing ~/.cache/foxleash may hold the development profile, and keeps its mode.
   mkdirSync(dir, { recursive: true, mode: 0o700 });
   const args = [
     "release",
@@ -130,7 +132,7 @@ async function downloadExtension(
     "--repo",
     RELEASE_REPO,
     "--pattern",
-    `foxhand-${version}.xpi`,
+    `foxleash-${version}.xpi`,
     "--dir",
     dir,
     "--clobber",
@@ -146,12 +148,12 @@ async function downloadExtension(
   }
   if (result.status === "missing") {
     out.write(
-      "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxhand .xpi\n",
+      "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxleash .xpi\n",
     );
   } else if (result.status === "failed") {
     out.write(`gh release download: ${detail(result)}\n`);
     out.write(
-      `run gh auth login with an account that can read ${RELEASE_REPO}, pass --xpi <path> with a signed Foxhand .xpi, or skip the extension with --no-extension\n`,
+      `run gh auth login with an account that can read ${RELEASE_REPO}, pass --xpi <path> with a signed Foxleash .xpi, or skip the extension with --no-extension\n`,
     );
   } else {
     out.write("gh release download did not finish in 120 s\n");
@@ -206,13 +208,13 @@ function homeRefusal(home: string, uid: number | undefined): string | undefined 
 
 export function installPaths(home: string): { launcher: string; manifest: string } {
   return {
-    launcher: join(home, ".local", "share", "foxhand", "foxhand-host"),
+    launcher: join(home, ".local", "share", "foxleash", "foxleash-host"),
     manifest: join(home, ".mozilla", "native-messaging-hosts", `${NATIVE_HOST_NAME}.json`),
   };
 }
 
 export function extensionPath(home: string, version: string): string {
-  return join(home, ".cache", "foxhand", `foxhand-${version}.xpi`);
+  return join(home, ".cache", "foxleash", `foxleash-${version}.xpi`);
 }
 
 export function launcherScript(node: string, main: string): string {
@@ -226,7 +228,7 @@ export function shellQuote(s: string): string {
 export function nativeManifest(launcherPath: string): string {
   const manifest = {
     name: NATIVE_HOST_NAME,
-    description: "Foxhand native messaging host",
+    description: "Foxleash native messaging host",
     path: launcherPath,
     type: "stdio",
     allowed_extensions: [EXTENSION_ID],

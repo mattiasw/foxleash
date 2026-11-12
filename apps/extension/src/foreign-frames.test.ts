@@ -30,7 +30,7 @@ describe("foreignFramePlan", () => {
     assert.deepEqual([...(plan?.hidden ?? [])], [7]);
   });
 
-  it("does not take Foxhand's own pages, web pages or the top frame as foreign", () => {
+  it("does not take Foxleash's own pages, web pages or the top frame as foreign", () => {
     hidesNothing([TOP, frame(7, 0, `${OWN}prompt.html`)]);
     hidesNothing([TOP, frame(7, 0, "https://0b5e2f4c-1d2e-4f3a-9b8c-7d6e5f4a3b2c/")]);
     hidesNothing([TOP, frame(7, 0, "about:blank"), frame(8, 0, "data:text/html,x")]);
@@ -44,7 +44,7 @@ describe("foreignFramePlan", () => {
     hidesNothing([TOP, frame(7, 0, "not a url")]);
   });
 
-  it("takes no frame as foreign when Foxhand's own host is unknown", () => {
+  it("takes no frame as foreign when Foxleash's own host is unknown", () => {
     hidesNothing([TOP, frame(7, 0, OTHER)], "");
     hidesNothing([TOP, frame(7, 0, OTHER)], "moz-extension:");
   });

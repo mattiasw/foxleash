@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { type PartInfo, protocolMismatch } from "./index.ts";
 
-const UPDATE = "update Foxhand with `git pull && npm ci && npm run setup` if you have not yet";
+const UPDATE = "update Foxleash with `git pull && npm ci && npm run setup` if you have not yet";
 
 describe("protocolMismatch", () => {
   it("returns null when the protocols match, even with different versions", () => {
@@ -20,15 +20,15 @@ describe("protocolMismatch", () => {
       stale: { part: "extension", protocol: 3, version: "0.9.1" },
       other: { part: "host", protocol: 12, version: "1.4.0" },
       sentence:
-        "The Foxhand extension (version 0.9.1, protocol 3) is older than the Foxhand native host " +
-        "(version 1.4.0, protocol 12): run `npm run setup` in your Foxhand folder and confirm the " +
+        "The Foxleash extension (version 0.9.1, protocol 3) is older than the Foxleash native host " +
+        "(version 1.4.0, protocol 12): run `npm run setup` in your Foxleash folder and confirm the " +
         "extension update in Firefox.",
     },
     {
       stale: { part: "host", protocol: 3, version: "0.9.1" },
       other: { part: "extension", protocol: 12, version: "1.4.0" },
       sentence:
-        "The Foxhand native host (version 0.9.1, protocol 3) is older than the Foxhand extension " +
+        "The Foxleash native host (version 0.9.1, protocol 3) is older than the Foxleash extension " +
         "(version 1.4.0, protocol 12): Firefox is still running the old native host, so " +
         `${UPDATE} and then restart Firefox.`,
     },
@@ -36,7 +36,7 @@ describe("protocolMismatch", () => {
       stale: { part: "mcp", protocol: 3, version: "0.9.1" },
       other: { part: "host", protocol: 12, version: "1.4.0" },
       sentence:
-        "The Foxhand MCP server (version 0.9.1, protocol 3) is older than the Foxhand native host " +
+        "The Foxleash MCP server (version 0.9.1, protocol 3) is older than the Foxleash native host " +
         "(version 1.4.0, protocol 12): your MCP client is still running the old MCP server, so " +
         `${UPDATE} and then restart your MCP client.`,
     },

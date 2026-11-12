@@ -91,7 +91,7 @@ describe("download in real Firefox", () => {
     });
     assert.equal(
       untrustedContent(text),
-      `The link led to ${other}, which Foxhand is not allowed on in this session; nothing was saved.`,
+      `The link led to ${other}, which Foxleash is not allowed on in this session; nothing was saved.`,
     );
     assert.deepEqual(listed(), files);
   });
@@ -109,7 +109,7 @@ describe("download in real Firefox", () => {
     });
     assert.equal(
       untrustedContent(text),
-      `Foxhand is not allowed on ${other} in this session; open it with tab_open or navigate first, which asks the user.`,
+      `Foxleash is not allowed on ${other} in this session; open it with tab_open or navigate first, which asks the user.`,
     );
     assert.equal(fixtures.hits("/download/unapproved.pdf"), 0);
   });

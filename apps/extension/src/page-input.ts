@@ -4,7 +4,7 @@ import {
   type Result,
   type TypeMethod,
   type TypeOutcome,
-} from "@foxhand/protocol";
+} from "@foxleash/protocol";
 import { isRecord, ownField } from "./page-messages.ts";
 import { siteOf } from "./site.ts";
 
@@ -291,7 +291,7 @@ export function implicitSubmission(
   return blockingFields === 1 ? "without_button" : "none";
 }
 
-/** The default action Foxhand performs for the key, if any. */
+/** The default action Foxleash performs for the key, if any. */
 export function keyDefault(key: ParsedKey): KeyDefault | undefined {
   if (key.control || key.alt || key.meta) return undefined;
   if (key.shift) return key.key === "Tab" ? "shift_tab" : undefined;

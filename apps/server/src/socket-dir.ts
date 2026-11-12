@@ -41,19 +41,19 @@ export function resolveSocketDir(
     const base = path.resolve(value);
     const check = checkSocketDir(base, uid);
     if (check.ok) {
-      return { dir: path.join(base, "foxhand"), skipped };
+      return { dir: path.join(base, "foxleash"), skipped };
     }
     skipped.push(`XDG_RUNTIME_DIR ${base} ${check.reason}`);
   }
   const base = path.join(runUserBase, String(uid));
   const check = checkSocketDir(base, uid);
   if (check.ok) {
-    return { dir: path.join(base, "foxhand"), skipped };
+    return { dir: path.join(base, "foxleash"), skipped };
   }
   skipped.push(`${base} ${check.reason}`);
   // Literal /tmp, not os.tmpdir(): Firefox and the MCP client can give their children different
   // TMPDIRs, and both ends must agree.
-  return { dir: `/tmp/foxhand-${uid}`, skipped };
+  return { dir: `/tmp/foxleash-${uid}`, skipped };
 }
 
 export function checkSocketDir(dir: string, uid: number): SocketDirCheck {
@@ -113,7 +113,7 @@ export function ensureSocketDir(dir: string, uid: number): void {
 }
 
 function sentence(dir: string, reason: string): string {
-  return `The Foxhand socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
+  return `The Foxleash socket directory ${dir} ${reason}; remove it, or set XDG_RUNTIME_DIR to a private directory, and try again.`;
 }
 
 export function socketPath(dir: string, pid: number): string {

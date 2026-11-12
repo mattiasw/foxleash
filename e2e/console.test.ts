@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { ConsoleMessage } from "@foxhand/protocol";
+import type { ConsoleMessage } from "@foxleash/protocol";
 import {
   CONSOLE_LOG_POINT,
   CONSOLE_TOKENS,
@@ -177,7 +177,7 @@ describe("read_console in real Firefox", () => {
   test("a blank tab is refused as not a web page", async () => {
     const blank = tabOf(await harness.ok(session, "tab_open")).id;
     const text = await harness.refused(session, "read_console", { tabId: blank });
-    assert.ok(text.includes("Foxhand acts only on http and https pages"), text);
+    assert.ok(text.includes("Foxleash acts only on http and https pages"), text);
   });
 
   async function open(path: string, title: string): Promise<number> {
@@ -187,7 +187,7 @@ describe("read_console in real Firefox", () => {
   }
 
   /**
-   * Clicks the page's Log button once Foxhand records the page, so a pass does not depend on how
+   * Clicks the page's Log button once Foxleash records the page, so a pass does not depend on how
    * soon the recorder lands, and console calls missing after it mean its wrappers do not work.
    */
   async function logWhenRecorded(tabId: number): Promise<void> {
