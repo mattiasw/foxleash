@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The README describes Claude Code settings that can make browser tasks faster: allowing
+  Foxhand's tools without a prompt, a lower effort level and fast mode.
+
 ### Fixed
 
 - `tab_open` of a URL that Firefox downloads now reports an error, as `navigate` does, instead
