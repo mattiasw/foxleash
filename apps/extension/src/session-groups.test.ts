@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { createFakeBrowser, type FakeTab, flush } from "./fake-browser.ts";
-import { createSessionGroups } from "./session-groups.ts";
+import type { BrowserApi, Tab } from "./browser-api.ts";
+import { createFakeBrowser, type FakeBrowser, type FakeTab, flush } from "./fake-browser.ts";
+import { createSessionGroups, type SessionGroups } from "./session-groups.ts";
 
 const BLANK = ["about:blank", "about:newtab", "about:home"];
 
@@ -674,6 +675,715 @@ describe("onGrouped", { timeout: 10000 }, () => {
     }
   });
 });
+
+const PAGE = { url: "https://example.com/", active: false, discarded: true };
+const OTHER_PAGE = { url: "https://example.com/next", active: false, discarded: true };
+const BLANK_TAB = { url: "about:blank", active: true };
+
+describe("createTab", { timeout: 10000 }, () => {
+  it("with the setting off, creates the tab as before, in the group's window once there is one", async () => {
+    const { fake, groups, created } = await windowSetup({ on: false });
+    const first = await groups.createTab("s1", PAGE);
+    assert.equal(first.windowId, fake.currentWindowId);
+    const other = fake.openTab({ url: "about:blank", windowId: 2 });
+    await groups.ensureGroup("s2", other);
+    const second = await groups.createTab("s2", PAGE);
+    assert.equal(second.windowId, 2);
+    assert.deepEqual(created, [PAGE, { ...PAGE, windowId: 2 }]);
+    assert.deepEqual(fake.windowCreations, []);
+  });
+
+  it("with the setting on, opens a new window for a session's page tab, unloaded", async () => {
+    const { fake, groups, created } = await windowSetup();
+    const tab = await groups.createTab("s1", PAGE);
+    assert.deepEqual(fake.windowCreations, [{ url: "about:blank", focused: false }]);
+    assert.notEqual(tab.windowId, fake.currentWindowId);
+    assert.equal(fake.tabs.get(tab.id)?.discarded, true);
+    assert.deepEqual(created, [{ ...PAGE, windowId: tab.windowId }]);
+    const groupId = await groups.ensureGroup("s1", tab);
+    assert.equal(fake.groups.get(groupId)?.windowId, tab.windowId);
+    const later = await groups.createTab("s1", OTHER_PAGE);
+    assert.equal(later.windowId, tab.windowId);
+    assert.equal(fake.windowCreations.length, 1);
+  });
+
+  it("gives a blank tab request the new window's own blank tab", async () => {
+    const { fake, groups, created } = await windowSetup();
+    const tab = await groups.createTab("s1", BLANK_TAB);
+    assert.equal(fake.windowCreations.length, 1);
+    assert.deepEqual(created, []);
+    assert.deepEqual(windowTabs(fake, tab.windowId), [tab.id]);
+    const groupId = await groups.ensureGroup("s1", tab);
+    assert.equal(fake.groups.get(groupId)?.windowId, tab.windowId);
+    const second = await groups.createTab("s1", BLANK_TAB);
+    assert.notEqual(second.id, tab.id);
+    assert.equal(second.windowId, tab.windowId);
+  });
+
+  it("opens one window for parallel first requests of a session", async () => {
+    for (const requests of [
+      [PAGE, OTHER_PAGE],
+      [BLANK_TAB, PAGE],
+      [PAGE, BLANK_TAB],
+    ]) {
+      const { fake, groups } = await windowSetup();
+      const tabs = await Promise.all(requests.map((request) => groups.createTab("s1", request)));
+      assert.equal(fake.windowCreations.length, 1, JSON.stringify(requests));
+      const windowId = tabs[0]?.windowId;
+      assert.notEqual(windowId, fake.currentWindowId);
+      for (const tab of tabs) assert.equal(tab.windowId, windowId);
+      // A blank request takes the window's own tab.
+      const expected = requests.includes(BLANK_TAB) ? 2 : 3;
+      assert.equal(windowTabs(fake, windowId).length, expected, JSON.stringify(requests));
+    }
+  });
+
+  it("opens one window for each session", async () => {
+    const { fake, groups } = await windowSetup();
+    const first = await groups.createTab("s1", PAGE);
+    const second = await groups.createTab("s2", PAGE);
+    assert.equal(fake.windowCreations.length, 2);
+    assert.notEqual(first.windowId, second.windowId);
+  });
+
+  it("creates a new blank tab when the window's own tab was navigated or grouped", async () => {
+    const changes: [string, (fake: FakeBrowser, tabId: number) => Promise<unknown>][] = [
+      ["navigated", async (fake, tabId) => fake.navigateByUser(tabId, "https://typed.example/")],
+      [
+        "grouped",
+        (fake, tabId) =>
+          fake.browser.tabs.group({
+            tabIds: [tabId],
+            createProperties: { windowId: fake.tabs.get(tabId)?.windowId ?? -1 },
+          }),
+      ],
+      ["closed", async (fake, tabId) => fake.removeTab(tabId)],
+    ];
+    for (const [name, change] of changes) {
+      const { fake, groups } = await windowSetup();
+      const page = await groups.createTab("s1", PAGE);
+      const first = otherTab(fake, page);
+      await change(fake, first);
+      await flush();
+      const blank = await groups.createTab("s1", BLANK_TAB);
+      assert.notEqual(blank.id, first, name);
+      assert.equal(blank.windowId, page.windowId, name);
+    }
+  });
+
+  it("removes the window it opened when the tab cannot be created in it", async () => {
+    const { fake, groups } = await windowSetup();
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async () => {
+      throw new Error("create failed");
+    };
+    await assert.rejects(groups.createTab("s1", PAGE), /create failed/);
+    assert.deepEqual(fake.windowRemovals, [100]);
+    assert.deepEqual(windowTabs(fake, 100), []);
+    fake.browser.tabs.create = create;
+    const tab = await groups.createTab("s1", PAGE);
+    assert.equal(tab.windowId, 101);
+  });
+
+  it("counts a window it gave up on as closing, so a session ending meanwhile keeps the last one", async () => {
+    const { fake, groups } = await windowSetup({ outside: false });
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    // Firefox takes a moment to close the window given up on.
+    const held = Promise.withResolvers<void>();
+    const remove = fake.browser.windows.remove;
+    fake.browser.windows.remove = async (windowId) => {
+      if (windowId !== blank.windowId) await held.promise;
+      return remove(windowId);
+    };
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async () => {
+      fake.browser.tabs.create = create;
+      throw new Error("create failed");
+    };
+    await assert.rejects(groups.createTab("s2", PAGE), /create failed/);
+    await groups.endSession("s1");
+    held.resolve();
+    await flush();
+    assert.deepEqual(windowTabs(fake, blank.windowId), [blank.id]);
+  });
+
+  it("keeps the window when a create in a window it opened earlier fails", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    fake.browser.tabs.create = async () => {
+      throw new Error("create failed");
+    };
+    await assert.rejects(groups.createTab("s1", OTHER_PAGE), /create failed/);
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(page.id), true);
+  });
+
+  it("rejects when Firefox cannot open the window, or opens it without a tab", async () => {
+    const { fake, groups } = await windowSetup();
+    fake.failNextWindowCreate(new Error("no window"));
+    await assert.rejects(groups.createTab("s1", PAGE), /no window/);
+    const create = fake.browser.windows.create;
+    fake.browser.windows.create = async (createData) => {
+      const { tabs: _tabs, ...window } = await create(createData);
+      return window;
+    };
+    await assert.rejects(groups.createTab("s1", PAGE), /without a tab/);
+    assert.deepEqual(fake.windowRemovals, [100]);
+    assert.deepEqual(windowTabs(fake, 100), []);
+  });
+
+  it("opens the tab as with the setting off when the settings cannot be read", async () => {
+    const { fake, groups } = await windowSetup();
+    fake.browser.storage.local.get = async () => {
+      throw new Error("storage is unavailable");
+    };
+    const tab = await groups.createTab("s1", PAGE);
+    assert.equal(tab.windowId, fake.currentWindowId);
+    assert.deepEqual(fake.windowCreations, []);
+  });
+
+  it("keeps using the session's window after the setting is turned off", async () => {
+    const { fake, groups } = await windowSetup();
+    const first = await groups.createTab("s1", PAGE);
+    await fake.browser.storage.local.remove("sessionWindow");
+    const second = await groups.createTab("s1", OTHER_PAGE);
+    assert.equal(second.windowId, first.windowId);
+  });
+
+  it("opens a new window once the user closed the session's window", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    fake.closeWindow(page.windowId);
+    const next = await groups.createTab("s1", PAGE);
+    assert.notEqual(next.windowId, page.windowId);
+    assert.notEqual(next.windowId, fake.currentWindowId);
+    assert.equal(fake.windowCreations.length, 2);
+  });
+
+  it("opens a new window once the session's group is gone and its first tab settled", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    fake.openTab({ url: "https://user.example/", windowId: page.windowId });
+    fake.closeGroup(page.groupId ?? -1);
+    const next = await groups.createTab("s1", PAGE);
+    assert.notEqual(next.windowId, page.windowId);
+    assert.equal(fake.windowCreations.length, 2);
+  });
+
+  it("creates in the group's window when a group was made while it read the setting", async () => {
+    const { fake, groups, outside } = await windowSetup();
+    assert.ok(outside !== undefined);
+    const [tab] = await Promise.all([
+      groups.createTab("s1", PAGE),
+      groups.ensureGroup("s1", outside),
+    ]);
+    assert.equal(tab.windowId, fake.currentWindowId);
+    assert.deepEqual(fake.windowCreations, []);
+  });
+
+  it("gives a blank tab request the window's own tab only once", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    const group = fake.browser.tabs.group;
+    fake.browser.tabs.group = async () => {
+      throw new Error("group failed");
+    };
+    await assert.rejects(groups.ensureGroup("s1", blank), /group failed/);
+    fake.browser.tabs.group = group;
+    const second = await groups.createTab("s1", BLANK_TAB);
+    assert.notEqual(second.id, blank.id);
+    assert.equal(second.windowId, blank.windowId);
+  });
+
+  it("forgets a window it gave up on before Firefox reports it closed", async () => {
+    for (const failure of ["create", "first tab"]) {
+      const { fake, groups } = await windowSetup();
+      // Firefox closes the window later.
+      fake.browser.windows.remove = async (windowId) => {
+        fake.windowRemovals.push(windowId);
+      };
+      if (failure === "create") {
+        const create = fake.browser.tabs.create;
+        fake.browser.tabs.create = async () => {
+          fake.browser.tabs.create = create;
+          throw new Error("create failed");
+        };
+        await assert.rejects(groups.createTab("s1", PAGE), /create failed/);
+      } else {
+        const page = await groups.createTab("s1", PAGE);
+        fake.removeTab(page.id);
+        await flush();
+      }
+      assert.deepEqual(fake.windowRemovals, [100], failure);
+      const next = await groups.createTab("s1", PAGE);
+      assert.equal(next.windowId, 101, failure);
+    }
+  });
+
+  it("opens a new window once the user closed a window holding only its own tab", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    const other = await groups.createTab("s2", PAGE);
+    fake.browser.tabs.group = async () => {
+      throw new Error("group failed");
+    };
+    await assert.rejects(groups.ensureGroup("s1", blank), /group failed/);
+    fake.closeWindow(blank.windowId);
+    const next = await groups.createTab("s1", BLANK_TAB);
+    assert.notEqual(next.windowId, blank.windowId);
+    assert.equal(fake.tabs.has(next.id), true);
+    const later = await groups.createTab("s2", OTHER_PAGE);
+    assert.equal(later.windowId, other.windowId);
+  });
+
+  it("creates in the group's window when the group moved out of the session's window", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    moveGroup(fake, page.groupId, fake.currentWindowId);
+    const next = await groups.createTab("s1", OTHER_PAGE);
+    assert.equal(next.windowId, fake.currentWindowId);
+  });
+});
+
+describe("the session's window", { timeout: 10000 }, () => {
+  it("loses its own first tab once another tab in it is selected", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    const first = otherTab(fake, page);
+    await groups.ensureGroup("s1", page);
+    await flush();
+    assert.equal(fake.tabs.has(first), true);
+    await fake.browser.tabs.update(page.id, { active: true });
+    await flush();
+    assert.equal(fake.tabs.has(first), false);
+    assert.deepEqual(windowTabs(fake, page.windowId), [page.id]);
+    assert.deepEqual(fake.windowRemovals, []);
+  });
+
+  it("loses its own first tab only for a select in its own window", async () => {
+    const { fake, groups } = await windowSetup();
+    const first = await groups.createTab("s1", PAGE);
+    await groups.ensureGroup("s1", first);
+    const starter = otherTab(fake, first);
+    await openPage(groups, fake, "s2", PAGE);
+    assert.equal(fake.tabs.has(starter), true);
+    await fake.browser.tabs.update(first.id, { active: true });
+    await flush();
+    assert.equal(fake.tabs.has(starter), false);
+  });
+
+  it("keeps the session's own blank tab that could not be grouped when another tab is selected", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    const group = fake.browser.tabs.group;
+    fake.browser.tabs.group = async () => {
+      throw new Error("group failed");
+    };
+    await assert.rejects(groups.ensureGroup("s1", blank), /group failed/);
+    fake.browser.tabs.group = group;
+    const page = await openPage(groups, fake, "s1", PAGE);
+    assert.equal(page.windowId, blank.windowId);
+    assert.equal(fake.tabs.has(blank.id), true);
+  });
+
+  it("does not hand out its own first tab once a select is removing it", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    await groups.ensureGroup("s1", page);
+    const starter = otherTab(fake, page);
+    // The removal reads the window late, so the blank request runs first.
+    const query = fake.browser.tabs.query;
+    fake.browser.tabs.query = async (queryInfo) => {
+      await flush();
+      return query(queryInfo);
+    };
+    const selecting = fake.browser.tabs.update(page.id, { active: true });
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await selecting;
+    await flush();
+    assert.notEqual(blank.id, starter);
+    assert.equal(fake.tabs.has(blank.id), true);
+  });
+
+  it("keeps its own first tab when the user navigated it, and while it is the one selected", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    const first = otherTab(fake, page);
+    const firstTab = fake.tabs.get(first);
+    assert.ok(firstTab !== undefined);
+    firstTab.active = false;
+    await fake.browser.tabs.update(first, { active: true });
+    await flush();
+    assert.equal(fake.tabs.has(first), true);
+    fake.navigateByUser(first, "https://typed.example/");
+    await flush();
+    await fake.browser.tabs.update(page.id, { active: true });
+    await flush();
+    assert.equal(fake.tabs.has(first), true);
+  });
+
+  it("closes when the session's first tab is removed and only its own tab is left", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    await groups.ensureGroup("s1", page);
+    const closed = await groups.closeTab(page.id, () => {});
+    assert.ok(closed);
+    await closed.removed;
+    await flush();
+    assert.deepEqual(fake.windowRemovals, [page.windowId]);
+    assert.deepEqual(windowTabs(fake, page.windowId), []);
+    assert.equal(await groups.groupOf("s1"), undefined);
+    const next = await groups.createTab("s1", PAGE);
+    assert.notEqual(next.windowId, page.windowId);
+  });
+
+  it("is left to the user who took its own first tab over before the session's tab failed", async () => {
+    for (const outside of [true, false]) {
+      const { fake, groups } = await windowSetup({ outside });
+      const page = await groups.createTab("s1", PAGE);
+      await groups.ensureGroup("s1", page);
+      const first = otherTab(fake, page);
+      fake.navigateByUser(first, "https://mail.example/inbox");
+      await flush();
+      const closed = await groups.closeTab(page.id, () => {});
+      assert.ok(closed);
+      await closed.removed;
+      await flush();
+      assert.deepEqual(fake.windowRemovals, [], String(outside));
+      assert.deepEqual(windowTabs(fake, page.windowId), [first], String(outside));
+      const next = await groups.createTab("s1", OTHER_PAGE);
+      assert.notEqual(next.windowId, page.windowId, String(outside));
+      assert.equal(fake.windowCreations.length, 2, String(outside));
+    }
+  });
+
+  it("stays while another tab of the session is in it", async () => {
+    const { fake, groups } = await windowSetup();
+    const [page, other] = await Promise.all([
+      groups.createTab("s1", PAGE),
+      groups.createTab("s1", OTHER_PAGE),
+    ]);
+    assert.ok(page !== undefined && other !== undefined);
+    fake.removeTab(page.id);
+    await flush();
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(other.id), true);
+  });
+
+  it("stays when it is the last window, and still at session end", async () => {
+    const { fake, groups } = await windowSetup({ outside: false });
+    const page = await groups.createTab("s1", PAGE);
+    const first = otherTab(fake, page);
+    fake.removeTab(page.id);
+    await flush();
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(first), true);
+    // A tab closed in another window does not close it either.
+    const user = fake.openTab({ url: "https://user.example/" });
+    fake.openTab({ url: "https://user.example/other" });
+    fake.removeTab(user.id);
+    await flush();
+    assert.deepEqual(fake.windowRemovals, []);
+    await groups.endSession("s1");
+    assert.equal(fake.windowRemovals.length, 1);
+  });
+
+  it("is kept when it would close at once with another session's window that is the only other", async () => {
+    const { fake, groups } = await windowSetup({ outside: false });
+    const page = await groups.createTab("s1", PAGE);
+    const blank = await groups.createTab("s2", BLANK_TAB);
+    await groups.ensureGroup("s2", blank);
+    fake.removeTab(page.id);
+    await groups.endSession("s2");
+    await flush();
+    assert.equal(fake.windowRemovals.length, 1);
+    assert.equal(
+      windowTabs(fake, page.windowId).length + windowTabs(fake, blank.windowId).length,
+      1,
+    );
+  });
+
+  it("holds the session's next request until Firefox has removed it", async () => {
+    const { fake, groups } = await windowSetup();
+    const held = Promise.withResolvers<void>();
+    const remove = fake.browser.windows.remove;
+    fake.browser.windows.remove = async (windowId) => {
+      await held.promise;
+      return remove(windowId);
+    };
+    const page = await groups.createTab("s1", PAGE);
+    fake.removeTab(page.id);
+    await flush();
+    let settled = false;
+    const next = groups.createTab("s1", PAGE).then((tab) => {
+      settled = true;
+      return tab;
+    });
+    await flush();
+    assert.equal(settled, false);
+    held.resolve();
+    assert.notEqual((await next).windowId, page.windowId);
+  });
+
+  it("closes at session end once another window opened after its first tab failed", async () => {
+    const { fake, groups } = await windowSetup({ outside: false });
+    const page = await groups.createTab("s1", PAGE);
+    fake.removeTab(page.id);
+    await flush();
+    fake.openTab({ url: "https://user.example/" });
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, [page.windowId]);
+  });
+
+  it("waits for a queued close before a tab request uses the window", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    await groups.ensureGroup("s1", page);
+    fake.removeTab(page.id);
+    const next = await groups.createTab("s1", OTHER_PAGE);
+    assert.deepEqual(fake.windowRemovals, [page.windowId]);
+    assert.notEqual(next.windowId, page.windowId);
+    assert.equal(fake.tabs.has(next.id), true);
+  });
+});
+
+describe("endSession with the session's window", { timeout: 10000 }, () => {
+  it("closes the window when it holds only blank tabs of the group", async () => {
+    const { fake, groups, outside } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    const second = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", second);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, [blank.windowId]);
+    assert.deepEqual(windowTabs(fake, blank.windowId), []);
+    assert.equal(outside !== undefined && fake.tabs.has(outside.id), true);
+    assert.equal(await groups.groupOf("s1"), undefined);
+    assert.equal(groups.isSessionGroup(blank.groupId), false);
+  });
+
+  it("closes the window with its own first tab and the group's prompt page", async () => {
+    const { fake, groups } = await windowSetup();
+    const prompt = fake.browser.runtime.getURL("approve.html?id=1");
+    const tab = await groups.createTab("s1", { url: prompt, active: false, discarded: true });
+    await groups.ensureGroup("s1", tab);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, [tab.windowId]);
+  });
+
+  it("closes the window holding only its own first tab", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    fake.browser.tabs.group = async () => {
+      throw new Error("group failed");
+    };
+    await assert.rejects(groups.ensureGroup("s1", blank), /group failed/);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, [blank.windowId]);
+  });
+
+  it("keeps the window when it is the last one", async () => {
+    const { fake, groups } = await windowSetup({ outside: false });
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(blank.id), true);
+  });
+
+  it("keeps the window, and its group, when the group holds a page", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(page.id), true);
+    assert.equal(fake.tabs.has(blank.id), true);
+  });
+
+  it("keeps the window, closing only the group's tabs, when it holds a tab outside the group", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    const user = fake.openTab({ url: "https://user.example/", windowId: blank.windowId });
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(blank.id), false);
+    assert.equal(fake.tabs.has(user.id), true);
+  });
+
+  it("keeps the window when it holds a blank tab of the user's outside the group", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    const user = fake.openTab({ url: "about:newtab", windowId: blank.windowId });
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(user.id), true);
+  });
+
+  it("applies the usual rule to a group moved out of the session's window", async () => {
+    const { fake, groups } = await windowSetup();
+    const blank = await groups.createTab("s1", BLANK_TAB);
+    await groups.ensureGroup("s1", blank);
+    const groupId = fake.tabs.get(blank.id)?.groupId;
+    assert.ok(groupId !== undefined);
+    const sessionWindow = blank.windowId;
+    fake.openTab({ url: "about:blank", windowId: sessionWindow });
+    moveGroup(fake, groupId, fake.currentWindowId);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    assert.equal(fake.tabs.has(blank.id), false);
+    assert.equal(windowTabs(fake, sessionWindow).length, 1);
+  });
+
+  it("closes the window left with only its own first tab by a group moved out of it", async () => {
+    const { fake, groups, outside } = await windowSetup();
+    const prompt = fake.browser.runtime.getURL("approve.html?id=1");
+    const tab = await groups.createTab("s1", { url: prompt, active: false, discarded: true });
+    const groupId = await groups.ensureGroup("s1", tab);
+    const sessionWindow = tab.windowId;
+    moveGroup(fake, groupId, fake.currentWindowId);
+    assert.equal(windowTabs(fake, sessionWindow).length, 1);
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, [sessionWindow]);
+    assert.deepEqual(windowTabs(fake, sessionWindow), []);
+    assert.equal(fake.tabs.has(tab.id), false);
+    assert.equal(outside !== undefined && fake.tabs.has(outside.id), true);
+    assert.equal(await groups.groupOf("s1"), undefined);
+  });
+
+  it("forgets the window, so the session's next first tab opens a new one", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await groups.createTab("s1", PAGE);
+    const groupId = await groups.ensureGroup("s1", page);
+    fake.openTab({ url: "https://user.example/", windowId: page.windowId });
+    await groups.endSession("s1");
+    assert.deepEqual(fake.windowRemovals, []);
+    fake.closeGroup(groupId);
+    const next = await groups.createTab("s1", PAGE);
+    assert.notEqual(next.windowId, page.windowId);
+  });
+
+  it("settles together with a tab request queued beside it", async () => {
+    const { fake, groups } = await windowSetup();
+    const [tab] = await Promise.all([groups.createTab("s1", PAGE), groups.endSession("s1")]);
+    assert.ok(tab !== undefined && fake.tabs.has(tab.id));
+    const page = await groups.createTab("s2", PAGE);
+    fake.removeTab(page.id);
+    await Promise.all([groups.endSession("s2"), groups.createTab("s2", PAGE)]);
+  });
+});
+
+describe("the fake's windows", { timeout: 10000 }, () => {
+  it("opens a window on one selected tab, and lists every window with its tabs", async () => {
+    const fake = createFakeBrowser();
+    const user = fake.openTab({ url: "https://user.example/", active: true });
+    const activated: unknown[] = [];
+    fake.browser.tabs.onActivated.addListener((info) => activated.push(info));
+    const window = await fake.browser.windows.create({ url: "about:blank", focused: false });
+    const tab = window.tabs?.[0];
+    assert.ok(tab !== undefined);
+    assert.deepEqual(window, { id: 100, focused: false, tabs: [tab] });
+    assert.deepEqual(
+      [tab.windowId, tab.url, tab.active, tab.groupId],
+      [100, "about:blank", true, -1],
+    );
+    assert.deepEqual(activated, [{ tabId: tab.id, windowId: 100 }]);
+    await fake.browser.tabs.update(tab.id, { active: true });
+    assert.equal(activated.length, 1);
+    const all = await fake.browser.windows.getAll({ windowTypes: ["normal"], populate: true });
+    assert.deepEqual(
+      all.map(({ id, focused, tabs }) => ({ id, focused, tabs: tabs?.map(({ id }) => id) })),
+      [
+        { id: 1, focused: true, tabs: [user.id] },
+        { id: 100, focused: false, tabs: [tab.id] },
+      ],
+    );
+  });
+
+  it("closes a window with its tabs and groups, and tells which removals close a window", async () => {
+    const fake = createFakeBrowser();
+    const removed: unknown[] = [];
+    const windows: number[] = [];
+    fake.browser.tabs.onRemoved.addListener((tabId, info) => removed.push({ tabId, ...info }));
+    fake.browser.windows.onRemoved.addListener((windowId) => windows.push(windowId));
+    const kept = fake.openTab({ url: "https://user.example/" });
+    const grouped = fake.openTab({ url: "https://user.example/a" });
+    const groupId = await fake.browser.tabs.group({ tabIds: [grouped.id] });
+    fake.closeGroup(groupId);
+    const window = await fake.browser.windows.create({ url: "about:blank", focused: false });
+    const first = window.tabs?.[0]?.id ?? -1;
+    const page = fake.openTab({ url: "https://user.example/b", windowId: 100 });
+    const pageGroup = await fake.browser.tabs.group({
+      tabIds: [page.id],
+      createProperties: { windowId: 100 },
+    });
+    fake.removeTab(kept.id);
+    await fake.browser.windows.remove(100);
+    assert.deepEqual(removed, [
+      { tabId: grouped.id, windowId: 1, isWindowClosing: false },
+      { tabId: kept.id, windowId: 1, isWindowClosing: false },
+      { tabId: first, windowId: 100, isWindowClosing: true },
+      { tabId: page.id, windowId: 100, isWindowClosing: true },
+    ]);
+    assert.deepEqual(windows, [100]);
+    assert.equal(fake.groups.has(pageGroup), false);
+    assert.deepEqual(fake.windowRemovals, [100]);
+    await assert.rejects(fake.browser.windows.remove(100), /Invalid window ID: 100/);
+  });
+});
+
+async function windowSetup({ on = true, outside = true } = {}) {
+  const fake = createFakeBrowser();
+  const groups = createSessionGroups(fake.browser);
+  const userTab = outside
+    ? fake.openTab({ url: "https://user.example/", active: true })
+    : undefined;
+  if (on) await fake.browser.storage.local.set({ sessionWindow: true });
+  const created: Parameters<BrowserApi["tabs"]["create"]>[0][] = [];
+  const create = fake.browser.tabs.create;
+  fake.browser.tabs.create = (properties) => {
+    created.push(properties);
+    return create(properties);
+  };
+  return { fake, groups, created, outside: userTab };
+}
+
+/** Creates, groups and selects a session's page tab, as tab_open does. */
+async function openPage(
+  groups: SessionGroups,
+  fake: FakeBrowser,
+  session: string,
+  properties: typeof PAGE,
+): Promise<Tab> {
+  const tab = await groups.createTab(session, properties);
+  await groups.ensureGroup(session, tab);
+  await fake.browser.tabs.update(tab.id, { url: properties.url, loadReplace: true });
+  const selected = await fake.browser.tabs.update(tab.id, { active: true });
+  await flush();
+  return selected;
+}
+
+function windowTabs(fake: FakeBrowser, windowId: number | undefined): number[] {
+  return [...fake.tabs.values()].filter((tab) => tab.windowId === windowId).map((tab) => tab.id);
+}
+
+/** The window's tab that is not `tab`: its own first tab. */
+function otherTab(fake: FakeBrowser, tab: Tab): number {
+  const other = windowTabs(fake, tab.windowId).find((id) => id !== tab.id);
+  assert.ok(other !== undefined);
+  return other;
+}
+
+function moveGroup(fake: FakeBrowser, groupId: number | undefined, windowId: number): void {
+  const group = fake.groups.get(groupId ?? -1);
+  assert.ok(group !== undefined);
+  group.windowId = windowId;
+  for (const tab of fake.tabs.values()) if (tab.groupId === groupId) tab.windowId = windowId;
+}
 
 function setup(onGrouped?: (tabId: number) => Promise<void>) {
   const fake = createFakeBrowser();

@@ -27,7 +27,7 @@ const READ_FAILED = "Firefox could not read the stored recipes. Reload the page 
 
 export interface RecipePromptsDeps<Handle> {
   browser: Pick<BrowserApi, "runtime" | "tabs" | "windows" | "storage">;
-  groups: Pick<SessionGroups, "groupOf" | "ensureGroup" | "closeTab">;
+  groups: Pick<SessionGroups, "createTab" | "ensureGroup" | "closeTab">;
   access: Pick<
     SiteAccess,
     "openPrompt" | "siteStates" | "allowForSession" | "refuseIfStoppedAsking"
@@ -142,14 +142,9 @@ export function createRecipePrompts<Handle>({
   async function propose(session: string, recipe: RecipeFields): Promise<Result<"recipe_propose">> {
     const generation = generationOf(session);
     refuseOpening(session);
-    const group = await groups.groupOf(session);
     const pageUrl = `${browser.runtime.getURL(PROPOSE_PAGE)}?id=${crypto.randomUUID()}`;
     // Unloaded, the page cannot connect before its prompt is recorded.
-    const tab = await browser.tabs.create(
-      group === undefined
-        ? { url: pageUrl, active: false, discarded: true }
-        : { url: pageUrl, active: false, discarded: true, windowId: group.windowId },
-    );
+    const tab = await groups.createTab(session, { url: pageUrl, active: false, discarded: true });
     // No await from here until the prompt is recorded, so parallel requests see one prompt.
     try {
       refuseIfEnded(session, generation);
@@ -202,14 +197,9 @@ export function createRecipePrompts<Handle>({
     if (askable.length === 0) return resultOf(states, false);
     const joined = pageToJoin(session, recipe.name);
     if (joined !== undefined) return join(joined);
-    const group = await groups.groupOf(session);
     const pageUrl = `${browser.runtime.getURL(RUN_PAGE)}?id=${crypto.randomUUID()}`;
     // Unloaded, the page cannot connect before its prompt is recorded.
-    const tab = await browser.tabs.create(
-      group === undefined
-        ? { url: pageUrl, active: false, discarded: true }
-        : { url: pageUrl, active: false, discarded: true, windowId: group.windowId },
-    );
+    const tab = await groups.createTab(session, { url: pageUrl, active: false, discarded: true });
     // No await from here until the prompt is recorded or joined, so parallel requests of one
     // recipe end with one page.
     let again: RunPrompt<Handle> | undefined;

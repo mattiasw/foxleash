@@ -10,6 +10,7 @@ export const SITE_KEY_PREFIX = "site:";
 export const RECIPE_KEY_PREFIX = "recipe:";
 
 const BLOCKLIST_KEY = "blocklist";
+const SESSION_WINDOW_KEY = "sessionWindow";
 
 export type SettingsBrowser = Pick<BrowserApi, "storage">;
 
@@ -18,19 +19,27 @@ export interface Settings {
   sites: string[];
   /** The user's blocklist, normalized; undefined when none is stored or it is malformed. */
   blocklist: string[] | undefined;
+  /** Whether each agent session opens in its own window; false unless `true` is stored. */
+  sessionWindow: boolean;
 }
 
 /**
- * Reads the site grants and the blocklist, ignoring recipes, and ignoring (and warning about) every
- * other key and every malformed one.
+ * Reads the site grants, the blocklist and the session window setting, ignoring recipes, and
+ * ignoring (and warning about) every other key and every malformed one.
  */
 export async function readSettings(browser: SettingsBrowser): Promise<Settings> {
   const items = await browser.storage.local.get(null);
   const sites: string[] = [];
   let blocklist: string[] | undefined;
+  let sessionWindow = false;
   for (const key of Object.keys(items)) {
     if (key === BLOCKLIST_KEY) {
       blocklist = storedBlocklist(items[key]);
+      continue;
+    }
+    if (key === SESSION_WINDOW_KEY) {
+      sessionWindow = items[key] === true;
+      if (!sessionWindow) warn({ event: "ignored_setting", key });
       continue;
     }
     if (key.startsWith(RECIPE_KEY_PREFIX)) continue;
@@ -38,7 +47,7 @@ export async function readSettings(browser: SettingsBrowser): Promise<Settings> 
     if (site === undefined) warn({ event: "ignored_setting", key });
     else sites.push(site);
   }
-  return { sites: sites.sort(), blocklist };
+  return { sites: sites.sort(), blocklist, sessionWindow };
 }
 
 /** The user's blocklist when one is stored, else the built-in one. */
@@ -70,6 +79,12 @@ export function saveBlocklist(
     return browser.storage.local.remove(BLOCKLIST_KEY);
   }
   return browser.storage.local.set({ [BLOCKLIST_KEY]: [...patterns] });
+}
+
+/** Stores the session window setting; off is stored as no key. */
+export function saveSessionWindow(browser: SettingsBrowser, on: boolean): Promise<void> {
+  if (!on) return browser.storage.local.remove(SESSION_WINDOW_KEY);
+  return browser.storage.local.set({ [SESSION_WINDOW_KEY]: true });
 }
 
 /** Calls `listener` whenever the stored settings change. */

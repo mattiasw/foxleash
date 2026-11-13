@@ -1,4 +1,5 @@
 import type { BrowserApi, Tab, TabGroup } from "./browser-api.ts";
+import { readSettings } from "./settings.ts";
 import { PROMPT_PAGE } from "./site-access.ts";
 
 export interface SessionGroups {
@@ -6,6 +7,15 @@ export interface SessionGroups {
   groupOf(session: string): Promise<TabGroup | undefined>;
   /** Puts the tab in the session's group, creating the group when needed; returns its id. */
   ensureGroup(session: string, tab: { id: number; windowId: number }): Promise<number>;
+  /**
+   * Creates the session's new tab as `tabs.create` does: in its group's window; in the session's
+   * own window once it has one; with neither and the setting on, in a new window made for the
+   * session, whose own blank tab a blank tab request takes; otherwise where Firefox puts it.
+   */
+  createTab(
+    session: string,
+    properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+  ): Promise<Tab>;
   /** Closes the session's group when it holds only blank tabs; otherwise leaves it. */
   endSession(session: string): Promise<void>;
   /**
@@ -51,9 +61,18 @@ export function createSessionGroups(
   // closeTab's removals Firefox has not settled yet. Asked again while the page's beforeunload
   // prompt is open, Firefox closes the tab without waiting for the user's answer.
   const unsettled = new Map<number, Promise<void>>();
-  browser.tabs.onRemoved.addListener((tabId) => removing.delete(tabId));
+  // The window this created for each session while the setting was on, until it closes or the
+  // session ends (and, once its first tab is settled, until the session's group is forgotten).
+  const ownWindows = new Map<string, OwnWindow>();
+  browser.tabs.onRemoved.addListener(tabRemoved);
+  browser.tabs.onActivated.addListener(({ tabId, windowId }) => removeFirstTab(tabId, windowId));
+  browser.windows.onRemoved.addListener((windowId) => {
+    for (const [session, own] of ownWindows) {
+      if (own.id === windowId) ownWindows.delete(session);
+    }
+  });
 
-  return { groupOf, ensureGroup, endSession, closeTab, isSessionGroup, sessionOf };
+  return { groupOf, ensureGroup, createTab, endSession, closeTab, isSessionGroup, sessionOf };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
     const id = groups.get(session);
@@ -70,14 +89,38 @@ export function createSessionGroups(
     return serialize(session, () => addToGroup(session, tab));
   }
 
+  async function createTab(
+    session: string,
+    properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+  ): Promise<Tab> {
+    const group = await groupOf(session);
+    const own = ownWindows.get(session);
+    if (own === undefined || (group !== undefined && group.windowId !== own.id)) {
+      if (group !== undefined) {
+        return browser.tabs.create({ ...properties, windowId: group.windowId });
+      }
+      // A failed read opens the tab as with the setting off.
+      const on = await readSettings(browser).then(
+        (settings) => settings.sessionWindow,
+        () => false,
+      );
+      if (!on) return browser.tabs.create(properties);
+    }
+    return serialize(session, () => createInOwnWindow(session, properties));
+  }
+
   function endSession(session: string): Promise<void> {
     return serialize(session, async () => {
-      const step = closing.catch(() => undefined).then(() => startClosingIfBlank(session));
-      closing = step;
-      const started = await step;
-      if (started === undefined) return;
-      await started.removed;
-      forget(session, started.groupId);
+      try {
+        const step = closing.catch(() => undefined).then(() => startClosingIfBlank(session));
+        closing = step;
+        const started = await step;
+        if (started === undefined) return;
+        await started.removed;
+        if (started.groupId !== undefined) forget(session, started.groupId);
+      } finally {
+        ownWindows.delete(session);
+      }
     });
   }
 
@@ -155,10 +198,69 @@ export function createSessionGroups(
     }
   }
 
+  /** Runs under the session's `serialize`, so no other create or close of its window interleaves. */
+  async function createInOwnWindow(
+    session: string,
+    properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+  ): Promise<Tab> {
+    const group = await groupOf(session);
+    let own = ownWindows.get(session);
+    if (group !== undefined && group.windowId !== own?.id) {
+      return browser.tabs.create({ ...properties, windowId: group.windowId });
+    }
+    const made = own === undefined;
+    if (own === undefined) own = await openOwnWindow(session);
+    if (properties.url === "about:blank" && own.firstPending) {
+      own.firstPending = false;
+      const first = await browser.tabs.get(own.first).catch(() => undefined);
+      if (first !== undefined && first.windowId === own.id && isFirstTabUnused(first)) return first;
+    }
+    try {
+      return await browser.tabs.create({ ...properties, windowId: own.id });
+    } catch (error) {
+      if (made) {
+        if (ownWindows.get(session) === own) ownWindows.delete(session);
+        // Counted as going, so a session ending meanwhile does not close the last window.
+        const windowId = own.id;
+        removeTabs([own.first], () => browser.windows.remove(windowId));
+      }
+      throw error;
+    }
+  }
+
+  async function openOwnWindow(session: string): Promise<OwnWindow> {
+    // Firefox cannot open a window on a tab it has not loaded, so the page waits for a tab of its
+    // own in it: a window opened on the page would load it before it joins the group.
+    const window = await browser.windows.create({ url: "about:blank", focused: false });
+    const first = window.tabs?.[0]?.id;
+    if (window.id === undefined || first === undefined) {
+      if (window.id !== undefined) browser.windows.remove(window.id).catch(() => {});
+      throw new Error("Firefox opened the session's window without a tab.");
+    }
+    const own: OwnWindow = { id: window.id, first, firstPending: true };
+    ownWindows.set(session, own);
+    return own;
+  }
+
+  /** The window's own first tab, as Firefox opened it: blank and in no group. */
+  function isFirstTabUnused(tab: Tab): boolean {
+    return (
+      (tab.groupId ?? -1) === -1 && isBlank(tab, browser.runtime.getURL(PROMPT_PAGE), blankPage)
+    );
+  }
+
   async function startClosingIfBlank(
     session: string,
-  ): Promise<{ removed: Promise<void>; groupId: number } | undefined> {
+  ): Promise<{ removed: Promise<void>; groupId: number | undefined } | undefined> {
+    // Before groupOf, which may forget the window along with a group that is gone.
+    const own = ownWindows.get(session);
     const group = await groupOf(session);
+    if (own !== undefined) {
+      // A group that left the window before a tab there was selected leaves its own first tab.
+      const inOwn = group === undefined || group.windowId === own.id;
+      const started = await startClosingOwnWindow(own, inOwn ? group?.id : undefined);
+      if (started !== undefined && inOwn) return started;
+    }
     if (group === undefined) return;
     // One query for the whole window: the blank check and the empty-window check see one state.
     const windowTabs = await browser.tabs.query({ windowId: group.windowId });
@@ -172,6 +274,44 @@ export function createSessionGroups(
     // Removing a window's last tabs closes the window, and closing the last window quits Firefox.
     if (!windowTabs.some((tab) => tab.groupId !== group.id && !removing.has(tab.id))) return;
     return { removed: removeTabs(tabs.map((tab) => tab.id)), groupId: group.id };
+  }
+
+  /**
+   * Closes the session's window when every tab in it is blank and in the group, or is the
+   * window's own first tab, and another window stays open.
+   */
+  async function startClosingOwnWindow(
+    own: OwnWindow,
+    groupId: number | undefined,
+  ): Promise<{ removed: Promise<void>; groupId: number | undefined } | undefined> {
+    if (!(await anotherWindowStays(own.id))) return;
+    // The last read before the removal.
+    const windowTabs = await browser.tabs.query({ windowId: own.id });
+    if (windowTabs.length === 0) return;
+    const promptPage = browser.runtime.getURL(PROMPT_PAGE);
+    const closable = windowTabs.every(
+      (tab) =>
+        (groupId !== undefined && tab.groupId === groupId && isBlank(tab, promptPage, blankPage)) ||
+        (tab.id === own.first && isFirstTabUnused(tab)),
+    );
+    if (!closable) return;
+    const removal = () => browser.windows.remove(own.id);
+    return {
+      removed: removeTabs(
+        windowTabs.map((tab) => tab.id),
+        removal,
+      ),
+      groupId,
+    };
+  }
+
+  /** Closing the last window quits Firefox. */
+  async function anotherWindowStays(windowId: number): Promise<boolean> {
+    const windows = await browser.windows.getAll({ windowTypes: ["normal"], populate: true });
+    return windows.some(
+      (window) =>
+        window.id !== windowId && (window.tabs ?? []).some((tab) => !removing.has(tab.id)),
+    );
   }
 
   /** Asks Firefox to remove the tab, unless an earlier ask has not settled; returns that removal. */
@@ -190,18 +330,21 @@ export function createSessionGroups(
    * The promise settles once Firefox has removed them or refused to; it carries a handler, so a
    * caller may stop waiting for it.
    */
-  function removeTabs(tabIds: number[]): Promise<void> {
-    const removal = askFirefoxToRemove(tabIds);
+  function removeTabs(
+    tabIds: number[],
+    remove: () => Promise<void> = () => browser.tabs.remove(tabIds),
+  ): Promise<void> {
+    const removal = askFirefoxToRemove(tabIds, remove);
     removal.catch(() => undefined);
     return removal;
   }
 
-  async function askFirefoxToRemove(tabIds: number[]): Promise<void> {
+  async function askFirefoxToRemove(tabIds: number[], remove: () => Promise<void>): Promise<void> {
     // An earlier removal that Firefox has not finished keeps its ids when this one fails.
     const added = tabIds.filter((id) => !removing.has(id));
     for (const id of added) removing.add(id);
     try {
-      await browser.tabs.remove(tabIds);
+      await remove();
     } catch (error) {
       for (const id of added) removing.delete(id);
       throw error;
@@ -209,8 +352,93 @@ export function createSessionGroups(
   }
 
   function forget(session: string, id: number): void {
-    if (groups.get(session) === id) groups.delete(session);
+    if (groups.get(session) !== id) return;
+    groups.delete(session);
+    // A window whose first tab is pending is still being set up for the session; once settled, a
+    // window that outlives the group may be the user's by then.
+    if (ownWindows.get(session)?.firstPending === false) ownWindows.delete(session);
   }
+
+  function tabRemoved(
+    tabId: number,
+    { windowId, isWindowClosing }: { windowId: number; isWindowClosing: boolean },
+  ): void {
+    removing.delete(tabId);
+    for (const [session, own] of ownWindows) {
+      if (own.first === tabId) own.firstPending = false;
+      else if (!isWindowClosing && own.id === windowId && own.firstPending) {
+        // The session's first tab failed and was removed: the window holds only its own tab.
+        serialize(session, () => closeIfOnlyFirst(session, own)).catch(() => {});
+      }
+    }
+  }
+
+  /** In the order endSession takes them: the session's turn, then the closing turn. */
+  async function closeIfOnlyFirst(session: string, own: OwnWindow): Promise<void> {
+    const step = closing.catch(() => undefined).then(() => startClosingIfOnlyFirst(session, own));
+    closing = step;
+    const started = await step;
+    if (started !== undefined) await started.removed;
+  }
+
+  async function startClosingIfOnlyFirst(
+    session: string,
+    own: OwnWindow,
+  ): Promise<{ removed: Promise<void> } | undefined> {
+    if (!own.firstPending) return;
+    const stays = await anotherWindowStays(own.id);
+    // The last read before the removal.
+    const windowTabs = await browser.tabs.query({ windowId: own.id });
+    const first = windowTabs.find((tab) => tab.id === own.first);
+    if (
+      !own.firstPending ||
+      first === undefined ||
+      !windowTabs.every((tab) => tab.id === own.first || removing.has(tab.id))
+    ) {
+      return;
+    }
+    if (!isFirstTabUnused(first)) {
+      // The user took the first tab over before the session's tab was selected: the window is
+      // theirs now, and `forget` drops it along with the session's group.
+      own.firstPending = false;
+      return;
+    }
+    if (!stays) return;
+    if (ownWindows.get(session) === own) ownWindows.delete(session);
+    const removal = () => browser.windows.remove(own.id);
+    return {
+      removed: removeTabs(
+        windowTabs.map((tab) => tab.id),
+        removal,
+      ),
+    };
+  }
+
+  /** The session's tab was selected in its window: the window's own first tab has done its job. */
+  function removeFirstTab(tabId: number, windowId: number): void {
+    for (const own of ownWindows.values()) {
+      if (own.id !== windowId || !own.firstPending || tabId === own.first) continue;
+      own.firstPending = false;
+      // Not awaited: its removal carries a handler.
+      closeTab(own.first, (tab) => {
+        // A first tab the user typed an address into, or grouped, is the user's now.
+        if (tab.windowId !== windowId || !isFirstTabUnused(tab)) {
+          throw new Error("The window's first tab is in use.");
+        }
+      }).catch(() => {});
+    }
+  }
+}
+
+interface OwnWindow {
+  id: number;
+  /** The blank tab Firefox opened the window with, kept for the window's life. */
+  first: number;
+  /**
+   * True until the session takes `first` as its blank tab, another tab is selected in the
+   * window, or `first` is removed.
+   */
+  firstPending: boolean;
 }
 
 const BLANK_URLS: ReadonlySet<string | undefined> = new Set([

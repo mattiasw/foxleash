@@ -545,6 +545,103 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 });
 
+describe("tab_open with each session in its own window", { timeout: 10000 }, () => {
+  it("opens an approved page unloaded in a new window, groups and loads it, then selects it", async () => {
+    const { fake, open, grant } = setup();
+    await grant("https://example.com");
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ active: true });
+    fake.commitOnCreate = false;
+    const creates = recordCreates(fake);
+    const atUpdate: unknown[] = [];
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const tab = fake.tabs.get(tabId);
+      atUpdate.push({ groupId: tab?.groupId, discarded: tab?.discarded });
+      return update(tabId, properties);
+    };
+    const tab = await open("s1", "https://example.com/a");
+    await flush();
+    assert.deepEqual(fake.windowCreations, [{ url: "about:blank", focused: false }]);
+    const windowId = fake.tabs.get(tab.id)?.windowId;
+    assert.notEqual(windowId, user.windowId);
+    assert.deepEqual(creates, [
+      { url: "https://example.com/a", active: false, discarded: true, windowId },
+    ]);
+    const groupId = groupIdOf(fake, tab.id);
+    assert.equal(fake.groups.get(groupId)?.windowId, windowId);
+    assert.deepEqual(atUpdate, [
+      { groupId, discarded: true },
+      { groupId, discarded: false },
+    ]);
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: tab.id, url: "https://example.com/a", loadReplace: true },
+      { tabId: tab.id, active: true },
+    ]);
+    assert.deepEqual(tabsIn(fake, windowId), [tab.id]);
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+    const second = await open("s1", "https://example.com/b");
+    assert.equal(fake.tabs.get(second.id)?.windowId, windowId);
+    assert.equal(fake.windowCreations.length, 1);
+  });
+
+  it("opens a blank tab as the new window's own tab, in the group", async () => {
+    const { fake, open } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ active: true });
+    const creates = recordCreates(fake);
+    const tab = await open("s1");
+    await flush();
+    const windowId = fake.tabs.get(tab.id)?.windowId;
+    assert.notEqual(windowId, user.windowId);
+    assert.deepEqual(creates, []);
+    assert.deepEqual(tabsIn(fake, windowId), [tab.id]);
+    assert.equal(fake.groups.get(groupIdOf(fake, tab.id))?.windowId, windowId);
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+  });
+
+  it("opens the approval prompt in a new window and loads the page there once answered", async () => {
+    const { fake, call, page, promptOf } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ active: true });
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const shown = await page("s1");
+    await flush();
+    const { tabId } = await promptOf("s1");
+    const windowId = fake.tabs.get(tabId)?.windowId;
+    assert.notEqual(windowId, user.windowId);
+    assert.equal(fake.groups.get(groupIdOf(fake, tabId))?.windowId, windowId);
+    assert.deepEqual(tabsIn(fake, windowId), [tabId]);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await opened;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.id, tabId);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+  });
+
+  it("closes the new window when the session's first page does not load", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://example.com");
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ active: true });
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.update = async (tabId) => {
+      fake.emitStatus(tabId, "loading");
+      fake.emitStatus(tabId, "complete");
+      return get(tabId);
+    };
+    const opening = open("s1", "https://example.com/file");
+    opening.catch(() => {});
+    for (let turn = 0; turn < 50 && timers.pending() === 0; turn += 1) await flush();
+    timers.advance(LOAD_TIMEOUT_MS);
+    await assert.rejects(opening, { code: "navigation_timeout" });
+    await flush();
+    assert.equal(fake.windowRemovals.length, 1);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+});
+
 describe("navigate", { timeout: 10000 }, () => {
   it("loads a url in a tab of the session's group", async () => {
     const { navigate, open, grant } = setup();
@@ -6770,6 +6867,10 @@ function restoreThenLoadNothing(fake: FakeBrowser): void {
     fake.emitStatus(tabId, "complete");
     return fake.browser.tabs.get(tabId);
   };
+}
+
+function tabsIn(fake: FakeBrowser, windowId: number | undefined): number[] {
+  return [...fake.tabs.values()].filter((tab) => tab.windowId === windowId).map((tab) => tab.id);
 }
 
 /** Records every `tabs.create` call's properties, in order. */

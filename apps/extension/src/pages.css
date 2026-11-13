@@ -46,6 +46,13 @@ label {
   display: block;
 }
 
+label.check {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  min-height: 44px;
+}
+
 fieldset {
   margin: 0;
   min-width: 0;

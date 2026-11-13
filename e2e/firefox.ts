@@ -99,13 +99,17 @@ const BLOCKED_POPUPS = `const [url] = arguments;
 const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
 if (tab === undefined) throw new Error("no tab shows " + url);
 return tab.linkedBrowser.popupAndRedirectBlocker.getBlockedPopupCount();`;
-// Unloads the tab showing a URL as Firefox does to save memory, after flushing its session store
-// (which saves the form data) until the store holds that page as the tab's current entry. After a
-// flush and the unload, the store has held an about:blank entry after the page as the current
-// one, and selecting the tab then loaded about:blank. Firefox refuses to unload the selected tab.
+// Unloads the tab showing a URL, in any window, as Firefox does to save memory, after flushing its
+// session store (which saves the form data) until the store holds that page as the tab's current
+// entry. After a flush and the unload, the store has held an about:blank entry after the page as
+// the current one, and selecting the tab then loaded about:blank. Firefox refuses to unload the
+// selected tab.
 const DISCARD_TAB = `const [url, timeoutMs] = arguments;
-const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
-if (tab === undefined) throw new Error("no tab shows " + url);
+const found = [...Services.wm.getEnumerator("navigator:browser")]
+  .flatMap((win) => [...win.gBrowser.tabs].map((tab) => ({ win, tab })))
+  .find(({ tab }) => tab.linkedBrowser.currentURI.spec === url);
+if (found === undefined) throw new Error("no tab shows " + url);
+const { win, tab } = found;
 const { TabStateFlusher } = ChromeUtils.importESModule(
   "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
 );
@@ -134,7 +138,7 @@ async function flushed() {
   }
 }
 return flushed().then(() => {
-  if (!gBrowser.discardBrowser(tab, true)) throw new Error("Firefox did not unload " + url);
+  if (!win.gBrowser.discardBrowser(tab, true)) throw new Error("Firefox did not unload " + url);
   const state = stored();
   if (state.current !== url) {
     throw new Error("Firefox unloaded " + url + " with the session store at " +
@@ -142,8 +146,9 @@ return flushed().then(() => {
   }
   return null;
 });`;
-// Collects every loaded tab's whole history into the session store first (an unloaded tab has no
-// frame loader), then finds the tab by its stored history, so a tab showing about:blank is found.
+// Collects every loaded tab's whole history into the session store first, in every window (an
+// unloaded tab has no frame loader), then finds the tab by its stored history, so a tab showing
+// about:blank is found.
 const SESSION_HISTORY = `const [url] = arguments;
 const { TabStateFlusher } = ChromeUtils.importESModule(
   "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
@@ -151,15 +156,16 @@ const { TabStateFlusher } = ChromeUtils.importESModule(
 const { SessionStore } = ChromeUtils.importESModule(
   "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
 );
+const allTabs = [...Services.wm.getEnumerator("navigator:browser")].flatMap((win) => [...win.gBrowser.tabs]);
 return Promise.all(
-  gBrowser.tabs
+  allTabs
     .filter((tab) => tab.linkedBrowser.frameLoader)
     .map((tab) => {
       tab.linkedBrowser.frameLoader.requestSHistoryUpdate();
       return TabStateFlusher.flush(tab.linkedBrowser);
     }),
 ).then(() => {
-  const held = gBrowser.tabs
+  const held = allTabs
     .map((tab) => JSON.parse(SessionStore.getTabState(tab)))
     .filter(({ entries = [] }) => entries.some((entry) => entry.url === url));
   if (held.length !== 1) throw new Error(held.length + " tabs hold " + url);

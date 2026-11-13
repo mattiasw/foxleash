@@ -47,6 +47,17 @@ export interface FakeBrowser {
   windowUpdates: WindowUpdate[];
   /** Each window's size, as `windows.update` set it; a window without an entry is 1280x800. */
   windowSizes: Map<number, { width: number; height: number }>;
+  /** Every `windows.create` call, in order. */
+  windowCreations: { url: string; focused: boolean }[];
+  /** Every `windows.remove` call's window id, in order. */
+  windowRemovals: number[];
+  /** Makes the next `windows.create` reject with `error`, once. */
+  failNextWindowCreate(error: unknown): void;
+  /**
+   * The user closing a window: its tabs and groups go, firing `tabs.onRemoved` with
+   * `isWindowClosing`, then `windows.onRemoved`.
+   */
+  closeWindow(windowId: number): void;
   /** Makes the next `storage.local.set` reject, once. */
   failNextSet(): void;
   /** Every `scripting.executeScript` call, in order, with only the keys it was given. */
@@ -309,7 +320,14 @@ export function createFakeBrowser(): FakeBrowser {
   const onConnect = createEvent<(port: RuntimePort) => void>();
   const onMessage =
     createEvent<(message: unknown, sender: MessageSender) => Promise<unknown> | undefined>();
-  const onTabRemoved = createEvent<(tabId: number) => void>();
+  const onTabRemoved =
+    createEvent<
+      (tabId: number, removeInfo: { windowId: number; isWindowClosing: boolean }) => void
+    >();
+  const onTabActivated = createEvent<(activeInfo: { tabId: number; windowId: number }) => void>();
+  const onWindowRemoved = createEvent<(windowId: number) => void>();
+  let nextWindowId = 100;
+  let windowCreateFailure: { error: unknown } | undefined;
   const onTabDetached = createEvent<(tabId: number) => void>();
   let failSet = false;
   let injectionFailure: { error: unknown } | undefined;
@@ -409,7 +427,11 @@ export function createFakeBrowser(): FakeBrowser {
       update: async (tabId, properties) => {
         const tab = tabOf(tabId);
         fake.tabUpdates.push({ tabId, ...properties });
-        if (properties.active === true) activate(tab);
+        if (properties.active === true) {
+          const already = tab.active;
+          activate(tab);
+          if (!already) emitActivated(tab);
+        }
         const { url } = properties;
         if (url === undefined) {
           // Firefox loads a tab it has not loaded yet once it is selected, without a new entry.
@@ -471,6 +493,7 @@ export function createFakeBrowser(): FakeBrowser {
         },
       },
       onCreated,
+      onActivated: onTabActivated,
       onRemoved: onTabRemoved,
       onDetached: onTabDetached,
     },
@@ -488,6 +511,27 @@ export function createFakeBrowser(): FakeBrowser {
         state: "normal",
         ...sizeOf(windowId),
       }),
+      create: async ({ url, focused }) => {
+        fake.windowCreations.push({ url, focused });
+        const failure = windowCreateFailure;
+        windowCreateFailure = undefined;
+        if (failure !== undefined) throw failure.error;
+        const id = nextWindowId++;
+        const tab = fake.openTab({ url, active: true, windowId: id });
+        return { id, focused, tabs: [snapshot(tab)] };
+      },
+      remove: async (windowId) => {
+        fake.windowRemovals.push(windowId);
+        if (!knownWindows().includes(windowId)) throw new Error(`Invalid window ID: ${windowId}`);
+        fake.closeWindow(windowId);
+      },
+      getAll: async () =>
+        knownWindows().map((id) => ({
+          id,
+          focused: id === fake.currentWindowId,
+          tabs: [...fake.tabs.values()].filter((tab) => tab.windowId === id).map(snapshot),
+        })),
+      onRemoved: onWindowRemoved,
     },
     tabGroups: {
       get: async (groupId) => ({ ...groupOf(groupId) }),
@@ -591,6 +635,18 @@ export function createFakeBrowser(): FakeBrowser {
     tabUpdates: [],
     windowUpdates: [],
     windowSizes: new Map(),
+    windowCreations: [],
+    windowRemovals: [],
+    failNextWindowCreate: (error) => {
+      windowCreateFailure = { error };
+    },
+    closeWindow: (windowId) => {
+      removeTabs(
+        [...fake.tabs.values()].filter((tab) => tab.windowId === windowId),
+        true,
+      );
+      for (const listener of [...onWindowRemoved.listeners]) listener(windowId);
+    },
     failNextSet: () => {
       failSet = true;
     },
@@ -679,6 +735,7 @@ export function createFakeBrowser(): FakeBrowser {
       if (tab.active) activate(tab);
       fake.tabs.set(tab.id, tab);
       for (const listener of [...onCreated.listeners]) listener(snapshot(tab));
+      if (tab.active) emitActivated(tab);
       return tab;
     },
     closeGroup: (groupId) => {
@@ -687,7 +744,9 @@ export function createFakeBrowser(): FakeBrowser {
         if (tab.groupId !== groupId) continue;
         fake.tabs.delete(tab.id);
         dropContentScript(tab.id);
-        for (const listener of [...onTabRemoved.listeners]) listener(tab.id);
+        for (const listener of [...onTabRemoved.listeners]) {
+          listener(tab.id, { windowId: tab.windowId, isWindowClosing: false });
+        }
       }
     },
     removeTab: (tabId) => removeTabs([tabOf(tabId)]),
@@ -911,7 +970,7 @@ export function createFakeBrowser(): FakeBrowser {
     return port;
   }
 
-  function removeTabs(removed: FakeTab[]): void {
+  function removeTabs(removed: FakeTab[], isWindowClosing = false): void {
     for (const tab of removed) {
       fake.tabs.delete(tab.id);
       dropContentScript(tab.id);
@@ -921,8 +980,17 @@ export function createFakeBrowser(): FakeBrowser {
       if (empty) fake.groups.delete(groupId);
     }
     for (const tab of removed) {
-      for (const listener of [...onTabRemoved.listeners]) listener(tab.id);
+      for (const listener of [...onTabRemoved.listeners]) {
+        listener(tab.id, { windowId: tab.windowId, isWindowClosing });
+      }
     }
+  }
+
+  /** Window 1 and every window a tab is in: Firefox closes a window with its last tab. */
+  function knownWindows(): number[] {
+    const ids = new Set([fake.currentWindowId]);
+    for (const tab of fake.tabs.values()) ids.add(tab.windowId);
+    return [...ids].sort((a, b) => a - b);
   }
 
   function activate(tab: FakeTab): void {
@@ -930,6 +998,12 @@ export function createFakeBrowser(): FakeBrowser {
       if (other.windowId === tab.windowId) other.active = false;
     }
     tab.active = true;
+  }
+
+  function emitActivated(tab: FakeTab): void {
+    for (const listener of [...onTabActivated.listeners]) {
+      listener({ tabId: tab.id, windowId: tab.windowId });
+    }
   }
 
   function tabOf(tabId: number): FakeTab {

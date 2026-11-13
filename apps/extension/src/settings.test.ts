@@ -10,6 +10,7 @@ import {
   revokeSite,
   SITE_KEY_PREFIX,
   saveBlocklist,
+  saveSessionWindow,
 } from "./settings.ts";
 
 const GRANT = { grantedAt: "2026-01-02T03:04:05.000Z" };
@@ -26,6 +27,7 @@ describe("readSettings", () => {
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["http://127.0.0.1:4567", "https://a.example", "https://b.example"],
       blocklist: undefined,
+      sessionWindow: false,
     });
     assert.deepEqual(
       get.mock.calls.map((call) => call.arguments),
@@ -36,7 +38,11 @@ describe("readSettings", () => {
 
   it("returns no sites from empty storage", async (t) => {
     const { fake } = setup(t);
-    assert.deepEqual(await readSettings(fake.browser), { sites: [], blocklist: undefined });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: [],
+      blocklist: undefined,
+      sessionWindow: false,
+    });
   });
 
   it("ignores each malformed key with one warning naming it", async (t) => {
@@ -64,6 +70,7 @@ describe("readSettings", () => {
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["https://kept.example"],
       blocklist: undefined,
+      sessionWindow: false,
     });
     assert.deepEqual(
       warnings(),
@@ -79,6 +86,7 @@ describe("readSettings", () => {
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["https://__proto__"],
       blocklist: undefined,
+      sessionWindow: false,
     });
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "__proto__" }]);
   });
@@ -101,6 +109,7 @@ describe("readSettings", () => {
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["https://a.example"],
       blocklist: ["paypal.com"],
+      sessionWindow: false,
     });
     assert.deepEqual(warnings(), []);
   });
@@ -116,8 +125,26 @@ describe("readSettings", () => {
     const settings = await readSettings(fake.browser).finally(() => {
       delete prototype.grantedAt;
     });
-    assert.deepEqual(settings, { sites: [], blocklist: undefined });
+    assert.deepEqual(settings, { sites: [], blocklist: undefined, sessionWindow: false });
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "site:https://a.example" }]);
+  });
+
+  it("reads the session window setting as on only for a stored true", async (t) => {
+    const { fake, warnings } = setup(t);
+    assert.equal((await readSettings(fake.browser)).sessionWindow, false);
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    assert.equal((await readSettings(fake.browser)).sessionWindow, true);
+    assert.deepEqual(warnings(), []);
+  });
+
+  it("ignores a session window setting that is not true, with one warning", async (t) => {
+    for (const value of ["yes", false, 1, {}]) {
+      const { fake, warnings } = setup(t);
+      await fake.browser.storage.local.set({ sessionWindow: value });
+      assert.equal((await readSettings(fake.browser)).sessionWindow, false, String(value));
+      assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "sessionWindow" }]);
+      t.mock.restoreAll();
+    }
   });
 
   it("fails when storage cannot be read", async (t) => {
@@ -145,7 +172,11 @@ describe("the stored blocklist", () => {
       "site:https://a.example": GRANT,
     });
     const settings = await readSettings(fake.browser);
-    assert.deepEqual(settings, { sites: ["https://a.example"], blocklist: ["paypal.com"] });
+    assert.deepEqual(settings, {
+      sites: ["https://a.example"],
+      blocklist: ["paypal.com"],
+      sessionWindow: false,
+    });
     assert.deepEqual(effectiveBlocklist(settings), ["paypal.com"]);
     assert.deepEqual(warnings(), []);
   });
@@ -261,6 +292,7 @@ describe("grantSite and revokeSite", () => {
     assert.deepEqual(await readSettings(fake.browser), {
       sites: ["https://b.example"],
       blocklist: undefined,
+      sessionWindow: false,
     });
   });
 
@@ -320,6 +352,23 @@ describe("saveBlocklist", () => {
     const superset = [...DEFAULT_BLOCKLIST, "127.0.0.1"];
     await saveBlocklist(fake.browser, superset);
     assert.deepEqual(await fake.browser.storage.local.get(null), { blocklist: superset });
+  });
+});
+
+describe("saveSessionWindow", () => {
+  it("stores true when on and removes the key when off", async (t) => {
+    const { fake } = setup(t);
+    let changes = 0;
+    onSettingsChanged(fake.browser, () => {
+      changes += 1;
+    });
+    await saveSessionWindow(fake.browser, true);
+    assert.deepEqual(await fake.browser.storage.local.get(null), { sessionWindow: true });
+    assert.equal((await readSettings(fake.browser)).sessionWindow, true);
+    await saveSessionWindow(fake.browser, false);
+    assert.deepEqual(await fake.browser.storage.local.get(null), {});
+    assert.equal((await readSettings(fake.browser)).sessionWindow, false);
+    assert.equal(changes, 2);
   });
 });
 

@@ -84,7 +84,8 @@ in memory until the session ends. The settings page is also where you edit the b
 and where you write, edit and delete recipes: a task's steps written down with the sites it
 uses, kept in Firefox on this computer. An agent can also read the recipes you saved, ask you
 to allow a saved recipe's sites for its session, and propose a recipe, which you read and save
-in Firefox.
+in Firefox. The settings page also has the setting "Open each agent session in its own window",
+off by default.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -93,6 +94,13 @@ Each agent session's tabs open in an orange tab group titled Foxleash, and Foxle
 on tabs in that group, including tabs you move into it and tabs that a page in the group
 opens, also after your own click. When the agent session ends, Foxleash closes its group if the
 group holds only blank tabs, so pages you may still be reading stay open.
+
+With "Open each agent session in its own window" on, a session's first tab opens in a new window
+beside yours that holds the session's group, and its later tabs open there too, so the tab
+selected in your window stays as it is. The blank tab Firefox opens the window with closes once
+another tab in it is selected, and the window closes at once if the session's first tab cannot
+be opened. When the session ends, Foxleash closes that window if it holds only blank tabs and is
+not your last window. If you close the window, the agent's next tab opens a new one.
 
 Subagents or parallel agents started from one agent session (for example Claude Code
 subagents) share that session's MCP connection, so Foxleash sees them as one session. They
@@ -108,6 +116,7 @@ never closes the last tab of a window. When a tab's page asks you to confirm lea
 `tab_close` tells the agent so, and Firefox closes the tab once you choose to leave the page.
 `resize_window` resizes the whole window that holds the agent's group, your own tabs in it
 included, and first returns a maximized, minimized or full-screen window to its normal state.
+With each session in its own window, that is the session's window, not yours.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use; clicking it
 opens Foxleash's settings.

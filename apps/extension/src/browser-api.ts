@@ -58,7 +58,11 @@ export interface BrowserApi {
       removeListener(listener: TabUpdatedListener): void;
     };
     onCreated: BrowserEvent<(tab: Tab) => void>;
-    onRemoved: BrowserEvent<(tabId: number) => void>;
+    /** A tab became the selected one of its window. */
+    onActivated: BrowserEvent<(activeInfo: { tabId: number; windowId: number }) => void>;
+    onRemoved: BrowserEvent<
+      (tabId: number, removeInfo: { windowId: number; isWindowClosing: boolean }) => void
+    >;
     /** The tab left its window, as when the user drags it to another one. */
     onDetached: BrowserEvent<(tabId: number) => void>;
   };
@@ -68,6 +72,10 @@ export interface BrowserApi {
       updateInfo: { drawAttention?: boolean; state?: "normal"; width?: number; height?: number },
     ): Promise<unknown>;
     get(windowId: number): Promise<BrowserWindow>;
+    create(createData: { url: string; focused: boolean }): Promise<BrowserWindow>;
+    remove(windowId: number): Promise<void>;
+    getAll(getInfo: { windowTypes: "normal"[]; populate: true }): Promise<BrowserWindow[]>;
+    onRemoved: BrowserEvent<(windowId: number) => void>;
   };
   tabGroups: {
     get(groupId: number): Promise<TabGroup>;
@@ -333,6 +341,9 @@ export interface BrowserWindow {
   width?: number;
   height?: number;
   state?: string;
+  focused?: boolean;
+  /** With `populate`, and on `windows.create`. */
+  tabs?: Tab[];
 }
 
 export interface TabGroup {

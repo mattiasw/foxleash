@@ -26,6 +26,7 @@ import {
   revokeSite,
   type SettingsBrowser,
   saveBlocklist,
+  saveSessionWindow,
 } from "./settings.ts";
 import { parseBlocklist } from "./site.ts";
 import type { SessionAnswers } from "./site-access.ts";
@@ -68,6 +69,8 @@ const answersHeading = element("answers-heading");
 const blocklist = textArea("blocklist");
 const blocklistErrors = element("blocklist-errors");
 const blocklistStatus = element("blocklist-status");
+const sessionWindow = input("session-window");
+const sessionWindowStatus = element("session-window-status");
 const recipeList = element("recipes");
 const recipesEmpty = element("recipes-empty");
 const recipesStatus = element("recipes-status");
@@ -115,6 +118,7 @@ document.addEventListener("visibilitychange", () => {
 fillBlocklist("");
 element("blocklist-save").addEventListener("click", save);
 element("blocklist-default").addEventListener("click", fillDefault);
+sessionWindow.addEventListener("change", saveWindowSetting);
 recipeAdd.addEventListener("click", () => openEditor(undefined));
 element("recipe-save").addEventListener("click", saveEditor);
 element("recipe-cancel").addEventListener("click", cancelEditor);
@@ -147,8 +151,10 @@ function render(): void {
   renders += 1;
   const current = renders;
   readSettings(browser).then(
-    ({ sites }) => {
-      if (current === renders) show(sites);
+    (settings) => {
+      if (current !== renders) return;
+      show(settings.sites);
+      sessionWindow.checked = settings.sessionWindow;
     },
     () => {
       if (current === renders) announce(status, READ_FAILED);
@@ -456,6 +462,23 @@ function updateAnswerRows(rows: AnswerRow[]): void {
     if (item === next) next = next.nextElementSibling;
     else answers.insertBefore(item, next);
   }
+}
+
+function saveWindowSetting(): void {
+  const on = sessionWindow.checked;
+  saveSessionWindow(browser, on).then(
+    () =>
+      announce(
+        sessionWindowStatus,
+        on
+          ? "Saved. Each agent session opens in its own window."
+          : "Saved. Agent sessions open their tabs in your window.",
+      ),
+    () => {
+      sessionWindow.checked = !on;
+      announce(sessionWindowStatus, "Could not save the setting.");
+    },
+  );
 }
 
 /**

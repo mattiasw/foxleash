@@ -1297,6 +1297,54 @@ describe("run", { timeout: 10000 }, () => {
   });
 });
 
+describe("each session in its own window", { timeout: 10000 }, () => {
+  it("opens a session's first propose page in a new window", async () => {
+    const { fake, groups, recipes } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const { tabId } = await recipes.propose("s1", RECIPE);
+    await flush();
+    const windowId = fake.tabs.get(tabId)?.windowId;
+    assert.deepEqual(fake.windowCreations, [{ url: "about:blank", focused: false }]);
+    assert.notEqual(windowId, fake.currentWindowId);
+    assert.equal((await groups.groupOf("s1"))?.windowId, windowId);
+    assert.deepEqual(tabsIn(fake, windowId), [tabId]);
+  });
+
+  it("opens a session's first run page in a new window", async () => {
+    const { fake, groups, recipes } = setup();
+    await seed(fake, TRIP);
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const { tabId } = await openRun(fake, recipes);
+    await flush();
+    const windowId = fake.tabs.get(tabId)?.windowId;
+    assert.equal(fake.windowCreations.length, 1);
+    assert.notEqual(windowId, fake.currentWindowId);
+    assert.equal((await groups.groupOf("s1"))?.windowId, windowId);
+    assert.deepEqual(tabsIn(fake, windowId), [tabId]);
+  });
+
+  it("closes the new window when the session's first page cannot be loaded", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.loadReplace === true) throw new Error("Invalid tab ID");
+      return update(tabId, properties);
+    };
+    await assert.rejects(recipes.propose("s1", RECIPE), /Invalid tab ID/);
+    await flush();
+    assert.equal(fake.windowRemovals.length, 1);
+    await assert.rejects(recipes.run("s2", "Trip"), /Invalid tab ID/);
+    await flush();
+    assert.equal(fake.windowRemovals.length, 2);
+    assert.deepEqual(
+      [...fake.tabs.values()].map(({ windowId }) => windowId),
+      [fake.currentWindowId],
+    );
+  });
+});
+
 describe("the run page", { timeout: 10000 }, () => {
   it("gets the recipe and each site's state on ready, again after a reload", async () => {
     const { fake, recipes, sessions } = setup();
@@ -1948,6 +1996,10 @@ async function shownRun(
   page.deliver({ type: "ready" });
   assert.equal(fieldsOfMessage(page.posted[0]).type, "run");
   return { answer, tabId, page: Object.assign(page, { tabId }) };
+}
+
+function tabsIn(fake: FakeBrowser, windowId: number | undefined): number[] {
+  return [...fake.tabs.values()].filter((tab) => tab.windowId === windowId).map((tab) => tab.id);
 }
 
 function runTabs(fake: FakeBrowser): number[] {

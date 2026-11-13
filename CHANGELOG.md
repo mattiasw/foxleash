@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one role (`role`), each after the lines of the elements it is in, and says how many more
   match. The agent finds an element on a large page without reading the whole tree, also past
   the point where a full read is cut.
+- A setting on the settings page, "Open each agent session in its own window", off by default.
+  With it on, an agent session's tabs open in a new window of their own instead of changing the
+  tab selected in your window, and Foxleash closes that window when the session ends if it
+  holds only blank tabs and is not your last window.
 
 ### Changed
 

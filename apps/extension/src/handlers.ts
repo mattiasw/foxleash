@@ -257,16 +257,11 @@ export function createHandlers<Handle>({
       // Waits on the session's open prompt for this site, in its tab, instead of a new tab.
       return { tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }) };
     }
-    const group = await groups.groupOf(session);
     if (url !== undefined && decision?.decision === "allowed") {
-      return { tab: await openOnPage(session, url, group?.windowId) };
+      return { tab: await openOnPage(session, url) };
     }
-    if (url !== undefined) return { tab: await openOnPrompt(session, url, group?.windowId) };
-    const tab = await browser.tabs.create(
-      group === undefined
-        ? { url: "about:blank", active: true }
-        : { url: "about:blank", active: true, windowId: group.windowId },
-    );
+    if (url !== undefined) return { tab: await openOnPrompt(session, url) };
+    const tab = await groups.createTab(session, { url: "about:blank", active: true });
     await groups.ensureGroup(session, tab);
     const current = await browser.tabs.get(tab.id);
     const view = await access.view(session);
@@ -280,16 +275,8 @@ export function createHandlers<Handle>({
    * a tab Firefox has not loaded restores its page as a history load, which shows the cached copy
    * without asking the server unless the response was `no-store`.
    */
-  async function openOnPage(
-    session: string,
-    url: string,
-    windowId: number | undefined,
-  ): Promise<TabInfo> {
-    const tab = await browser.tabs.create(
-      windowId === undefined
-        ? { url, active: false, discarded: true }
-        : { url, active: false, discarded: true, windowId },
-    );
+  async function openOnPage(session: string, url: string): Promise<TabInfo> {
+    const tab = await groups.createTab(session, { url, active: false, discarded: true });
     try {
       await groups.ensureGroup(session, tab);
     } catch (error) {
@@ -322,17 +309,13 @@ export function createHandlers<Handle>({
    * not shown in (its site allowed meanwhile) loads the page and is then selected, as
    * `openOnPage`'s is.
    */
-  async function openOnPrompt(
-    session: string,
-    url: string,
-    windowId: number | undefined,
-  ): Promise<TabInfo> {
+  async function openOnPrompt(session: string, url: string): Promise<TabInfo> {
     const promptUrl = access.newPromptUrl();
-    const tab = await browser.tabs.create(
-      windowId === undefined
-        ? { url: promptUrl, active: false, discarded: true }
-        : { url: promptUrl, active: false, discarded: true, windowId },
-    );
+    const tab = await groups.createTab(session, {
+      url: promptUrl,
+      active: false,
+      discarded: true,
+    });
     let approval: Approval;
     try {
       await groups.ensureGroup(session, tab);
