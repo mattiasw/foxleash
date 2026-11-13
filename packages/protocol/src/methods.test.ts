@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type FoundLines, fillChars, foundLinesOf, READ_PAGE_MAX_MATCHES } from "./methods.ts";
+import {
+  aimsWithoutRef,
+  type FoundLines,
+  fillChars,
+  foundLinesOf,
+  READ_PAGE_MAX_MATCHES,
+} from "./methods.ts";
 
 describe("fillChars", () => {
   it("counts nothing for a checkbox's or radio's state", () => {
@@ -118,6 +124,36 @@ describe("foundLinesOf", () => {
         accepted ? counts : undefined,
         JSON.stringify([counts, tree, truncated]),
       );
+    }
+  });
+});
+
+describe("aimsWithoutRef", () => {
+  it("is true for a click or press_key without its own ref", () => {
+    assert.equal(aimsWithoutRef("click", { x: 1, y: 2 }), true);
+    assert.equal(aimsWithoutRef("press_key", { key: "Enter" }), true);
+    assert.equal(aimsWithoutRef("click", Object.create({ ref: "a1" })), true);
+  });
+
+  it("is false for a click or press_key by ref", () => {
+    assert.equal(aimsWithoutRef("click", { ref: "a1" }), false);
+    assert.equal(aimsWithoutRef("press_key", { key: "Enter", ref: "a1" }), false);
+  });
+
+  it("is true for a drag whose start or end is a point", () => {
+    assert.equal(aimsWithoutRef("drag", { x: 1, y: 2, targetRef: "a2" }), true);
+    assert.equal(aimsWithoutRef("drag", { ref: "a1", targetX: 1, targetY: 2 }), true);
+    assert.equal(aimsWithoutRef("drag", { x: 1, y: 2, targetX: 3, targetY: 4 }), true);
+  });
+
+  it("is false for a drag from a ref to a ref", () => {
+    assert.equal(aimsWithoutRef("drag", { ref: "a1", targetRef: "a2" }), false);
+  });
+
+  it("is false for hover, scroll, the acts that always take a ref, and other tools", () => {
+    for (const method of ["hover", "scroll", "type", "fill_form", "upload_file", "read_page"]) {
+      assert.equal(aimsWithoutRef(method, { x: 1, y: 2 }), false, method);
+      assert.equal(aimsWithoutRef(method, {}), false, method);
     }
   });
 });

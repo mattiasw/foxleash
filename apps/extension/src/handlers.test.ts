@@ -8,6 +8,7 @@ import {
   type Result,
   type TabInfo,
 } from "@foxleash/protocol";
+import { createActSettle, MIN_SETTLE_MS } from "./act-settle.ts";
 import type { FrameDetails, RequestDetails, Tab, TabChangeInfo } from "./browser-api.ts";
 import {
   type CssCall,
@@ -4694,8 +4695,51 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
     for (const { method, params, options, reply } of tools) {
       const { call, pageCalls, replyWith } = setup();
       replyWith(async () => ({ ...reply, extra: "page" }));
-      assert.deepEqual(await call("s2", method, { tabId: 0, ...params }), reply);
+      assert.deepEqual(await call("s2", method, { tabId: 0, ...params }), {
+        ...reply,
+        after: UNKNOWN,
+      });
       assert.deepEqual(pageCalls, [{ session: "s2", tabId: 0, type: method, params: options }]);
+    }
+  });
+
+  it("waits for the page after the act and adds what followed, leaving no timer behind", async () => {
+    for (const { method, params, reply } of tools) {
+      const { call, pageCalls, replyWith, timers } = setup();
+      const pending = timers.pending();
+      replyWith(async (type) =>
+        type === "page_changes"
+          ? { state: "current", changes: 2, quietMs: 500 }
+          : { ...reply, watch: "w.1", element: { role: "button", name: "Go" } },
+      );
+      const result = call("s2", method, { tabId: 0, ...params });
+      await flush();
+      timers.advance(MIN_SETTLE_MS);
+      assert.deepEqual(await result, {
+        ...reply,
+        after: { element: { role: "button", name: "Go" }, page: "changed" },
+      });
+      assert.deepEqual(
+        pageCalls.map(({ type, params }) => [type, params]),
+        [
+          [method, pageCalls[0]?.params],
+          ["page_changes", { watch: "w.1" }],
+          ["page_changes", { watch: "w.1" }],
+        ],
+      );
+      assert.equal(timers.pending(), pending, method);
+    }
+  });
+
+  it("leaves no timer behind when the page refuses the act or its reply", async () => {
+    for (const { method, params } of tools) {
+      const { call, replyWith, timers } = setup();
+      const pending = timers.pending();
+      replyWith(() => Promise.reject(new ToolError("stale_ref", "Old.")));
+      await assert.rejects(call("s1", method, { tabId: 3, ...params }), { code: "stale_ref" });
+      replyWith(async () => "done");
+      await assert.rejects(call("s1", method, { tabId: 3, ...params }), { code: "page_error" });
+      assert.equal(timers.pending(), pending, method);
     }
   });
 
@@ -4733,6 +4777,7 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
     assert.deepEqual(await call("s1", "press_key", { tabId: 4, key: "enter" }), {
       action: "submitted",
       prevented: false,
+      after: UNKNOWN,
     });
     await assert.rejects(call("s1", "press_key", { tabId: 4, key: "Shift+Shift+a" }), {
       code: "invalid_params",
@@ -6268,6 +6313,7 @@ describe("upload_file", { timeout: 10000 }, () => {
         { name: "empty", size: 0 },
         { name: "b.png", size: 3 },
       ],
+      after: UNKNOWN,
     });
     assert.deepEqual(pageCalls, [
       {
@@ -6286,6 +6332,38 @@ describe("upload_file", { timeout: 10000 }, () => {
     ]);
   });
 
+  it("waits for the page after the upload and adds what followed, leaving no timer behind", async () => {
+    const { call, pageCalls, replyWith, timers } = setup();
+    const pending = timers.pending();
+    replyWith(async (type) =>
+      type === "page_changes"
+        ? { state: "current", changes: 0, quietMs: 500 }
+        : { target: "input", watch: "w.1", element: { role: "button", name: "Browse…" } },
+    );
+    const result = call("s1", "upload_file", {
+      tabId: 0,
+      ref: REF,
+      upload: "none",
+      files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
+    });
+    await flush();
+    timers.advance(MIN_SETTLE_MS);
+    assert.deepEqual(await result, {
+      target: "input",
+      files: [{ name: "empty.txt", size: 0 }],
+      after: { element: { role: "button", name: "Browse…" }, page: "unchanged" },
+    });
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["upload_file", "page_changes", "page_changes"],
+    );
+    assert.equal(timers.pending(), pending);
+    replyWith(async () => ({ target: "elsewhere" }));
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    await assert.rejects(call("s1", "upload_file", valid()), { code: "page_error" });
+    assert.equal(timers.pending(), pending);
+  });
+
   it("takes nothing staged as no bytes, for empty files", async () => {
     const { call, pageCalls, replyWith } = setup();
     replyWith(async () => ({ target: "input" }));
@@ -6295,7 +6373,11 @@ describe("upload_file", { timeout: 10000 }, () => {
       upload: "never-sent",
       files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
     });
-    assert.deepEqual(result, { target: "input", files: [{ name: "empty.txt", size: 0 }] });
+    assert.deepEqual(result, {
+      target: "input",
+      files: [{ name: "empty.txt", size: 0 }],
+      after: UNKNOWN,
+    });
     assert.deepEqual(pageCalls[0]?.params.files, [
       { name: "empty.txt", type: "text/plain", bytes: new Uint8Array([]) },
     ]);
@@ -6363,7 +6445,7 @@ describe("upload_file", { timeout: 10000 }, () => {
       upload: "none",
       files: [{ name, type: "t".repeat(255), size: 0 }],
     });
-    assert.deepEqual(result, { target: "input", files: [{ name, size: 0 }] });
+    assert.deepEqual(result, { target: "input", files: [{ name, size: 0 }], after: UNKNOWN });
   });
 
   it("refuses sizes that do not add up to the staged bytes, and drops them", async () => {
@@ -7153,6 +7235,7 @@ function setup() {
       networkReads.push({ session, tabId, site, options });
       return networkResult;
     },
+    requestsSince: () => ({ begun: 0, open: 0 }),
   };
   const saves: Save[] = [];
   const downloads = {
@@ -7162,6 +7245,16 @@ function setup() {
     },
   };
   const navigations = createTabNavigations({ browser: fake.browser, timers });
+  const settle = createActSettle({
+    browser: fake.browser,
+    groups,
+    access,
+    timers,
+    navigations,
+    network,
+    pages,
+    now: () => 0,
+  });
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -7175,6 +7268,7 @@ function setup() {
     network,
     downloads,
     recipes,
+    settle,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
@@ -7323,6 +7417,9 @@ function assertMaskedAndRemoved(calls: CssCall[], tabId: number, frameIds: numbe
     ...inserts.map((insert) => ({ ...insert, method: "removeCSS" })),
   ]);
 }
+
+/** What an act reports after a reply without a watch, as the fake content script's are. */
+const UNKNOWN = { page: "unknown" };
 
 /** No remembered password field revealed for a screenshot, an empty tree for anything else. */
 async function defaultReply(type: string): Promise<unknown> {

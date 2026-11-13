@@ -11,6 +11,7 @@ import {
   tabOf,
   tabsOf,
   untrustedContent,
+  withoutAfter,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -73,9 +74,9 @@ describe("batch in real Firefox", () => {
     const [first, clicked, second, typed, third, read, ...rest] = result.texts;
     assert.deepEqual(rest, []);
     assert.equal(first, "Step 1 of 3, click: ok");
-    assert.equal(record(parseResult(clicked ?? "")).ref, toggle);
+    assert.equal(withoutAfter(parseResult(clicked ?? "")).ref, toggle);
     assert.equal(second, "Step 2 of 3, type: ok");
-    assert.equal(record(parseResult(typed ?? "")).outcome, "typed");
+    assert.equal(withoutAfter(parseResult(typed ?? "")).outcome, "typed");
     assert.equal(third, "Step 3 of 3, read_page: ok");
     const tree = untrustedContent(read ?? "") ?? "";
     assert.match(tree, new RegExp(`button "Toggle" \\[${toggle}\\] expanded=true`));
@@ -162,9 +163,4 @@ function refOf(tree: string, line: string): string {
   const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];
   assert.ok(ref !== undefined, `no ref for ${line} in:\n${tree}`);
   return ref;
-}
-
-function record(value: unknown): Record<string, unknown> {
-  assert.ok(typeof value === "object" && value !== null && !Array.isArray(value));
-  return Object.fromEntries(Object.entries(value));
 }

@@ -230,6 +230,45 @@ export type KeyAction =
   | "closed_dialog"
   | "hid_popover";
 
+/** How long the page must show no change after an act, with no request it began open, to settle. */
+export const ACT_QUIET_MS = 100;
+/** The longest an act's result waits for the page to go quiet, from the act's reply. */
+export const ACT_SETTLE_CAP_MS = 2_000;
+
+/** What followed an act, as the extension saw it once the page settled or the wait ended. */
+export type ActPage =
+  /** The tab loaded another page; `url` is its address. */
+  | "loaded"
+  /** The tab was still loading another page when Foxleash stopped waiting. */
+  | "loading"
+  /** The page changed, then went quiet. */
+  | "changed"
+  /** Nothing changed in the page within the wait. */
+  | "unchanged"
+  /** At the cap the page was still changing, or waiting for a request it began after the act. */
+  | "unsettled"
+  /** The tab closed. */
+  | "closed"
+  /** Foxleash could not tell: a check failed, another act ran in the tab, or time ran out. */
+  | "unknown";
+
+/** What an act's result says about the page after the act. */
+export interface ActAfter {
+  /** The element that took the act, as read_page shows it: page text. */
+  element?: { role: string; name: string };
+  page: ActPage;
+  /** With loaded, and with loading once the new page committed: the tab's address as tabs_list shows it. */
+  url?: string;
+  /** Tabs that opened in the session's group during the act or the wait. */
+  openedTabs?: number[];
+  /**
+   * How many requests the page began after the act (beacons, pings, CSP reports, websockets and
+   * media left out); absent when none. Unchanged with requests can mean the page sent what the act
+   * asked for without showing it.
+   */
+  requests?: number;
+}
+
 /** The most bytes upload_file takes in one call, across all its files. */
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
@@ -237,6 +276,10 @@ export const UPLOAD_CHUNK_BYTES = 512 * 1024;
 /** The largest file download saves. */
 export const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
+/**
+ * The acts' results carry `after` once the extension has watched the page after the act; the
+ * page's own part of the result has none, and an extension older than the field sends none.
+ */
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
   tab_open: { params: { url?: string }; result: { tab: TabInfo } };
@@ -290,14 +333,21 @@ export interface Methods {
       upload: string;
       files: { name: string; type: string; size: number }[];
     };
-    result: { target: "input" | "drop"; files: { name: string; size: number }[] };
+    result: {
+      target: "input" | "drop";
+      files: { name: string; size: number }[];
+      after?: ActAfter;
+    };
   };
   /** `ref` is the element the events went to, `x` and `y` the point in the viewport. */
   click: {
     params: { tabId: number; button?: ClickButton; doubleClick?: boolean } & Target;
-    result: { ref: string; x: number; y: number };
+    result: { ref: string; x: number; y: number; after?: ActAfter };
   };
-  hover: { params: { tabId: number } & Target; result: { ref: string; x: number; y: number } };
+  hover: {
+    params: { tabId: number } & Target;
+    result: { ref: string; x: number; y: number; after?: ActAfter };
+  };
   /**
    * With a direction, at the target or the viewport's centre; without one, `ref` is scrolled
    * into view. `ref` in the result is absent when the page itself scrolled.
@@ -307,24 +357,36 @@ export interface Methods {
       | Target
       | { ref?: never; x?: never; y?: never }
     );
-    result: { ref?: string; scrollLeft: number; scrollTop: number; moved: boolean };
+    result: {
+      ref?: string;
+      scrollLeft: number;
+      scrollTop: number;
+      moved: boolean;
+      after?: ActAfter;
+    };
   };
   drag: {
     params: { tabId: number } & Target & DragEnd;
-    result: { ref: string; targetRef: string; mode: DragMode; dropped: boolean };
+    result: {
+      ref: string;
+      targetRef: string;
+      mode: DragMode;
+      dropped: boolean;
+      after?: ActAfter;
+    };
   };
   type: {
     params: { tabId: number; ref: string; text: string };
-    result: { outcome: TypeOutcome; method: TypeMethod };
+    result: { outcome: TypeOutcome; method: TypeMethod; after?: ActAfter };
   };
   /** `prevented` is true when the page cancelled keydown or keypress. */
   press_key: {
     params: { tabId: number; key: string; ref?: string };
-    result: { action: KeyAction; prevented: boolean };
+    result: { action: KeyAction; prevented: boolean; after?: ActAfter };
   };
   fill_form: {
     params: { tabId: number; fields: { ref: string; value: FillValue }[] };
-    result: { fields: FillResult[] };
+    result: { fields: FillResult[]; after?: ActAfter };
   };
   /** `recording` is false when Foxleash has not recorded the page since it loaded. */
   read_console: {
@@ -447,4 +509,20 @@ export function foundLinesOf(
 function countField(value: object, key: string): number | undefined {
   const field = Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
   return typeof field === "number" && Number.isSafeInteger(field) && field >= 0 ? field : undefined;
+}
+
+/**
+ * Whether an act that cannot safely be repeated aims at a point in the viewport or at the focused
+ * element instead of at an element by ref: it lands on whatever page the tab shows.
+ */
+export function aimsWithoutRef(method: string, params: object): boolean {
+  switch (method) {
+    case "click":
+    case "press_key":
+      return !Object.hasOwn(params, "ref");
+    case "drag":
+      return !Object.hasOwn(params, "ref") || !Object.hasOwn(params, "targetRef");
+    default:
+      return false;
+  }
 }

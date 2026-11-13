@@ -1099,6 +1099,8 @@ export interface FakeTimers extends Timers<number> {
   /** Moves the clock forward, running each due callback in time order. */
   advance(ms: number): void;
   pending(): number;
+  /** The clock's time: 0 at the start, then what `advance` added. */
+  now(): number;
 }
 
 export function createFakeTimers(): FakeTimers {
@@ -1125,6 +1127,7 @@ export function createFakeTimers(): FakeTimers {
       now = end;
     },
     pending: () => timers.size,
+    now: () => now,
   };
 
   function nextDue(end: number): [number, { at: number; callback: () => void }] | undefined {

@@ -68,7 +68,15 @@ export const TITLES = {
   navStart: "Fixture navigation start",
   navMiddle: "Fixture navigation middle",
   navTarget: "Fixture navigation target",
+  settle: "Fixture settle",
+  settleNext: "Fixture settle next",
 } as const;
+
+/** The text the settle page adds once its slow request answers. */
+export const SETTLE_SLOW_TEXT = "The slow answer arrived";
+/** How long the server holds the settle page's slow request, and each of its ticker's. */
+export const SETTLE_SLOW_MS = 400;
+const SETTLE_TICK_MS = 30;
 
 /** The text only the navigation target page shows. */
 export const NAV_TARGET_TEXT = "Only the target page says this";
@@ -608,6 +616,21 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/fill-form") {
       // The other site is the same server under localhost.
       sendHtml(response, fillFormPage(request.socket.localPort ?? 0));
+    } else if (path === "/settle") {
+      sendHtml(response, SETTLE_PAGE);
+    } else if (path === "/settle-next") {
+      sendPage(response, TITLES.settleNext);
+    } else if (path === "/settle/slow" || path === "/settle/tick") {
+      // Delays come from the server: a hidden tab runs the page's own timers about once a second.
+      const timer = setTimeout(
+        () => {
+          timers.delete(timer);
+          response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+          response.end("ok");
+        },
+        path === "/settle/slow" ? SETTLE_SLOW_MS : SETTLE_TICK_MS,
+      );
+      timers.add(timer);
     } else if (path === "/act-redirect") {
       // To the act page on another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/act` });
@@ -2106,6 +2129,35 @@ zone.addEventListener("drop", (event) => {
 });
 document.addEventListener("drop", () => {
   window.events.documentDrops += 1;
+});
+</script>
+</body></html>
+`;
+
+// Quiet does nothing; Slow adds a paragraph once its request answers; Ticker starts a chain of
+// requests that never ends, each changing the count.
+const SETTLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.settle}</title></head>
+<body>
+<button id="quiet">Quiet</button>
+<button id="slow">Slow</button>
+<button id="ticker">Ticker</button>
+<a href="/settle-next">Next page</a>
+<p id="count">0</p>
+<div id="out"></div>
+<script>
+document.getElementById("quiet").addEventListener("click", () => {});
+document.getElementById("slow").addEventListener("click", async () => {
+  await (await fetch("/settle/slow")).text();
+  const answer = document.createElement("p");
+  answer.textContent = ${JSON.stringify(SETTLE_SLOW_TEXT)};
+  document.getElementById("out").append(answer);
+});
+document.getElementById("ticker").addEventListener("click", async () => {
+  for (let ticks = 1; ; ticks += 1) {
+    await (await fetch("/settle/tick")).text();
+    document.getElementById("count").textContent = String(ticks);
+  }
 });
 </script>
 </body></html>

@@ -5,10 +5,11 @@ export interface PageRequest {
   /** The site the background checked, as `siteOf` returns it. */
   site: string;
   /**
-   * A tag no document has had: a document takes the tag of the first request it gets and keeps
-   * it, as the first part of every element reference it hands out.
+   * A tag no document has had: a document takes the tag of the first tagged request it gets and
+   * keeps it, as the first part of every element reference it hands out. Null for a request that
+   * hands out no refs.
    */
-  tag: string;
+  tag: string | null;
   params: Record<string, unknown>;
 }
 
@@ -73,7 +74,7 @@ export function ownField(value: object, key: string): unknown {
 /**
  * The content script's answer to a message: undefined, synchronously, for anything that is not
  * a Foxleash page request, so Firefox sends no reply; else a reply promise that never rejects.
- * `adopt` gets the tag of every request that can be read, before anything else is checked.
+ * `adopt` gets the tag of every tagged request that can be read, before anything else is checked.
  * `before` runs right before every handler, so memory the handlers share sees the page before the
  * handler changes it; a throw from it fails the request.
  */
@@ -96,13 +97,13 @@ export function handlePageMessage(
     typeof type !== "string" ||
     typeof requestSite !== "string" ||
     !isRecord(params) ||
-    !isPageTag(tag)
+    (tag !== null && !isPageTag(tag))
   ) {
     return Promise.resolve(
       failure(site, "invalid_params", "Foxleash's page script got a request it cannot read."),
     );
   }
-  ctx.adopt(tag);
+  if (tag !== null) ctx.adopt(tag);
   if (ctx.site !== requestSite) {
     return Promise.resolve(
       failure(

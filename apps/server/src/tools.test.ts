@@ -17,6 +17,7 @@ import { BridgeError, HostError } from "./bridge.ts";
 import { NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { createMcpServer } from "./mcp.ts";
 import {
+  actLoaded,
   prettyJsonLength,
   SCREENSHOT_NOTE,
   someFieldFailed,
@@ -50,6 +51,10 @@ const REDACTED_TABS = "A tab on a site the user has not approved shows only that
 const ASKS_FIRST =
   "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer.";
 const EM_DASH = String.fromCodePoint(0x2014);
+const SETTLES =
+  "After the act, Foxleash waits for the page to settle: a page the act loads until its document is ready, up to 10 seconds; otherwise until the page has not changed for 0.1 seconds and no request it began after the act is still open, at most 2 seconds. The result's after gives element, the element that took the act (its role and name as read_page shows them), and page: loaded (the tab loaded another page; url is its address), loading (the tab was still loading another page when Foxleash stopped waiting; url once the page is known), changed (the page changed, then went quiet), unchanged (no change was seen within the wait), unsettled (the page was still changing, or waiting for a request it began after the act, at 2 seconds), closed (the tab closed) or unknown (Foxleash could not tell). openedTabs lists tabs that opened in this session's group, and requests counts the requests the page began after the act. Foxleash watches the elements, attributes and text of the page's own document and its shadow roots, and its fields' values; not frames, canvas drawing, or CSS animations and transitions. Since unchanged means only that no change was seen within the wait, read the page before repeating an act, also when requests shows that the page sent something.";
+const UNSEEN_PAGE =
+  "is refused, and not sent, when the tab was loading another page, or loaded one, before it could be sent: read the page, then act again.";
 const LIMIT = { timeout: 10_000 };
 const clients: Client[] = [];
 
@@ -294,7 +299,6 @@ describe("tools", () => {
         words: [
           "dragstart and pointercancel, then, after a pause in which the page can start the drag",
           "drag on the start element and dragenter and dragover on the end",
-          "dropped does not show that the page changed, so read the page afterwards",
           "when the page cancels dragstart, it moves the pointer to the end in 5 steps",
           "drag never asks",
         ],
@@ -313,6 +317,44 @@ describe("tools", () => {
       }
     }
   });
+
+  it(
+    "says that the eight acts wait for the page and what their result's after says",
+    LIMIT,
+    async () => {
+      const { client } = await start(() => ({}));
+      const { tools } = await client.listTools();
+      const acts = ["click", "hover", "scroll", "drag", "type", "press_key", "fill_form"];
+      for (const name of [...acts, "upload_file"]) {
+        const description = tools.find((listed) => listed.name === name)?.description ?? "";
+        assert.ok(description.includes(`${SETTLES} The tab must show a site`), name);
+      }
+      const describing = (name: string) =>
+        tools.find((listed) => listed.name === name)?.description ?? "";
+      assert.ok(describing("click").includes(`A click at x and y ${UNSEEN_PAGE}`));
+      assert.ok(
+        describing("drag").includes(`A drag that starts or ends at a point ${UNSEEN_PAGE}`),
+      );
+      assert.ok(describing("press_key").includes(`A key pressed without ref ${UNSEEN_PAGE}`));
+      for (const name of ["hover", "scroll", "type", "fill_form", "upload_file"]) {
+        assert.equal(describing(name).includes(UNSEEN_PAGE), false, name);
+      }
+      assert.equal(
+        describing("click").includes("The result does not say whether anything opened"),
+        false,
+      );
+      assert.ok(describing("click").includes("and the result's openedTabs lists it"));
+      assert.equal(
+        describing("drag").includes("dropped does not show that the page changed"),
+        false,
+      );
+      assert.ok(
+        describing("batch").includes(
+          "A batch also stops before a click or drag at a point, or a press_key without ref, in a tab an earlier step loaded another page in (a navigate step, or a step whose after says loaded or loading): its point or key was chosen before that page was seen.",
+        ),
+      );
+    },
+  );
 
   it("passes click, hover, scroll and drag only the arguments given", LIMIT, async () => {
     const { client, calls } = await start(() => ({}));
@@ -629,7 +671,7 @@ describe("tools", () => {
     const tool = tools.find((listed) => listed.name === "fill_form");
     assert.equal(
       tool?.description,
-      "Fill several form fields in the page in a tab of this session's Foxleash tab group in one call, in the order given. Give each field as ref, an element reference from read_page, and value: for a text field (a text, search, email, url, tel, password or number input, or a textarea), the text that replaces what it holds, where an empty string clears it; for a select, the value or label of the option to choose (value first), or a list of them for a select that takes several, which becomes its whole selection; for a checkbox, true or false; for a radio button, true. No key events are sent: Foxleash puts text in as the browser inserts typed text (execCommand insertText), and only when the page gets no input event from that, by setting the field's value as a framework's own edit does. Each text field then loses focus and gets a change event, as when the user moves on; a field whose page changes or clears it then, such as a box that suggests options, is reported as no_effect. A select gets input and change events when its selection changes. Foxleash clicks a checkbox or radio button whose state differs from the one given. A value the browser would change as the field stores it, such as letters in a number field or text longer than its maxlength, is refused. fill_form never submits the form: use press_key Enter with a field's ref, or click the submit button. The result lists the fields in the order given, each with its ref, ok, and either outcome (typed, selected, clicked or unchanged) or code and message; one field that fails does not stop the others. No value is returned, password fields included. A text field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. No field is started after 4 seconds and each text field takes at least a tenth of a second, so the fields left get not_attempted and can be filled in another call. Other frames are not entered. At most 50 fields and 100,000 characters across all values. The tab must show a site the user approved; fill_form never asks.",
+      `Fill several form fields in the page in a tab of this session's Foxleash tab group in one call, in the order given. Give each field as ref, an element reference from read_page, and value: for a text field (a text, search, email, url, tel, password or number input, or a textarea), the text that replaces what it holds, where an empty string clears it; for a select, the value or label of the option to choose (value first), or a list of them for a select that takes several, which becomes its whole selection; for a checkbox, true or false; for a radio button, true. No key events are sent: Foxleash puts text in as the browser inserts typed text (execCommand insertText), and only when the page gets no input event from that, by setting the field's value as a framework's own edit does. Each text field then loses focus and gets a change event, as when the user moves on; a field whose page changes or clears it then, such as a box that suggests options, is reported as no_effect. A select gets input and change events when its selection changes. Foxleash clicks a checkbox or radio button whose state differs from the one given. A value the browser would change as the field stores it, such as letters in a number field or text longer than its maxlength, is refused. fill_form never submits the form: use press_key Enter with a field's ref, or click the submit button. The result lists the fields in the order given, each with its ref, ok, and either outcome (typed, selected, clicked or unchanged) or code and message; one field that fails does not stop the others. No value is returned, password fields included. A text field Firefox filled in from the user's saved logins, addresses or cards is refused with not_editable until the user edits it. No field is started after 4 seconds and each text field takes at least a tenth of a second, so the fields left get not_attempted and can be filled in another call. Other frames are not entered. At most 50 fields and 100,000 characters across all values. ${SETTLES} The tab must show a site the user approved; fill_form never asks.`,
     );
     assert.deepEqual(tool?.inputSchema.required, ["tabId", "fields"]);
     assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), ["tabId", "fields"]);
@@ -3130,6 +3172,43 @@ describe("upload_file", () => {
     );
   });
 
+  it("adds the page's after, framed, as a second item", LIMIT, async () => {
+    await writeFile(join(folder, "after.txt"), "a");
+    const after = {
+      element: { role: "button", name: "Upload" },
+      page: "loaded",
+      url: "https://a.example/",
+    };
+    const { client } = await startUpload(() => ({ target: "input", after }));
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 2, ref: REF, paths: ["after.txt"] },
+    });
+    const [own, framed] = texts(output);
+    assert.equal(
+      own,
+      `Put 1 file into the file field ${REF} in tab 2:\n- ${JSON.stringify(join(folder, "after.txt"))}, 1 byte`,
+    );
+    assert.equal(framedIn(framed), pretty({ after }));
+    assert.equal(texts(output).length, 2);
+  });
+
+  it("refuses an after too large to return, as for the other tools", LIMIT, async () => {
+    await writeFile(join(folder, "large.txt"), "a");
+    const { client } = await startUpload(() => ({
+      target: "input",
+      after: { page: "x".repeat(MAX_RESULT_BYTES) },
+    }));
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 2, ref: REF, paths: ["large.txt"] },
+    });
+    assert.deepEqual(output, {
+      content: [{ type: "text", text: "The result from Firefox is too large to return." }],
+      isError: true,
+    });
+  });
+
   it("says where dropped files went, and that the page decides", LIMIT, async () => {
     await writeFile(join(folder, "a.png"), "a");
     await writeFile(join(folder, "b.csv"), "bb");
@@ -3526,6 +3605,90 @@ describe("batch", () => {
       );
     }
   });
+
+  it("reads fill_form's fields beside its after", () => {
+    const framed = (value: unknown) => ({
+      content: [{ type: "text" as const, text: untrusted(pretty(value)) }],
+    });
+    const after = { page: "changed" };
+    assert.equal(someFieldFailed(framed({ fields: [{ ok: true }], after })), false);
+    assert.equal(someFieldFailed(framed({ fields: [{ ok: true }, { ok: false }], after })), true);
+    assert.equal(someFieldFailed(framed({ after })), true);
+    assert.equal(
+      someFieldFailed(framed(Object.assign(Object.create({ fields: [] }), { after }))),
+      true,
+    );
+  });
+
+  it("tells whether an act's result says its tab loaded another page", () => {
+    const framed = (json: string) => ({
+      content: [{ type: "text" as const, text: untrusted(json) }],
+    });
+    for (const page of ["loaded", "loading"]) {
+      assert.equal(actLoaded(framed(pretty({ ref: "a1", after: { page } }))), true, page);
+    }
+    for (const page of ["changed", "unchanged", "unsettled", "closed", "unknown", undefined]) {
+      assert.equal(actLoaded(framed(pretty({ ref: "a1", after: { page } }))), false, String(page));
+    }
+    // An older extension's result, without after.
+    assert.equal(actLoaded(framed(pretty({ ref: "a1", x: 1, y: 2 }))), false);
+    assert.equal(actLoaded(framed(pretty({ after: "loaded" }))), false);
+    assert.equal(actLoaded(framed("null")), false);
+    // Stop rather than act blind.
+    assert.equal(actLoaded(framed("{")), true);
+    // upload_file's own text first, then its framed after; an older extension sends only the text.
+    const upload = "Put 1 file into the file field a1 in tab 2:";
+    assert.equal(actLoaded({ content: [{ type: "text", text: upload }] }), false);
+    assert.equal(
+      actLoaded({
+        content: [
+          { type: "text", text: upload },
+          { type: "text", text: untrusted(pretty({ after: { page: "loaded" } })) },
+        ],
+      }),
+      true,
+    );
+    assert.equal(
+      actLoaded({ content: [{ type: "image", data: "", mimeType: "image/png" }] }),
+      false,
+    );
+  });
+
+  it(
+    "stops before a click at a point on a tab that a navigate or click step loaded",
+    LIMIT,
+    async () => {
+      const steps = (first: { tool: string; args: Record<string, unknown> }) => [
+        first,
+        { tool: "click", args: { tabId: 3, x: 5, y: 6 } },
+      ];
+      const navigated = await start(answers({ navigate: { tab: {} }, click: CLICKED }));
+      const afterNavigate = await navigated.client.callTool({
+        name: "batch",
+        arguments: {
+          steps: steps({ tool: "navigate", args: { tabId: 3, url: "https://a.example/" } }),
+        },
+      });
+      assert.equal(afterNavigate.isError, true);
+      assert.deepEqual(
+        navigated.calls.map((call) => call.method),
+        ["navigate"],
+      );
+      for (const [page, stops] of [
+        ["loaded", true],
+        ["loading", true],
+        ["changed", false],
+      ] as const) {
+        const clicked = await start(answers({ click: { ...CLICKED, after: { page } } }));
+        const output = await clicked.client.callTool({
+          name: "batch",
+          arguments: { steps: steps({ tool: "click", args: { tabId: 3, ref: REF } }) },
+        });
+        assert.equal(output.isError, stops ? true : undefined, page);
+        assert.equal(clicked.calls.length, stops ? 1 : 2, page);
+      }
+    },
+  );
 
   it("counts a fill_form result it cannot read as failed", () => {
     const framed = (json: string) => ({

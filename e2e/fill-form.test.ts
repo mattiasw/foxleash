@@ -18,6 +18,7 @@ import {
   type Session,
   tabOf,
   untrustedContent,
+  withoutAfter,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -119,7 +120,7 @@ describe("fill_form in real Firefox", () => {
       "clicked",
       "clicked",
     ];
-    assert.deepEqual(parseResult(result.text), {
+    assert.deepEqual(withoutAfter(parseResult(result.text)), {
       fields: fields.map(({ ref }, index) => ({ ref, ok: true, outcome: outcomes[index] })),
     });
     assert.deepEqual(
@@ -312,7 +313,9 @@ describe("fill_form in real Firefox", () => {
       const sequences: unknown[][] = [];
       for (const value of [held, other]) {
         if (focused) {
-          await harness.ok(session, "press_key", { tabId: form.tabId, key: "ArrowLeft", ref });
+          withoutAfter(
+            await harness.ok(session, "press_key", { tabId: form.tabId, key: "ArrowLeft", ref }),
+          );
         }
         const start = (await eventTypes(form, "password")).length;
         const result = await harness.call(session, "fill_form", {
@@ -320,7 +323,7 @@ describe("fill_form in real Firefox", () => {
           fields: [{ ref, value }],
         });
         assert.equal(result.isError, false, result.text);
-        results.push(parseResult(result.text));
+        results.push(withoutAfter(parseResult(result.text)));
         sequences.push((await eventTypes(form, "password")).slice(start));
       }
       const typed = { fields: [{ ref, ok: true, outcome: "typed" }] };
@@ -524,7 +527,9 @@ describe("fill_form in real Firefox", () => {
     page: Page,
     fields: { ref: string; value: unknown }[],
   ): Promise<FieldResult[]> {
-    const result = record(await harness.ok(session, "fill_form", { tabId: page.tabId, fields }));
+    const result = withoutAfter(
+      await harness.ok(session, "fill_form", { tabId: page.tabId, fields }),
+    );
     assert.ok(Array.isArray(result.fields), JSON.stringify(result));
     return result.fields.map(record);
   }

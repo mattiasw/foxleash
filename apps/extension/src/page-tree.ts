@@ -333,7 +333,7 @@ export function quote(text: string): string {
 }
 
 /** What a line shows of page text between its quotes, before escaping. */
-function shownText(text: string): string {
+export function shownText(text: string): string {
   const cut = capText(clean(text), MAX_FIELD_CHARS);
   return cut.truncated ? `${cut.text}…` : cut.text;
 }

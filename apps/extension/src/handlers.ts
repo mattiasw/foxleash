@@ -1,4 +1,5 @@
 import {
+  type ActAfter,
   DEFAULT_NETWORK_LIMIT,
   DEFAULT_WAIT_FOR_MS,
   foundLinesOf,
@@ -17,6 +18,7 @@ import {
   type Result,
   type TabInfo,
 } from "@foxleash/protocol";
+import type { ActSettle } from "./act-settle.ts";
 import type {
   BrowserApi,
   CaptureArea,
@@ -115,6 +117,8 @@ export interface HandlerDeps<Handle> {
   downloads: Pick<Downloads, "save">;
   /** The session's recipe pages; `import type`, since it imports this file. */
   recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt" | "request">;
+  /** Watches the page after an act; `import type`, since it imports this file. */
+  settle: Pick<ActSettle, "begin">;
 }
 
 type Params = Record<string, unknown>;
@@ -209,6 +213,7 @@ export function createHandlers<Handle>({
   network,
   downloads,
   recipes,
+  settle,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const frameErrors = watchFrameErrors(browser);
   const handlers: Handlers = {
@@ -968,21 +973,30 @@ export function createHandlers<Handle>({
       offset += size;
       return { name, type, bytes };
     });
-    const reply = await pages.request(session, tabId, "upload_file", { ref, files: handed });
-    // The reply comes from the page's content process: only its own target is read.
-    const target = isRecord(reply) ? ownField(reply, "target") : undefined;
-    if (target !== "input" && target !== "drop") {
-      throw new ToolError(
-        "page_error",
-        `Foxleash could not complete the request in the page in tab ${tabId}.`,
+    const watch = settle.begin(session, tabId);
+    try {
+      const reply = await pages.request(session, tabId, "upload_file", { ref, files: handed }, () =>
+        watch.sent(),
       );
+      // The reply comes from the page's content process: only its own target is read.
+      const target = isRecord(reply) ? ownField(reply, "target") : undefined;
+      if (target !== "input" && target !== "drop") {
+        throw new ToolError(
+          "page_error",
+          `Foxleash could not complete the request in the page in tab ${tabId}.`,
+        );
+      }
+      const listed = files.map(({ name, size }) => ({ name, size }));
+      return { target, files: listed, after: await watch.after(reply) };
+    } finally {
+      watch.stop();
     }
-    return { target, files: files.map(({ name, size }) => ({ name, size })) };
   }
 
   /**
    * Acts in a page through the content script, which runs only after the site gate: the tool's
-   * options parsed here and again in the page, and the page's reply checked.
+   * options parsed here and again in the page, and the page's reply checked. Then waits for the
+   * page to settle, and adds what followed the act.
    */
   async function pageAction<O extends Params, R>(
     session: string,
@@ -990,22 +1004,28 @@ export function createHandlers<Handle>({
     tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form",
     parse: (params: Params) => O | string,
     check: (reply: unknown, options: O) => R | undefined,
-  ): Promise<R> {
+  ): Promise<R & { after: ActAfter }> {
     const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
-    const reply = await pages.request(session, tabId, tool, options, () =>
-      navigations.acted(session, tabId),
-    );
-    // The reply comes from the page's content process: own fields only, of exact types.
-    const result = check(reply, options);
-    if (result === undefined) {
-      throw new ToolError(
-        "page_error",
-        `Foxleash could not complete the request in the page in tab ${tabId}.`,
-      );
+    const watch = settle.begin(session, tabId);
+    try {
+      const reply = await pages.request(session, tabId, tool, options, () => {
+        navigations.acted(session, tabId);
+        watch.sent();
+      });
+      // The reply comes from the page's content process: own fields only, of exact types.
+      const result = check(reply, options);
+      if (result === undefined) {
+        throw new ToolError(
+          "page_error",
+          `Foxleash could not complete the request in the page in tab ${tabId}.`,
+        );
+      }
+      return { ...result, after: await watch.after(reply) };
+    } finally {
+      watch.stop();
     }
-    return result;
   }
 
   /** Reads what the page in a tab wrote to its console, through the content script. */

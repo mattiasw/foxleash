@@ -26,6 +26,14 @@ import type { SiteAccess } from "./site-access.ts";
 /** The most UTF-16 units a page's log holds across all its strings; older requests go first. */
 export const MAX_LOG_CHARS = 4_000_000;
 export const REDACTED = "[redacted]";
+/** The webRequest resource types `requestsSince` leaves out. */
+const UNWATCHED_TYPES: ReadonlySet<string> = new Set([
+  "websocket",
+  "media",
+  "beacon",
+  "ping",
+  "csp_report",
+]);
 /** Lowercase: HTTP/2 names arrive lowercase, HTTP/1.1 names as the sender wrote them. */
 export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
   "cookie",
@@ -55,6 +63,20 @@ export interface NetworkLog {
   ): Result<"read_network">;
   /** The session's approval of the site ended: no request of its tabs there is read again. */
   withdraw(session: string, site: string): void;
+  /**
+   * The requests of the tab's live document that began at or after `since` (ms since the epoch,
+   * as webRequest's timeStamp): how many began, how many of those have not ended, and when the
+   * last of them to end ended, absent when none has. Left out: websockets and media streams, which
+   * stay open for as long as the connection or the playback runs, and beacons, pings and CSP
+   * reports, which cannot change the page.
+   */
+  requestsSince(tabId: number, since: number): RequestCounts;
+}
+
+export interface RequestCounts {
+  begun: number;
+  open: number;
+  lastEnd?: number;
 }
 
 interface Entry {
@@ -130,7 +152,7 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
     committedAt.delete(tabId);
   });
 
-  return { read, withdraw: documents.withdraw };
+  return { read, withdraw: documents.withdraw, requestsSince };
 
   function onCommit(tabId: number, url: string, timeStamp: number): void {
     logs.delete(tabId);
@@ -283,6 +305,26 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
       if (log.open.get(oldest.requestId) === oldest) log.open.delete(oldest.requestId);
       log.dropped = true;
     }
+  }
+
+  function requestsSince(tabId: number, since: number): RequestCounts {
+    const log = current(tabId);
+    if (log === undefined) return { begun: 0, open: 0 };
+    const counted = (entry: Entry) =>
+      entry.request.startTime >= since && !UNWATCHED_TYPES.has(entry.request.type);
+    const begun = log.entries.filter(counted);
+    const counts: RequestCounts = {
+      begun: begun.length,
+      open: [...log.open.values()].filter(counted).length,
+    };
+    for (const { request } of begun) {
+      if (request.durationMs === undefined) continue;
+      counts.lastEnd = Math.max(
+        counts.lastEnd ?? -Infinity,
+        request.startTime + request.durationMs,
+      );
+    }
+    return counts;
   }
 
   function read(

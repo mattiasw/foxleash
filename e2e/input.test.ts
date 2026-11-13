@@ -11,6 +11,7 @@ import {
   tabOf,
   tabsOf,
   untrustedContent,
+  withoutAfter,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -50,6 +51,15 @@ describe("type and press_key in real Firefox", () => {
     },
     { timeout: 120_000 },
   );
+
+  /** Calls an act that must succeed and returns its result without its checked after. */
+  async function acted(
+    on: Session,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return withoutAfter(await harness.ok(on, name, args));
+  }
 
   after(
     async () => {
@@ -600,7 +610,7 @@ describe("type and press_key in real Firefox", () => {
   test("Enter on an SVG link does nothing but still sends keyup", async () => {
     const forms = await open("/input-forms", TITLES.inputForms);
     await evaluate(forms, 'document.getElementById("svg-link").focus()');
-    assert.deepEqual(await harness.ok(session, "press_key", { tabId: forms.tabId, key: "Enter" }), {
+    assert.deepEqual(await acted(session, "press_key", { tabId: forms.tabId, key: "Enter" }), {
       action: "none",
       prevented: false,
     });
@@ -613,7 +623,7 @@ describe("type and press_key in real Firefox", () => {
     const forms = await open("/input-forms", TITLES.inputForms);
     assert.equal((await type(forms, 'textbox "Shadow name"', "n")).outcome, "typed");
     assert.deepEqual(
-      await harness.ok(session, "press_key", { tabId: forms.tabId, key: "Enter" }),
+      await acted(session, "press_key", { tabId: forms.tabId, key: "Enter" }),
       submitted(),
     );
     assert.deepEqual(await evaluate(forms, "window.submits"), ["shadow-form:"]);
@@ -700,7 +710,7 @@ describe("type and press_key in real Firefox", () => {
   test("Escape hides an open popover, then closes a modal dialog", async () => {
     const keys = await open("/input-keys", TITLES.inputKeys);
     await evaluate(keys, 'document.getElementById("pop").showPopover()');
-    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+    assert.deepEqual(await acted(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
       action: "hid_popover",
       prevented: false,
     });
@@ -709,7 +719,7 @@ describe("type and press_key in real Firefox", () => {
       false,
     );
     await evaluate(keys, 'document.getElementById("dialog").showModal()');
-    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+    assert.deepEqual(await acted(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
       action: "closed_dialog",
       prevented: false,
     });
@@ -721,7 +731,7 @@ describe("type and press_key in real Firefox", () => {
     await evaluate(keys, 'document.getElementById("fixed-dialog").showModal()');
     // Firefox's own Escape honours closedby where Firefox knows the attribute.
     const honoured = (await evaluate(keys, '"closedBy" in HTMLDialogElement.prototype')) === true;
-    assert.deepEqual(await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
+    assert.deepEqual(await acted(session, "press_key", { tabId: keys.tabId, key: "Escape" }), {
       action: honoured ? "none" : "closed_dialog",
       prevented: false,
     });
@@ -731,10 +741,10 @@ describe("type and press_key in real Firefox", () => {
   test("a key with no default action reaches the page's listener with its modifiers", async () => {
     const keys = await open("/input-keys", TITLES.inputKeys);
     await evaluate(keys, "window.keys.length = 0");
-    assert.deepEqual(
-      await harness.ok(session, "press_key", { tabId: keys.tabId, key: "Control+k" }),
-      { action: "none", prevented: false },
-    );
+    assert.deepEqual(await acted(session, "press_key", { tabId: keys.tabId, key: "Control+k" }), {
+      action: "none",
+      prevented: false,
+    });
     assert.deepEqual(await evaluate(keys, "window.keys"), ["keydown::k:ctrl", "keyup::k:ctrl"]);
   });
 
@@ -752,16 +762,16 @@ describe("type and press_key in real Firefox", () => {
 
   async function type(page: Page, line: string, text: string): Promise<Record<string, unknown>> {
     const ref = refOf(page.tree, line);
-    return record(await harness.ok(session, "type", { tabId: page.tabId, ref, text }));
+    return record(await acted(session, "type", { tabId: page.tabId, ref, text }));
   }
 
   async function press(page: Page, key: string, line: string): Promise<unknown> {
     const ref = refOf(page.tree, line);
-    return harness.ok(session, "press_key", { tabId: page.tabId, key, ref });
+    return acted(session, "press_key", { tabId: page.tabId, key, ref });
   }
 
   async function tab(page: Page, key: string): Promise<unknown> {
-    return harness.ok(session, "press_key", { tabId: page.tabId, key });
+    return acted(session, "press_key", { tabId: page.tabId, key });
   }
 
   /**

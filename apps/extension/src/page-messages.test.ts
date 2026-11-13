@@ -106,7 +106,7 @@ describe("handlePageMessage", () => {
     const requests: unknown[] = [
       request,
       { ...request, tag: 1 },
-      { ...request, tag: null },
+      { ...request, tag: undefined },
       { ...request, tag: ["b"] },
       { ...request, tag: "" },
       { ...request, tag: "B" },
@@ -117,6 +117,7 @@ describe("handlePageMessage", () => {
       { ...request, tag: "b\n" },
       { ...request, tag: "é" },
       withInherited(request, { tag: TAG }),
+      withInherited(request, { tag: null }),
     ];
     for (const each of requests) {
       assert.deepEqual(
@@ -132,6 +133,27 @@ describe("handlePageMessage", () => {
     }
     assert.deepEqual(calls, []);
     assert.deepEqual(adopted, []);
+  });
+
+  it("runs a request whose tag is null without adopting a tag", async () => {
+    const calls: string[] = [];
+    const handlers: PageHandlers = {
+      echo: () => {
+        calls.push("handler");
+        return "echoed";
+      },
+    };
+    const request = { kind: PAGE_REQUEST_KIND, tag: null, type: "echo", site: SITE, params: {} };
+    assert.deepEqual(
+      await handlePageMessage(request, {
+        site: SITE,
+        handlers,
+        adopt: (tag) => calls.push(`adopt ${tag}`),
+        before: () => calls.push("before"),
+      }),
+      { ok: true, site: SITE, result: "echoed" },
+    );
+    assert.deepEqual(calls, ["before", "handler"]);
   });
 
   it("adopts the tag of a readable request before its handler runs", async () => {

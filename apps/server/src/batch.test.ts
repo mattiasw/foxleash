@@ -512,10 +512,190 @@ describe("runBatch", () => {
   });
 });
 
+describe("runBatch on a tab an earlier step loaded another page in", () => {
+  const LOADED = textItem("loaded");
+  const STAYED = textItem("stayed");
+  const ACT_SHAPE = {
+    tabId: z.number(),
+    ref: z.string().optional(),
+    x: z.number().optional(),
+    y: z.number().optional(),
+    targetRef: z.string().optional(),
+    targetX: z.number().optional(),
+    targetY: z.number().optional(),
+    key: z.string().optional(),
+  };
+  const loads = (result: CallToolResult) => result.content[0] === LOADED;
+  const act: FakeTool = {
+    shape: ACT_SHAPE,
+    result: (args) => ({ content: [args.ref === "link" ? LOADED : STAYED] }),
+    loaded: loads,
+  };
+  const acts = () =>
+    registry({
+      click: act,
+      drag: act,
+      press_key: act,
+      hover: act,
+      scroll: act,
+      navigate: { shape: { tabId: z.number() }, result: { content: [STAYED] }, loaded: () => true },
+      read_page: { shape: { tabId: z.number() }, result: { content: [textItem("tree")] } },
+    });
+
+  for (const [tool, args] of [
+    ["click", { x: 1, y: 2 }],
+    ["drag", { ref: "a1", targetX: 3, targetY: 4 }],
+    ["drag", { x: 1, y: 2, targetRef: "a2" }],
+    ["press_key", { key: "Enter" }],
+  ] as const) {
+    it(`stops before ${tool} ${JSON.stringify(args)} after an act loaded a page in that tab`, async () => {
+      const { tools, calls } = acts();
+      const result = await runBatch(
+        [
+          { tool: "click", args: { tabId: 7, ref: "link" } },
+          { tool: "read_page", args: { tabId: 7 } },
+          { tool, args: { tabId: 7, ...args } },
+          { tool: "read_page", args: { tabId: 7 } },
+        ],
+        tools,
+        extra(),
+        MAX_BYTES,
+      );
+      assert.deepEqual(result, {
+        content: [
+          textItem("Step 1 of 4, click: ok"),
+          LOADED,
+          textItem("Step 2 of 4, read_page: ok"),
+          textItem("tree"),
+          textItem(
+            `Steps 3 to 4 (${tool}, read_page) were not run because step 1 loaded another page in tab 7, and step 3 aims at a point or at the focused element chosen before that page was seen; read the page, then act.`,
+          ),
+        ],
+        isError: true,
+      });
+      assert.equal(calls.length, 2);
+    });
+  }
+
+  it("stops in tab 0 too", async () => {
+    const { tools, calls } = acts();
+    const result = await runBatch(
+      [
+        { tool: "click", args: { tabId: 0, ref: "link" } },
+        { tool: "click", args: { tabId: 0, x: 1, y: 2 } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.equal(result.isError, true);
+    assert.equal(calls.length, 1);
+  });
+
+  it("names the last loading step, and stops before a last step", async () => {
+    const { tools, calls } = acts();
+    const result = await runBatch(
+      [
+        { tool: "navigate", args: { tabId: 7 } },
+        { tool: "click", args: { tabId: 7, ref: "link" } },
+        { tool: "click", args: { tabId: 7, x: 1, y: 2 } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.deepEqual(result.content.at(-1), {
+      type: "text",
+      text: "Step 3 (click) was not run because step 2 loaded another page in tab 7, and step 3 aims at a point or at the focused element chosen before that page was seen; read the page, then act.",
+    });
+    assert.equal(result.isError, true);
+    assert.equal(calls.length, 2);
+  });
+
+  it("stops after a navigate step in that tab", async () => {
+    const { tools, calls } = acts();
+    const result = await runBatch(
+      [
+        { tool: "navigate", args: { tabId: 3 } },
+        { tool: "press_key", args: { tabId: 3, key: "Tab" } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.equal(result.isError, true);
+    assert.deepEqual(
+      calls.map(({ tool }) => tool),
+      ["navigate"],
+    );
+  });
+
+  it("runs on for a ref step, another tab, hover and scroll at a point, and after no load", async () => {
+    const { tools, calls } = acts();
+    const result = await runBatch(
+      [
+        { tool: "click", args: { tabId: 1, x: 1, y: 2 } },
+        { tool: "click", args: { tabId: 7, ref: "link" } },
+        { tool: "click", args: { tabId: 7, ref: "b2" } },
+        { tool: "drag", args: { tabId: 7, ref: "a1", targetRef: "a2" } },
+        { tool: "press_key", args: { tabId: 7, key: "Enter", ref: "a3" } },
+        { tool: "hover", args: { tabId: 7, x: 1, y: 2 } },
+        { tool: "scroll", args: { tabId: 7, x: 1, y: 2 } },
+        { tool: "click", args: { tabId: 8, x: 1, y: 2 } },
+        { tool: "press_key", args: { tabId: 1, key: "Enter" } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.equal(Object.hasOwn(result, "isError"), false);
+    assert.equal(calls.length, 9);
+  });
+
+  it("does not count a failed step's result, or a tab id that is not a whole number", async () => {
+    const { tools, calls } = registry({
+      click: {
+        shape: { tabId: z.unknown(), x: z.number().optional(), ref: z.string().optional() },
+        result: (args) => ({ content: [LOADED], isError: args.x === 0 }),
+        loaded: loads,
+      },
+    });
+    const failed = await runBatch(
+      [
+        { tool: "click", args: { tabId: 7, x: 0 } },
+        { tool: "click", args: { tabId: 7, x: 1 } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.deepEqual(
+      failed.content.at(-1),
+      textItem("Step 2 (click) was not run because step 1 failed."),
+    );
+    const odd = await runBatch(
+      [
+        { tool: "click", args: { tabId: "7", ref: "x" } },
+        { tool: "click", args: { tabId: "7", x: 1 } },
+        { tool: "click", args: { tabId: 1.5, ref: "x" } },
+        { tool: "click", args: { tabId: 1.5, x: 1 } },
+        { tool: "click", args: { tabId: -1, ref: "x" } },
+        { tool: "click", args: { tabId: -1, x: 1 } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.equal(Object.hasOwn(odd, "isError"), false);
+    assert.equal(calls.length, 7);
+  });
+});
+
 interface FakeTool {
   shape: z.ZodRawShape;
   result: CallToolResult | ((args: Record<string, unknown>) => CallToolResult);
   failed?: (result: CallToolResult) => boolean;
+  loaded?: (result: CallToolResult) => boolean;
 }
 
 /** Tools that record each call and return their fixed or computed result. */
@@ -534,6 +714,7 @@ function registry(fakes: Record<string, FakeTool>): {
       },
     };
     if (fake.failed !== undefined) tool.failed = fake.failed;
+    if (fake.loaded !== undefined) tool.loaded = fake.loaded;
     tools.set(name, tool);
   }
   return { tools, calls };

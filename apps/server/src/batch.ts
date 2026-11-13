@@ -1,3 +1,4 @@
+import { aimsWithoutRef } from "@foxleash/protocol";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 
@@ -14,6 +15,8 @@ export interface BatchTool<Extra> {
   callback(args: Record<string, unknown>, extra: Extra): CallToolResult | Promise<CallToolResult>;
   /** Whether a result without isError still fails the step. */
   failed?(result: CallToolResult): boolean;
+  /** Whether the step's result says its tab loaded, or is loading, another page. */
+  loaded?(result: CallToolResult): boolean;
 }
 
 interface BatchStep {
@@ -25,7 +28,9 @@ type Content = CallToolResult["content"];
 
 /**
  * Runs the steps in order, each as a direct call of its tool runs, and stops at the first step
- * that fails or when the call is cancelled. The result's content stays within `maxBytes` as JSON.
+ * that fails or when the call is cancelled. It also stops before a step that aims at a point or at
+ * the focused element in a tab an earlier step loaded another page in: its args were fixed before
+ * that page was seen. The result's content stays within `maxBytes` as JSON.
  */
 export async function runBatch<Extra extends { signal: AbortSignal }>(
   steps: readonly BatchStep[],
@@ -35,13 +40,26 @@ export async function runBatch<Extra extends { signal: AbortSignal }>(
 ): Promise<CallToolResult> {
   const content: Content = [];
   let budget = maxBytes - (steps.length * 2 + 1) * NOTE_ALLOWANCE;
+  // The tabs an earlier step loaded another page in, with that step's index.
+  const loadedIn = new Map<number, number>();
   for (const [index, step] of steps.entries()) {
     if (extra.signal.aborted) {
       content.push(notRunNote(steps, index, "the call was cancelled"));
       return { content, isError: true };
     }
-    const result = await runStep(step, tools.get(step.tool), extra);
+    const tabId = tabOf(step);
+    const loader = tabId === undefined ? undefined : loadedIn.get(tabId);
+    if (loader !== undefined && aimsWithoutRef(step.tool, step.args ?? {})) {
+      const reason = `step ${loader + 1} loaded another page in tab ${tabId}, and step ${index + 1} aims at a point or at the focused element chosen before that page was seen; read the page, then act`;
+      content.push(notRunNote(steps, index, reason));
+      return { content, isError: true };
+    }
+    const tool = tools.get(step.tool);
+    const result = await runStep(step, tool, extra);
     const failed = result.isError === true;
+    if (!failed && tabId !== undefined && tool?.loaded?.(result) === true) {
+      loadedIn.set(tabId, index);
+    }
     content.push(header(index, steps.length, step.tool, failed));
     let leftOut = false;
     for (const item of result.content) {
@@ -61,6 +79,13 @@ export async function runBatch<Extra extends { signal: AbortSignal }>(
     }
   }
   return { content };
+}
+
+/** The step's own tabId argument, when it is a whole number of 0 or more. */
+function tabOf(step: BatchStep): number | undefined {
+  const args = step.args ?? {};
+  const tabId: unknown = Object.hasOwn(args, "tabId") ? args.tabId : undefined;
+  return typeof tabId === "number" && Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : undefined;
 }
 
 /** The step's result, with isError set when it failed in any way. */

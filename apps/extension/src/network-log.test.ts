@@ -1072,6 +1072,74 @@ describe("network log", { timeout: 10000 }, () => {
     ]);
   });
 
+  describe("requestsSince", () => {
+    it("gives the latest end of the requests that ended, whatever their order", async () => {
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      const ends: [string, number][] = [
+        [request(tab.id, `${SITE}/long`, { timeStamp: 1000 }), 1500],
+        [request(tab.id, `${SITE}/short`, { timeStamp: 1100 }), 1200],
+        [request(tab.id, `${SITE}/failed`, { timeStamp: 1200 }), 1300],
+      ];
+      for (const [requestId, timeStamp] of ends) {
+        const details = { requestId, tabId: tab.id, timeStamp };
+        if (requestId === ends[2]?.[0]) {
+          fake.emitWebRequest("onErrorOccurred", { ...details, error: "failed" });
+        } else {
+          fake.emitWebRequest("onCompleted", { ...details, statusCode: 200, fromCache: false });
+        }
+      }
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 3, open: 0, lastEnd: 1500 });
+      assert.deepEqual(network.requestsSince(tab.id, 1100), { begun: 2, open: 0, lastEnd: 1300 });
+    });
+
+    it("counts the requests begun at or after the time, and those of them not ended", async () => {
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      request(tab.id, `${SITE}/before`, { timeStamp: 999 });
+      const ended = request(tab.id, `${SITE}/at`, { timeStamp: 1000 });
+      request(tab.id, `${SITE}/after`, { timeStamp: 1001 });
+      fake.emitWebRequest("onCompleted", {
+        requestId: ended,
+        tabId: tab.id,
+        timeStamp: 1002,
+        statusCode: 200,
+        fromCache: false,
+      });
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 2, open: 1, lastEnd: 1002 });
+      assert.deepEqual(network.requestsSince(tab.id, 999), { begun: 3, open: 2, lastEnd: 1002 });
+      assert.deepEqual(network.requestsSince(tab.id, 1001), { begun: 1, open: 1 });
+      assert.deepEqual(network.requestsSince(tab.id, 1002), { begun: 0, open: 0 });
+    });
+
+    it("leaves out websockets, media, beacons, pings and CSP reports", async () => {
+      const { network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      for (const type of ["websocket", "media", "beacon", "ping", "csp_report"]) {
+        request(tab.id, `${SITE}/${type}`, { type });
+      }
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 0, open: 0 });
+      for (const type of ["xmlhttprequest", "script", "image", "sub_frame"]) {
+        request(tab.id, `${SITE}/${type}`, { type });
+      }
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 4, open: 4 });
+    });
+
+    it("counts only the tab's own live document, and nothing for a tab without one", async (t) => {
+      quiet(t);
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      const other = await tabIn("s1", URL_A);
+      request(other.id, `${SITE}/api`);
+      assert.deepEqual(network.requestsSince(tab.id, 0), { begun: 0, open: 0 });
+      assert.deepEqual(network.requestsSince(other.id, 0), { begun: 1, open: 1 });
+      assert.deepEqual(network.requestsSince(99, 0), { begun: 0, open: 0 });
+      fake.navigateByUser(other.id, "https://b.example/");
+      await flush();
+      assert.deepEqual(network.requestsSince(other.id, 0), { begun: 0, open: 0 });
+    });
+  });
+
   it("adds six non-blocking listeners for every URL, which return nothing", async () => {
     const { fake, request, tabIn } = setup();
     assert.deepEqual(fake.webRequestRegistrations, [

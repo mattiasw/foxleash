@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An agent can ask you on one page for all the sites a task needs (`request_sites`): the page
   lists each site and what allowing does for it, and one click on Allow allows them for the
   agent's session, never always, instead of a prompt for each site as the agent opens it.
+- Actions (`click`, `hover`, `scroll`, `drag`, `type`, `press_key`, `fill_form` and
+  `upload_file`) wait for the page to settle and then say what happened: which element took the
+  action, and whether the tab loaded another page (with its address), the page changed, nothing
+  changed, the page kept changing, the tab closed, or tabs opened. A read right after an action,
+  also in the same `batch`, sees the page the action left, and the agent needs fewer reads.
 
 ### Changed
 
@@ -40,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can already spell out into one `batch` call, read each page once, and, in clients that load
   tools on demand, load all the tools a task needs at once. Browser tasks take fewer model
   requests.
+- A click or a drag at a point, or `press_key` without an element, is refused and not sent when
+  the tab was loading another page, or loaded one, before it could be sent, since its point or
+  key was chosen for the page before. A `batch` stops before such a step in a tab an earlier step loaded another page
+  in.
 
 ### Fixed
 

@@ -1,4 +1,4 @@
-import type { MethodName } from "@foxleash/protocol";
+import { aimsWithoutRef, type MethodName } from "@foxleash/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
 import { allowedPageSite, NAVIGATION_WAIT_MS, pageLoading, ToolError } from "./handlers.ts";
@@ -19,15 +19,16 @@ import type { TabNavigations } from "./tab-navigations.ts";
 
 /** The content script's bundle in the extension. */
 export const CONTENT_SCRIPT = "content.js";
-/**
- * A request waits at most NAVIGATION_WAIT_MS for each navigation, and starts a wait or its second
- * run only in its first NAVIGATION_WAIT_MS, so it answers within 2 * NAVIGATION_WAIT_MS +
- * TAG_RESERVE_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS = 55 s, below the host's 60 s request
- * timeout, which shuts the host down.
- */
 export const PAGE_INJECTION_MS = 20_000;
 export const PAGE_REPLY_MS = 10_000;
 export const TAG_RESERVE_MS = 5_000;
+/**
+ * A request waits at most NAVIGATION_WAIT_MS for each navigation, and starts a wait or its second
+ * run only in its first NAVIGATION_WAIT_MS, so it answers within this, 55 s: below the host's 60 s
+ * request timeout, which shuts the host down.
+ */
+export const PAGE_REQUEST_MS =
+  2 * NAVIGATION_WAIT_MS + TAG_RESERVE_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS;
 
 /** The document tags reserved by one write of the stored mark. */
 export const TAG_BLOCK = 100;
@@ -46,6 +47,9 @@ const ACTING_REQUEST_TYPES: readonly string[] = [
   "upload_file",
 ] satisfies readonly MethodName[];
 
+/** Request types that hand out no element refs, so their message carries no document tag. */
+const TAGLESS_REQUEST_TYPES: readonly string[] = ["page_changes"];
+
 export interface PageScriptsDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting" | "storage">;
   groups: Pick<SessionGroups, "groupOf">;
@@ -60,8 +64,10 @@ export interface PageScripts {
    * Sends a request to Foxleash's content script in the top frame of a tab the session may act
    * in, injecting the script first, and returns the result of the request's page handler. Waits
    * first for a navigation under way in the tab, and runs once more after one that began while
-   * it ran, unless it is an act already sent. `onSend` runs right before each send of the
-   * request's message to the page, after the waits and the gate's checks.
+   * it ran, unless it is an act already sent. An act that aims at a point or at the focused
+   * element is refused, unsent, when the tab began loading another page since the request started
+   * or the request waited for one. `onSend` runs right before each send of the request's message to
+   * the page, after the waits and the gate's checks.
    */
   request(
     session: string,
@@ -88,12 +94,13 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     params: Record<string, unknown>,
     onSend?: () => void,
   ): Promise<unknown> {
+    const started = navigations.begun(tabId);
     let late = false;
     const cutoff = timers.setTimeout(() => {
       late = true;
     }, NAVIGATION_WAIT_MS);
     try {
-      return await run(session, tabId, type, params, () => late, onSend);
+      return await run(session, tabId, type, params, { started, late: () => late }, onSend);
     } finally {
       timers.clearTimeout(cutoff);
     }
@@ -102,19 +109,22 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
   /**
    * Runs the request, and once more when a navigation of the tab began during the run, unless the
    * message of an act was sent: a reply from such a run may be the leaving page's. A wait or a
-   * second run starts only before `late`.
+   * second run starts only before `late`. `started` is the tab's count of begun navigations when
+   * the request started.
    */
   async function run(
     session: string,
     tabId: number,
     type: string,
     params: Record<string, unknown>,
-    late: () => boolean,
+    { started, late }: { started: number; late: () => boolean },
     onSend: (() => void) | undefined,
   ): Promise<unknown> {
     const acting = ACTING_REQUEST_TYPES.includes(type);
+    const blind = aimsWithoutRef(type, params);
+    let waited = false;
     for (let second = false; ; second = true) {
-      await settle(session, tabId, late);
+      if (await settle(session, tabId, late)) waited = true;
       const begun = navigations.begun(tabId);
       // Above, not just different: a closed tab's count is dropped.
       const moved = () => navigations.begun(tabId) > begun;
@@ -122,10 +132,11 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       try {
         const site = await allowedPageSite(deps, session, tabId);
         // A fresh tag for every message, so no two documents can take the same one.
-        const tag = await reserveTag(tabId);
+        const tag = TAGLESS_REQUEST_TYPES.includes(type) ? null : await reserveTag(tabId);
         await inject(tabId);
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
+        if (blind && (waited || navigations.begun(tabId) > started)) throw unseenPage(tabId, type);
         sent = true;
         // Here, not when the request starts: a navigation an act first waits for is not the act's.
         onSend?.();
@@ -157,18 +168,19 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
   /**
    * Waits for the navigation under way in the tab, when the tab is in the session's group, which
    * it checks first: a refusal comes at once, whether or not the tab is loading, so its timing
-   * tells nothing about other tabs. `ran` names an act already sent.
+   * tells nothing about other tabs. `ran` names an act already sent. Returns whether it waited.
    */
   async function settle(
     session: string,
     tabId: number,
     late: () => boolean,
     ran?: string,
-  ): Promise<void> {
-    if (!(await inGroup(session, tabId)) || !navigations.underWay(tabId)) return;
+  ): Promise<boolean> {
+    if (!(await inGroup(session, tabId)) || !navigations.underWay(tabId)) return false;
     if (late() || (await navigations.settled(tabId, NAVIGATION_WAIT_MS)) === "timeout") {
       throw pageLoading(tabId, ran);
     }
+    return true;
   }
 
   /**
@@ -418,6 +430,13 @@ function pageUnreachable(tabId: number): ToolError {
   return new ToolError(
     "page_unreachable",
     `Firefox did not let Foxleash into the page in tab ${tabId}.`,
+  );
+}
+
+function unseenPage(tabId: number, type: string): ToolError {
+  return new ToolError(
+    "page_unseen",
+    `Tab ${tabId} loaded another page before ${type} was sent, so Foxleash did not send it: its point or key was chosen for the page before. Read the page, then act again.`,
   );
 }
 

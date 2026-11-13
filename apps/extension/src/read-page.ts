@@ -22,6 +22,7 @@ import {
   NAME_FROM_CONTENT_ROLES,
   type ReadPageOptions,
   readPageOptions,
+  shownText,
   type TreeLines,
   textLine,
 } from "./page-tree.ts";
@@ -172,6 +173,22 @@ export function passwordFieldsRevealed(page: Pick<PageMemory, "passwordFields">)
     }
   }
   return { revealed: false };
+}
+
+/**
+ * The role and name read_page shows for the element, or for its nearest ancestor (through shadow
+ * hosts) that read_page gives a line; undefined when none has. The name is cut as read_page cuts
+ * names. Never a field's value.
+ */
+export function describeElement(
+  element: Element,
+  page: PageMemory,
+): { role: string; name: string } | undefined {
+  for (let current: Element | null = element; current !== null; current = parentOf(current)) {
+    const role = roleOf(current, page);
+    if (role !== undefined) return { role, name: shownText(nameOf(current, role, page).name) };
+  }
+  return undefined;
 }
 
 interface TreeContext {
@@ -511,9 +528,12 @@ export function notePasswordFields(page: Pick<PageMemory, "passwordFields">): vo
   }
 }
 
-/** Every element of the document and of the shadow roots in it, closed ones included. */
-export function* documentElements(): Generator<Element> {
-  const roots: ParentNode[] = [document];
+/**
+ * Every element of the document, or of what `from` contains, and of the shadow roots in it, closed
+ * ones included.
+ */
+export function* documentElements(from: ParentNode = document): Generator<Element> {
+  const roots: ParentNode[] = [from];
   for (let root = roots.pop(); root !== undefined; root = roots.pop()) {
     for (const element of root.querySelectorAll("*")) {
       yield element;

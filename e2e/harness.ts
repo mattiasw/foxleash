@@ -589,6 +589,31 @@ export function parseResult(text: string): unknown {
   return JSON.parse(content);
 }
 
+/** The values an act's after.page can have. */
+const ACT_PAGES: readonly unknown[] = [
+  "loaded",
+  "loading",
+  "changed",
+  "unchanged",
+  "unsettled",
+  "closed",
+  "unknown",
+];
+
+/**
+ * An act's result without its after, once after is checked to be a record with a page it can
+ * have: for tests about what the act did rather than what followed it.
+ */
+export function withoutAfter(value: unknown): Record<string, unknown> {
+  assert.ok(isRecord(value), `expected an act's result, got ${JSON.stringify(value)}`);
+  const { after, ...rest } = value;
+  assert.ok(
+    isRecord(after) && ACT_PAGES.includes(after.page),
+    `expected an act's after, got ${JSON.stringify(after)}`,
+  );
+  return rest;
+}
+
 /** The text inside an untrusted frame whose start and end lines carry the same id. */
 export function untrustedContent(text: string): string | undefined {
   return UNTRUSTED_FRAME.exec(text)?.[2];

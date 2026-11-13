@@ -142,7 +142,10 @@ whole page, also past the 50,000-character cut, but never the value of a protect
 
 A read, an action or a screenshot made while the tab is loading another page, as right after a
 click on a link or a form submit, waits up to 10 seconds for that page and then works on it.
-When the page has not arrived by then, the agent is told the tab is still loading.
+When the page has not arrived by then, the agent is told the tab is still loading. A click or a
+drag at a point, or a key pressed without an element, is refused and not sent when the tab was
+loading another page, or loaded one, before the action could be sent: the point or the key was
+chosen for the page before, so the agent reads the new page first.
 
 The agent reads a page's text with `get_page_text`: the text as the page shows it, the main
 content first (the page's main element or article, else its largest block of text), then the
@@ -198,6 +201,20 @@ allow pop-ups for the site; a new tab that does open joins the agent's tab group
 window is out of the agent's reach. These tools work only on a tab showing a site you
 approved, and never ask.
 
+After each action (`click`, `hover`, `scroll`, `drag`, `type`, `press_key`, `fill_form` and
+`upload_file`), Foxleash waits for the page to settle before it answers: for a page the action
+loads, until that page is ready, up to 10 seconds; otherwise until the page has not changed for
+a tenth of a second and no request it began after the action is still open, at most 2 seconds.
+The result then says which element took the action (its role and name, as `read_page` shows
+them) and what followed: the tab loaded another page (with its address, shown as `tabs_list`
+shows it), is still loading one, the page changed, nothing changed, the page was still changing
+at 2 seconds, or the tab closed. It also lists tabs that opened in the agent's group and counts
+the requests the page began after the action. Foxleash watches the elements, attributes and
+text of the page's own document and its shadow roots, and its fields' values, not frames, canvas
+drawing, or CSS animations and transitions, so the agent reads the page before repeating an
+action whose result says nothing changed. An action on a quiet page takes about 120 to 150 ms
+longer than the action itself.
+
 The agent types text with `type`, into a text field or an editable area from `read_page`.
 Foxleash focuses the element, adds the text and reads it back. A text field gets the text after
 what it already holds. An editable area gets it at its caret when the caret is in it, and
@@ -235,12 +252,15 @@ Enter on a link or in a form that opens a new tab meets the pop-up blocker, as c
 The agent runs several tool calls in one call with `batch`, up to 20, one after the other in
 order, with arguments it already has: a step cannot use what an earlier step returns. It stops
 at the first step that fails, a `fill_form` with a field that was not filled included, and says
-which steps did not run. Each step is checked exactly as when its tool is called on its own: a
-step that reads or acts in a page on a site you have not approved fails, and a `tab_open` or
-`navigate` step asks you first. An MCP client that asks you before each tool call asks once for
-the whole batch, and a rule in your client that denies or asks for one tool does not cover that
-tool inside `batch`: deny or ask for `batch` too to keep it. Foxleash's own checks apply to
-every step.
+which steps did not run. Since each action waits for the page to settle, a read after it in the
+same batch sees what the action changed. A batch also stops before a click or a drag at a point,
+or a key pressed without an element, in a tab where an earlier step loaded another page, since
+that step's point or key was chosen before the page was seen. Each step is checked exactly as
+when its tool is called on its own: a step that reads or acts in a page on a site you have not
+approved fails, and a `tab_open` or `navigate` step asks you first. An MCP client that asks you
+before each tool call asks once for the whole batch, and a rule in your client that denies or
+asks for one tool does not cover that tool inside `batch`: deny or ask for `batch` too to keep
+it. Foxleash's own checks apply to every step.
 
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an

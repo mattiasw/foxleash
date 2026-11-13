@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import type { MethodName, TabInfo } from "@foxleash/protocol";
+import { createActSettle } from "./act-settle.ts";
 import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
 import {
   type ContentScript,
@@ -21,6 +22,7 @@ import {
   createPageScripts,
   PAGE_INJECTION_MS,
   PAGE_REPLY_MS,
+  PAGE_REQUEST_MS,
   parsePageReply,
   TAG_BLOCK,
   TAG_RESERVE_MS,
@@ -1141,7 +1143,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (injections === 1) begin(fake, tab.id, NEXT);
         return [{ frameId: 0, result: null }];
       });
-      const request = pages.request("s1", tab.id, "click", {});
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" });
       await flush();
       assert.deepEqual(fake.tabMessages, []);
       land(fake, tab.id, NEXT, answering("clicked"));
@@ -1187,7 +1189,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, tab } = await grantedTab();
       let sends = 0;
       begin(fake, tab.id, NEXT);
-      const request = pages.request("s1", tab.id, "click", {}, () => {
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" }, () => {
         sends += 1;
       });
       await flush();
@@ -1309,7 +1311,102 @@ describe("page script requests", { timeout: 10000 }, () => {
       assert.equal(NAVIGATION_WAIT_MS, 10_000);
       const worst = 2 * NAVIGATION_WAIT_MS + TAG_RESERVE_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS;
       assert.equal(worst, 55_000);
+      assert.equal(PAGE_REQUEST_MS, worst);
       assert.ok(worst < 60_000);
+    });
+  });
+
+  describe("refuses an act aimed at a point or the focused element on a page loaded meanwhile", () => {
+    const NEXT = `${SITE}/next`;
+    const unseen = (tabId: number, type: string) => ({
+      code: "page_unseen",
+      message: `Tab ${tabId} loaded another page before ${type} was sent, so Foxleash did not send it: its point or key was chosen for the page before. Read the page, then act again.`,
+    });
+    const blind: [string, Record<string, unknown>][] = [
+      ["click", { x: 1, y: 2 }],
+      ["drag", { ref: "a1", targetX: 3, targetY: 4 }],
+      ["drag", { x: 1, y: 2, targetRef: "a2" }],
+      ["press_key", { key: "Enter" }],
+    ];
+
+    for (const [type, params] of blind) {
+      it(`refuses ${type} ${JSON.stringify(params)} that waited for a navigation, sending nothing`, async () => {
+        const { fake, pages, tab } = await grantedTab();
+        const sends: number[] = [];
+        begin(fake, tab.id, NEXT);
+        const request = pages.request("s1", tab.id, type, params, () => sends.push(1));
+        await flush();
+        land(fake, tab.id, NEXT, answering("acted"));
+        await assert.rejects(request, unseen(tab.id, type));
+        assert.deepEqual(fake.tabMessages, []);
+        assert.deepEqual(sends, []);
+      });
+    }
+
+    it("refuses one when a navigation began and ended between the request's start and its send", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      let injections = 0;
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        injections += 1;
+        if (injections === 1) {
+          // A 204: the navigation ends without another document.
+          begin(fake, tab.id, NEXT);
+          fake.emitStatus(tab.id, "complete");
+        }
+        return [{ frameId: 0, result: null }];
+      });
+      await assert.rejects(
+        pages.request("s1", tab.id, "click", { x: 1, y: 2 }),
+        unseen(tab.id, "click"),
+      );
+      assert.equal(injections, 2);
+      assert.deepEqual(fake.tabMessages, []);
+    });
+
+    it("refuses at once, without a second run", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      begin(fake, tab.id, NEXT);
+      const request = pages.request("s1", tab.id, "press_key", { key: "a" });
+      await flush();
+      land(fake, tab.id, NEXT, answering("pressed"));
+      await rejectsWith(request, "page_unseen");
+      assert.equal(fake.injections.length, 1);
+      assert.deepEqual(fake.tabMessages, []);
+    });
+
+    it("sends a ref act after a navigation wait, and a point act with no navigation", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      begin(fake, tab.id, NEXT);
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" });
+      await flush();
+      land(fake, tab.id, NEXT, answering("by ref"));
+      assert.equal(await request, "by ref");
+      assert.equal(await pages.request("s1", tab.id, "click", { x: 1, y: 2 }), "by ref");
+      assert.equal(await pages.request("s1", tab.id, "press_key", { key: "a" }), "by ref");
+      assert.equal(fake.tabMessages.length, 3);
+    });
+
+    it("sends hover and scroll at a point after a navigation wait", async () => {
+      for (const type of ["hover", "scroll"]) {
+        const { fake, pages, tab } = await grantedTab();
+        begin(fake, tab.id, NEXT);
+        const request = pages.request("s1", tab.id, type, { x: 1, y: 2 });
+        await flush();
+        land(fake, tab.id, NEXT, answering(type));
+        assert.equal(await request, type);
+        assert.equal(fake.tabMessages.length, 1, type);
+      }
+    });
+  });
+
+  describe("asks for page changes without a document tag", () => {
+    it("sends page_changes with tag null, and the next request gets the next tag", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, answering("ok"));
+      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "page_changes", { watch: "w" });
+      await pages.request("s1", tab.id, "echo", {});
+      assert.deepEqual(tagsSent(fake), ["a", null, "b"]);
     });
   });
 });
@@ -1559,6 +1656,20 @@ function setup() {
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const navigations = createTabNavigations({ browser: fake.browser, timers });
   const pages = createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
+  const network = {
+    read: () => ({ recording: false, requests: [], truncated: false }),
+    requestsSince: () => ({ begun: 0, open: 0 }),
+  };
+  const settle = createActSettle({
+    browser: fake.browser,
+    groups,
+    access,
+    timers,
+    navigations,
+    network,
+    pages,
+    now: () => 0,
+  });
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -1569,7 +1680,7 @@ function setup() {
     navigations,
     uploads: createUploads(timers),
     recordings: { liveRecording: () => undefined },
-    network: { read: () => ({ recording: false, requests: [], truncated: false }) },
+    network,
     downloads: { save: async () => ({ path: "", bytes: 0 }) },
     recipes: {
       propose: () => Promise.reject(new Error("unused")),
@@ -1577,6 +1688,7 @@ function setup() {
       request: () => Promise.reject(new Error("unused")),
       openPrompt: () => undefined,
     },
+    settle,
   });
   let requests = 0;
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>

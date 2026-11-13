@@ -10,10 +10,12 @@ import {
   createHarness,
   EXTENSION_DIST,
   type Harness,
+  parseResult,
   type Session,
   tabOf,
   tabsOf,
   untrustedContent,
+  withoutAfter,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -121,6 +123,9 @@ describe("upload_file in real Firefox", () => {
   test("a file over 1 MB reaches a file field byte for byte, with input and change", async () => {
     const result = await upload(refs.single, [join(allowed, "big.bin")]);
     assert.equal(result.isError, false, result.text);
+    const [, framed, ...rest] = result.texts;
+    assert.deepEqual(rest, []);
+    assert.deepEqual(withoutAfter(parseResult(framed ?? "")), {});
     assert.equal(
       result.text,
       `Put 1 file into the file field ${refs.single} in tab ${tabId}:\n- ${JSON.stringify(join(allowed, "big.bin"))}, 1,500,000 bytes`,

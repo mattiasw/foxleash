@@ -10,6 +10,7 @@ import {
   tabOf,
   tabsOf,
   untrustedContent,
+  withoutAfter,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -57,6 +58,15 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     { timeout: 120_000 },
   );
 
+  /** Calls an act that must succeed and returns its result without its checked after. */
+  async function acted(
+    on: Session,
+    name: string,
+    args: Record<string, unknown>,
+  ): Promise<Record<string, unknown>> {
+    return withoutAfter(await harness.ok(on, name, args));
+  }
+
   after(
     async () => {
       try {
@@ -71,7 +81,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("click by ref sends the full press sequence a mousedown-then-mouseup button needs", async () => {
     const ref = refOf(act.tree, 'button "Toggle"');
     await clearLog(act);
-    const result = await harness.ok(session, "click", { tabId: act.tabId, ref });
+    const result = await acted(session, "click", { tabId: act.tabId, ref });
     assert.deepEqual(result, { ref, x: 70, y: 25 });
     assert.deepEqual(await evaluate(act, "window.log"), [
       "pointerdown:toggle:0:mouse",
@@ -88,14 +98,14 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
   test("click by coordinates acts on the element at that point", async () => {
     await clearLog(act);
-    const result = await harness.ok(session, "click", { tabId: act.tabId, x: 210, y: 25 });
+    const result = await acted(session, "click", { tabId: act.tabId, x: 210, y: 25 });
     assert.deepEqual(result, { ref: refOf(act.tree, 'button "Fixed"'), x: 210, y: 25 });
     assert.deepEqual(await clicksIn(act), ["click:fixed:1"]);
   });
 
   test("a button below the fold is scrolled into view and clicked", async () => {
     await clearLog(act);
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: act.tabId,
       ref: refOf(act.tree, 'button "Below"'),
     });
@@ -106,7 +116,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
   test("a button scrolled out of its scrolling box is scrolled into view and clicked", async () => {
     await clearLog(act);
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: act.tabId,
       ref: refOf(act.tree, 'button "Listed"'),
     });
@@ -137,7 +147,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   });
 
   test("clicking a text field focuses it", async () => {
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: act.tabId,
       ref: refOf(act.tree, 'textbox "Field"'),
     });
@@ -147,7 +157,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("a right click sends contextmenu, and a double click two clicks and dblclick", async () => {
     const ref = refOf(act.tree, 'button "Mouse"');
     await clearLog(act);
-    await harness.ok(session, "click", { tabId: act.tabId, ref, button: "right" });
+    await acted(session, "click", { tabId: act.tabId, ref, button: "right" });
     assert.deepEqual(await evaluate(act, "window.log"), [
       "pointerdown:mouse:0:mouse",
       "mousedown:mouse",
@@ -156,14 +166,14 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       "contextmenu:mouse",
     ]);
     await clearLog(act);
-    await harness.ok(session, "click", { tabId: act.tabId, ref, doubleClick: true });
+    await acted(session, "click", { tabId: act.tabId, ref, doubleClick: true });
     assert.deepEqual(await clicksIn(act), ["click:mouse:1", "click:mouse:2", "dblclick:mouse:2"]);
   });
 
   test("a press the page cancels at pointerdown sends no mousedown or mouseup and moves no focus", async () => {
     await evaluate(act, 'document.getElementById("field").focus()');
     await clearLog(act);
-    await harness.ok(session, "click", { tabId: act.tabId, ref: refOf(act.tree, 'button "Held"') });
+    await acted(session, "click", { tabId: act.tabId, ref: refOf(act.tree, 'button "Held"') });
     assert.deepEqual(await evaluate(act, "window.log"), [
       "pointerdown:held:0:mouse",
       "pointerup:held:0:mouse",
@@ -174,7 +184,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
   test("a button in a closed shadow root is clicked by ref", async () => {
     const ref = refOf(act.tree, 'button "Shadow button"');
-    await harness.ok(session, "click", { tabId: act.tabId, ref });
+    await acted(session, "click", { tabId: act.tabId, ref });
     assert.equal(await evaluate(act, "window.shadowClicks"), 1);
   });
 
@@ -187,13 +197,13 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const menuHidden = 'document.getElementById("menu").hidden';
     await clearLog(act);
     const ref = refOf(act.tree, 'button "Trigger"');
-    assert.deepEqual(await harness.ok(session, "hover", { tabId: act.tabId, ref }), {
+    assert.deepEqual(await acted(session, "hover", { tabId: act.tabId, ref }), {
       ref,
       x: 70,
       y: 215,
     });
     assert.equal(await evaluate(act, menuHidden), false);
-    await harness.ok(session, "hover", {
+    await acted(session, "hover", {
       tabId: act.tabId,
       ref: refOf(act.tree, 'button "Elsewhere"'),
     });
@@ -207,7 +217,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("clicking plain text takes focus away from a text field", async () => {
     await evaluate(act, 'document.getElementById("blurred").focus()');
     await clearLog(act);
-    await harness.ok(session, "click", { tabId: act.tabId, x: 210, y: 315 });
+    await acted(session, "click", { tabId: act.tabId, x: 210, y: 315 });
     assert.deepEqual(await evaluate(act, "window.log"), ["blur:blurred"]);
     await assertFocusOnBody(act);
   });
@@ -215,22 +225,22 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("clicking plain text in a shadow root takes focus away from a field in it", async () => {
     await evaluate(act, "window.innerField.focus()");
     await clearLog(act);
-    await harness.ok(session, "click", { tabId: act.tabId, x: 510, y: 105 });
+    await acted(session, "click", { tabId: act.tabId, x: 510, y: 105 });
     assert.deepEqual(await evaluate(act, "window.log"), ["blur:inner"]);
     await assertFocusOnBody(act);
   });
 
   test("clicking focuses tabindex -1, editable text and a host that delegates focus", async () => {
-    await harness.ok(session, "click", { tabId: act.tabId, x: 660, y: 25 });
+    await acted(session, "click", { tabId: act.tabId, x: 660, y: 25 });
     assert.equal(await evaluate(act, "document.activeElement.id"), "tabbed");
-    await harness.ok(session, "click", { tabId: act.tabId, x: 660, y: 75 });
+    await acted(session, "click", { tabId: act.tabId, x: 660, y: 75 });
     assert.equal(await evaluate(act, "document.activeElement.id"), "editable");
     const delegated = 'window.delegatingRoot.activeElement?.getAttribute("aria-label")';
-    await harness.ok(session, "click", { tabId: act.tabId, x: 660, y: 125 });
+    await acted(session, "click", { tabId: act.tabId, x: 660, y: 125 });
     assert.equal(await evaluate(act, delegated), "Autofocus field");
     // Firefox moves focus to the delegate even from another field in the same host.
     await evaluate(act, 'window.delegatingRoot.querySelector("input").focus()');
-    await harness.ok(session, "click", { tabId: act.tabId, x: 660, y: 125 });
+    await acted(session, "click", { tabId: act.tabId, x: 660, y: 125 });
     assert.equal(await evaluate(act, delegated), "Autofocus field");
   });
 
@@ -297,7 +307,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     assert.equal(await evaluate(links, "window.clicks"), 0);
     assert.equal(await evaluate(links, "location.href"), links.url);
 
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: links.tabId,
       ref: refOf(links.tree, 'link "Script link"'),
     });
@@ -310,7 +320,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     assert.equal(await evaluate(links, "window.clicks"), 1);
     assert.equal(await evaluate(links, "location.href"), links.url);
     // A blob URL the page made has the page's origin, so it opens.
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: links.tabId,
       ref: refOf(links.tree, 'link "Blob link"'),
     });
@@ -343,7 +353,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
   test("a same-site link navigates", async () => {
     const links = await open("/act-links", TITLES.actLinks);
-    await harness.ok(session, "click", {
+    await acted(session, "click", {
       tabId: links.tabId,
       ref: refOf(links.tree, 'link "Same site"'),
     });
@@ -374,7 +384,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
         const ref = refOf(page.tree, line);
         const args =
           tool === "click" ? { tabId: page.tabId, ref } : { tabId: page.tabId, ref, key: "Enter" };
-        const result = await harness.ok(session, tool, args);
+        const result = await acted(session, tool, args);
         if (action !== undefined) {
           assert.deepEqual(result, { action, prevented: false }, `${tool} on ${line}`);
         }
@@ -403,7 +413,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       for (const line of ['link "New tab"', 'button "Send new tab"']) {
         const page = await open("/act-new-tab", TITLES.actNewTab);
         const before = new Set(idsOf(await queryTabs(settings)));
-        await harness.ok(session, "click", { tabId: page.tabId, ref: refOf(page.tree, line) });
+        await acted(session, "click", { tabId: page.tabId, ref: refOf(page.tree, line) });
         const tabs = await pollUntil(
           async () => {
             const all = await queryTabs(settings);
@@ -444,7 +454,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("scroll moves the page, an inner panel and an element into view", async () => {
     const page = await open("/act-scroll", TITLES.actScroll);
     assert.deepEqual(
-      await harness.ok(session, "scroll", { tabId: page.tabId, direction: "down", amount: 300 }),
+      await acted(session, "scroll", { tabId: page.tabId, direction: "down", amount: 300 }),
       { scrollLeft: 0, scrollTop: 300, moved: true },
     );
     assert.equal(await evaluate(page, "window.scrollY"), 300);
@@ -452,7 +462,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
     const panel = refOf(page.tree, 'region "Panel"');
     const scrolled = record(
-      await harness.ok(session, "scroll", { tabId: page.tabId, ref: panel, direction: "down" }),
+      await acted(session, "scroll", { tabId: page.tabId, ref: panel, direction: "down" }),
     );
     const panelTop = await evaluate(page, 'document.getElementById("panel").scrollTop');
     assert.deepEqual(scrolled, { ref: panel, scrollLeft: 0, scrollTop: panelTop, moved: true });
@@ -462,7 +472,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     // A panel at its end does not move, so the page scrolls, by most of its own height.
     await evaluate(page, 'document.getElementById("panel").scrollTop = 1000');
     const onward = record(
-      await harness.ok(session, "scroll", { tabId: page.tabId, ref: panel, direction: "down" }),
+      await acted(session, "scroll", { tabId: page.tabId, ref: panel, direction: "down" }),
     );
     assert.equal(onward.ref, undefined, JSON.stringify(onward));
     assert.ok(Number(onward.scrollTop) > 200, JSON.stringify(onward));
@@ -478,7 +488,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       ),
       2670.5,
     );
-    const inView = record(await harness.ok(session, "scroll", { tabId: page.tabId, ref: far }));
+    const inView = record(await acted(session, "scroll", { tabId: page.tabId, ref: far }));
     assert.equal(inView.ref, far);
     assert.equal(inView.moved, true);
     await firefox.evaluate(
@@ -503,7 +513,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
     const stuck = refOf(page.tree, 'region "Stuck"');
     assert.deepEqual(
-      await harness.ok(session, "scroll", { tabId: page.tabId, ref: stuck, direction: "down" }),
+      await acted(session, "scroll", { tabId: page.tabId, ref: stuck, direction: "down" }),
       { scrollLeft: 0, scrollTop: 0, moved: false },
     );
     assert.equal(await evaluate(page, 'document.getElementById("stuck").scrollTop'), 0);
@@ -511,15 +521,16 @@ describe("click, hover, scroll and drag in real Firefox", () => {
 
   test("scroll follows CSS overflow propagation between the root and body", async () => {
     const modal = await open("/act-modal", TITLES.actModal);
-    assert.deepEqual(
-      await harness.ok(session, "scroll", { tabId: modal.tabId, direction: "down" }),
-      { scrollLeft: 0, scrollTop: 0, moved: false },
-    );
+    assert.deepEqual(await acted(session, "scroll", { tabId: modal.tabId, direction: "down" }), {
+      scrollLeft: 0,
+      scrollTop: 0,
+      moved: false,
+    });
     assert.equal(await evaluate(modal, "window.scrollY"), 0);
 
     const body = await open("/act-body-scroll", TITLES.actBodyScroll);
     const scrolled = record(
-      await harness.ok(session, "scroll", { tabId: body.tabId, direction: "down" }),
+      await acted(session, "scroll", { tabId: body.tabId, direction: "down" }),
     );
     assert.equal(scrolled.moved, true);
     assert.ok(Number(scrolled.scrollTop) > 0, JSON.stringify(scrolled));
@@ -534,7 +545,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
   test("scroll with no target sends the wheel to a frame at the centre and scrolls the page", async () => {
     const page = await open("/act-embed", TITLES.actEmbed);
     const scrolled = record(
-      await harness.ok(session, "scroll", { tabId: page.tabId, direction: "down" }),
+      await acted(session, "scroll", { tabId: page.tabId, direction: "down" }),
     );
     assert.equal(scrolled.moved, true);
     assert.ok(Number(scrolled.scrollTop) > 0, JSON.stringify(scrolled));
@@ -545,7 +556,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const page = await open("/act-drag", TITLES.actDrag);
     const ref = refOf(page.tree, 'button "Item"');
     const targetRef = refOf(page.tree, 'region "Target"');
-    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef }), {
       ref,
       targetRef,
       mode: "pointer",
@@ -560,10 +571,12 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const page = await open("/act-drag", TITLES.actDrag);
     const ref = refOf(page.tree, 'button "Source"');
     const accept = refOf(page.tree, 'region "Accept"');
-    assert.deepEqual(
-      await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef: accept }),
-      { ref, targetRef: accept, mode: "html5", dropped: true },
-    );
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef: accept }), {
+      ref,
+      targetRef: accept,
+      mode: "html5",
+      dropped: true,
+    });
     assert.equal(await evaluate(page, "window.dropped"), ACT_DRAG_DATA);
     assert.deepEqual(await evaluate(page, "window.log"), [
       "pointercancel:source",
@@ -573,10 +586,12 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     ]);
     await evaluate(page, "window.log.length = 0");
     const refuse = refOf(page.tree, 'region "Refuse"');
-    assert.deepEqual(
-      await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef: refuse }),
-      { ref, targetRef: refuse, mode: "html5", dropped: false },
-    );
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef: refuse }), {
+      ref,
+      targetRef: refuse,
+      mode: "html5",
+      dropped: false,
+    });
     assert.deepEqual(await evaluate(page, "window.log"), [
       "pointercancel:source",
       "dragenter:refuse",
@@ -589,7 +604,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const page = await open("/act-sortable", TITLES.actSortable);
     const ref = refOf(page.tree, 'listitem "Item 1"');
     const targetRef = refOf(page.tree, 'listitem "Item 3"');
-    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef }), {
       ref,
       targetRef,
       mode: "html5",
@@ -623,7 +638,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
       page.context,
       "new Promise((resolve) => setTimeout(() => resolve(true), 0))",
     );
-    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef }), {
       ref,
       targetRef,
       mode: "html5",
@@ -666,7 +681,7 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     const page = await open("/act-drag", TITLES.actDrag);
     const ref = refOf(page.tree, 'button "Sortable"');
     const targetRef = refOf(page.tree, 'region "Slot"');
-    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+    assert.deepEqual(await acted(session, "drag", { tabId: page.tabId, ref, targetRef }), {
       ref,
       targetRef,
       mode: "pointer",

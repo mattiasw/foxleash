@@ -1,3 +1,4 @@
+import { createActSettle } from "./act-settle.ts";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createConsoleRecording } from "./console-recording.ts";
@@ -43,6 +44,16 @@ const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });
+const settle = createActSettle({
+  browser,
+  groups,
+  access,
+  timers,
+  navigations,
+  network,
+  pages,
+  now: () => Date.now(),
+});
 const uploads = createUploads(timers);
 // Wrapped for the same reason as the timers.
 const downloads = createDownloads({
@@ -68,6 +79,7 @@ const handleRequest = createHandlers({
   network,
   downloads,
   recipes,
+  settle,
 });
 const connection = createConnection({
   browser,
