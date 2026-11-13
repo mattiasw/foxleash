@@ -1,10 +1,12 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
   AUTOFILL_CARD,
   AUTOFILL_LOGIN,
   type FixtureServer,
+  HISTORY_LOAD_DELAY_MS,
   READ_EDITABLE_LONG,
   READ_HIDDEN,
   READ_LARGE_ITEMS,
@@ -46,9 +48,30 @@ const SPACED_CARD_NUMBER = "4111 1111 1111 1111";
 const FRAME_STATE =
   "JSON.stringify({ href: location.href, readyState: document.readyState, timeOrigin: performance.timeOrigin })";
 
+// The extension's LOAD_TIMEOUT_MS (apps/extension/src/wait-for-load.ts).
+const STEP_LOAD_TIMEOUT_MS = 30_000;
+// The extension's HISTORY_RELOAD_TIMEOUT_MS (apps/extension/src/handlers.ts).
+const HISTORY_RELOAD_TIMEOUT_MS = 20_000;
+
 interface Read {
   tree: string;
   texts: string[];
+}
+
+/** What the tab showed right after navigate went back, and 3 * HISTORY_LOAD_DELAY_MS later. */
+interface HistoryAnswer {
+  /** How long navigate took to go back, in ms. */
+  elapsed: number;
+  /** The top document's navigation type at once. */
+  type: unknown;
+  /** The top document's navigation type later. */
+  later: unknown;
+  /** The frame's plain name value at once. */
+  plainName: unknown;
+  /** How many requests for the page's path reached the server while going back. */
+  requests: number;
+  /** The top document's sessionStorage item "stopping", later. */
+  stopping: unknown;
 }
 
 // One Firefox for the file: the tests run in order and build on each other's tabs.
@@ -1527,6 +1550,85 @@ describe("read_page in real Firefox", () => {
     assert.equal(fixtures.hits("/autofill-frame-post"), posts);
   });
 
+  test("going back to a page that had not loaded within the step's timeout answers on the load of its address", {
+    timeout: 120_000,
+  }, async () => {
+    // The page's image is held through the step, so the step's load is still going when the load
+    // of the page's address starts. The page's next request releases the image: the step's load
+    // can then finish while the load of the address is under way, and that load gets its image at
+    // once.
+    const answer = await backToTypedFrame("/autofill-framed-held", "/a?held", () =>
+      fixtures.holdImage(),
+    );
+    assert.deepEqual(
+      {
+        cutOff: answer.elapsed >= STEP_LOAD_TIMEOUT_MS,
+        timedOut: answer.elapsed >= STEP_LOAD_TIMEOUT_MS + HISTORY_RELOAD_TIMEOUT_MS,
+        type: answer.type,
+        later: answer.later,
+        plainName: answer.plainName,
+        requests: answer.requests,
+      },
+      {
+        cutOff: true,
+        timedOut: false,
+        type: "navigate",
+        later: "navigate",
+        plainName: "MMMM WWWW",
+        requests: 1,
+      },
+      `navigate went back in ${answer.elapsed} ms`,
+    );
+  });
+
+  test("going back to a page that stops every load in its tab answers on its own document once the load's wait ends", {
+    timeout: 120_000,
+  }, async () => {
+    // The load of the page's address never arrives, and the wait for it no longer ends at the
+    // stopped load's complete (ADR 0054). A stop before the request reaches the server leaves no
+    // request.
+    const answer = await backToTypedFrame("/autofill-framed-stop", "/a?stop");
+    assert.deepEqual(
+      {
+        waited: answer.elapsed >= HISTORY_RELOAD_TIMEOUT_MS,
+        type: answer.type,
+        later: answer.later,
+        plainName: answer.plainName,
+        atMostOneRequest: answer.requests <= 1,
+        stopping: answer.stopping,
+      },
+      {
+        waited: true,
+        type: "back_forward",
+        later: "back_forward",
+        plainName: "Typed in the frame",
+        atMostOneRequest: true,
+        stopping: "yes",
+      },
+      `navigate went back in ${answer.elapsed} ms`,
+    );
+  });
+
+  test("going back from a page still loading answers on the load of the earlier page's address", {
+    timeout: 120_000,
+  }, async () => {
+    // The middle page's image is held for 3 s, so navigate answers while it is still loading.
+    const answer = await backToTypedFrame(
+      "/autofill-framed-unload?leave",
+      `/nav/middle?delay=0&store=nostore&n=${Date.now()}`,
+    );
+    assert.deepEqual(
+      {
+        type: answer.type,
+        later: answer.later,
+        plainName: answer.plainName,
+        requests: answer.requests,
+      },
+      { type: "navigate", later: "navigate", plainName: "MMMM WWWW", requests: 1 },
+      `navigate went back in ${answer.elapsed} ms`,
+    );
+  });
+
   test("navigating a tab to its own address brings back no autofilled value", async () => {
     const path = "/autofill?same";
     const tabId = await filledTab(path);
@@ -1676,6 +1778,51 @@ describe("read_page in real Firefox", () => {
     const before = fixtures.hits(path);
     await steps();
     assert.equal(fixtures.hits(path), before + 1, `requests for ${path}`);
+  }
+
+  /**
+   * Opens `page`, sets the values of its frame's fields, navigates to `next`, runs `beforeBack`
+   * and goes back with no view, then reads what the tab shows at once and
+   * 3 * HISTORY_LOAD_DELAY_MS later. The page's own requests are counted by its path.
+   */
+  async function backToTypedFrame(
+    page: string,
+    next: string,
+    beforeBack?: () => void,
+  ): Promise<HistoryAnswer> {
+    const site = `http://localhost:${fixtures.port}`;
+    const path = new URL(page, fixtures.site).pathname;
+    const tabId = await open(page, TITLES.autofillFramed);
+    const form = await frameLoad(await contextOf(fixtures.url(page)), `${site}/autofill-frame`, 0);
+    await firefox.evaluate(
+      form.context,
+      `document.getElementById("login-name").value = ${JSON.stringify(AUTOFILL_LOGIN.username)};
+      document.getElementById("plain-name").value = "Typed in the frame";`,
+    );
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url(next) });
+    const hits = fixtures.hits(path);
+    beforeBack?.();
+    const started = Date.now();
+    // Above the host's 60 s request timeout, so a late answer shows the host's error, not this
+    // call's: the step's 30 s and the load's 1 s grace and 20 s can exceed the 45 s default.
+    await harness.ok(session, "navigate", { tabId, action: "back", view: false }, 65_000);
+    const elapsed = Date.now() - started;
+    const top = await contextOf(fixtures.url(page));
+    const type = await firefox.evaluate(top, 'performance.getEntriesByType("navigation")[0].type');
+    const frame = await frameLoad(top, `${site}/autofill-frame`, 0);
+    const plainName = await firefox.evaluate(
+      frame.context,
+      'document.getElementById("plain-name").value',
+    );
+    const requests = fixtures.hits(path) - hits;
+    await sleep(3 * HISTORY_LOAD_DELAY_MS);
+    const laterTop = await contextOf(fixtures.url(page));
+    const later = await firefox.evaluate(
+      laterTop,
+      'performance.getEntriesByType("navigation")[0].type',
+    );
+    const stopping = await firefox.evaluate(laterTop, 'sessionStorage.getItem("stopping")');
+    return { elapsed, type, later, plainName, requests, stopping };
   }
 
   /** Navigates the tab to `pages` more pages, `/a?<label>-1` and on. */

@@ -1067,6 +1067,134 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     assertCleanedUp(fake, timers);
   });
 
+  describe("told to wait for the load's commit when the destination is not known", () => {
+    const url = "https://a.example/";
+    const timeoutMs = 20_000;
+
+    function waitForCommit(
+      fake: FakeBrowser,
+      timers: ReturnType<typeof createFakeTimers>,
+      tab: FakeTab,
+      navigate: () => Promise<unknown> = () => new Promise(() => {}),
+    ) {
+      return track(
+        waitForLoad(fake.browser, timers, tab.id, undefined, navigate, { timeoutMs, commit: true }),
+      );
+    }
+
+    it("does not end at a complete with no commit, and returns the tab as it is at the timeout", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForCommit(fake, timers, tab, async () => {
+        fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "loading");
+        fake.emitStatus(tab.id, "complete");
+      });
+      await flush();
+      timers.advance(timeoutMs - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers);
+    });
+
+    it("ends at the complete after the load's commit", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForCommit(fake, timers, tab, async () => {
+        fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "loading");
+        fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      });
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers);
+    });
+
+    it("counts a redirect's commit reported before the loading status", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForCommit(fake, timers, tab, async () => {
+        fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+        fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://c.example/" });
+        fake.emitStatus(tab.id, "loading");
+      });
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers);
+    });
+
+    it("does not end at an earlier load's complete before the commit", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForCommit(fake, timers, tab, async () => {
+        fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "loading");
+      });
+      // The abort of the load the navigation replaced.
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers);
+    });
+
+    it("counts no commit before the navigation begins, nor one of a frame, another tab or about:blank", async () => {
+      const { fake, timers, tab } = setup();
+      const other = fake.openTab();
+      const wait = waitForCommit(fake, timers, tab, async () => {
+        // The document the tab showed, committed late.
+        fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "loading");
+      });
+      fake.emitStatus(tab.id, "complete");
+      // None of these begins the tab's top-frame navigation.
+      fake.emitBeforeNavigate({ tabId: other.id, frameId: 0, url });
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 1, url });
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "about:blank" });
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+      fake.emitCommitted({ tabId: other.id, frameId: 0, url });
+      fake.emitCommitted({ tabId: tab.id, frameId: 1, url });
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(timeoutMs);
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers);
+    });
+
+    it("does not end at the grace, and returns the tab as it is at the timeout after it", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForCommit(fake, timers, tab);
+      timers.advance(LOAD_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(timeoutMs - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.id, tab.id);
+      assertCleanedUp(fake, timers);
+    });
+  });
+
   describe("told when the document is ready", () => {
     const url = "https://b.example/";
 

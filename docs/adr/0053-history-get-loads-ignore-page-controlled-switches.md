@@ -5,7 +5,8 @@
 30 s timeout, and the top-level veto for a request that started after the tab's last top-level
 commit, as 0025, [0051](0051-history-steps-load-the-page-again-with-get.md) and
 [0052](0052-history-get-loads-ignore-frame-posts.md) kept them. Answers 0052's "Still open"
-consequence.
+consequence. Amended by [0054](0054-history-loads-wait-for-their-commit.md), 2026-11-13: the wait
+for the history load ends only after that load committed.
 
 ## Context
 
@@ -127,7 +128,7 @@ own loads.
   when `navigate` answers with the one the step committed, for a page with an image whose
   response never ends, and for a page that calls `window.stop()` repeatedly while its server
   delays the GET; if either answers on the old document, the wait must require the load's
-  commit.
+  commit. Measured and answered in [0054](0054-history-loads-wait-for-their-commit.md).
 - Unverified that Firefox reports in this order: if it reported a request the page sent after
   its commit before the commit itself, that request would take the place of the page's own, and
   nothing would be loaded. 0016 measured the opposite lag.

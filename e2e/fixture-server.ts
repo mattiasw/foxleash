@@ -456,6 +456,12 @@ export const PROBE_SECRET = "fixture-secret-7Q2xZ9kL";
 // It also keeps the console load page loading long after the console recorder starts.
 const SLOW_HOLD_MS = 1500;
 
+/**
+ * How late the history-load pages answer: a read right after navigate answers then sees the
+ * document the tab showed before the load of the page's address committed.
+ */
+export const HISTORY_LOAD_DELAY_MS = 2000;
+
 const COUNTER_PREFIX = "Counter ";
 
 export interface FixtureServer {
@@ -468,6 +474,11 @@ export interface FixtureServer {
   hits(path: string): number;
   /** The headers of each request to a path under /download/, in order. */
   downloadHeaders(): IncomingHttpHeaders[];
+  /**
+   * Holds each request for /held-image.gif from now until the next request for
+   * /autofill-framed-held, which answers the held ones; the server's close ends any still held.
+   */
+  holdImage(): void;
   close(): Promise<void>;
 }
 
@@ -478,6 +489,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const hits = new Map<string, number>();
   const closedPort = await unusedPort();
   const downloadHeaders: IncomingHttpHeaders[] = [];
+  const heldImages = new Set<ServerResponse>();
+  let holdingImages = false;
 
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -592,6 +605,30 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end(
         autofillFramedPage(request.socket.localPort ?? 0, "/autofill-frame", UNLOAD_SCRIPT),
       );
+    } else if (path === "/autofill-framed-held" || path === "/autofill-framed-stop") {
+      // Storable, as /autofill-framed-unload. The page's request answers the held images, so the
+      // step's load can finish while Foxleash's load of the page's address is under way, as a slow
+      // page's load does, and Foxleash's load gets its own image at once.
+      if (path === "/autofill-framed-held") {
+        holdingImages = false;
+        for (const held of heldImages) sendHeldImage(held);
+        heldImages.clear();
+      }
+      const port = request.socket.localPort ?? 0;
+      const script = path === "/autofill-framed-held" ? HELD_IMAGE : STOP_SCRIPT;
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        response.end(autofillFramedPage(port, "/autofill-frame", UNLOAD_SCRIPT + script));
+      }, HISTORY_LOAD_DELAY_MS);
+      timers.add(timer);
+    } else if (path === "/held-image.gif") {
+      if (holdingImages) {
+        heldImages.add(response);
+        response.on("close", () => heldImages.delete(response));
+      } else {
+        sendHeldImage(response);
+      }
     } else if (path === "/autofill-frame" || path === "/autofill-frame-post") {
       // Its form posts here, so it is also the frame a form sent with POST.
       request.resume();
@@ -783,7 +820,15 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     url: (path) => `${origin}${path}`,
     hits: (path) => hits.get(path) ?? 0,
     downloadHeaders: () => [...downloadHeaders],
+    holdImage: () => {
+      holdingImages = true;
+    },
     close: async () => {
+      for (const response of heldImages) {
+        if (!response.destroyed && !response.writableEnded) response.end();
+      }
+      heldImages.clear();
+      holdingImages = false;
       for (const timer of timers) clearTimeout(timer);
       timers.clear();
       server.closeAllConnections();
@@ -792,6 +837,13 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       await closed.promise;
     },
   };
+}
+
+/** Answers a /held-image.gif request with the pixel; a response already closed is left alone. */
+function sendHeldImage(response: ServerResponse): void {
+  if (response.destroyed || response.writableEnded) return;
+  response.writeHead(200, { "Content-Type": "image/gif", "Cache-Control": "no-store" });
+  response.end(Buffer.from(PIXEL_GIF, "base64"));
 }
 
 const NAVIGATION_PAGES: readonly string[] = ["/nav/start", "/nav/middle", "/nav/target"];
@@ -1904,6 +1956,19 @@ const AUTOFILL_PAGE = autofillPage("/autofill-done", "");
 
 // Keeps a page out of the back-forward cache, so going back to it loads it again.
 const UNLOAD_SCRIPT = '<script>addEventListener("unload", () => {});</script>\n';
+
+// An image the server holds open while holdImage() is on.
+const HELD_IMAGE = '<img src="/held-image.gif" alt="">\n';
+
+// Going back or forward to the page, once it has loaded, it stops every load in its tab every 5 ms
+// (after load, so the step's own frame still loads and gets its value back).
+const STOP_SCRIPT = `<script>if (performance.getEntriesByType("navigation")[0]?.type === "back_forward") {
+  addEventListener("load", () => {
+    sessionStorage.setItem("stopping", "yes");
+    setInterval(() => window.stop(), 5);
+  });
+}</script>
+`;
 
 // The same form, which posts to /autofill-post, on a page an unload listener keeps out of the
 // back-forward cache.

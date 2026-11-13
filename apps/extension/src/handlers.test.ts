@@ -3015,9 +3015,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       message: "No such tab",
     });
     note("failed", tab.id);
+    // The commit listener at the load is the load's own wait's, which waits for its commit.
     assert.deepEqual(listeners, [
       ["back", 1, 1],
-      ["load", 0, 0],
+      ["load", 0, 1],
       ["returned", 0, 0],
       ["forward", 1, 1],
       ["failed", 0, 0],
@@ -3118,6 +3119,62 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         `${label}: answered after ${elapsed} ms`,
       );
       assert.ok(elapsed < 60_000, `${label}: answered after ${elapsed} ms`);
+    }
+  });
+
+  it("answers after going back only once the load of the address committed, not at an earlier complete", async () => {
+    for (const commits of [true, false]) {
+      const context = setup();
+      const tab = await historyTab(context);
+      const fakeTab = context.fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      let began = false;
+      // The load begins, and Firefox reports a complete before its commit, as for the abort of a
+      // load the step's timeout cut off, or a load the page stops.
+      context.fake.browser.tabs.update = async (tabId, properties) => {
+        began = true;
+        beginNavigation(context.fake, tabId, properties.url ?? "");
+        context.fake.emitStatus(tabId, "complete");
+        return { ...fakeTab };
+      };
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+        done = true;
+      });
+      for (let turn = 0; turn < 50 && !began; turn += 1) await flush();
+      await flush();
+      const label = commits ? "commits" : "no commit";
+      assert.ok(began, label);
+      assert.equal(done, false, label);
+      if (commits) {
+        context.timers.advance(HISTORY_RELOAD_TIMEOUT_MS - 1);
+        // A redirect's commit counts as the load's.
+        landNavigation(context.fake, tab.id, "https://a.example/redirected");
+        await flush();
+        assert.equal(done, false, label);
+        context.fake.emitStatus(tab.id, "complete");
+      } else {
+        context.timers.advance(HISTORY_RELOAD_TIMEOUT_MS - 1);
+        await flush();
+        assert.equal(done, false, label);
+        context.timers.advance(1);
+      }
+      assert.equal(
+        (await result).url,
+        commits ? "https://a.example/redirected" : "https://a.example/a",
+        label,
+      );
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
+        ],
+        label,
+      );
     }
   });
 

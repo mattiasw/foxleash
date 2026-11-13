@@ -712,7 +712,8 @@ export function createHandlers<Handle>({
         return loaded;
       }
       history.stop();
-      // No URL to wait for, so that a redirect still ends the wait.
+      // No URL to wait for, so that a redirect still ends the wait; it still needs the load's
+      // commit, so that the complete of a load stopped or cut off before it does not end it.
       return waitForLoad(
         browser,
         timers,
@@ -721,7 +722,7 @@ export function createHandlers<Handle>({
         fragment
           ? () => browser.tabs.reload(tabId, { bypassCache: true })
           : () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
+        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true },
       );
     }
     return loaded;

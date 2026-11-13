@@ -37,6 +37,10 @@ export const LOAD_AFTER_READY_MS = 400;
  * only the fragment differs. With `ready` and a URL, the wait also resolves `LOAD_AFTER_READY_MS`
  * after the DOM of the document the tab committed last is ready, as `ready.settled` reports it,
  * with the tab as it is then; a top-frame navigation that leaves the document stops that time.
+ * With `commit` and no URL, a complete ends the wait only after a top-frame commit, not of
+ * about:blank, that followed a top-frame onBeforeNavigate the wait heard, before or after the
+ * loading status and whatever its URL; the grace ends nothing, and the timeout still returns the
+ * tab as it is.
  */
 export function waitForLoad<Handle>(
   browser: BrowserApi,
@@ -47,10 +51,12 @@ export function waitForLoad<Handle>(
   {
     timeoutMs = LOAD_TIMEOUT_MS,
     unloaded = false,
+    commit = false,
     ready,
   }: {
     timeoutMs?: number;
     unloaded?: boolean;
+    commit?: boolean;
     ready?: Pick<TabNavigations, "settled"> | undefined;
   } = {},
 ): Promise<Tab> {
@@ -66,8 +72,11 @@ export function waitForLoad<Handle>(
     let committedBeforeLoad = false;
     let loadStarts = 0;
     // Firefox restores a tab it unloaded, committing its stored URL, before the requested
-    // navigation begins.
-    let restoring = unloaded;
+    // navigation begins. With `commit`, a commit before the navigation begins is not its own either:
+    // it keeps out the document the tab showed when the wait began.
+    let restoring = unloaded || commit;
+    // Whether a complete can end the wait before the tab arrived.
+    const anyComplete = url === undefined && !commit;
     let timeoutTimer: Handle | undefined;
     // The ask whose answer counts: the one made at the commit of the document the tab shows, until
     // a navigation leaves it.
@@ -82,7 +91,7 @@ export function waitForLoad<Handle>(
       else if (changeInfo.status === "complete" && started) {
         // Firefox can report a complete on a new tab's about:blank before the navigation's page.
         if (url !== undefined && tab.url === "about:blank") restart();
-        else if (url === undefined || arrived) finish(tab);
+        else if (anyComplete || arrived) finish(tab);
         // Otherwise an earlier load's complete, or a load that showed no document (a 204, a URL
         // Firefox downloads), which the timeout reports.
       }
@@ -95,8 +104,9 @@ export function waitForLoad<Handle>(
       if (details.tabId !== tabId || details.frameId !== 0 || details.url === "about:blank") return;
       if (restoring) return;
       // Before any loading, a commit of the URL can be a restore's, not this navigation's: it counts
-      // only if loading comes next.
-      if (loadStarts === 0) {
+      // only if loading comes next. With `commit`, the navigation began after the wait did, so its
+      // commit counts whatever its URL, a redirect's included.
+      if (loadStarts === 0 && !commit) {
         if (url !== undefined && withoutFragment(details.url) === withoutFragment(url)) {
           committedBeforeLoad = true;
         }
@@ -121,7 +131,7 @@ export function waitForLoad<Handle>(
     };
 
     browser.tabs.onUpdated.addListener(listener, { tabId, properties: ["status"] });
-    if (url !== undefined) {
+    if (url !== undefined || commit) {
       browser.webNavigation.onBeforeNavigate.addListener(onBeforeNavigate);
       browser.webNavigation.onCommitted.addListener(onCommitted);
     }
@@ -193,7 +203,7 @@ export function waitForLoad<Handle>(
       const tab = await currentTab();
       if (settled || loadStarts !== startsBefore) return;
       if (url !== undefined && !unloaded && fragmentNavigation(tab, url)) arrived = true;
-      if (tab.status === "complete" && (url === undefined || arrived)) finish(tab);
+      if (tab.status === "complete" && (anyComplete || arrived)) finish(tab);
       else start();
     }
 

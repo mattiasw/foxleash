@@ -111,10 +111,23 @@ export interface Harness {
   waitForArmed(context: string, buttons?: number): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
-  /** Calls a tool and returns its result, whether it failed or not. */
-  call(session: Session, name: string, args?: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * Calls a tool and returns its result, whether it failed or not. A call waits `timeoutMs` for
+   * its result, 45 s unless given.
+   */
+  call(
+    session: Session,
+    name: string,
+    args?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<ToolResult>;
   /** Calls a tool that must succeed and returns its parsed JSON. */
-  ok(session: Session, name: string, args?: Record<string, unknown>): Promise<unknown>;
+  ok(
+    session: Session,
+    name: string,
+    args?: Record<string, unknown>,
+    timeoutMs?: number,
+  ): Promise<unknown>;
   /** Calls a tool that must fail and returns its text. */
   refused(session: Session, name: string, args?: Record<string, unknown>): Promise<string>;
   /** Runs every teardown step even when one fails, then rethrows the first failure. */
@@ -164,9 +177,10 @@ export function createHarness(): Harness {
     session: Session,
     name: string,
     args: Record<string, unknown>,
+    timeoutMs?: number,
   ): Promise<ToolResult> {
     try {
-      return await callTool(session, name, args);
+      return await callTool(session, name, args, timeoutMs);
     } catch (error: unknown) {
       throw new Error(`${name} returned no result: ${messageOf(error)}${diagnostics(session)}`, {
         cause: error,
@@ -398,12 +412,12 @@ export function createHarness(): Harness {
       }
     },
 
-    call(session, name, args = {}) {
-      return call(session, name, args);
+    call(session, name, args = {}, timeoutMs) {
+      return call(session, name, args, timeoutMs);
     },
 
-    async ok(session, name, args = {}) {
-      const result = await call(session, name, args);
+    async ok(session, name, args = {}, timeoutMs) {
+      const result = await call(session, name, args, timeoutMs);
       if (result.isError) {
         throw new Error(`${name} failed:\n${result.text}${diagnostics(session)}`);
       }
@@ -577,9 +591,10 @@ async function callTool(
   session: Session,
   name: string,
   args: Record<string, unknown>,
+  timeoutMs = CALL_TIMEOUT_MS,
 ): Promise<ToolResult> {
   const result: unknown = await session.client.callTool({ name, arguments: args }, undefined, {
-    timeout: CALL_TIMEOUT_MS,
+    timeout: timeoutMs,
   });
   assert.ok(isRecord(result), `${name} returned ${JSON.stringify(result)}`);
   const content: unknown[] = Array.isArray(result.content) ? result.content : [];
