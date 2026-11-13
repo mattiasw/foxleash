@@ -586,6 +586,17 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
       // The frame from another site is the same server under localhost.
       response.end(autofillFramedPage(request.socket.localPort ?? 0));
+    } else if (path === "/autofill-framed-unload") {
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      // Storable, and kept out of the back-forward cache by its unload listener.
+      response.end(
+        autofillFramedPage(request.socket.localPort ?? 0, "/autofill-frame", UNLOAD_SCRIPT),
+      );
+    } else if (path === "/autofill-frame" || path === "/autofill-frame-post") {
+      // Its form posts here, so it is also the frame a form sent with POST.
+      request.resume();
+      response.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      response.end(AUTOFILL_FRAME_PAGE);
     } else if (path === "/card-autofill") {
       sendHtml(response, CARD_AUTOFILL_PAGE);
     } else if (path === "/upload") {
@@ -1891,12 +1902,15 @@ function rgb(colour: readonly number[]): string {
 // field, not its fill colour. The plain field outside the form is the control.
 const AUTOFILL_PAGE = autofillPage("/autofill-done", "");
 
+// Keeps a page out of the back-forward cache, so going back to it loads it again.
+const UNLOAD_SCRIPT = '<script>addEventListener("unload", () => {});</script>\n';
+
 // The same form, which posts to /autofill-post, on a page an unload listener keeps out of the
-// back-forward cache, so going back to it loads it again.
-const AUTOFILL_UNLOAD_PAGE = autofillPage(
-  "/autofill-post",
-  '<script>addEventListener("unload", () => {});</script>\n',
-);
+// back-forward cache.
+const AUTOFILL_UNLOAD_PAGE = autofillPage("/autofill-post", UNLOAD_SCRIPT);
+
+// The same form, which posts to /autofill-frame-post, for the frame of /autofill-framed-unload.
+const AUTOFILL_FRAME_PAGE = autofillPage("/autofill-frame-post", "");
 
 // The unload page, which also changes its address with the History API when going back or forward
 // loads it again, as some pages do while they load.
@@ -1930,11 +1944,11 @@ ${script}</body></html>
 `;
 }
 
-// The autofill page in a frame from another site.
-function autofillFramedPage(port: number): string {
+// An autofill page, /autofill unless given, in a frame from another site.
+function autofillFramedPage(port: number, framePath = "/autofill?frame", script = ""): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.autofillFramed}</title></head>
-<body><iframe title="Login frame" src="http://localhost:${port}/autofill?frame"></iframe></body></html>
+<body><iframe title="Login frame" src="http://localhost:${port}${framePath}"></iframe>${script}</body></html>
 `;
 }
 

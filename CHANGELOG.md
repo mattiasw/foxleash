@@ -59,6 +59,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   empty title when the page is still loading.
 - `navigate` back or forward to a page Firefox kept in memory now answers in a fraction of a
   second instead of about a second later.
+- After `navigate` goes back or forward to a page Firefox loads again, Foxleash now loads the
+  page's address again instead of reloading it without the browser's cache, so a form in one of
+  its frames is not sent again however late Firefox reports it (except for an address with a
+  #fragment, which is still reloaded). The page may now come from the browser's cache.
 
 ### Fixed
 

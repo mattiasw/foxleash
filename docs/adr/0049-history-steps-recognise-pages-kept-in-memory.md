@@ -1,6 +1,6 @@
 # 0049: Going back or forward tells a page Firefox kept in memory by its document id and answers without waiting for a request
 
-**Status:** Accepted, 2026-11-13. Supersedes parts of [0025](0025-history-loads-and-autofilled-fields.md).
+**Status:** Accepted, 2026-11-13. Supersedes parts of [0025](0025-history-loads-and-autofilled-fields.md). Its rejected alternative `tabs.update({ url, loadReplace: true })` and its consequence of a frame's POST that Firefox reports only after the checks, except for a URL with a fragment, are superseded by [0051](0051-history-steps-load-the-page-again-with-get.md), 2026-11-13.
 
 ## Context
 

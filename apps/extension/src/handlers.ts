@@ -214,7 +214,7 @@ export const KEPT_GRACE_MS = 200;
  */
 export const KNOWN_DOCUMENTS_PER_TAB = 50;
 /**
- * Bounds the wait for the reload after going back or forward, so that with the step's own wait
+ * Bounds the wait for the load after going back or forward, so that with the step's own wait
  * (LOAD_GRACE_MS and LOAD_TIMEOUT_MS) and the waits for its request (HISTORY_REQUEST_TIMEOUT_MS,
  * twice at most), `navigate` answers below the host's 60 s request timeout.
  */
@@ -620,13 +620,16 @@ export function createHandlers<Handle>({
   }
 
   /**
-   * Reloads without the cache a page that going back or forward loaded again instead of taking
+   * Loads the address again of a page that going back or forward loaded again instead of taking
    * it from the back-forward cache: Firefox puts field values back into such a page without its
-   * autofill mark (ADR 0025). Only in the session's group, off its prompt, on a site it may act
-   * on, unless the tab shows a document from before the step that no commit during the step named,
-   * and never after a request that was not a GET, so no form is sent again. A page kept in memory
-   * waits KEPT_GRACE_MS for a navigation of its own, which is then decided on as a page loaded
-   * again, also one the tab commits while it is read before the reload (ADR 0049).
+   * autofill mark (ADR 0025). The load is a GET that replaces the history entry, so it restores no
+   * field value and sends no form again, also not a frame's; an address with a fragment would be a
+   * fragment navigation, so it is reloaded without the cache instead (ADR 0051). Only in the
+   * session's group, off its prompt, on a site it may act on, unless the tab shows a document from
+   * before the step that no commit during the step named, and never after a request that was not
+   * a GET. A page kept in memory waits KEPT_GRACE_MS for a navigation of its own, which is then
+   * decided on as a page loaded again, also one the tab commits while it is read before the load
+   * (ADR 0049).
    */
   async function reloadHistoryLoad(
     session: string,
@@ -645,7 +648,7 @@ export function createHandlers<Handle>({
       const view = await access.view(session);
       const frames = await browser.webNavigation.getAllFrames({ tabId }).catch(() => null);
       const tab = await existingTab(tabId);
-      // No await from here to the reload, so a request the page sends meanwhile still counts.
+      // No await from here to the load, so a request the page sends meanwhile still counts.
       const reloads = history.reloads();
       if (reloads === undefined) continue;
       const url = tab.url ?? "";
@@ -661,12 +664,15 @@ export function createHandlers<Handle>({
         return loaded;
       }
       history.stop();
+      // No URL to wait for, so that a redirect still ends the wait.
       return waitForLoad(
         browser,
         timers,
         tabId,
         undefined,
-        () => browser.tabs.reload(tabId, { bypassCache: true }),
+        withoutFragment(url) === url
+          ? () => browser.tabs.update(tabId, { url, loadReplace: true })
+          : () => browser.tabs.reload(tabId, { bypassCache: true }),
         { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
       );
     }

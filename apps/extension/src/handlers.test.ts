@@ -1402,16 +1402,16 @@ describe("blocklist", { timeout: 10000 }, () => {
 });
 
 describe("navigate back and forward to a page Firefox loads again", { timeout: 10000 }, () => {
-  it("reloads it without the cache after going back, and returns the reloaded tab", async () => {
+  it("loads its address again after going back, and returns the loaded tab", async () => {
     const context = setup();
     const tab = await historyTab(context);
     const fakeTab = context.fake.tabs.get(tab.id);
     assert.ok(fakeTab);
-    const reload = context.fake.browser.tabs.reload;
-    context.fake.browser.tabs.reload = async (tabId, properties) => {
-      // The user selects another tab while the reload runs.
+    const update = context.fake.browser.tabs.update;
+    context.fake.browser.tabs.update = async (tabId, properties) => {
+      // The user selects another tab while the load runs.
       fakeTab.active = false;
-      return reload(tabId, properties);
+      return update(tabId, properties);
     };
     const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
     assert.deepEqual(await context.navigate("s1", { tabId: tab.id, action: "back" }), {
@@ -1420,11 +1420,11 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
-  it("reloads it without the cache after going forward", async () => {
+  it("loads its address again after going forward", async () => {
     const context = setup();
     const tab = await historyTab(context);
     await pastRequestWait(context, { tabId: tab.id, action: "back" });
@@ -1435,7 +1435,33 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     );
     assert.deepEqual(steps, [
       ["forward", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://b.example/b", loadReplace: true }],
+    ]);
+  });
+
+  it("goes forward again after the load that followed going back", async () => {
+    const context = setup();
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, (tabId) => [
+      pageRequest(
+        tabId,
+        context.fake.tabs.get(tabId)?.url === "https://b.example/b"
+          ? "https://a.example/a"
+          : "https://b.example/b",
+      ),
+    ]);
+    await context.navigate("s1", { tabId: tab.id, action: "back" });
+    // Otherwise going forward would wait for a load that never comes.
+    assert.ok(context.fake.tabs.get(tab.id)?.history.includes("https://b.example/b"));
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "forward" })).url,
+      "https://b.example/b",
+    );
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
+      ["forward", tab.id],
+      ["load", tab.id, { url: "https://b.example/b", loadReplace: true }],
     ]);
   });
 
@@ -1453,7 +1479,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     );
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -1480,7 +1506,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.equal((await result).url, "https://a.example/a");
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
     assert.equal(context.timers.pending(), timers);
   });
@@ -1540,7 +1566,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         steps,
         [
           ["back", tab.id],
-          ["reload", tab.id, { bypassCache: true }],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
         ],
         label,
       );
@@ -1680,7 +1706,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     );
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
 
     const late = setup();
@@ -1702,7 +1728,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.equal((await result).url, "https://a.example/a");
     assert.deepEqual(lateSteps, [
       ["back", lateTab.id],
-      ["reload", lateTab.id, { bypassCache: true }],
+      ["load", lateTab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
     assert.equal(late.timers.pending(), timers);
   });
@@ -1732,7 +1758,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.deepEqual(steps, [["back", tab.id]]);
   });
 
-  it("reloads without the cache a page kept in memory that reloads itself within the grace", async () => {
+  it("loads again a page kept in memory that reloads itself within the grace", async () => {
     const orders: [
       string,
       number,
@@ -1782,7 +1808,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         steps,
         [
           ["back", tab.id],
-          ["reload", tab.id, { bypassCache: true }],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
         ],
         label,
       );
@@ -1859,7 +1885,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     );
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -1935,7 +1961,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
           reloadsItself
             ? [
                 ["back", tab.id],
-                ["reload", tab.id, { bypassCache: true }],
+                ["load", tab.id, { url: "https://z.example/z", loadReplace: true }],
               ]
             : [["back", tab.id]],
           label,
@@ -1963,7 +1989,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     await context.navigate("s1", { tabId: tab.id, action: "back" });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -1995,7 +2021,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     );
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://z.example/z", loadReplace: true }],
     ]);
   });
 
@@ -2047,7 +2073,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         reloadsItself
           ? [
               ["back", tab.id],
-              ["reload", tab.id, { bypassCache: true }],
+              ["load", tab.id, { url: "https://z.example/z", loadReplace: true }],
             ]
           : [["back", tab.id]],
         label,
@@ -2159,7 +2185,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         steps,
         [
           ["back", tab.id],
-          ["reload", tab.id, { bypassCache: true }],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
         ],
         label,
       );
@@ -2184,7 +2210,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     await context.navigate("s1", { tabId: tab.id, action: "back" });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -2332,27 +2358,32 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.deepEqual(steps, [["back", tab.id]]);
   });
 
-  it("reloads a page that changed its address while it loaded", async () => {
-    const context = setup();
-    const tab = await historyTab(context);
-    const fakeTab = context.fake.tabs.get(tab.id);
-    assert.ok(fakeTab);
-    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
-    const goBack = context.fake.browser.tabs.goBack;
-    context.fake.browser.tabs.goBack = (tabId) => {
-      const stepped = goBack(tabId);
-      // The page's history.replaceState, before its load completes.
-      fakeTab.url = "https://a.example/a?moved";
-      return stepped;
-    };
-    assert.equal(
-      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
-      "https://a.example/a?moved",
-    );
-    assert.deepEqual(steps, [
-      ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
-    ]);
+  it("loads the address a page moved to while it loaded, and reloads one with a fragment", async () => {
+    const moves: [string, (tabId: number) => unknown[]][] = [
+      [
+        "https://a.example/a?moved",
+        (tabId) => ["load", tabId, { url: "https://a.example/a?moved", loadReplace: true }],
+      ],
+      ["https://a.example/a#moved", (tabId) => ["reload", tabId, { bypassCache: true }]],
+    ];
+    for (const [moved, load] of moves) {
+      const context = setup();
+      const tab = await historyTab(context);
+      const fakeTab = context.fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      const goBack = context.fake.browser.tabs.goBack;
+      context.fake.browser.tabs.goBack = (tabId) => {
+        const stepped = goBack(tabId);
+        // The page's history.replaceState, before its load completes.
+        fakeTab.url = moved;
+        return stepped;
+      };
+      assert.equal((await context.navigate("s1", { tabId: tab.id, action: "back" })).url, moved);
+      assert.deepEqual(steps, [["back", tab.id], load(tab.id)], moved);
+    }
   });
 
   it("does not reload after a top-level or frame request that is not a GET", async () => {
@@ -2418,7 +2449,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     await context.navigate("s1", { tabId: tab.id, action: "back" });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -2436,7 +2467,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     await context.navigate("s1", { tabId: tab.id, action: "back" });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -2466,7 +2497,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         steps,
         [
           ["back", tab.id],
-          ["reload", tab.id, { bypassCache: true }],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
         ],
         label,
       );
@@ -2524,9 +2555,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     }
   });
 
-  it("reloads when only the fragment differs between the request and the commit", async () => {
+  it("loads when only the fragment differs between the request and the commit, and reloads an address with a fragment without the cache", async () => {
     const cases: [string, string][] = [
       ["https://a.example/a#top", "https://a.example/a"],
+      ["https://a.example/a#", "https://a.example/a"],
       ["https://a.example/a", "https://a.example/a#top"],
     ];
     for (const [shown, requested] of cases) {
@@ -2538,7 +2570,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         steps,
         [
           ["back", tab.id],
-          ["reload", tab.id, { bypassCache: true }],
+          // Loading an address with a fragment over its document loads no document.
+          shown.includes("#")
+            ? ["reload", tab.id, { bypassCache: true }]
+            : ["load", tab.id, { url: shown, loadReplace: true }],
         ],
         shown,
       );
@@ -2607,6 +2642,35 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     }
   });
 
+  it("does not turn the load into a reload after a POST reported once it started", async () => {
+    const cases: [string, (tabId: number) => RequestDetails][] = [
+      ["a frame POST", (tabId) => frameRequest(tabId, "https://f.example/form", "POST", 1000)],
+      ["a top-level POST", (tabId) => pageRequest(tabId, "https://a.example/a", "POST", 1000)],
+    ];
+    for (const [label, late] of cases) {
+      const context = setup();
+      const tab = await historyTab(context);
+      const update = context.fake.browser.tabs.update;
+      context.fake.browser.tabs.update = async (tabId, properties) => {
+        send(context.fake, [late(tabId)]);
+        return update(tabId, properties);
+      };
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
+      assert.equal(loaded.url, "https://a.example/a", label);
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
+        ],
+        label,
+      );
+    }
+  });
+
   it("reloads despite a top-level GET sent once the step's load completed", async () => {
     const context = setup();
     const tab = await historyTab(context);
@@ -2618,11 +2682,11 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     await context.navigate("s1", { tabId: tab.id, action: "back" });
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
-  it("stops watching requests as the reload starts, and when the history step fails", async () => {
+  it("stops watching requests as the load starts, and when the history step fails", async () => {
     const context = setup();
     const tab = await historyTab(context);
     const listeners: [string, number, number][] = [];
@@ -2631,10 +2695,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       const requests = send(context.fake, [frameRequest(tabId, "https://a.example/f")]);
       listeners.push([label, requests, context.fake.committedListenerCount() - committed]);
     };
-    const reload = context.fake.browser.tabs.reload;
-    context.fake.browser.tabs.reload = async (tabId, properties) => {
-      note("reload", tabId);
-      return reload(tabId, properties);
+    const update = context.fake.browser.tabs.update;
+    context.fake.browser.tabs.update = async (tabId, properties) => {
+      note("load", tabId);
+      return update(tabId, properties);
     };
     recordSteps(context.fake, (tabId) => {
       note("back", tabId);
@@ -2652,7 +2716,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     note("failed", tab.id);
     assert.deepEqual(listeners, [
       ["back", 1, 1],
-      ["reload", 0, 0],
+      ["load", 0, 0],
       ["returned", 0, 0],
       ["forward", 1, 1],
       ["failed", 0, 0],
@@ -2700,10 +2764,11 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         send(context.fake, [pageRequest(tabId, "https://a.example/a")]);
       }, reported);
     };
-    // The reload never completes.
-    context.fake.browser.tabs.reload = async (tabId, properties) => {
-      steps.push(["reload", tabId, properties]);
+    // The load never completes.
+    context.fake.browser.tabs.update = async (tabId, properties) => {
+      steps.push(["load", tabId, properties]);
       fakeTab.status = "loading";
+      return { ...fakeTab };
     };
     let done = false;
     const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
@@ -2719,9 +2784,9 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.equal((await result).url, "https://a.example/a");
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
-    // Then the reload's grace and timeout.
+    // Then the load's grace and timeout.
     assert.ok(
       elapsed >= reported + LOAD_GRACE_MS + HISTORY_RELOAD_TIMEOUT_MS,
       `answered after ${elapsed} ms`,
@@ -2737,16 +2802,20 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       send(context.fake, [pageRequest(tabId, "https://b.example/b")]);
       return reload(tabId, { bypassCache: true });
     });
+    const updates: unknown[][] = [];
     context.fake.browser.tabs.update = async (tabId, properties) => {
       if (properties.url !== undefined) {
+        updates.push([tabId, properties]);
         send(context.fake, [pageRequest(tabId, properties.url)]);
       }
       return update(tabId, properties);
     };
     await context.navigate("s1", { tabId: tab.id, action: "reload" });
     assert.equal(reloads.mock.callCount(), 1);
+    assert.deepEqual(updates, []);
     await context.navigate("s1", { tabId: tab.id, url: "https://a.example/c" });
     assert.equal(reloads.mock.callCount(), 1);
+    assert.deepEqual(updates, [[tab.id, { url: "https://a.example/c" }]]);
   });
 });
 
@@ -3184,7 +3253,7 @@ describe("a load whose page is ready before it completes", { timeout: 10000 }, (
     assert.equal(result.tab.title, "");
   });
 
-  it("waits for the whole page going back, and still reloads the page Firefox loaded again", async () => {
+  it("waits for the whole page going back, and still loads again the page Firefox loaded again", async () => {
     const context = setup();
     const { fake, timers, navigate } = context;
     const tab = await historyTab(context);
@@ -3199,10 +3268,14 @@ describe("a load whose page is ready before it completes", { timeout: 10000 }, (
       beginNavigation(fake, tabId, url);
       landNavigation(fake, tabId, url);
     };
-    const reload = fake.browser.tabs.reload;
+    const { reload, update } = fake.browser.tabs;
     fake.browser.tabs.reload = async (tabId, properties) => {
       steps.push(["reload", tabId, properties]);
       return reload(tabId, properties);
+    };
+    fake.browser.tabs.update = async (tabId, properties) => {
+      steps.push(["load", tabId, properties]);
+      return update(tabId, properties);
     };
     let done = false;
     const result = navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
@@ -3217,7 +3290,7 @@ describe("a load whose page is ready before it completes", { timeout: 10000 }, (
     assert.equal((await result).url, "https://a.example/a");
     assert.deepEqual(steps, [
       ["back", tab.id],
-      ["reload", tab.id, { bypassCache: true }],
+      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
     ]);
   });
 
@@ -9018,8 +9091,8 @@ function lastCommitTime(fake: FakeBrowser): () => number {
 
 /**
  * Makes the tabs' history steps send the requests `requests` returns as they start, and those
- * `after` returns once they committed, before their load completes. Records each history step
- * and each reload with its options, in order.
+ * `after` returns once they committed, before their load completes. Records each history step,
+ * each reload with its options and each load of a URL with its properties, in order.
  */
 function recordSteps(
   fake: FakeBrowser,
@@ -9027,7 +9100,7 @@ function recordSteps(
   after: (tabId: number) => RequestDetails[] = () => [],
 ): unknown[][] {
   const steps: unknown[][] = [];
-  const { goBack, goForward, reload } = fake.browser.tabs;
+  const { goBack, goForward, reload, update } = fake.browser.tabs;
   fake.browser.tabs.goBack = async (tabId) => {
     steps.push(["back", tabId]);
     send(fake, requests(tabId));
@@ -9045,6 +9118,10 @@ function recordSteps(
   fake.browser.tabs.reload = async (tabId, properties) => {
     steps.push(["reload", tabId, properties]);
     return reload(tabId, properties);
+  };
+  fake.browser.tabs.update = async (tabId, properties) => {
+    if (properties.url !== undefined) steps.push(["load", tabId, properties]);
+    return update(tabId, properties);
   };
   return steps;
 }

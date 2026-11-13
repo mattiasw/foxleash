@@ -1485,6 +1485,69 @@ describe("read_page in real Firefox", () => {
     assert.equal(fixtures.hits("/autofill-post"), hits);
   });
 
+  test("going back to a page whose frame a form sent with POST sends that form no second time", async () => {
+    // The frame measurement of ADR 0051. Firefox fills no saved login into a frame from another
+    // site (ADR 0025), so the test sets the values a fill or the user would leave.
+    const page = "/autofill-framed-unload";
+    const site = `http://localhost:${fixtures.port}`;
+    const tabId = await open(page, TITLES.autofillFramed);
+    const form = await frameLoad(await contextOf(fixtures.url(page)), `${site}/autofill-frame`, 0);
+    await firefox.evaluate(form.context, 'document.querySelector("form").submit(), true');
+    const posted = await frameLoad(
+      await contextOf(fixtures.url(page)),
+      `${site}/autofill-frame-post`,
+      0,
+    );
+    await firefox.evaluate(
+      posted.context,
+      `document.getElementById("login-name").value = ${JSON.stringify(AUTOFILL_LOGIN.username)};
+      document.getElementById("plain-name").value = "Typed in the frame";`,
+    );
+    const posts = fixtures.hits("/autofill-frame-post");
+    const pageHits = fixtures.hits(page);
+    await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?frame-post") });
+    await harness.ok(session, "navigate", { tabId, action: "back" });
+    assert.equal(fixtures.hits("/autofill-frame-post"), posts);
+    const top = await contextOf(fixtures.url(page));
+    const type = await firefox.evaluate(top, 'performance.getEntriesByType("navigation")[0].type');
+    if (type === "back_forward") {
+      // Foxleash saw the frame's POST and loaded nothing: Firefox puts the frame's values back.
+      assert.equal(fixtures.hits(page), pageHits);
+      const restored = await frameLoad(top, `${site}/autofill-frame-post`, posted.timeOrigin);
+      await pollUntil(
+        async () =>
+          (await firefox.evaluate(
+            restored.context,
+            'document.getElementById("login-name").value',
+          )) === AUTOFILL_LOGIN.username
+            ? true
+            : undefined,
+        PAGE_TIMEOUT_MS,
+        "Firefox to put the login name back into the frame",
+      );
+      assert.equal(
+        await firefox.evaluate(restored.context, 'document.getElementById("plain-name").value'),
+        "Typed in the frame",
+      );
+      assert.equal(await firefox.evaluate(restored.context, AUTOFILLED), false);
+    } else if (type === "navigate") {
+      // Foxleash loaded the page's address again: the frame loads from its src.
+      assert.equal(fixtures.hits(page), pageHits + 1);
+      const { context } = await frameLoad(top, `${site}/autofill-frame`, 0);
+      assert.equal(
+        await firefox.evaluate(context, 'document.getElementById("login-name").value'),
+        "",
+      );
+      assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+      assert.equal(
+        await firefox.evaluate(context, 'document.getElementById("plain-name").value'),
+        "MMMM WWWW",
+      );
+    } else {
+      assert.fail(`the page loaded with navigation type ${String(type)}`);
+    }
+  });
+
   test("navigating a tab to its own address brings back no autofilled value", async () => {
     const path = "/autofill?same";
     const tabId = await filledTab(path);

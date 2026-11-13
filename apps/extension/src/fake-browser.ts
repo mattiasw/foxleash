@@ -454,7 +454,12 @@ export function createFakeBrowser(): FakeBrowser {
           return snapshot(tab);
         }
         if (properties.loadReplace === true) {
-          tab.history = [...tab.history.slice(0, tab.index), url];
+          // Firefox keeps the entries after the one a load replaces.
+          tab.history = [
+            ...tab.history.slice(0, tab.index),
+            url,
+            ...tab.history.slice(tab.index + 1),
+          ];
         } else {
           tab.history = [...tab.history.slice(0, tab.index + 1), url];
           tab.index += 1;

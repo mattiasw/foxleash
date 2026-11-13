@@ -459,8 +459,9 @@ and no defense is complete. Foxleash limits what a fooled agent can do:
   screenshot of it or acted in it while it was still a password field, and a text field that
   the page puts in its place shows its value.
   When the agent reloads a page, Foxleash loads it without the browser's cache, so Firefox puts
-  back no field value. It does the same after the agent goes back or forward to a page that
-  Firefox loads again instead of keeping it in memory, except a page that a form sent with
+  back no field value. After the agent goes back or forward to a page that Firefox loads again
+  instead of keeping it in memory, Foxleash loads the page's address again, which may come from
+  the browser's cache and also puts back no field value, except a page that a form sent with
   POST or that holds a frame a form sent with POST, and a page on a site the agent may not act
   on. The page's fields then lose what was typed into them.
   A text field Firefox filled in shows its value again once Firefox no longer highlights it as
