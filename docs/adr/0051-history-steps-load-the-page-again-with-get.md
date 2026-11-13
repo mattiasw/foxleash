@@ -5,7 +5,10 @@
 [0049](0049-history-steps-recognise-pages-kept-in-memory.md). Its decision that the frame veto
 stays, its rejected alternative of dropping it, and its consequence that Foxleash loads nothing
 for a page holding a frame a form sent with POST, all except for a URL with a fragment, are
-superseded by [0052](0052-history-get-loads-ignore-frame-posts.md), 2026-11-13.
+superseded by [0052](0052-history-get-loads-ignore-frame-posts.md), 2026-11-13. Its decision that
+every veto of 0025 stays, as far as a top-level request that was not a GET and started after the
+tab's last top-level commit and a step's load that its timeout cut off go, except for a URL with
+a fragment, is superseded by [0053](0053-history-get-loads-ignore-page-controlled-switches.md), 2026-11-13.
 
 ## Context
 

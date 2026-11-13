@@ -2,7 +2,11 @@
 
 **Status:** Accepted, 2026-11-13. Supersedes part of
 [0051](0051-history-steps-load-the-page-again-with-get.md), and the frame veto of
-[0025](0025-history-loads-and-autofilled-fields.md) for a URL without a fragment.
+[0025](0025-history-loads-and-autofilled-fields.md) for a URL without a fragment. Its decision
+that the top-level veto and 0025's completed-load condition stay for both loads, as far as a
+top-level request that was not a GET and started after the tab's last top-level commit and a
+step's load that its timeout cut off go, for a URL without a fragment, and its "Still open"
+consequence, which 0053 answers, are superseded by [0053](0053-history-get-loads-ignore-page-controlled-switches.md), 2026-11-13.
 
 ## Context
 

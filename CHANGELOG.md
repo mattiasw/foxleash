@@ -67,6 +67,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sent with POST, Foxleash now also loads the page's address again, so values typed or filled into
   that frame no longer come back and the frame shows its first page (except for an address with a
   #fragment).
+- After `navigate` goes back or forward to a page Firefox loads again, Foxleash now also loads the
+  page's address again when the page sends a form with POST after it arrived or does not finish
+  loading within 30 seconds (except for an address with a #fragment).
 
 ### Fixed
 
@@ -83,6 +86,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   active tab of its window, and `fill_form` there no longer stops after four text fields.
 - `wait_for` with `navigation` true, called right after a click on a link, no longer waits its
   whole timeout and fails when the new page has already loaded.
+- `wait_for` with `navigation` true no longer counts the end of a load that `navigate` answered
+  during after going back or forward, as it already did not for `navigate`'s other loads.
 
 ## [0.3.0] - 2026-11-06
 

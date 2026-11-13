@@ -154,7 +154,7 @@ describe("tools", () => {
     );
     assert.ok(
       navigate?.description?.includes(
-        "Going back or forward to a page that Firefox loads again instead of keeping it in memory loads its address again, so its form fields lose what was typed into them too, unless a form sent it with POST, its address has a #fragment and a form sent a frame in it with POST, or this session may not act on its site.",
+        "Going back or forward to a page that Firefox loads again instead of keeping it in memory loads its address again, so its form fields lose what was typed into them too, unless a form sent it with POST, it took over 30 seconds to arrive, or this session may not act on its site, or, when its address has a #fragment, a form sent a frame in it with POST, it or a frame in it sent a form with POST before Foxleash loaded it again, or it took over 30 seconds to load.",
       ),
     );
     const loadsUntilReady =

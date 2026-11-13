@@ -1611,7 +1611,62 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     }
   });
 
-  it("does not reload after a top-level non-GET that started after the commit and one before the page's request", async () => {
+  it("does not reload after a top-level non-GET that started by the commit, whatever was reported around it", async () => {
+    const cases: [
+      string,
+      (tabId: number) => RequestDetails[],
+      (tabId: number) => RequestDetails[],
+    ][] = [
+      [
+        "a POST after the commit, then one between the page's request and the commit, both reported before the commit",
+        (tabId) => [
+          pageRequest(tabId, "https://b.example/send", "POST", 60),
+          pageRequest(tabId, "https://b.example/old", "POST", 40),
+        ],
+        (tabId) => [pageRequest(tabId, "https://a.example/a", "GET", 2)],
+      ],
+      [
+        "a POST started before the page's request, then one after the commit, both reported after it",
+        () => [],
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+          pageRequest(tabId, "https://b.example/old", "POST", 1),
+          pageRequest(tabId, "https://b.example/send", "POST", 60),
+        ],
+      ],
+      [
+        "a POST after the commit, then one started before the page's request, both reported after it",
+        () => [],
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+          pageRequest(tabId, "https://b.example/send", "POST", 60),
+          pageRequest(tabId, "https://b.example/old", "POST", 1),
+        ],
+      ],
+      [
+        "the page's own request a POST started in the commit's millisecond",
+        () => [],
+        (tabId) => [pageRequest(tabId, "https://a.example/a", "POST", 50)],
+      ],
+    ];
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, before, after] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, before, after);
+        const emitCommitted = context.fake.emitCommitted;
+        context.fake.emitCommitted = (details) => emitCommitted({ ...details, timeStamp: 50 });
+        assert.deepEqual(
+          await pastRequestWait(context, { tabId: tab.id, action: "back" }),
+          tab,
+          `${label}, ${shown}`,
+        );
+        assert.deepEqual(steps, [["back", tab.id]], `${label}, ${shown}`);
+      }
+    }
+  });
+
+  it("loads with GET after a top-level non-GET that started after the commit and one before the page's request, and reloads no address with a fragment after them", async () => {
     for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
       const context = setup();
       const tab = await historyTab(context, shown);
@@ -1625,12 +1680,79 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       );
       const emitCommitted = context.fake.emitCommitted;
       context.fake.emitCommitted = (details) => emitCommitted({ ...details, timeStamp: 50 });
-      assert.deepEqual(
-        await pastRequestWait(context, { tabId: tab.id, action: "back" }),
-        tab,
-        shown,
-      );
-      assert.deepEqual(steps, [["back", tab.id]], shown);
+      const loaded = await pastRequestWait(context, { tabId: tab.id, action: "back" });
+      assertGetLoadOnlyWithoutFragment(steps, loaded, tab, shown);
+    }
+  });
+
+  it("loads with GET after a top-level POST the page sends once it committed, and reloads no address with a fragment after one", async () => {
+    const cases: [
+      string,
+      (tabId: number) => RequestDetails[],
+      (tabId: number) => RequestDetails[],
+    ][] = [
+      [
+        "the page's request reported before the commit, the POST after it",
+        (tabId) => [pageRequest(tabId, "https://a.example/a", "GET", 2)],
+        (tabId) => [pageRequest(tabId, "https://a.example/send", "POST", 60)],
+      ],
+      [
+        "both reported after the commit, the POST first",
+        () => [],
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/send", "POST", 60),
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+        ],
+      ],
+    ];
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, before, after] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, before, after);
+        const emitCommitted = context.fake.emitCommitted;
+        context.fake.emitCommitted = (details) => emitCommitted({ ...details, timeStamp: 50 });
+        const loaded = await pastRequestWait(context, { tabId: tab.id, action: "back" });
+        assertGetLoadOnlyWithoutFragment(steps, loaded, tab, `${label}, ${shown}`);
+      }
+    }
+  });
+
+  it("does not reload when the page's own POST commits during the step", async () => {
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const reportedFirst of [true, false]) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const fakeTab = context.fake.tabs.get(tab.id);
+        assert.ok(fakeTab);
+        const commitTime = lastCommitTime(context.fake);
+        const steps = recordSteps(context.fake, (tabId) => [
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+        ]);
+        const result = shown.includes("#")
+          ? "https://a.example/result#top"
+          : "https://a.example/result";
+        const goBack = context.fake.browser.tabs.goBack;
+        context.fake.browser.tabs.goBack = (tabId) => {
+          const stepped = goBack(tabId);
+          // The page sends its form with POST after it committed, and the result commits.
+          const posted = pageRequest(tabId, "https://a.example/result", "POST", commitTime() + 1);
+          if (reportedFirst) send(context.fake, [posted]);
+          fakeTab.url = result;
+          context.fake.emitCommitted({
+            tabId,
+            frameId: 0,
+            url: result,
+            timeStamp: commitTime() + 2,
+          });
+          if (!reportedFirst) send(context.fake, [posted]);
+          return stepped;
+        };
+        const label = `${shown}, POST reported ${reportedFirst ? "before" : "after"} its commit`;
+        const loaded = await pastRequestWait(context, { tabId: tab.id, action: "back" });
+        assert.equal(loaded.url, result, label);
+        assert.deepEqual(steps, [["back", tab.id]], label);
+      }
     }
   });
 
@@ -2767,7 +2889,7 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.deepEqual(steps, [["back", tab.id]]);
   });
 
-  it("does not reload after a top-level POST sent once the step's load completed", async () => {
+  it("loads with GET after a top-level POST sent once the step's load completed, and reloads no address with a fragment after one", async () => {
     for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
       const context = setup();
       const tab = await historyTab(context, shown);
@@ -2779,8 +2901,8 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         (tabId) => pageRequest(tabId, "https://a.example/a", "POST", 1000),
         shown,
       );
-      assert.deepEqual(await context.navigate("s1", { tabId: tab.id, action: "back" }), tab, shown);
-      assert.deepEqual(steps, [["back", tab.id]], shown);
+      const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
+      assertGetLoadOnlyWithoutFragment(steps, loaded, tab, shown);
     }
   });
 
@@ -2902,51 +3024,112 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     ]);
   });
 
-  it("does not reload a page whose load its timeout cut off", async () => {
-    const context = setup();
-    const tab = await historyTab(context);
-    const fakeTab = context.fake.tabs.get(tab.id);
-    assert.ok(fakeTab);
-    const steps = recordSteps(context.fake, () => []);
-    // The load commits and never completes, as with a script that never arrives.
-    context.fake.browser.tabs.goBack = async (tabId) => {
-      steps.push(["back", tabId]);
-      send(context.fake, [pageRequest(tabId, "https://a.example/a")]);
-      Object.assign(fakeTab, { url: "https://a.example/a", status: "loading" });
-      context.fake.emitCommitted({ tabId, frameId: 0, url: "https://a.example/a" });
-    };
-    const result = context.navigate("s1", { tabId: tab.id, action: "back" });
-    await flush();
-    context.timers.advance(LOAD_GRACE_MS);
-    await flush();
-    context.timers.advance(LOAD_TIMEOUT_MS);
-    assert.deepEqual(await result, { ...tab, title: "" });
-    assert.deepEqual(steps, [["back", tab.id]]);
+  it("loads with GET a page whose load its timeout cut off, and reloads no address with a fragment then", async () => {
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      const context = setup();
+      const tab = await historyTab(context, shown);
+      const fakeTab = context.fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      const steps = recordSteps(context.fake, () => []);
+      // The load commits and never completes, as with a script that never arrives.
+      context.fake.browser.tabs.goBack = async (tabId) => {
+        steps.push(["back", tabId]);
+        send(context.fake, [pageRequest(tabId, "https://a.example/a")]);
+        Object.assign(fakeTab, { url: shown, status: "loading" });
+        context.fake.emitCommitted({ tabId, frameId: 0, url: shown });
+      };
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" });
+      await flush();
+      context.timers.advance(LOAD_GRACE_MS);
+      await flush();
+      context.timers.advance(LOAD_TIMEOUT_MS);
+      const loaded = await result;
+      if (shown.includes("#")) {
+        assert.deepEqual(loaded, { ...tab, title: "" }, shown);
+        assert.deepEqual(steps, [["back", tab.id]], shown);
+      } else {
+        assert.deepEqual(loaded, { ...tab, title: `Title of ${shown}` }, shown);
+        assert.deepEqual(
+          steps,
+          [
+            ["back", tab.id],
+            ["load", tab.id, { url: shown, loadReplace: true }],
+          ],
+          shown,
+        );
+      }
+    }
   });
 
   it("answers below the host's request timeout when each wait runs to its end", async () => {
+    // The step's load completes just before its timeout, or its timeout cuts it off.
+    for (const completes of [true, false]) {
+      const context = setup();
+      const tab = await historyTab(context);
+      const fakeTab = context.fake.tabs.get(tab.id);
+      assert.ok(fakeTab);
+      const steps: unknown[][] = [];
+      const ended = completes
+        ? LOAD_GRACE_MS + LOAD_TIMEOUT_MS - 1
+        : LOAD_GRACE_MS + LOAD_TIMEOUT_MS;
+      // Its request is reported just before navigate stops waiting for it.
+      const reported = ended + HISTORY_REQUEST_TIMEOUT_MS - 1;
+      context.fake.browser.tabs.goBack = async (tabId) => {
+        steps.push(["back", tabId]);
+        Object.assign(fakeTab, { url: "https://a.example/a", status: "loading" });
+        context.fake.emitCommitted({ tabId, frameId: 0, url: "https://a.example/a" });
+        if (completes) {
+          context.timers.setTimeout(() => context.fake.emitStatus(tabId, "complete"), ended);
+        }
+        context.timers.setTimeout(() => {
+          send(context.fake, [pageRequest(tabId, "https://a.example/a")]);
+        }, reported);
+      };
+      // The load never completes.
+      context.fake.browser.tabs.update = async (tabId, properties) => {
+        steps.push(["load", tabId, properties]);
+        fakeTab.status = "loading";
+        return { ...fakeTab };
+      };
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+        done = true;
+      });
+      let elapsed = 0;
+      while (!done && elapsed < 120_000) {
+        await flush();
+        await flush();
+        context.timers.advance(500);
+        elapsed += 500;
+      }
+      const label = completes ? "completed" : "cut off";
+      assert.equal((await result).url, "https://a.example/a", label);
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
+        ],
+        label,
+      );
+      // Then the load's grace and timeout.
+      assert.ok(
+        elapsed >= reported + LOAD_GRACE_MS + HISTORY_RELOAD_TIMEOUT_MS,
+        `${label}: answered after ${elapsed} ms`,
+      );
+      assert.ok(elapsed < 60_000, `${label}: answered after ${elapsed} ms`);
+    }
+  });
+
+  it("does not count for wait_for the end of a load after going back that navigate returned during", async () => {
     const context = setup();
     const tab = await historyTab(context);
     const fakeTab = context.fake.tabs.get(tab.id);
     assert.ok(fakeTab);
-    const steps: unknown[][] = [];
-    const completed = LOAD_GRACE_MS + LOAD_TIMEOUT_MS - 1;
-    const reported = completed + HISTORY_REQUEST_TIMEOUT_MS - 1;
-    // The step's load completes just before its timeout, and its request is reported just before
-    // navigate stops waiting for it.
-    context.fake.browser.tabs.goBack = async (tabId) => {
-      steps.push(["back", tabId]);
-      Object.assign(fakeTab, { url: "https://a.example/a", status: "loading" });
-      context.fake.emitCommitted({ tabId, frameId: 0, url: "https://a.example/a" });
-      context.timers.setTimeout(() => context.fake.emitStatus(tabId, "complete"), completed);
-      context.timers.setTimeout(() => {
-        send(context.fake, [pageRequest(tabId, "https://a.example/a")]);
-      }, reported);
-    };
-    // The load never completes.
-    context.fake.browser.tabs.update = async (tabId, properties) => {
-      steps.push(["load", tabId, properties]);
-      fakeTab.status = "loading";
+    recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    // The load begins and never completes within its wait.
+    context.fake.browser.tabs.update = async (tabId) => {
+      beginNavigation(context.fake, tabId, "https://a.example/a");
       return { ...fakeTab };
     };
     let done = false;
@@ -2961,16 +3144,17 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       elapsed += 500;
     }
     assert.equal((await result).url, "https://a.example/a");
-    assert.deepEqual(steps, [
-      ["back", tab.id],
-      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
-    ]);
-    // Then the load's grace and timeout.
-    assert.ok(
-      elapsed >= reported + LOAD_GRACE_MS + HISTORY_RELOAD_TIMEOUT_MS,
-      `answered after ${elapsed} ms`,
-    );
-    assert.ok(elapsed < 60_000, `answered after ${elapsed} ms`);
+    const waiting = context.call("s1", "wait_for", {
+      tabId: tab.id,
+      navigation: true,
+      timeoutMs: 2000,
+    });
+    await flush();
+    fakeTab.status = "complete";
+    context.fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/a" });
+    await flush();
+    context.timers.advance(2000);
+    await rejectsWith(waiting, "wait_timeout");
   });
 
   it("leaves the reload action and a url navigate as they were", async (t) => {
@@ -9317,6 +9501,31 @@ async function pastRequestWait(
   await flush();
   timers.advance(HISTORY_REQUEST_TIMEOUT_MS);
   return result;
+}
+
+/**
+ * Asserts that going back to `shown` loaded it again with GET when it has no fragment, and loaded
+ * nothing and returned `tab` when it has one.
+ */
+function assertGetLoadOnlyWithoutFragment(
+  steps: unknown[][],
+  loaded: TabInfo,
+  tab: TabInfo,
+  label: string,
+): void {
+  assert.deepEqual(loaded, tab, label);
+  if (tab.url?.includes("#")) {
+    assert.deepEqual(steps, [["back", tab.id]], label);
+  } else {
+    assert.deepEqual(
+      steps,
+      [
+        ["back", tab.id],
+        ["load", tab.id, { url: tab.url, loadReplace: true }],
+      ],
+      label,
+    );
+  }
 }
 
 /**
