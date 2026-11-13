@@ -9,7 +9,13 @@ import {
   type TabInfo,
 } from "@foxleash/protocol";
 import { createActSettle, MIN_SETTLE_MS } from "./act-settle.ts";
-import type { FrameDetails, RequestDetails, Tab, TabChangeInfo } from "./browser-api.ts";
+import type {
+  BrowserApi,
+  FrameDetails,
+  RequestDetails,
+  Tab,
+  TabChangeInfo,
+} from "./browser-api.ts";
 import {
   type CssCall,
   createFakeBrowser,
@@ -28,6 +34,8 @@ import {
   createHandlers,
   HISTORY_RELOAD_TIMEOUT_MS,
   HISTORY_REQUEST_TIMEOUT_MS,
+  KEPT_GRACE_MS,
+  KNOWN_DOCUMENTS_PER_TAB,
   NAVIGATION_WAIT_MS,
   PROBE_CUTOFF_MS,
   PROBE_TIMEOUT_MS,
@@ -1605,6 +1613,681 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       assert.deepEqual(steps, [["back", tab.id]], label);
       assert.equal(get.mock.callCount(), 1, label);
       get.mock.restore();
+    }
+  });
+
+  it("answers after a short grace for a page kept in memory, and reloads nothing", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, () => []);
+    const timers = context.timers.pending();
+    const moves: [string, string][] = [
+      ["back", "https://a.example/a"],
+      ["forward", "https://b.example/b"],
+    ];
+    for (const [action, url] of moves) {
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action }).finally(() => {
+        done = true;
+      });
+      await flush();
+      context.timers.advance(KEPT_GRACE_MS - 1);
+      await flush();
+      assert.equal(done, false, action);
+      context.timers.advance(1);
+      await flush();
+      assert.equal(done, true, action);
+      assert.equal((await result).url, url, action);
+      assert.equal(context.timers.pending(), timers, action);
+    }
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["forward", tab.id],
+    ]);
+  });
+
+  it("does not reload a page kept in memory on a request for its own address", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    // A navigate to the page's own address, which the step replaced.
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    context.timers.advance(KEPT_GRACE_MS);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("still waits for and reloads a page that committed a new document", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => false);
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+      "https://a.example/a",
+    );
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+
+    const late = setup();
+    late.fake.modelDocuments(() => false);
+    const lateTab = await historyTab(late);
+    const lateSteps = recordSteps(late.fake, () => []);
+    const timers = late.timers.pending();
+    let done = false;
+    const result = late.navigate("s1", { tabId: lateTab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    late.timers.advance(HISTORY_REQUEST_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    send(late.fake, [pageRequest(lateTab.id, "https://a.example/a")]);
+    await flush();
+    assert.equal(done, true);
+    assert.equal((await result).url, "https://a.example/a");
+    assert.deepEqual(lateSteps, [
+      ["back", lateTab.id],
+      ["reload", lateTab.id, { bypassCache: true }],
+    ]);
+    assert.equal(late.timers.pending(), timers);
+  });
+
+  it("starts the grace of a page kept in memory once the step's load completes, not at its commit", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, () => []);
+    const stepBack = context.fake.browser.tabs.goBack;
+    context.fake.browser.tabs.goBack = (tabId) => {
+      const stepped = stepBack(tabId);
+      // Firefox reports the load complete a grace after the commit.
+      context.timers.advance(KEPT_GRACE_MS);
+      return stepped;
+    };
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    assert.equal(done, false);
+    context.timers.advance(KEPT_GRACE_MS);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("reloads without the cache a page kept in memory that reloads itself within the grace", async () => {
+    const orders: [
+      string,
+      number,
+      (fake: FakeBrowser, tabId: number, reload: Reload, lastCommit: () => number) => void,
+    ][] = [
+      [
+        "its request reported before its commit, decided at the end of the wait",
+        HISTORY_REQUEST_TIMEOUT_MS,
+        (fake, tabId, reload, lastCommit) => {
+          send(fake, [pageRequest(tabId, "https://a.example/a", "GET", lastCommit() + 1)]);
+          reload(tabId);
+        },
+      ],
+      [
+        "its request reported after its commit",
+        0,
+        (fake, tabId, reload, lastCommit) => {
+          reload(tabId);
+          send(fake, [pageRequest(tabId, "https://a.example/a", "GET", lastCommit())]);
+        },
+      ],
+    ];
+    for (const [label, wait, reloadItself] of orders) {
+      const context = setup();
+      context.fake.modelDocuments(() => true);
+      const tab = await historyTab(context);
+      const { reload } = context.fake.browser.tabs;
+      const steps = recordSteps(context.fake, () => []);
+      const lastCommit = lastCommitTime(context.fake);
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+        done = true;
+      });
+      await flush();
+      assert.equal(done, false, label);
+      // The page's location.reload() on pageshow.
+      reloadItself(context.fake, tab.id, reload, lastCommit);
+      await flush();
+      if (wait > 0) {
+        assert.equal(done, false, label);
+        context.timers.advance(wait);
+        await flush();
+      }
+      assert.equal(done, true, label);
+      assert.equal((await result).url, "https://a.example/a", label);
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          ["reload", tab.id, { bypassCache: true }],
+        ],
+        label,
+      );
+    }
+  });
+
+  it("waits for a request after a page kept in memory begins a navigation within the grace", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, () => []);
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    context.timers.advance(KEPT_GRACE_MS - 1);
+    context.fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "https://a.example/a" });
+    await flush();
+    context.timers.advance(HISTORY_REQUEST_TIMEOUT_MS - KEPT_GRACE_MS);
+    await flush();
+    assert.equal(done, false);
+    context.timers.advance(1);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("does not end the grace of a page kept in memory on a request alone, or on another frame or tab", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    const steps = recordSteps(context.fake, () => []);
+    const lastCommit = lastCommitTime(context.fake);
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    send(context.fake, [pageRequest(tab.id, "https://a.example/a", "GET", lastCommit())]);
+    context.fake.emitBeforeNavigate({ tabId: tab.id, frameId: 1, url: "https://f.example/" });
+    context.fake.emitBeforeNavigate({ tabId: tab.id + 1, frameId: 0, url: "https://c.example/" });
+    context.fake.emitCommitted({ tabId: tab.id, frameId: 1, url: "https://f.example/" });
+    await flush();
+    context.timers.advance(KEPT_GRACE_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    context.timers.advance(1);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("decides on the last of the step's commits, not on an earlier one kept in memory", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    const { reload } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, () => []);
+    const lastCommit = lastCommitTime(context.fake);
+    const stepBack = context.fake.browser.tabs.goBack;
+    context.fake.browser.tabs.goBack = (tabId) => {
+      const stepped = stepBack(tabId);
+      // The page restored from memory reloads itself before the step's load completes.
+      send(context.fake, [pageRequest(tabId, "https://a.example/a", "GET", lastCommit())]);
+      reload(tabId);
+      return stepped;
+    };
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+      "https://a.example/a",
+    );
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+  });
+
+  it("waits for a commit's own request, also after a request for its address", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const tab = await historyTab(context);
+    // A navigate to the page's own address, which the step replaced.
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const lastCommit = lastCommitTime(context.fake);
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    // Within the grace the page sends a form to its own address with POST, reported late.
+    context.fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "https://a.example/a" });
+    context.fake.emitCommitted({
+      tabId: tab.id,
+      frameId: 0,
+      url: "https://a.example/a",
+      documentId: "posted",
+    });
+    context.fake.setFrames(tab.id, [{ frameId: 0, documentId: "posted" }]);
+    await flush();
+    assert.equal(done, false);
+    send(context.fake, [pageRequest(tab.id, "https://a.example/a", "POST", lastCommit())]);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("gives a page kept in memory that the page shown goes back to a grace of its own", async () => {
+    const shownFirst: [string, (url: string) => boolean][] = [
+      ["kept in memory", () => true],
+      ["loaded again, its request not reported", (url) => url === "https://z.example/z"],
+    ];
+    for (const [shown, keptInMemory] of shownFirst) {
+      for (const reloadsItself of [true, false]) {
+        const label = `${shown}, z reloads itself: ${reloadsItself}`;
+        const context = setup();
+        context.fake.modelDocuments(keptInMemory);
+        const tab = await threePageTab(context);
+        const { goBack, reload } = context.fake.browser.tabs;
+        const steps = recordSteps(context.fake, () => []);
+        const lastCommit = lastCommitTime(context.fake);
+        let done = false;
+        const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+          done = true;
+        });
+        await flush();
+        context.timers.advance(KEPT_GRACE_MS - 50);
+        // The page shown calls history.back(): z, kept in memory, shows.
+        await goBack(tab.id);
+        await flush();
+        // Past the grace of the page the step showed, not of z.
+        context.timers.advance(KEPT_GRACE_MS - 1);
+        await flush();
+        assert.equal(done, false, label);
+        if (reloadsItself) {
+          // On pageshow.
+          reload(tab.id);
+          send(context.fake, [pageRequest(tab.id, "https://z.example/z", "GET", lastCommit())]);
+        } else {
+          context.timers.advance(1);
+        }
+        await flush();
+        assert.equal(done, true, label);
+        if (reloadsItself) assert.equal((await result).url, "https://z.example/z", label);
+        assert.deepEqual(
+          steps,
+          reloadsItself
+            ? [
+                ["back", tab.id],
+                ["reload", tab.id, { bypassCache: true }],
+              ]
+            : [["back", tab.id]],
+          label,
+        );
+      }
+    }
+  });
+
+  it("reloads a page loaded again that commits once more while navigate reads the tab", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => false);
+    const tab = await historyTab(context);
+    const { reload } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const lastCommit = lastCommitTime(context.fake);
+    const get = context.fake.browser.tabs.get;
+    context.fake.browser.tabs.get = async (tabId) => {
+      if (context.fake.tabs.get(tabId)?.url === "https://a.example/a" && steps.length === 1) {
+        // After the frames were read, the page reloads itself: a new document again.
+        send(context.fake, [pageRequest(tabId, "https://a.example/a", "GET", lastCommit() + 1)]);
+        reload(tabId);
+      }
+      return get(tabId);
+    };
+    await context.navigate("s1", { tabId: tab.id, action: "back" });
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+  });
+
+  it("reloads a page that reloads itself after the tab's frames named the page it went back to", async () => {
+    const context = setup();
+    context.fake.modelDocuments((url) => url === "https://z.example/z");
+    const tab = await threePageTab(context);
+    const { goBack, reload } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const lastCommit = lastCommitTime(context.fake);
+    const getAllFrames = context.fake.browser.webNavigation.getAllFrames;
+    context.fake.browser.webNavigation.getAllFrames = async (details) => {
+      if (context.fake.tabs.get(details.tabId)?.url !== "https://a.example/a") {
+        return getAllFrames(details);
+      }
+      // The page loaded again goes back: z, kept in memory, shows and commits; the frames name it.
+      await goBack(details.tabId);
+      const frames = await getAllFrames(details);
+      // Then z reloads itself on pageshow before the check.
+      send(context.fake, [
+        pageRequest(details.tabId, "https://z.example/z", "GET", lastCommit() + 1),
+      ]);
+      await reload(details.tabId);
+      return frames;
+    };
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+      "https://z.example/z",
+    );
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+  });
+
+  it("gives a page kept in memory that the tab reaches while navigate reads it a grace of its own", async () => {
+    for (const reloadsItself of [true, false]) {
+      const label = `z reloads itself: ${reloadsItself}`;
+      const context = setup();
+      context.fake.modelDocuments((url) => url === "https://z.example/z");
+      const tab = await threePageTab(context);
+      const { goBack, reload } = context.fake.browser.tabs;
+      // The step loads a.example/a again with its request: decided at once.
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      const lastCommit = lastCommitTime(context.fake);
+      const get = context.fake.browser.tabs.get;
+      let wentBack = false;
+      context.fake.browser.tabs.get = async (tabId) => {
+        if (!wentBack && steps.length === 1) {
+          // Before the check, the page loaded again goes back: z shows from memory.
+          wentBack = true;
+          await goBack(tabId);
+        }
+        return get(tabId);
+      };
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+        done = true;
+      });
+      await flush();
+      assert.equal(wentBack, true, label);
+      assert.equal(done, false, label);
+      if (reloadsItself) {
+        // On pageshow, within z's grace.
+        reload(tab.id);
+        send(context.fake, [pageRequest(tab.id, "https://z.example/z", "GET", lastCommit())]);
+        await flush();
+        assert.equal((await result).url, "https://z.example/z", label);
+      } else {
+        context.timers.advance(KEPT_GRACE_MS - 1);
+        await flush();
+        assert.equal(done, false, label);
+        context.timers.advance(1);
+        await flush();
+      }
+      assert.equal(done, true, label);
+      assert.deepEqual(
+        steps,
+        reloadsItself
+          ? [
+              ["back", tab.id],
+              ["reload", tab.id, { bypassCache: true }],
+            ]
+          : [["back", tab.id]],
+        label,
+      );
+    }
+  });
+
+  it("decides twice at most, when the tab commits again while navigate reads it", async () => {
+    const context = setup();
+    context.fake.modelDocuments((url) => url === "https://z.example/z");
+    const tab = await threePageTab(context);
+    const { goBack, goForward, reload } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const lastCommit = lastCommitTime(context.fake);
+    const timers = context.timers.pending();
+    const get = context.fake.browser.tabs.get;
+    let reads = 0;
+    context.fake.browser.tabs.get = async (tabId) => {
+      if (steps.length === 1) {
+        reads += 1;
+        // Before each check the tab moves on: back to z, kept in memory, then forward to
+        // a.example/a, loaded again and its request not reported.
+        if (reads === 1) await goBack(tabId);
+        if (reads === 2) await goForward(tabId);
+      }
+      return get(tabId);
+    };
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    assert.equal(done, false);
+    // z reloads itself within its grace, which decides the second time.
+    reload(tab.id);
+    send(context.fake, [pageRequest(tab.id, "https://z.example/z", "GET", lastCommit())]);
+    await flush();
+    assert.equal(reads, 2);
+    assert.equal(done, true);
+    await result;
+    assert.deepEqual(steps, [["back", tab.id]]);
+    assert.equal(context.timers.pending(), timers);
+  });
+
+  it("does not reload a page restored from memory, without a commit, after the step's commit", async () => {
+    const context = setup();
+    context.fake.modelDocuments((url) => url === "https://z.example/z");
+    const tab = await threePageTab(context);
+    const { goBack } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const stepBack = context.fake.browser.tabs.goBack;
+    context.fake.browser.tabs.goBack = (tabId) => {
+      // The step loads the page again, whose inline script calls history.back().
+      const stepped = stepBack(tabId);
+      withoutCommitOf(context.fake, "https://z.example/z", () => goBack(tabId));
+      return stepped;
+    };
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+      "https://z.example/z",
+    );
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("does not reload a page restored from memory, without a commit, after a racing load", async () => {
+    const context = setup();
+    context.fake.modelDocuments((url) => url === "https://a.example/a");
+    const tab = await threePageTab(context);
+    const { reload } = context.fake.browser.tabs;
+    const steps = recordSteps(context.fake, () => []);
+    const stepBack = context.fake.browser.tabs.goBack;
+    context.fake.browser.tabs.goBack = (tabId) => {
+      // The page left loads again first, then the step restores its page from memory.
+      send(context.fake, [pageRequest(tabId, "https://b.example/b")]);
+      reload(tabId);
+      return withoutCommitOf(context.fake, "https://a.example/a", () => stepBack(tabId));
+    };
+    assert.equal(
+      (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+      "https://a.example/a",
+    );
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("reloads when the tab's frames cannot be read or name no document from before the step", async () => {
+    const frames: [string, () => Promise<FrameDetails[] | null>][] = [
+      [
+        "rejected",
+        async () => {
+          throw new Error("No tab with id");
+        },
+      ],
+      ["null", async () => null],
+      ["no top frame", async () => [{ frameId: 1, documentId: "frame-document" }]],
+      ["a top frame without a document", async () => [{ frameId: 0 }]],
+      // The page's own next document, its commit not reported yet.
+      ["a top document not heard of", async () => [{ frameId: 0, documentId: "unheard" }]],
+    ];
+    for (const [label, getAllFrames] of frames) {
+      const context = setup();
+      context.fake.modelDocuments(() => false);
+      const tab = await historyTab(context);
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      context.fake.browser.webNavigation.getAllFrames = getAllFrames;
+      await context.navigate("s1", { tabId: tab.id, action: "back" });
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          ["reload", tab.id, { bypassCache: true }],
+        ],
+        label,
+      );
+    }
+  });
+
+  it("reloads after a commit without a document id, whatever document the frames name", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => false);
+    const committed: string[] = [];
+    context.fake.browser.webNavigation.onCommitted.addListener(({ frameId, documentId }) => {
+      if (frameId === 0 && documentId !== undefined) committed.push(documentId);
+    });
+    const tab = await historyTab(context);
+    const [first] = committed;
+    assert.ok(first !== undefined);
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const { emitCommitted } = context.fake;
+    context.fake.emitCommitted = ({ tabId, frameId, url }) =>
+      emitCommitted({ tabId, frameId, url });
+    context.fake.setFrames(tab.id, [{ frameId: 0, documentId: first }]);
+    await context.navigate("s1", { tabId: tab.id, action: "back" });
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+  });
+
+  it("stops watching navigations once it answered, for a page kept in memory or loaded again", async () => {
+    const cases: [string, boolean][] = [
+      ["kept in memory", true],
+      ["loaded again", false],
+    ];
+    for (const [label, kept] of cases) {
+      const context = setup();
+      context.fake.modelDocuments(() => kept);
+      const tab = await historyTab(context);
+      recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+      const listeners = context.fake.beforeNavigateListenerCount();
+      await pastRequestWait(context, { tabId: tab.id, action: "back" });
+      assert.equal(context.fake.beforeNavigateListenerCount(), listeners, label);
+    }
+  });
+
+  it("drops the document the tab committed least recently, not the one it first committed", async () => {
+    const context = setup();
+    context.fake.modelDocuments(() => true);
+    const committed: string[] = [];
+    context.fake.browser.webNavigation.onCommitted.addListener(({ frameId, documentId }) => {
+      if (frameId === 0 && documentId !== undefined) committed.push(documentId);
+    });
+    const tab = await historyTab(context);
+    const [first] = committed;
+    assert.ok(first !== undefined);
+    const extra = (index: number) =>
+      context.fake.emitCommitted({
+        tabId: tab.id,
+        frameId: 0,
+        url: "https://b.example/x",
+        documentId: `extra-${index}`,
+      });
+    for (let index = 0; index < KNOWN_DOCUMENTS_PER_TAB - 2; index += 1) extra(index);
+    // Firefox shows a.example/a from memory again, then the tab commits one document more.
+    context.fake.emitCommitted({
+      tabId: tab.id,
+      frameId: 0,
+      url: "https://a.example/a",
+      documentId: first,
+    });
+    extra(KNOWN_DOCUMENTS_PER_TAB);
+    const steps = recordSteps(context.fake, () => []);
+    let done = false;
+    const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    context.timers.advance(KEPT_GRACE_MS);
+    await flush();
+    assert.equal(done, true);
+    assert.deepEqual(await result, tab);
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("remembers the tab's last top-level web documents only, up to the bound", async () => {
+    const cases: [string, number, boolean][] = [
+      ["one document too many", KNOWN_DOCUMENTS_PER_TAB - 1, false],
+      ["up to the bound", KNOWN_DOCUMENTS_PER_TAB - 2, true],
+    ];
+    for (const [label, extra, kept] of cases) {
+      const context = setup();
+      context.fake.modelDocuments(() => true);
+      const tab = await historyTab(context);
+      // historyTab committed a.example/a and b.example/b; none of these counts.
+      context.fake.emitCommitted({
+        tabId: tab.id,
+        frameId: 0,
+        url: "about:blank",
+        documentId: "blank",
+      });
+      context.fake.emitCommitted({
+        tabId: tab.id,
+        frameId: 1,
+        url: "https://f.example/",
+        documentId: "frame",
+      });
+      context.fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://b.example/no-id" });
+      context.fake.emitCommitted({
+        tabId: tab.id + 1,
+        frameId: 0,
+        url: "https://c.example/",
+        documentId: "other-tab",
+      });
+      for (let index = 0; index < extra; index += 1) {
+        context.fake.emitCommitted({
+          tabId: tab.id,
+          frameId: 0,
+          url: "https://b.example/x",
+          documentId: `extra-${index}`,
+        });
+      }
+      const steps = recordSteps(context.fake, () => []);
+      let done = false;
+      const result = context.navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+        done = true;
+      });
+      await flush();
+      context.timers.advance(KEPT_GRACE_MS);
+      await flush();
+      assert.equal(done, kept, label);
+      context.timers.advance(HISTORY_REQUEST_TIMEOUT_MS - KEPT_GRACE_MS);
+      assert.deepEqual(await result, tab, label);
+      assert.deepEqual(steps, [["back", tab.id]], label);
     }
   });
 
@@ -7837,6 +8520,41 @@ async function historyTab(
   const tab = await open("s1", first);
   await navigate("s1", { tabId: tab.id, url: "https://b.example/b" });
   return tab;
+}
+
+/** A session's tab on https://b.example/b, after z.example/z and a.example/a; all approved. */
+async function threePageTab({ open, navigate, grant }: ReturnType<typeof setup>): Promise<TabInfo> {
+  await grant("https://z.example");
+  await grant("https://a.example");
+  await grant("https://b.example");
+  const tab = await open("s1", "https://z.example/z");
+  await navigate("s1", { tabId: tab.id, url: "https://a.example/a" });
+  await navigate("s1", { tabId: tab.id, url: "https://b.example/b" });
+  return tab;
+}
+
+type Reload = BrowserApi["tabs"]["reload"];
+
+/** Runs `load` with the fake's commits of `url` dropped, as Firefox can show a page it kept. */
+function withoutCommitOf<T>(fake: FakeBrowser, url: string, load: () => T): T {
+  const { emitCommitted } = fake;
+  fake.emitCommitted = (details) => {
+    if (details.url !== url) emitCommitted(details);
+  };
+  try {
+    return load();
+  } finally {
+    fake.emitCommitted = emitCommitted;
+  }
+}
+
+/** Gives the `timeStamp` of the last top-level commit reported from now on, 0 before one. */
+function lastCommitTime(fake: FakeBrowser): () => number {
+  let last = 0;
+  fake.browser.webNavigation.onCommitted.addListener((details) => {
+    if (details.frameId === 0) last = details.timeStamp;
+  });
+  return () => last;
 }
 
 /**

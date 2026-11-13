@@ -1,6 +1,6 @@
 # 0025: `navigate` reloads without the cache a page that going back or forward loaded again
 
-**Status:** Accepted, 2026-10-24. Extends [0021](0021-autofilled-fields-are-protected.md).
+**Status:** Accepted, 2026-10-24. Extends [0021](0021-autofilled-fields-are-protected.md). Its rule that a page taken from the back-forward cache waits a second for a request, and its accepted cases of a page that a page kept in memory replaces at once and of a `navigate` to a page's own address that a step to a page kept in memory replaces, are superseded by [0049](0049-history-steps-recognise-pages-kept-in-memory.md), 2026-11-13.
 
 ## Context
 

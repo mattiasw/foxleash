@@ -134,10 +134,22 @@ type NavigationRequest = NavigationTarget | { kind: "path"; path: string };
 
 /** What `navigate` watched while it went back or forward. */
 interface HistoryLoad {
-  /** Undefined while the request of the tab's last top-level commit has not been reported. */
+  /**
+   * False for a last top-level commit of a document the tab committed before the step, kept in
+   * memory, once its grace passed with no navigation begun after it; else undefined until then,
+   * or while the request of that commit has not been reported.
+   */
   reloads(): boolean | undefined;
-  /** Resolves once a request makes `reloads` defined, or after `ms`. */
+  /**
+   * Starts the grace of a commit kept in memory, and resolves once a request or a grace makes
+   * `reloads` defined, or after `ms`.
+   */
   decided(ms: number): Promise<void>;
+  /**
+   * False only when `documentId` is a document the tab committed before the step that no top-level
+   * commit during the step named.
+   */
+  shows(documentId: string | undefined): boolean;
   stop(): void;
 }
 
@@ -178,14 +190,27 @@ export const READ_CONSOLE_TIMEOUT_MS = 50_000;
 export const NAVIGATION_WAIT_MS = 10_000;
 /**
  * How long `navigate` waits, once going back or forward has loaded a page, for that page's own
- * request: Firefox can report it after the commit (ADR 0016 measured 211 ms). A page Firefox
- * takes from the back-forward cache commits but makes no request, so it waits this long.
+ * request: Firefox can report it after the commit (ADR 0016 measured 211 ms). A page Firefox kept
+ * in memory is told by its commit's `documentId` and waits only KEPT_GRACE_MS, within this wait
+ * (ADR 0049); one Foxleash cannot tell makes no request and waits this long.
  */
 export const HISTORY_REQUEST_TIMEOUT_MS = 1000;
 /**
+ * How long a step to a page Firefox kept in memory waits for a navigation the page begins on its
+ * own, such as a reload on `pageshow`: measured 0 to 5 ms after the tab's load completed. It
+ * starts when `navigate` decides, or at a later commit of such a page.
+ */
+export const KEPT_GRACE_MS = 200;
+/**
+ * The top-level documents remembered per tab to tell a page kept in memory, the least recently
+ * committed dropped first. A page whose document was dropped waits HISTORY_REQUEST_TIMEOUT_MS, and
+ * is not reloaded.
+ */
+export const KNOWN_DOCUMENTS_PER_TAB = 50;
+/**
  * Bounds the wait for the reload after going back or forward, so that with the step's own wait
- * (LOAD_GRACE_MS and LOAD_TIMEOUT_MS) and the wait for its request (HISTORY_REQUEST_TIMEOUT_MS),
- * `navigate` answers below the host's 60 s request timeout.
+ * (LOAD_GRACE_MS and LOAD_TIMEOUT_MS) and the waits for its request (HISTORY_REQUEST_TIMEOUT_MS,
+ * twice at most), `navigate` answers below the host's 60 s request timeout.
  */
 export const HISTORY_RELOAD_TIMEOUT_MS = 20_000;
 /**
@@ -216,6 +241,7 @@ export function createHandlers<Handle>({
   settle,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const frameErrors = watchFrameErrors(browser);
+  const knownDocuments = watchTopDocuments(browser);
   // Tabs navigate or tab_open returned while their page still loaded, with the count of top-frame
   // navigations begun in each then: until another begins, a load that ends is the returned one.
   const returnedLoading = new Map<number, number>();
@@ -426,15 +452,33 @@ export function createHandlers<Handle>({
   }
 
   /**
-   * Notes a tab's top-level commits and its top-level and frame requests until `stop`, with
-   * their start times: Firefox can report a document's own request after its commit (ADR 0016),
-   * so they are matched by time, not by the order they arrive in. It `reloads` when the last
-   * top-level request started by the tab's last top-level commit is for the commit's URL, and no
-   * top-level or frame request that started from that request on, or was reported after it, was
-   * not a GET.
+   * Notes a tab's top-level commits and navigations and its top-level and frame requests until
+   * `stop`, with their start times: Firefox can report a document's own request after its commit
+   * (ADR 0016), so they are matched by time, not by the order they arrive in. It `reloads` when
+   * the last top-level request started by the tab's last top-level commit is for the commit's URL,
+   * and no top-level or frame request that started from that request on, or was reported after
+   * it, was not a GET. A commit of a document the tab committed before the step was kept in
+   * memory: it reloads nothing once KEPT_GRACE_MS passed with no top-level navigation begun after
+   * it, by the order Firefox reports them. The grace starts when `navigate` decides, or at a later
+   * such commit (ADR 0049).
    */
   function watchHistoryLoad(tabId: number): HistoryLoad {
-    let commit: { url: string; timeStamp: number } | undefined;
+    // A copy: the record hears each commit before the listener below does.
+    const known = knownDocuments(tabId);
+    let commit:
+      | {
+          url: string;
+          timeStamp: number;
+          documentId: string | undefined;
+          kept: boolean;
+          graced: boolean;
+        }
+      | undefined;
+    // The documents of the top-level commits since the step began.
+    const committed = new Set<string>();
+    let begun = false;
+    let deciding = false;
+    let grace: Handle | undefined;
     // The latest top-level request started by the commit, and the latest one reported before any
     // commit or started after the one it was reported after.
     let byCommit: TopRequest | undefined;
@@ -467,19 +511,36 @@ export function createHandlers<Handle>({
       wake?.();
     };
     // The commit's URL, not the tab's: the page can change its address with the History API.
+    // A commit does not wake the wait: its own request, a POST perhaps, can be reported after it.
     const onCommit = (details: NavigationDetails) => {
       if (details.tabId !== tabId || details.frameId !== 0) return;
-      commit = { url: withoutFragment(details.url), timeStamp: details.timeStamp };
+      const { documentId } = details;
+      if (documentId !== undefined) committed.add(documentId);
+      commit = {
+        url: withoutFragment(details.url),
+        timeStamp: details.timeStamp,
+        documentId,
+        kept: documentId !== undefined && known.has(documentId),
+        graced: false,
+      };
+      begun = false;
       if (next !== undefined && next.timeStamp <= commit.timeStamp) {
         byCommit = later(byCommit, next);
       }
+      startGrace();
+    };
+    const onNavigate = (details: NavigationDetails) => {
+      if (details.tabId === tabId && details.frameId === 0) begun = true;
     };
     browser.webRequest.onBeforeRequest.addListener(onRequest, { urls: ["<all_urls>"] });
     browser.webNavigation.onCommitted.addListener(onCommit);
+    browser.webNavigation.onBeforeNavigate.addListener(onNavigate);
     return {
       reloads,
-      decided: (ms) =>
-        new Promise((resolve) => {
+      decided: (ms) => {
+        deciding = true;
+        startGrace();
+        return new Promise((resolve) => {
           const timer = timers.setTimeout(done, ms);
           wake = () => {
             if (reloads() !== undefined) done();
@@ -488,19 +549,41 @@ export function createHandlers<Handle>({
             timers.clearTimeout(timer);
             resolve();
           }
-        }),
+        });
+      },
+      shows: (documentId) =>
+        documentId === undefined ||
+        commit?.documentId === undefined ||
+        !known.has(documentId) ||
+        // One that also committed during the step: the frames may predate a later commit.
+        committed.has(documentId),
       stop: () => {
         browser.webRequest.onBeforeRequest.removeListener(onRequest);
         browser.webNavigation.onCommitted.removeListener(onCommit);
+        browser.webNavigation.onBeforeNavigate.removeListener(onNavigate);
+        if (grace !== undefined) timers.clearTimeout(grace);
       },
     };
 
     function reloads(): boolean | undefined {
       // No commit: the step loaded no document. webRequest sees no page off the web.
       if (commit === undefined || siteOf(commit.url) === undefined) return false;
-      // Also for a page taken from the back-forward cache, which commits but makes no request.
+      // Before the request: one for the address of a document kept in memory loaded no document.
+      if (commit.kept) return commit.graced && !begun ? false : undefined;
+      // Firefox can report the page's own request late (ADR 0016).
       if (byCommit?.url !== commit.url) return undefined;
       return byCommit.onlyGets && nonGetStarted < byCommit.timeStamp;
+    }
+
+    /** Gives the last commit, once `navigate` decides and if it was kept, its grace. */
+    function startGrace(): void {
+      if (grace !== undefined) timers.clearTimeout(grace);
+      const shown = commit;
+      if (!deciding || shown?.kept !== true) return;
+      grace = timers.setTimeout(() => {
+        shown.graced = true;
+        wake?.();
+      }, KEPT_GRACE_MS);
     }
   }
 
@@ -508,7 +591,10 @@ export function createHandlers<Handle>({
    * Reloads without the cache a page that going back or forward loaded again instead of taking
    * it from the back-forward cache: Firefox puts field values back into such a page without its
    * autofill mark (ADR 0025). Only in the session's group, off its prompt, on a site it may act
-   * on, and never after a request that was not a GET, so no form is sent again.
+   * on, unless the tab shows a document from before the step that no commit during the step named,
+   * and never after a request that was not a GET, so no form is sent again. A page kept in memory
+   * waits KEPT_GRACE_MS for a navigation of its own, which is then decided on as a page loaded
+   * again, also one the tab commits while it is read before the reload (ADR 0049).
    */
   async function reloadHistoryLoad(
     session: string,
@@ -518,31 +604,41 @@ export function createHandlers<Handle>({
   ): Promise<Tab> {
     // A load cut off by its timeout may not have requested its frames yet, POSTs among them.
     if (loaded.status !== "complete") return loaded;
-    if (history.reloads() === undefined) await history.decided(HISTORY_REQUEST_TIMEOUT_MS);
-    if (history.reloads() !== true) return loaded;
-    const group = await groups.groupOf(session);
-    const view = await access.view(session);
-    const tab = await existingTab(tabId);
-    // No await from here to the reload, so a request the page sends meanwhile still counts.
-    const url = tab.url ?? "";
-    if (
-      history.reloads() !== true ||
-      group === undefined ||
-      tab.groupId !== group.id ||
-      access.openPrompt(session)?.tabId === tabId ||
-      !view.allowed(url)
-    ) {
-      return loaded;
+    // Twice at most: a commit heard while the tab is read, of a page kept in memory perhaps, is
+    // decided once more.
+    for (let decisions = 0; decisions < 2; decisions += 1) {
+      if (history.reloads() === undefined) await history.decided(HISTORY_REQUEST_TIMEOUT_MS);
+      if (history.reloads() !== true) return loaded;
+      const group = await groups.groupOf(session);
+      const view = await access.view(session);
+      const frames = await browser.webNavigation.getAllFrames({ tabId }).catch(() => null);
+      const tab = await existingTab(tabId);
+      // No await from here to the reload, so a request the page sends meanwhile still counts.
+      const reloads = history.reloads();
+      if (reloads === undefined) continue;
+      const url = tab.url ?? "";
+      if (
+        !reloads ||
+        // A page restored from memory may commit nothing: the tab must not show it.
+        !history.shows(frames?.find((frame) => frame.frameId === 0)?.documentId) ||
+        group === undefined ||
+        tab.groupId !== group.id ||
+        access.openPrompt(session)?.tabId === tabId ||
+        !view.allowed(url)
+      ) {
+        return loaded;
+      }
+      history.stop();
+      return waitForLoad(
+        browser,
+        timers,
+        tabId,
+        undefined,
+        () => browser.tabs.reload(tabId, { bypassCache: true }),
+        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
+      );
     }
-    history.stop();
-    return waitForLoad(
-      browser,
-      timers,
-      tabId,
-      undefined,
-      () => browser.tabs.reload(tabId, { bypassCache: true }),
-      { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
-    );
+    return loaded;
   }
 
   /**
@@ -1405,6 +1501,38 @@ export function createHandlers<Handle>({
         return browser.tabs.goForward(tabId);
       case "reload":
         return browser.tabs.reload(tabId, { bypassCache: true });
+    }
+  }
+}
+
+/**
+ * Remembers, per tab, the top-level web documents Firefox reported committing, at most
+ * KNOWN_DOCUMENTS_PER_TAB, the least recently committed dropped first, and gives a copy of a
+ * tab's. Adds its listeners at once.
+ */
+function watchTopDocuments(
+  browser: Pick<BrowserApi, "webNavigation" | "tabs">,
+): (tabId: number) => Set<string> {
+  const tabs = new Map<number, Set<string>>();
+
+  browser.webNavigation.onCommitted.addListener(record);
+  browser.tabs.onRemoved.addListener((tabId) => tabs.delete(tabId));
+
+  return (tabId) => new Set(tabs.get(tabId));
+
+  function record({ tabId, frameId, documentId, url }: NavigationDetails): void {
+    if (frameId !== 0 || typeof documentId !== "string" || siteOf(url) === undefined) return;
+    let documents = tabs.get(tabId);
+    if (documents === undefined) {
+      documents = new Set();
+      tabs.set(tabId, documents);
+    }
+    // Last in the set's insertion order, also when Firefox commits it again.
+    documents.delete(documentId);
+    documents.add(documentId);
+    if (documents.size > KNOWN_DOCUMENTS_PER_TAB) {
+      const oldest = documents.values().next();
+      if (!oldest.done) documents.delete(oldest.value);
     }
   }
 }

@@ -119,6 +119,15 @@ export interface FakeBrowser {
    * which loads nothing until `tabs.update` loads a URL into the tab or selects it, never fire it.
    */
   commitOnCreate: boolean;
+  /**
+   * Off until called. From then on each top-frame commit the fake makes for a tab's own load
+   * (create, update, reload, history step) carries a new `documentId`, which
+   * `webNavigation.getAllFrames` lists for frame 0 unless `setFrames` set the tab's frames; a
+   * `goBack` or `goForward` to an entry whose URL `keptInMemory` accepts and whose document the
+   * fake has seen shows that document again, as Firefox does for a page it kept in memory: its
+   * commit carries that document's id.
+   */
+  modelDocuments(keptInMemory: (url: string) => boolean): void;
   /** Fires `webNavigation.onCompleted`. A load in a tab fires it for its top frame too. */
   emitCompleted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   /** Fires `webNavigation.onHistoryStateUpdated`; `pushState` fires it for the top frame too. */
@@ -346,6 +355,10 @@ export function createFakeBrowser(): FakeBrowser {
   const onDOMContentLoaded = createEvent<(details: DocumentDetails) => void>();
   // The latest timeStamp a commit or a webRequest event carried.
   let latestTimeStamp = 0;
+  let keptInMemory: ((url: string) => boolean) | undefined;
+  // Per tab, while modelDocuments is on: the document shown, and the one at each history index.
+  const documents = new Map<number, { shown: string; byIndex: Map<number, string> }>();
+  let nextDocument = 1;
   const contentScripts = new Map<
     number,
     { handler: ContentScript; pending: Set<(error: Error) => void> }
@@ -419,7 +432,7 @@ export function createFakeBrowser(): FakeBrowser {
         if (fake.commitOnCreate) {
           queueMicrotask(() => {
             if (fake.tabs.has(tab.id))
-              fake.emitCommitted({ tabId: tab.id, frameId: 0, url: tab.url });
+              fake.emitCommitted({ tabId: tab.id, frameId: 0, url: tab.url, ...showDocument(tab) });
           });
         }
         return snapshot(tab);
@@ -574,7 +587,10 @@ export function createFakeBrowser(): FakeBrowser {
         tabOf(tabId);
         const listed = frames.get(tabId);
         if (listed === null) return null;
-        return (listed ?? [frameOf(tabId, 0)]).map((frame) => ({ ...frame }));
+        const shown = documents.get(tabId)?.shown;
+        const top =
+          shown === undefined ? frameOf(tabId, 0) : { ...frameOf(tabId, 0), documentId: shown };
+        return (listed ?? [top]).map((frame) => ({ ...frame }));
       },
       onBeforeNavigate,
       onCommitted,
@@ -698,6 +714,9 @@ export function createFakeBrowser(): FakeBrowser {
     emitCommitted: (details) => emitNavigation(onCommitted, details),
     committedListenerCount: () => onCommitted.listeners.size,
     commitOnCreate: true,
+    modelDocuments: (kept) => {
+      keptInMemory = kept;
+    },
     emitCompleted: (details) => emitNavigation(onNavigationCompleted, details),
     emitHistoryStateUpdated: (details) => emitNavigation(onHistoryStateUpdated, details),
     navigationListenerCount: () =>
@@ -1017,7 +1036,7 @@ export function createFakeBrowser(): FakeBrowser {
     return fields;
   }
 
-  function load(tab: FakeTab, url: string): void {
+  function load(tab: FakeTab, url: string, keptDocument?: string): void {
     if (tab.discarded === true) tab.discarded = false;
     // At the latest time stamp, so the time stamps fired after it stay as they were without it.
     fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url, timeStamp: latestTimeStamp });
@@ -1029,7 +1048,7 @@ export function createFakeBrowser(): FakeBrowser {
     fake.badgeText.delete(tab.id);
     fake.badgeTitle.delete(tab.id);
     emit(tab, changed ? { status: "loading", url } : { status: "loading" });
-    fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url, ...showDocument(tab, keptDocument) });
     queueMicrotask(() => {
       if (!fake.tabs.has(tab.id)) return;
       tab.status = "complete";
@@ -1054,7 +1073,22 @@ export function createFakeBrowser(): FakeBrowser {
     const url = tab.history[tab.index + step];
     if (url === undefined) return;
     tab.index += step;
-    load(tab, url);
+    const kept = keptInMemory?.(url) === true;
+    load(tab, url, kept ? documents.get(tab.id)?.byIndex.get(tab.index) : undefined);
+  }
+
+  /**
+   * While modelDocuments is on, makes `kept`, or else a new document, the one the tab shows at its
+   * history index, and returns it as a commit's `documentId`.
+   */
+  function showDocument(tab: FakeTab, kept?: string): { documentId?: string } {
+    if (keptInMemory === undefined) return {};
+    const documentId = kept ?? `top-document-${nextDocument++}`;
+    const tabDocuments = documents.get(tab.id) ?? { shown: documentId, byIndex: new Map() };
+    tabDocuments.shown = documentId;
+    tabDocuments.byIndex.set(tab.index, documentId);
+    documents.set(tab.id, tabDocuments);
+    return { documentId };
   }
 
   function createGroup(windowId = fake.currentWindowId): TabGroup {

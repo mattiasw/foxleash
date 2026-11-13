@@ -535,7 +535,7 @@ describe("console recording", { timeout: 10000 }, () => {
     const live = recordings.liveRecording("s1", tab.id);
     fake.pushState(tab.id, `${SITE}/other#part`);
     assert.equal(recordings.liveRecording("s1", tab.id), live);
-    // As a page from another site restored from the back-forward cache: no commit, a new URL.
+    // A site change without a commit (a restore from memory does commit, ADR 0049): a new URL.
     fake.pushState(tab.id, "https://b.example/");
     assert.equal(recordings.liveRecording("s1", tab.id), undefined);
     assert.deepEqual(warned(), [

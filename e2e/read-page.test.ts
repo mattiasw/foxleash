@@ -1354,13 +1354,16 @@ describe("read_page in real Firefox", () => {
     );
     const before = fixtures.hits("/autofill");
     await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?kept") });
+    const started = Date.now();
     await harness.ok(session, "navigate", { tabId, action: "back" });
+    const elapsed = Date.now() - started;
     if ((await firefox.evaluate(context, 'sessionStorage.getItem("shown-from-memory")')) === null) {
       // Firefox did not keep the page this time and loaded it again.
       assert.equal(fixtures.hits("/autofill"), before + 1, "requests for /autofill");
       await assertNoFill(tabId, fixtures.url(path));
       return;
     }
+    assert.ok(elapsed < 500, `going back took ${elapsed} ms`);
     assert.equal(
       await firefox.evaluate(context, "window.kept === true"),
       true,
@@ -1369,6 +1372,91 @@ describe("read_page in real Firefox", () => {
     assert.equal(fixtures.hits("/autofill"), before, "requests for /autofill");
     assert.equal(await firefox.evaluate(context, AUTOFILLED), true);
     await assertProtected(tabId);
+  });
+
+  test("going back and forward between pages Firefox kept in memory answers within half a second and requests nothing", async () => {
+    // Not /a: it is served no-store, which Firefox never keeps in memory.
+    const first = fixtures.url("/autofill?mem-1");
+    const second = fixtures.url("/autofill?mem-2");
+    const tabId = await open("/autofill?mem-1", TITLES.autofill);
+    // No Foxleash page tool on these pages: they stay as Firefox would keep them.
+    await markForMemory(await contextOf(first));
+    await harness.ok(session, "navigate", { tabId, url: second });
+    await markForMemory(await contextOf(second));
+    const moves: ["back" | "forward", string][] = [
+      ["back", first],
+      ["forward", second],
+    ];
+    let fromMemory = 0;
+    for (let round = 1; round <= 3; round += 1) {
+      for (const [action, shown] of moves) {
+        const label = `${action} in round ${round}`;
+        const hits = fixtures.hits("/autofill");
+        const started = Date.now();
+        await harness.ok(session, "navigate", { tabId, action });
+        const elapsed = Date.now() - started;
+        const context = await contextOf(shown);
+        // A page shown from memory can read a stale sessionStorage: compare a time, not a count.
+        const shownAt = await firefox.evaluate(
+          context,
+          'sessionStorage.getItem("shown-from-memory-at")',
+        );
+        if (Number(shownAt) >= started) {
+          fromMemory += 1;
+          assert.ok(elapsed < 500, `${label} took ${elapsed} ms`);
+          assert.equal(fixtures.hits("/autofill"), hits, `requests for /autofill, ${label}`);
+          assert.equal(await firefox.evaluate(context, "window.kept === true"), true, label);
+        } else {
+          // Firefox loaded the page again, and Foxleash reloaded it without the cache.
+          assert.equal(fixtures.hits("/autofill"), hits + 1, `requests for /autofill, ${label}`);
+          await markForMemory(context);
+        }
+      }
+    }
+    assert.ok(fromMemory > 0, "Firefox showed no page from memory");
+  });
+
+  test("going back to a page Firefox kept in memory that reloads itself brings back no autofilled value", async () => {
+    // Firefox does not keep every page in memory: a few tries, until it showed one from memory.
+    let fromMemory = false;
+    for (let attempt = 1; attempt <= 3 && !fromMemory; attempt += 1) {
+      const path = `/autofill?pageshow-${attempt}`;
+      const url = fixtures.url(path);
+      const tabId = await filledTab(path);
+      const context = await contextOf(url);
+      // Sites reload a page shown from memory this way; the reload would put the value back unmarked.
+      assert.equal(
+        await firefox.evaluate(
+          context,
+          `addEventListener("pageshow", (event) => {
+            if (event.persisted) {
+              sessionStorage.setItem("reloaded-itself", "yes");
+              location.reload();
+            }
+          });
+          true`,
+        ),
+        true,
+      );
+      await harness.ok(session, "navigate", { tabId, url: fixtures.url(`/a?pageshow-${attempt}`) });
+      await harness.ok(session, "navigate", { tabId, action: "back" });
+      const reloadedItself = await pollUntil(
+        async () => {
+          const state = await firefox.evaluate(
+            context,
+            `document.readyState === "complete" && location.href === ${JSON.stringify(url)}
+              ? sessionStorage.getItem("reloaded-itself") ?? "no"
+              : undefined`,
+          );
+          return typeof state === "string" ? state : undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        `${url} to finish loading`,
+      );
+      await assertNoFill(tabId, url, `the page reloaded itself: ${reloadedItself}`);
+      fromMemory = reloadedItself === "yes";
+    }
+    assert.ok(fromMemory, "Firefox showed the page from memory in none of 3 tries");
   });
 
   test("going back to a page a form sent with POST brings back its autofilled value unmarked", async () => {
@@ -1553,13 +1641,14 @@ describe("read_page in real Firefox", () => {
   }
 
   /** Asserts the login name field of the tab showing `url` is empty, unmarked and read so. */
-  async function assertNoFill(tabId: number, url: string): Promise<void> {
+  async function assertNoFill(tabId: number, url: string, label = url): Promise<void> {
     const context = await contextOf(url);
     assert.equal(
       await firefox.evaluate(context, 'document.getElementById("login-name").value'),
       "",
+      label,
     );
-    assert.equal(await firefox.evaluate(context, AUTOFILLED), false);
+    assert.equal(await firefox.evaluate(context, AUTOFILLED), false, label);
     const { tree, texts } = await read(tabId);
     assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
     assertLines(tree, ['textbox "Login name" [*]']);
@@ -1570,6 +1659,26 @@ describe("read_page in real Firefox", () => {
     const { tree, texts } = await read(tabId);
     assertNoSecrets(texts, [AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password]);
     assertLines(tree, ['textbox "Login name" [*] protected filled']);
+  }
+
+  /**
+   * Marks the document in `context` with `window.kept` and notes, in the tab's sessionStorage
+   * (`shown-from-memory-at`), when Firefox last showed it again from memory.
+   */
+  async function markForMemory(context: string): Promise<void> {
+    assert.equal(
+      await firefox.evaluate(
+        context,
+        `window.kept = true;
+        addEventListener("pageshow", (event) => {
+          if (event.persisted) {
+            sessionStorage.setItem("shown-from-memory-at", String(Date.now()));
+          }
+        });
+        true`,
+      ),
+      true,
+    );
   }
 
   /**

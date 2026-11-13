@@ -52,6 +52,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `navigate` to a URL and `tab_open` with a URL answer once the page can be read, instead of
   after every image and script has loaded, so pages open faster. The tab they return has an
   empty title when the page is still loading.
+- `navigate` back or forward to a page Firefox kept in memory now answers in a fraction of a
+  second instead of about a second later.
 
 ### Fixed
 
