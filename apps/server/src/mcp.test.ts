@@ -93,7 +93,7 @@ describe("createMcpServer", () => {
       "Keep track of your tabs (those you opened, those your actions opened and those the user points you to) and leave the others alone.",
       'A tab\'s "active" field means it is the active tab of its window, which changes whenever a tab in that window is opened or selected.',
       "The first time you open a page on a site the user has not approved, Foxleash asks the user in its tab, and the call waits up to 30 seconds.",
-      "If the user has not answered by then, tell them to answer in that tab, then call navigate with that tab and action reload.",
+      "If the user has not answered by then, the call fails saying what to tell them and which call to make next.",
       "Do not retry a site the user did not allow unless they ask.",
       "tab_open on a site being asked about can return the tab that asks, which another agent may be using.",
       "A call refused because the user is being asked about a site you did not ask for is another agent's question: retry your own call after the user has answered, and do not reload the tab that asks.",

@@ -195,35 +195,34 @@ describe("the approval prompt, in real Firefox", () => {
     for (const session of [asking, later, revoked]) await session.close();
   });
 
-  test("a slow answer times out the call, and a reload of the prompt tab waits for it", {
+  test("after a slow answer, the same tab_open opens the page once the prompt tab is closed", {
     timeout: 90_000,
   }, async () => {
-    const session = await connected();
-    const hits = site.hits("/a");
-    const existing = await promptContexts();
-    const started = Date.now();
-    const opening = pending(harness.refused(session, "tab_open", { url: site.url("/a") }));
-    const prompt = await harness.promptContext(existing);
-    await waitForQuestion(prompt, site.site);
-    const text = await opening;
-    assert.ok(Date.now() - started >= 29_000, `timed out after ${Date.now() - started} ms`);
-    assert.ok(text.includes("is still asking the user in tab"), text);
-    assert.ok(text.includes("and action reload"), text);
-    const tabId = Number(/tab (\d+)/.exec(text)?.[1]);
-    assert.ok(Number.isSafeInteger(tabId), text);
-    assert.deepEqual(await promptContexts(), [prompt]);
-    assert.equal(site.hits("/a"), hits);
+    const { session, prompt, hits } = await answeredAfterTimeout();
+    assert.equal(
+      await firefox.evaluate(prompt, "document.getElementById('close').checkVisibility()"),
+      true,
+    );
+    await firefox.closeContext(prompt);
 
-    const retry = pending(harness.ok(session, "navigate", { tabId, action: "reload" }));
-    await stillPending(retry, PENDING_MS);
-    assert.deepEqual(await promptContexts(), [prompt]);
-    assert.equal(site.hits("/a"), hits);
-    await harness.waitForArmed(prompt);
-    await firefox.click(prompt, ANSWER.once);
-    const tab = tabOf(await retry);
-    assert.equal(tab.id, tabId);
+    const tab = tabOf(await harness.ok(session, "tab_open", { url: site.url("/a") }));
     assert.equal(tab.url, site.url("/a"));
     assert.equal(tab.title, TITLES.a);
+    assert.deepEqual(await promptContexts(), []);
+    assert.equal(site.hits("/a"), hits + 1);
+    await session.close();
+  });
+
+  test("after a slow answer, the same tab_open opens the page in a new tab beside the answered prompt", {
+    timeout: 90_000,
+  }, async () => {
+    const { session, prompt, tabId, hits } = await answeredAfterTimeout();
+
+    const tab = tabOf(await harness.ok(session, "tab_open", { url: site.url("/a") }));
+    assert.notEqual(tab.id, tabId);
+    assert.equal(tab.url, site.url("/a"));
+    assert.equal(tab.title, TITLES.a);
+    assert.deepEqual(await promptContexts(), [prompt]);
     assert.equal(site.hits("/a"), hits + 1);
     await session.close();
   });
@@ -331,6 +330,40 @@ describe("the approval prompt, in real Firefox", () => {
     const session = await harness.connect();
     await harness.waitUntilReady(session);
     return session;
+  }
+
+  /**
+   * Opens the site in a fresh session and lets the call time out, then answers Allow this
+   * session in the prompt, which stays open.
+   */
+  async function answeredAfterTimeout(): Promise<{
+    session: Session;
+    prompt: string;
+    tabId: number;
+    hits: number;
+  }> {
+    const session = await connected();
+    const hits = site.hits("/a");
+    const existing = await promptContexts();
+    const started = Date.now();
+    const opening = pending(harness.refused(session, "tab_open", { url: site.url("/a") }));
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, site.site);
+    const text = await opening;
+    assert.ok(Date.now() - started >= 29_000, `timed out after ${Date.now() - started} ms`);
+    assert.ok(text.includes("is still asking the user in tab"), text);
+    assert.ok(text.includes("make the same tab_open or navigate call again"), text);
+    assert.ok(text.includes("call tab_open with the page's URL instead"), text);
+    assert.ok(!text.includes("action reload"), text);
+    const tabId = Number(/tab (\d+)/.exec(text)?.[1]);
+    assert.ok(Number.isSafeInteger(tabId), text);
+    assert.deepEqual(await promptContexts(), [prompt]);
+    assert.equal(site.hits("/a"), hits);
+
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, ANSWER.once);
+    await waitForStatus(prompt, "Allowed for this session. Ask the agent to try again.");
+    return { session, prompt, tabId, hits };
   }
 
   async function promptContexts(): Promise<string[]> {

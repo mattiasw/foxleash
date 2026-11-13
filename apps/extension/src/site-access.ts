@@ -505,7 +505,7 @@ export function createSiteAccess<Handle>({
       waiter.reject(
         new ToolError(
           "approval_timeout",
-          `Foxleash is still asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}. Tell the user to answer there, then call navigate with tab ${prompt.tabId} and action reload.`,
+          `Foxleash is still asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
         ),
       );
     }

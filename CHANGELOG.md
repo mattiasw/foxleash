@@ -91,6 +91,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After `navigate` goes back or forward to a page Firefox loads again, it now waits for
   Foxleash's load of the page's address to arrive, up to 20 seconds after that load starts,
   instead of answering when Firefox reports a stopped load as finished.
+- When you answer a site prompt after the agent stopped waiting for it, the agent now repeats
+  its request to open the page, or opens the page in a new tab if you closed the prompt's tab,
+  instead of trying to reload the closed tab and failing.
 
 ## [0.3.0] - 2026-11-06
 

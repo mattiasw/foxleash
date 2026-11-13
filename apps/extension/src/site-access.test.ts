@@ -986,7 +986,7 @@ describe("waiting for the answer", () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is still asking the user in tab ${tab.id} whether to allow https://a.example. Tell the user to answer there, then call navigate with tab ${tab.id} and action reload.`,
+      `Foxleash is still asking the user in tab ${tab.id} whether to allow https://a.example. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
     );
     assert.deepEqual(access.openPrompt("s1"), {
       tabId: tab.id,

@@ -450,18 +450,22 @@ export function createHandlers<Handle>({
     const group = await groups.groupOf(session);
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
     try {
-      const target: NavigationTarget =
-        request.kind === "path" ? { kind: "url", url: pathUrl(request.path, tab.url) } : request;
-      // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
       const prompt = access.openPrompt(session);
+      const asked = access.askedUrl(session, tab);
+      // On a prompt's tab, a path is on the site the prompt asks about.
+      const page = prompt?.tabId === tabId ? prompt.url : (asked ?? tab.url);
+      const target: NavigationTarget =
+        request.kind === "path" ? { kind: "url", url: pathUrl(request.path, page) } : request;
+      // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
       if (prompt?.tabId === tabId) {
         const url = retryUrl(prompt, target);
         return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
       }
-      // A reload of a prompt the user has answered loads the page it asked about.
-      const asked = isReload(target) ? access.askedUrl(session, tab) : undefined;
-      if (asked !== undefined) {
-        return { tab: await approveAndLoad(session, tabId, asked, { kind: "url", url: asked }) };
+      // On a prompt the user has answered, a reload loads the page it asked about, and a URL loads
+      // in the prompt's place in the tab's history.
+      const url = target.kind === "url" ? target.url : isReload(target) ? asked : undefined;
+      if (asked !== undefined && url !== undefined) {
+        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
       }
       const gated = await gate(session, tab, target);
       if (gated !== undefined && gated.decision.decision !== "allowed") {

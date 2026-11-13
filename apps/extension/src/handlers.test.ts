@@ -948,7 +948,7 @@ describe("navigate", { timeout: 10000 }, () => {
     });
 
     it("refuses one in a tab that does not show an http or https page", async (t) => {
-      const { fake, call, open, promptOf } = setup();
+      const { fake, call, open } = setup();
       const tab = await open("s1");
       for (const url of ["about:blank", "file:///home/x.html"]) {
         fake.navigateByUser(tab.id, url);
@@ -958,13 +958,6 @@ describe("navigate", { timeout: 10000 }, () => {
           message: NOT_WEB,
         });
       }
-      const opened = call("s1", "tab_open", { url: "https://b.example/" });
-      const prompt = await promptOf("s1");
-      await assert.rejects(call("s1", "navigate", { tabId: prompt.tabId, url: "/x" }), {
-        code: "invalid_url",
-        message: NOT_WEB,
-      });
-      void opened.catch(() => {});
       const get = fake.browser.tabs.get;
       t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
         const { url: _url, ...rest } = await get(tabId);
@@ -4139,6 +4132,105 @@ describe("approval", { timeout: 10000 }, () => {
       loadReplace: true,
     });
     assert.deepEqual(fake.tabs.get(tabId)?.history, ["https://a.example/x"]);
+  });
+
+  it("opens the page with tab_open again after a prompt answered after its call timed out, with its tab closed or left open", async () => {
+    for (const closed of [true, false]) {
+      const { fake, access, call, timeOut, promptOf } = setup();
+      const first = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+        code: "approval_timeout",
+      });
+      const shown = await timeOut("s1");
+      await first;
+      const { tabId } = await promptOf("s1");
+      const promptUrl = fake.tabs.get(tabId)?.url;
+      assert.ok(promptUrl?.includes("approve.html"), `prompt tab url: ${promptUrl}`);
+      shown.deliver({ type: "answer", answer: "once" });
+      await flush();
+      if (closed) fake.removeTab(tabId);
+      const retry = call("s1", "tab_open", { url: "https://a.example/x" });
+      await flush();
+      // Checked before awaiting the call, so a second prompt fails the test instead of hanging it.
+      assert.equal(access.openPrompt("s1"), undefined, `closed: ${closed}`);
+      const result = await retry;
+      assert.ok("tab" in result);
+      assert.notEqual(result.tab.id, tabId);
+      assert.equal(result.tab.url, "https://a.example/x");
+      assert.equal(loadsOf(fake, "https://a.example/x"), 1);
+      if (closed) assert.equal(fake.tabs.has(tabId), false);
+      else assert.equal(fake.tabs.get(tabId)?.url, promptUrl);
+    }
+  });
+
+  it("opens the page with tab_open after the blank tab of a navigate's prompt answered late is closed", async () => {
+    const { fake, access, call, open, timeOut, promptOf } = setup();
+    const tab = await open("s1");
+    const params = { tabId: tab.id, url: "https://a.example/x" };
+    const first = assert.rejects(call("s1", "navigate", params), { code: "approval_timeout" });
+    const shown = await timeOut("s1");
+    await first;
+    assert.equal((await promptOf("s1")).tabId, tab.id);
+    shown.deliver({ type: "answer", answer: "once" });
+    await flush();
+    fake.removeTab(tab.id);
+    await assert.rejects(call("s1", "navigate", params), { code: "tab_not_found" });
+    const retry = call("s1", "tab_open", { url: "https://a.example/x" });
+    await flush();
+    // Checked before awaiting the call, so a second prompt fails the test instead of hanging it.
+    assert.equal(access.openPrompt("s1"), undefined);
+    const result = await retry;
+    assert.ok("tab" in result);
+    assert.notEqual(result.tab.id, tab.id);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.equal(loadsOf(fake, "https://a.example/x"), 1);
+  });
+
+  it("loads the same navigate in place of a prompt answered after its call timed out", async () => {
+    const { fake, call, open, grant, timeOut } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const params = { tabId: tab.id, url: "https://b.example/x" };
+    const first = assert.rejects(call("s1", "navigate", params), { code: "approval_timeout" });
+    const shown = await timeOut("s1");
+    await first;
+    shown.deliver({ type: "answer", answer: "once" });
+    await flush();
+    const result = await call("s1", "navigate", params);
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://b.example/x");
+    assert.deepEqual(fake.tabUpdates.at(-1), { ...params, loadReplace: true });
+    assert.deepEqual(fake.tabs.get(tab.id)?.history, ["https://a.example/", "https://b.example/x"]);
+  });
+
+  it("takes the same navigate to a path again after its call timed out, before or after the answer", async () => {
+    for (const late of [false, true]) {
+      const { fake, call, open, grant, timeOut } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      await revokeSite(fake.browser, "https://a.example");
+      const params = { tabId: tab.id, url: "/x" };
+      const first = assert.rejects(call("s1", "navigate", params), { code: "approval_timeout" });
+      const shown = await timeOut("s1");
+      await first;
+      if (late) {
+        shown.deliver({ type: "answer", answer: "once" });
+        await flush();
+      }
+      const retry = call("s1", "navigate", params);
+      await flush();
+      if (!late) {
+        assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+        await assert.rejects(call("s1", "navigate", params), { code: "approval_pending" });
+        shown.deliver({ type: "answer", answer: "once" });
+      }
+      const result = await retry;
+      assert.ok("tab" in result);
+      assert.equal(result.tab.url, "https://a.example/x", `late: ${late}`);
+      assert.deepEqual(fake.tabs.get(tab.id)?.history, [
+        "https://a.example/",
+        "https://a.example/x",
+      ]);
+    }
   });
 
   it("refuses a reload of a prompt answered with Don't allow, staying on it", async () => {
