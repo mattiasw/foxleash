@@ -3559,8 +3559,29 @@ describe("read_page", { timeout: 10000 }, () => {
     assert.deepEqual(pageCalls, []);
   });
 
-  it("asks the page for read_page with only the options given", async () => {
+  it("refuses a bad find or role with its sentence before asking the page", async () => {
     const { call, pageCalls } = setup();
+    const find = "read_page needs find to be text that is not only spaces.";
+    const role = "read_page needs role to be a role name, such as link or heading.";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ find: "" }, find],
+      [{ find: " \n\u0085" }, find],
+      [{ find: 5 }, find],
+      [{ find: "a", role: 4 }, role],
+      [{ find: "a", role: "" }, role],
+      [{ role: "link" }, "read_page takes role only together with find."],
+    ];
+    for (const [options, message] of cases) {
+      await assert.rejects(call("s1", "read_page", { tabId: 3, ...options }), {
+        code: "invalid_params",
+        message,
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("asks the page for read_page with only the options given", async () => {
+    const { call, pageCalls, replyWith } = setup();
     await call("s1", "read_page", { tabId: 3 });
     await call("s2", "read_page", {
       tabId: 0,
@@ -3569,6 +3590,13 @@ describe("read_page", { timeout: 10000 }, () => {
       ref: "0a1b2c3d-4",
       extra: true,
     });
+    replyWith(async () => ({
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 0 },
+    }));
+    await call("s1", "read_page", { tabId: 3, find: " Link ", role: "LINK" });
+    await call("s1", "read_page", { tabId: 3, find: "a" });
     assert.deepEqual(pageCalls, [
       { session: "s1", tabId: 3, type: "read_page", params: { filter: "all" } },
       {
@@ -3577,8 +3605,78 @@ describe("read_page", { timeout: 10000 }, () => {
         type: "read_page",
         params: { filter: "interactive", depth: 2, ref: "0a1b2c3d-4" },
       },
+      {
+        session: "s1",
+        tabId: 3,
+        type: "read_page",
+        params: { filter: "all", find: " Link ", role: "LINK" },
+      },
+      { session: "s1", tabId: 3, type: "read_page", params: { filter: "all", find: "a" } },
     ]);
     assert.deepEqual(Object.keys(pageCalls[0]?.params ?? {}), ["filter"]);
+    assert.deepEqual(Object.keys(pageCalls[3]?.params ?? {}), ["filter", "find"]);
+  });
+
+  it("returns with find the tree, whether it was cut and the counts, as a fresh object", async () => {
+    const { call, replyWith } = setup();
+    const found = { shown: 1, matches: 3, searched: 40, extra: "page text" };
+    replyWith(async () => ({ tree: "main\n  link", truncated: true, found, extra: 1 }));
+    const result = await call("s1", "read_page", { tabId: 3, find: "link" });
+    assert.deepEqual(result, {
+      tree: "main\n  link",
+      truncated: true,
+      found: { shown: 1, matches: 3, searched: 40 },
+    });
+    assert.ok(typeof result === "object" && result !== null);
+    assert.notEqual(Reflect.get(result, "found"), found);
+    replyWith(async () => ({
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 7 },
+    }));
+    assert.deepEqual(await call("s1", "read_page", { tabId: 3, find: "nothing" }), {
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 7 },
+    });
+  });
+
+  it("refuses with find a reply whose counts it cannot read as page_error", async () => {
+    const { call, replyWith } = setup();
+    const replies: unknown[] = [
+      { tree: "main", truncated: false },
+      { tree: "main", truncated: false, found: null },
+      { tree: "main", truncated: false, found: { shown: "1", matches: 1, searched: 1 } },
+      { tree: "main", truncated: false, found: { shown: 2, matches: 1, searched: 3 } },
+      { tree: "main", truncated: false, found: { shown: 0, matches: 0, searched: 3 } },
+      { tree: "", truncated: true, found: { shown: 0, matches: 0, searched: 3 } },
+      { tree: "", truncated: false, found: { shown: 3, matches: 3, searched: 3 } },
+      { tree: "main", truncated: false, found: { shown: 0, matches: 9, searched: 9 } },
+      Object.assign(Object.create({ found: { shown: 1, matches: 1, searched: 1 } }), {
+        tree: "main",
+        truncated: false,
+      }),
+    ];
+    for (const reply of replies) {
+      replyWith(async () => reply);
+      await assert.rejects(call("s1", "read_page", { tabId: 3, find: "main" }), {
+        code: "page_error",
+        message: "Foxleash could not complete the request in the page in tab 3.",
+      });
+    }
+  });
+
+  it("passes on no counts without find", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({
+      tree: "main",
+      truncated: false,
+      found: { shown: 1, matches: 1, searched: 1 },
+    }));
+    const result = await call("s1", "read_page", { tabId: 3 });
+    assert.deepEqual(result, { tree: "main", truncated: false });
+    assert.ok(typeof result === "object" && result !== null);
+    assert.deepEqual(Object.keys(result), ["tree", "truncated"]);
   });
 
   it("returns only the tree and whether it was cut", async () => {

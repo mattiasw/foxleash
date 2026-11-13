@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   ARIA_ROLES,
+  createLineFinder,
   createTextBuffer,
+  createTreeLines,
   createTreeText,
   explicitRole,
   formatLine,
@@ -10,6 +12,7 @@ import {
   isCredentialAutocomplete,
   isProtectedField,
   LANDMARK_ROLES,
+  type Line,
   MAX_FIELD_CHARS,
   NAME_FROM_CONTENT_ROLES,
   quote,
@@ -60,6 +63,51 @@ describe("readPageOptions", () => {
       [{ depth: null }, depth],
       [{ ref: 4 }, ref],
       [{ ref: null }, ref],
+    ];
+    for (const [params, sentence] of cases) {
+      assert.equal(readPageOptions(params), sentence, JSON.stringify(params));
+    }
+  });
+
+  it("keeps find and role as given, and has no key for either when not given", () => {
+    assert.deepEqual(readPageOptions({ find: "  Link\n2000 ", role: " LINK " }), {
+      filter: "all",
+      find: "  Link\n2000 ",
+      role: " LINK ",
+    });
+    const find = readPageOptions({ find: "a", depth: 2 });
+    assert.deepEqual(find, { filter: "all", depth: 2, find: "a" });
+    assert.deepEqual(Object.keys(find), ["filter", "depth", "find"]);
+  });
+
+  it("reads find and role only from own keys", () => {
+    const inherited: Record<string, unknown> = Object.create({ find: "a", role: "link" });
+    assert.deepEqual(readPageOptions(inherited), { filter: "all" });
+    const role: Record<string, unknown> = Object.create({ find: "a" });
+    role.role = "link";
+    assert.equal(readPageOptions(role), "read_page takes role only together with find.");
+  });
+
+  it("refuses a bad find or role with its sentence", () => {
+    const find = "read_page needs find to be text that is not only spaces.";
+    const role = "read_page needs role to be a role name, such as link or heading.";
+    const alone = "read_page takes role only together with find.";
+    const cases: [Record<string, unknown>, string][] = [
+      [{ find: "" }, find],
+      [{ find: "   " }, find],
+      [{ find: "\u0085" }, find],
+      [{ find: " \n\t\u0085 " }, find],
+      [{ find: 3 }, find],
+      [{ find: null }, find],
+      [{ find: ["a"] }, find],
+      [{ find: "", role: "link" }, find],
+      [{ find: "a", role: 4 }, role],
+      [{ find: "a", role: null }, role],
+      [{ find: "a", role: "" }, role],
+      [{ find: "a", role: " \u0085 " }, role],
+      [{ role: "" }, role],
+      [{ role: "link" }, alone],
+      [{ role: "link", ref: "x" }, alone],
     ];
     for (const [params, sentence] of cases) {
       assert.equal(readPageOptions(params), sentence, JSON.stringify(params));
@@ -245,9 +293,15 @@ describe("quote", () => {
 });
 
 describe("textLine", () => {
-  it("writes a text line at its level", () => {
-    assert.equal(textLine(0, " Forgot  your password? "), 'text "Forgot your password?"');
-    assert.equal(textLine(2, "a"), '    text "a"');
+  it("gives a text line at its level, written as a text line always was", () => {
+    const line = textLine(0, " Forgot  your password? ");
+    assert.deepEqual(line, { level: 0, role: "text", name: " Forgot  your password? " });
+    assert.ok(line !== undefined);
+    assert.equal(formatLine(line), 'text "Forgot your password?"');
+    const deep = textLine(2, "a");
+    assert.deepEqual(deep, { level: 2, role: "text", name: "a" });
+    assert.ok(deep !== undefined);
+    assert.equal(formatLine(deep), '    text "a"');
   });
 
   it("writes nothing for whitespace", () => {
@@ -354,6 +408,365 @@ describe("createTreeText", () => {
     assert.deepEqual(tree.result(), { tree: "ab\ncd …", truncated: false });
   });
 });
+
+describe("createTreeLines", () => {
+  const page: Line[] = [
+    { level: 0, role: "main", ref: "0a1b2c3d-1" },
+    {
+      level: 1,
+      role: "link",
+      name: "Docs",
+      ref: "0a1b2c3d-2",
+      states: { href: "https://example.com/" },
+    },
+    { level: 1, role: "text", name: "Some  text" },
+  ];
+
+  it("writes the lines as formatLine into a TreeText, cut mark included", () => {
+    const tree = createTreeLines();
+    for (const line of page) assert.equal(tree.add(line), true);
+    tree.markCut();
+    assert.equal(tree.full, false);
+    assert.deepEqual(tree.result(), {
+      tree: 'main [0a1b2c3d-1]\n  link "Docs" [0a1b2c3d-2] href="https://example.com/"\n  text "Some text" …',
+      truncated: false,
+    });
+  });
+
+  it("gives what createTreeText gives for the same lines at any cap", () => {
+    for (const max of [READ_PAGE_MAX_CHARS, 70, 64, 40, 17, 5]) {
+      const tree = createTreeLines(max);
+      const text = createTreeText(max);
+      for (const [index, line] of page.entries()) {
+        assert.equal(tree.add(line), text.add(formatLine(line)), `${max} ${index}`);
+        assert.equal(tree.full, text.full, `${max} ${index}`);
+        if (index === 1) {
+          tree.markCut();
+          text.markCut();
+        }
+      }
+      assert.deepEqual(tree.result(), text.result(), String(max));
+      assert.equal(tree.full, text.full, String(max));
+    }
+  });
+
+  it("caps the tree at READ_PAGE_MAX_CHARS by default", () => {
+    const tree = createTreeLines();
+    assert.equal(tree.add({ level: 0, role: "a".repeat(READ_PAGE_MAX_CHARS) }), true);
+    assert.equal(tree.add({ level: 0, role: "b" }), false);
+    assert.equal(tree.full, true);
+  });
+});
+
+describe("createLineFinder", () => {
+  const form: Line[] = [
+    { level: 0, role: "main", ref: "0a1b2c3d-1" },
+    { level: 1, role: "heading", name: "Sign in", ref: "0a1b2c3d-2", states: { level: 2 } },
+    { level: 1, role: "form", name: "Sign in", ref: "0a1b2c3d-3" },
+    {
+      level: 2,
+      role: "textbox",
+      name: "Email",
+      ref: "0a1b2c3d-4",
+      states: { required: true, field: { value: "Me@Example.com" } },
+    },
+    {
+      level: 2,
+      role: "textbox",
+      name: "Password",
+      ref: "0a1b2c3d-5",
+      states: { field: { protected: true, filled: true } },
+    },
+    {
+      level: 2,
+      role: "checkbox",
+      name: "Remember",
+      ref: "0a1b2c3d-6",
+      states: { checked: "checked" },
+    },
+    { level: 2, role: "text", name: "Forgot  your\n password?" },
+    {
+      level: 1,
+      role: "link",
+      name: "Help",
+      ref: "0a1b2c3d-7",
+      states: { href: "https://example.com/help" },
+    },
+  ];
+  const MAIN = "main [0a1b2c3d-1]";
+  const FORM = '  form "Sign in" [0a1b2c3d-3]';
+  const EMAIL = '    textbox "Email" [0a1b2c3d-4] required value="Me@Example.com"';
+  const PASSWORD = '    textbox "Password" [0a1b2c3d-5] protected filled';
+  const FORGOT = '    text "Forgot your password?"';
+  const HELP = '  link "Help" [0a1b2c3d-7] href="https://example.com/help"';
+
+  it("finds a name, a field value, a link address and a text, ignoring case", () => {
+    const cases: [string, string[]][] = [
+      ["EMAIL", [MAIN, FORM, EMAIL]],
+      ["me@example.COM", [MAIN, FORM, EMAIL]],
+      ["/HELP", [MAIN, HELP]],
+      ["your password?", [MAIN, FORM, FORGOT]],
+    ];
+    for (const [find, lines] of cases) {
+      assert.deepEqual(
+        search(find, undefined, form),
+        { tree: lines.join("\n"), truncated: false, found: { shown: 1, matches: 1, searched: 8 } },
+        find,
+      );
+    }
+  });
+
+  it("collapses and trims whitespace in find, as in the text the tree shows", () => {
+    assert.equal(
+      search("  FORGOT \n YOUR\u0085 ", undefined, form).tree,
+      [MAIN, FORM, FORGOT].join("\n"),
+    );
+  });
+
+  it("writes each ancestor once and leaves out siblings and what a match contains", () => {
+    // "o" is in a value, a name, a text and a link address, and in no line of main or the form.
+    assert.deepEqual(search("o", undefined, form), {
+      tree: [MAIN, FORM, EMAIL, PASSWORD, FORGOT, HELP].join("\n"),
+      truncated: false,
+      found: { shown: 4, matches: 4, searched: 8 },
+    });
+    assert.deepEqual(search("sign in", undefined, form), {
+      tree: [MAIN, '  heading "Sign in" [0a1b2c3d-2] level=2', FORM].join("\n"),
+      truncated: false,
+      found: { shown: 2, matches: 2, searched: 8 },
+    });
+  });
+
+  it("writes a match that is an ancestor of a later match once", () => {
+    const lines: Line[] = [
+      { level: 0, role: "list", name: "Items" },
+      { level: 1, role: "listitem", name: "Item 1" },
+      { level: 2, role: "link", name: "Item 1 details" },
+    ];
+    assert.deepEqual(search("item", undefined, lines), {
+      tree: 'list "Items"\n  listitem "Item 1"\n    link "Item 1 details"',
+      truncated: false,
+      found: { shown: 3, matches: 3, searched: 3 },
+    });
+  });
+
+  it("keeps only lines of the role given, compared cleaned and in lower case", () => {
+    assert.deepEqual(search("sign in", " HEADING\n", form), {
+      tree: [MAIN, '  heading "Sign in" [0a1b2c3d-2] level=2'].join("\n"),
+      truncated: false,
+      found: { shown: 1, matches: 1, searched: 8 },
+    });
+    assert.equal(search("sign in", "form", form).tree, [MAIN, FORM].join("\n"));
+    assert.deepEqual(search("email", "checkbox", form), {
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 8 },
+    });
+    assert.equal(search("in", "foo", form).found?.matches, 0);
+  });
+
+  it("never matches a protected field's value, whatever the line holds", () => {
+    const secret = Object.assign({ protected: true as const, filled: true }, { value: "hunter2" });
+    const lines: Line[] = [
+      { level: 0, role: "textbox", name: "Password", states: { field: secret } },
+      {
+        level: 0,
+        role: "textbox",
+        name: "Empty",
+        states: { field: { protected: true, filled: false } },
+      },
+    ];
+    for (const find of ["hunter2", "HUNTER", "protected", "filled", "true"]) {
+      assert.deepEqual(search(find, undefined, lines).found, { shown: 0, matches: 0, searched: 2 });
+    }
+    assert.equal(search("password", undefined, lines).found?.matches, 1);
+  });
+
+  it("never matches role words, state words or refs", () => {
+    const lines: Line[] = [
+      ...form,
+      { level: 0, role: "button", ref: "0a1b2c3d-8", states: { file: true } },
+      { level: 0, role: "iframe", name: "", ref: "0a1b2c3d-9", states: { frame: true } },
+      {
+        level: 0,
+        role: "button",
+        name: "Go",
+        ref: "0a1b2c3d-10",
+        states: { pressed: true, expanded: true, disabled: true, selected: true },
+      },
+    ];
+    const words = [
+      "main",
+      "textbox",
+      "button",
+      "iframe",
+      "checked",
+      "level=2",
+      "level",
+      "required",
+      "protected",
+      "filled",
+      "file field",
+      "frame content not read",
+      "pressed",
+      "expanded=true",
+      "disabled",
+      "selected",
+      "value=",
+      "href=",
+      '"Go"',
+      "[0a1b2c3d-10]",
+      "0a1b2c3d",
+    ];
+    for (const find of words) {
+      assert.deepEqual(
+        search(find, undefined, lines).found,
+        { shown: 0, matches: 0, searched: 11 },
+        find,
+      );
+    }
+  });
+
+  it("matches only the text a line shows before its cut", () => {
+    const long = `${"a".repeat(MAX_FIELD_CHARS - 5)}needle and more`;
+    const lines: Line[] = [
+      { level: 0, role: "link", name: long },
+      { level: 0, role: "textbox", name: "Name", states: { field: { value: long } } },
+      { level: 0, role: "link", name: "Name", states: { href: long } },
+    ];
+    for (const line of lines) {
+      assert.equal(search("needl", undefined, [line]).found?.matches, 1, JSON.stringify(line));
+      assert.equal(search("needle", undefined, [line]).found?.matches, 0, JSON.stringify(line));
+      // The cut mark is shown between the quotes, so text copied with it matches.
+      assert.equal(search("NEEDL…", undefined, [line]).found?.matches, 1, JSON.stringify(line));
+    }
+    assert.equal(search("Name…", undefined, lines).found?.matches, 0);
+  });
+
+  it("finds a text ending in a capital sigma inside a longer word", () => {
+    const lines: Line[] = [
+      { level: 0, role: "link", name: "ΟΔΟΣΤΡΩΜΑ" },
+      { level: 0, role: "link", name: "οδος" },
+    ];
+    assert.equal(search("ΟΔΟΣ", undefined, lines).found?.matches, 2);
+    assert.equal(search("οδοσ", undefined, lines).found?.matches, 2);
+    assert.equal(search("Σ", undefined, lines).found?.matches, 2);
+  });
+
+  it("follows levels that jump by more than one", () => {
+    const lines: Line[] = [
+      { level: 0, role: "main" },
+      { level: 3, role: "link", name: "A" },
+      { level: 1, role: "list" },
+      { level: 2, role: "listitem" },
+      { level: 4, role: "text", name: "B" },
+      { level: 2, role: "link", name: "C" },
+    ];
+    assert.equal(search("a", undefined, lines).tree, 'main\n      link "A"');
+    assert.equal(
+      search("b", undefined, lines).tree,
+      'main\n  list\n    listitem\n        text "B"',
+    );
+    assert.equal(search("c", undefined, lines).tree, 'main\n  list\n    link "C"');
+  });
+
+  it("shows the first 20 matches and counts the rest", () => {
+    const lines: Line[] = [{ level: 0, role: "list" }];
+    for (let index = 1; index <= 30; index += 1) {
+      lines.push({ level: 1, role: "listitem", name: `Item ${index}` });
+    }
+    const shown = lines.slice(0, 21).map(formatLine);
+    assert.deepEqual(search("item", undefined, lines), {
+      tree: shown.join("\n"),
+      truncated: false,
+      found: { shown: 20, matches: 30, searched: 31 },
+    });
+  });
+
+  it("takes every line and stays open once the tree is full, counting on", () => {
+    const finder = createLineFinder("item", undefined, 30);
+    const lines: Line[] = [{ level: 0, role: "list" }];
+    for (let index = 1; index <= 5; index += 1) {
+      lines.push({ level: 1, role: "listitem", name: `Item 0${index}` });
+    }
+    for (const line of lines) {
+      assert.equal(finder.add(line), true);
+      assert.equal(finder.full, false);
+    }
+    assert.deepEqual(finder.result(), {
+      tree: 'list\n  listitem "Item 01"',
+      truncated: true,
+      found: { shown: 1, matches: 5, searched: 6 },
+    });
+  });
+
+  it("counts no match as shown when its ancestors fill the tree", () => {
+    const lines: Line[] = [
+      { level: 0, role: "main", name: "A long landmark name" },
+      { level: 1, role: "link", name: "Next" },
+    ];
+    assert.deepEqual(search("next", undefined, lines, 10), {
+      tree: 'main "A lo',
+      truncated: true,
+      found: { shown: 0, matches: 1, searched: 2 },
+    });
+    assert.deepEqual(search("landmark", undefined, lines, 10), {
+      tree: 'main "A lo',
+      truncated: true,
+      found: { shown: 0, matches: 1, searched: 2 },
+    });
+  });
+
+  it("marks the last line given as cut, at once when it was written", () => {
+    const finder = createLineFinder("item", undefined);
+    finder.add({ level: 0, role: "list" });
+    finder.add({ level: 1, role: "listitem", name: "Item 1" });
+    finder.markCut();
+    finder.add({ level: 1, role: "listitem", name: "Item 2" });
+    assert.equal(finder.result().tree, 'list\n  listitem "Item 1" …\n  listitem "Item 2"');
+  });
+
+  it("marks a line not yet written as cut when it is written later", () => {
+    const finder = createLineFinder("item", undefined);
+    finder.add({ level: 0, role: "list" });
+    finder.markCut();
+    finder.add({ level: 1, role: "listitem", name: "Item 1" });
+    assert.equal(finder.result().tree, 'list …\n  listitem "Item 1"');
+  });
+
+  it("does nothing for a cut mark before the first line", () => {
+    const finder = createLineFinder("item", undefined);
+    finder.markCut();
+    assert.deepEqual(finder.result(), {
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 0 },
+    });
+    finder.add({ level: 0, role: "listitem", name: "Item 1" });
+    assert.equal(finder.result().tree, 'listitem "Item 1"');
+  });
+
+  it("caps the tree at READ_PAGE_MAX_CHARS by default", () => {
+    const fits = { level: 0, role: "x".repeat(READ_PAGE_MAX_CHARS - 4), name: "a" };
+    assert.equal(formatLine(fits).length, READ_PAGE_MAX_CHARS);
+    const next = { level: 0, role: "y", name: "a" };
+    const full = search("a", undefined, [fits, next]);
+    assert.equal(full.tree, formatLine(fits));
+    assert.equal(full.truncated, true);
+    assert.deepEqual(full.found, { shown: 1, matches: 2, searched: 2 });
+  });
+});
+
+function search(
+  find: string,
+  role: string | undefined,
+  lines: readonly Line[],
+  max?: number,
+): ReturnType<ReturnType<typeof createLineFinder>["result"]> {
+  const finder = createLineFinder(find, role, max);
+  for (const line of lines) finder.add(line);
+  return finder.result();
+}
 
 describe("createTextBuffer", () => {
   it("collapses whitespace across pieces and trims", () => {

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The README describes Claude Code settings that can make browser tasks faster: allowing
   Foxleash's tools without a prompt, a lower effort level and fast mode.
+- `read_page` can return only the lines that contain a text (`find`), optionally only those of
+  one role (`role`), each after the lines of the elements it is in, and says how many more
+  match. The agent finds an element on a large page without reading the whole tree, also past
+  the point where a full read is cut.
 
 ### Changed
 

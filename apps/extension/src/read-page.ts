@@ -1,3 +1,4 @@
+import type { FoundLines } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import {
   detailsSummaryOf,
@@ -8,18 +9,19 @@ import {
 } from "./flat-tree.ts";
 import { PageError } from "./page-messages.ts";
 import {
+  createLineFinder,
   createTextBuffer,
-  createTreeText,
+  createTreeLines,
   explicitRole,
-  formatLine,
   INTERACTIVE_ROLES,
   isProtectedField,
   LANDMARK_ROLES,
+  type Line,
   type LineStates,
   NAME_FROM_CONTENT_ROLES,
   type ReadPageOptions,
   readPageOptions,
-  type TreeText,
+  type TreeLines,
   textLine,
 } from "./page-tree.ts";
 
@@ -115,10 +117,11 @@ const SECTIONING = "article, aside, main, nav, section";
 export function readPage(
   params: Record<string, unknown>,
   page: PageMemory,
-): { tree: string; truncated: boolean } {
+): { tree: string; truncated: boolean; found?: FoundLines } {
   const options = readPageOptions(params);
   if (typeof options === "string") throw new PageError("invalid_params", options);
-  const tree = createTreeText();
+  const tree =
+    options.find === undefined ? createTreeLines() : createLineFinder(options.find, options.role);
   if (options.ref === undefined) {
     const start = document.body ?? document.documentElement;
     if (start !== null) {
@@ -137,15 +140,13 @@ export function readPage(
   const rootState = rootTextState(element, getComputedStyle(element));
   const { name } = nameOf(element, role, page, rootState);
   const focused = focusedElement();
-  tree.add(
-    formatLine({
-      level: 0,
-      role,
-      name,
-      ref: page.refs.refFor(element),
-      states: statesOf(element, role, focused, page, rootState),
-    }),
-  );
+  tree.add({
+    level: 0,
+    role,
+    name,
+    ref: page.refs.refFor(element),
+    states: statesOf(element, role, focused, page, rootState),
+  });
   // Nothing below a root without a box is shown, but an option in a select would get a line.
   if (!withinHidden(element) && rootState.boxed) {
     walkTree(element, role, { options, page, tree, focused });
@@ -175,7 +176,7 @@ export function passwordFieldsRevealed(page: Pick<PageMemory, "passwordFields">)
 interface TreeContext {
   options: ReadPageOptions;
   page: PageMemory;
-  tree: TreeText;
+  tree: TreeLines;
   focused: Element | null;
 }
 
@@ -264,15 +265,13 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
           if (!flushPending()) return false;
           const named = nameOf(element, role, page, state);
           const level = top().childLevel;
-          const placed = place(level, top().owner, () =>
-            formatLine({
-              level,
-              role,
-              name: named.name,
-              ref: page.refs.refFor(element),
-              states: statesOf(element, role, focused, page, state),
-            }),
-          );
+          const placed = place(level, top().owner, () => ({
+            level,
+            role,
+            name: named.name,
+            ref: page.refs.refFor(element),
+            states: statesOf(element, role, focused, page, state),
+          }));
           if (!placed) return false;
           scope.lineLevel = level;
           scope.childLevel = level + 1;
@@ -335,15 +334,13 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
       const landmark = scope.pending;
       if (landmark !== undefined) {
         const at = level;
-        const placed = place(at, owner, () =>
-          formatLine({
-            level: at,
-            role: landmark.role,
-            name: landmark.name,
-            ref: page.refs.refFor(scope.element),
-            states: statesOf(scope.element, landmark.role, focused, page),
-          }),
-        );
+        const placed = place(at, owner, () => ({
+          level: at,
+          role: landmark.role,
+          name: landmark.name,
+          ref: page.refs.refFor(scope.element),
+          states: statesOf(scope.element, landmark.role, focused, page),
+        }));
         if (!placed) {
           // Those placed before the cut are pending no more.
           pending.splice(0, pending.indexOf(scope));
@@ -367,7 +364,7 @@ function walkTree(root: Element, rootRole: string | undefined, context: TreeCont
    * Adds a line at `level`, or, below the depth asked for, ends the line of `owner` with the
    * cut mark and skips the rest of what it contains.
    */
-  function place(level: number, owner: Scope | undefined, line: () => string): boolean {
+  function place(level: number, owner: Scope | undefined, line: () => Line): boolean {
     if (options.depth !== undefined && level >= options.depth) {
       tree.markCut();
       cutAt = owner;
@@ -732,14 +729,14 @@ function isFrame(element: Element): boolean {
   return element.localName === "iframe" || element.localName === "frame";
 }
 
-function frameLine(element: Element, level: number, page: PageMemory): string {
-  return formatLine({
+function frameLine(element: Element, level: number, page: PageMemory): Line {
+  return {
     level,
     role: "iframe",
     name: element.getAttribute("title") ?? "",
     ref: page.refs.refFor(element),
     states: { frame: true },
-  });
+  };
 }
 
 /**

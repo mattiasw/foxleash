@@ -1,4 +1,4 @@
-import { READ_PAGE_MAX_CHARS } from "@foxleash/protocol";
+import { type FoundLines, READ_PAGE_MAX_CHARS, READ_PAGE_MAX_MATCHES } from "@foxleash/protocol";
 import { capText, ownField } from "./page-messages.ts";
 
 export { READ_PAGE_MAX_CHARS };
@@ -6,7 +6,13 @@ export { READ_PAGE_MAX_CHARS };
 /** The longest name, value, href or text a line holds, before quoting and the cut mark. */
 export const MAX_FIELD_CHARS = 200;
 
-export type ReadPageOptions = { filter: "all" | "interactive"; depth?: number; ref?: string };
+export type ReadPageOptions = {
+  filter: "all" | "interactive";
+  depth?: number;
+  ref?: string;
+  find?: string;
+  role?: string;
+};
 
 /** The states a line can carry; only `value` and `href` hold page text. */
 export interface LineStates {
@@ -45,6 +51,16 @@ export interface TreeText {
   /** True once nothing more can be added. */
   readonly full: boolean;
   result(): { tree: string; truncated: boolean };
+}
+
+export interface TreeLines {
+  /** Takes a line; false when it was not placed, and the walker skips what the element contains. */
+  add(line: Line): boolean;
+  /** Ends the last line given with ` …`, as TreeText's markCut does. */
+  markCut(): void;
+  /** True once the walk may stop. */
+  readonly full: boolean;
+  result(): { tree: string; truncated: boolean; found?: FoundLines };
 }
 
 export interface TextBuffer {
@@ -229,6 +245,21 @@ export function readPageOptions(params: Record<string, unknown>): ReadPageOption
     if (typeof ref !== "string") return "read_page needs ref to be a string.";
     options.ref = ref;
   }
+  const find = ownField(params, "find");
+  if (find !== undefined) {
+    if (typeof find !== "string" || clean(find) === "") {
+      return "read_page needs find to be text that is not only spaces.";
+    }
+    options.find = find;
+  }
+  const role = ownField(params, "role");
+  if (role !== undefined) {
+    if (typeof role !== "string" || clean(role) === "") {
+      return "read_page needs role to be a role name, such as link or heading.";
+    }
+    if (options.find === undefined) return "read_page takes role only together with find.";
+    options.role = role;
+  }
   return options;
 }
 
@@ -260,9 +291,9 @@ export function formatLine({ level, role, name, ref, states = {} }: Line): strin
 }
 
 /** A `text` line, or undefined when the text is only whitespace. */
-export function textLine(level: number, text: string): string | undefined {
+export function textLine(level: number, text: string): Line | undefined {
   if (clean(text) === "") return undefined;
-  return `${"  ".repeat(level)}text ${quote(text)}`;
+  return { level, role: "text", name: text };
 }
 
 /**
@@ -270,12 +301,99 @@ export function textLine(level: number, text: string): string | undefined {
  * MAX_FIELD_CHARS, ending with `…` when cut, so it can neither end the line nor close the quote.
  */
 export function quote(text: string): string {
+  return JSON.stringify(shownText(text));
+}
+
+/** What a line shows of page text between its quotes, before escaping. */
+function shownText(text: string): string {
   const cut = capText(clean(text), MAX_FIELD_CHARS);
-  return JSON.stringify(cut.truncated ? `${cut.text}…` : cut.text);
+  return cut.truncated ? `${cut.text}…` : cut.text;
 }
 
 export function clean(text: string): string {
   return text.replace(WHITESPACE, " ").trim();
+}
+
+/** The lines of a full read, formatted into a TreeText. */
+export function createTreeLines(max: number = READ_PAGE_MAX_CHARS): TreeLines {
+  const text = createTreeText(max);
+  return {
+    add: (line) => text.add(formatLine(line)),
+    markCut: () => text.markCut(),
+    get full() {
+      return text.full;
+    },
+    result: () => text.result(),
+  };
+}
+
+/**
+ * The lines of a read with find: each of the first READ_PAGE_MAX_MATCHES matching lines after its
+ * ancestor lines, each line written once. Takes every line, so the walk reaches the end of the
+ * page and the counts cover all of it.
+ */
+export function createLineFinder(
+  find: string,
+  role: string | undefined,
+  max: number = READ_PAGE_MAX_CHARS,
+): TreeLines {
+  const query = caseless(clean(find));
+  const wanted = role === undefined ? undefined : clean(role).toLowerCase();
+  const text = createTreeText(max);
+  // The ancestor chain of the last line given, outermost first, ending with that line.
+  const chain: { line: Line; written: boolean; cut: boolean }[] = [];
+  let shown = 0;
+  let matches = 0;
+  let searched = 0;
+
+  return {
+    add,
+    markCut,
+    full: false,
+    result: () => ({ ...text.result(), found: { shown, matches, searched } }),
+  };
+
+  function add(line: Line): boolean {
+    while ((chain.at(-1)?.line.level ?? -1) >= line.level) chain.pop();
+    const entry = { line, written: false, cut: false };
+    chain.push(entry);
+    searched += 1;
+    if (!lineMatches(line, query, wanted)) return true;
+    matches += 1;
+    if (matches > READ_PAGE_MAX_MATCHES || text.full) return true;
+    for (const each of chain) {
+      if (each.written) continue;
+      each.written = text.add(each.cut ? `${formatLine(each.line)} …` : formatLine(each.line));
+      if (!each.written) break;
+    }
+    if (entry.written) shown += 1;
+    return true;
+  }
+
+  function markCut(): void {
+    const last = chain.at(-1);
+    if (last === undefined) return;
+    if (last.written) text.markCut();
+    else last.cut = true;
+  }
+}
+
+/**
+ * Whether the text the line shows as its name, unprotected field value or link address contains
+ * `query`, and the line has `role` when one is given. Role words, states and refs never match.
+ */
+function lineMatches(line: Line, query: string, role: string | undefined): boolean {
+  if (role !== undefined && line.role !== role) return false;
+  const field = line.states?.field;
+  const value = field === undefined || "protected" in field ? undefined : field.value;
+  return [line.name, value, line.states?.href].some(
+    (text) => text !== undefined && caseless(shownText(text)).includes(query),
+  );
+}
+
+/** Text in lower case, with a final sigma as any other, since lowering it depends on what follows. */
+function caseless(text: string): string {
+  return text.toLowerCase().replaceAll("ς", "σ");
 }
 
 /** Lines joined by newlines, never longer than `max`, cut only between whole lines. */

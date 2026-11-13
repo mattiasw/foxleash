@@ -54,6 +54,18 @@ export interface ProbeResult {
 
 /** The longest tree read_page returns, in UTF-16 units. */
 export const READ_PAGE_MAX_CHARS = 50_000;
+/** The most matching lines a read_page with find shows. */
+export const READ_PAGE_MAX_MATCHES = 20;
+
+/**
+ * What a read_page with find counted: the matching lines in the tree, all matching lines, and all
+ * lines searched.
+ */
+export interface FoundLines {
+  shown: number;
+  matches: number;
+  searched: number;
+}
 
 /** get_page_text's cut when the request gives none. */
 export const DEFAULT_PAGE_TEXT_CHARS = 50_000;
@@ -248,8 +260,16 @@ export interface Methods {
     result: { width: number; height: number };
   };
   read_page: {
-    params: { tabId: number; filter?: "all" | "interactive"; depth?: number; ref?: string };
-    result: { tree: string; truncated: boolean };
+    params: {
+      tabId: number;
+      filter?: "all" | "interactive";
+      depth?: number;
+      ref?: string;
+      find?: string;
+      role?: string;
+    };
+    /** `found` is there exactly when `find` was given. */
+    result: { tree: string; truncated: boolean; found?: FoundLines };
   };
   get_page_text: {
     params: { tabId: number; maxChars?: number; offset?: number };
@@ -390,4 +410,35 @@ export function fillChars(fields: readonly { value: FillValue }[]): number {
 
 function stringChars(text: string): number {
   return Math.max(1, text.length);
+}
+
+/**
+ * The counts of a read_page with find, checked against each other and against the tree they came
+ * with, as a fresh object; undefined when the page could not have written them.
+ */
+export function foundLinesOf(
+  value: unknown,
+  tree: string,
+  truncated: boolean,
+): FoundLines | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const shown = countField(value, "shown");
+  const matches = countField(value, "matches");
+  const searched = countField(value, "searched");
+  if (shown === undefined || matches === undefined || searched === undefined) return undefined;
+  if (shown > matches || matches > searched || shown > READ_PAGE_MAX_MATCHES) return undefined;
+  // The page writes nothing without a match, and every match up to the cap until the tree is full.
+  if ((matches === 0) !== (tree === "")) return undefined;
+  if (truncated ? matches === 0 : shown < Math.min(matches, READ_PAGE_MAX_MATCHES)) {
+    return undefined;
+  }
+  // Each line written was searched, and each match shown is a line of its own.
+  const lines = tree === "" ? 0 : tree.split("\n").length;
+  if (shown > lines || lines > searched) return undefined;
+  return { shown, matches, searched };
+}
+
+function countField(value: object, key: string): number | undefined {
+  const field = Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
+  return typeof field === "number" && Number.isSafeInteger(field) && field >= 0 ? field : undefined;
 }

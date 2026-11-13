@@ -157,9 +157,24 @@ describe("tools", () => {
       "50,000 characters",
       "A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it.",
       "read_page never asks",
+      "read less with find (only the lines that contain a text), ref (one element and what it contains)",
+      "With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most 20, with the number of other lines that match, or the number of lines searched when none does.",
+      'in find, write a quote as " and a backslash as \\, not \\" or \\\\.',
+      "Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree.",
+      "A protected field's value is never matched.",
+      "role, given with find, keeps only matching lines of that role, such as link, button, heading or text.",
+      "find searches the whole page, past the 50,000-character cut too, within what ref, filter and depth keep.",
     ]) {
       assert.ok(readPage?.description?.includes(words), words);
     }
+    assert.deepEqual(Object.keys(readPage?.inputSchema.properties ?? {}), [
+      "tabId",
+      "filter",
+      "depth",
+      "ref",
+      "find",
+      "role",
+    ]);
     const getPageText = tools.find((tool) => tool.name === "get_page_text");
     assert.equal(getPageText?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(getPageText?.inputSchema.required, ["tabId"]);
@@ -814,14 +829,22 @@ describe("tools", () => {
       name: "read_page",
       arguments: { tabId: 0, filter: "interactive", depth: 1, ref: "0a1b2c3d-4" },
     });
+    await client.callTool({
+      name: "read_page",
+      arguments: { tabId: 1, find: " Link ", role: "link" },
+    });
+    await client.callTool({ name: "read_page", arguments: { tabId: 1, find: "a" } });
     assert.deepEqual(calls, [
       { method: "read_page", params: { tabId: 2 } },
       {
         method: "read_page",
         params: { tabId: 0, filter: "interactive", depth: 1, ref: "0a1b2c3d-4" },
       },
+      { method: "read_page", params: { tabId: 1, find: " Link ", role: "link" } },
+      { method: "read_page", params: { tabId: 1, find: "a" } },
     ]);
     assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
+    assert.deepEqual(Object.keys(record(calls[3]?.params)), ["tabId", "find"]);
   });
 
   it("refuses read_page arguments outside the schema", LIMIT, async () => {
@@ -837,6 +860,13 @@ describe("tools", () => {
         'Invalid option: expected one of "all"|"interactive" at filter',
       ],
       [{ tabId: 1, ref: 4 }, "Invalid input: expected string, received number at ref"],
+      [{ tabId: 1, find: "" }, "Too small: expected string to have >=1 characters at find"],
+      [{ tabId: 1, find: 3 }, "Invalid input: expected string, received number at find"],
+      [{ tabId: 1, find: "a", role: 4 }, "Invalid input: expected string, received number at role"],
+      [
+        { tabId: 1, find: "a", role: "" },
+        "Too small: expected string to have >=1 characters at role",
+      ],
     ];
     for (const [args, reason] of cases) {
       const output = await client.callTool({ name: "read_page", arguments: args });
@@ -894,6 +924,137 @@ describe("tools", () => {
     }
   });
 
+  it("answers a find that matches no line with only Foxleash's count", LIMIT, async () => {
+    const cases: [number, string][] = [
+      [4001, "No line matches. Foxleash searched 4,001 lines."],
+      [1, "No line matches. Foxleash searched 1 line."],
+      [0, "No line matches. Foxleash searched 0 lines."],
+    ];
+    for (const [searched, sentence] of cases) {
+      const { client } = await start(() => ({
+        tree: "",
+        truncated: false,
+        found: { shown: 0, matches: 0, searched },
+      }));
+      const output = await client.callTool({
+        name: "read_page",
+        arguments: { tabId: 1, find: "nowhere", role: "link" },
+      });
+      assert.deepEqual(output, { content: [{ type: "text", text: sentence }] });
+    }
+  });
+
+  it("adds after the frame how many matching lines are not shown", LIMIT, async () => {
+    const links = Array.from({ length: 20 }, (_, index) => `  link "Link ${index}" [0a1b2c3d-2]`);
+    const tree = ["list [0a1b2c3d-1]", ...links].join("\n");
+    const cases: [Record<string, unknown>, Record<string, unknown>, string[]][] = [
+      [{ shown: 1, matches: 1, searched: 30 }, { find: "link" }, []],
+      [{ shown: 20, matches: 20, searched: 3000 }, { find: "link" }, []],
+      [
+        { shown: 20, matches: 21, searched: 30 },
+        { find: "link" },
+        ["1 matching line is not shown. Narrow find, add role, or read one element with ref."],
+      ],
+      [
+        { shown: 20, matches: 1020, searched: 4001 },
+        { find: "link" },
+        [
+          "1,000 matching lines are not shown. Narrow find, add role, or read one element with ref.",
+        ],
+      ],
+      [
+        { shown: 20, matches: 990, searched: 4001 },
+        { find: "link", role: "link" },
+        ["970 matching lines are not shown. Narrow find, or read one element with ref."],
+      ],
+    ];
+    for (const [found, args, notes] of cases) {
+      const { client } = await start(() => ({ tree, truncated: false, found }));
+      const output = await client.callTool({ name: "read_page", arguments: { tabId: 1, ...args } });
+      assert.equal(output.isError, undefined);
+      const content = record(output).content;
+      assert.ok(Array.isArray(content), JSON.stringify(found));
+      assert.equal(unframed({ content: [content[0]] }), tree);
+      assert.deepEqual(
+        content.slice(1),
+        notes.map((note) => ({ type: "text", text: note })),
+        JSON.stringify(found),
+      );
+    }
+  });
+
+  it(
+    "notes a cut tree before the matching lines not shown, also with none shown",
+    LIMIT,
+    async () => {
+      const { client } = await start(() => ({
+        tree: "main",
+        truncated: true,
+        found: { shown: 0, matches: 3, searched: 9000 },
+      }));
+      const output = await client.callTool({
+        name: "read_page",
+        arguments: { tabId: 1, find: "x" },
+      });
+      const content = record(output).content;
+      assert.ok(Array.isArray(content) && content.length === 3);
+      assert.equal(unframed({ content: [content[0]] }), "main");
+      assert.deepEqual(content.slice(1), [
+        {
+          type: "text",
+          text: "The page tree was cut at 50,000 characters. Read a part of it with ref, or use filter interactive or a smaller depth.",
+        },
+        {
+          type: "text",
+          text: "3 matching lines are not shown. Narrow find, add role, or read one element with ref.",
+        },
+      ]);
+    },
+  );
+
+  it("refuses with find a result whose counts it cannot read", LIMIT, async () => {
+    const results: unknown[] = [
+      { tree: "main", truncated: false },
+      { tree: "main", truncated: false, found: "1" },
+      { tree: "main", truncated: false, found: { shown: 1, matches: 1 } },
+      { tree: "main", truncated: false, found: { shown: 2, matches: 1, searched: 1 } },
+      { tree: "main", truncated: false, found: { shown: 0, matches: 0, searched: 3 } },
+      { tree: "", truncated: false, found: { shown: 3, matches: 3, searched: 3 } },
+      { tree: "main", truncated: false, found: { shown: 0, matches: 9, searched: 9 } },
+      JSON.parse(
+        '{"tree":"main","truncated":false,"__proto__":{"found":{"shown":1,"matches":1,"searched":1}}}',
+      ),
+    ];
+    for (const result of results) {
+      const { client } = await start(() => result);
+      const output = await client.callTool({
+        name: "read_page",
+        arguments: { tabId: 1, find: "main" },
+      });
+      assert.deepEqual(
+        output,
+        {
+          content: [{ type: "text", text: "Firefox returned a page tree Foxleash cannot read." }],
+          isError: true,
+        },
+        JSON.stringify(result),
+      );
+    }
+  });
+
+  it("reads no counts without find", LIMIT, async () => {
+    for (const found of [
+      { shown: 0, matches: 0, searched: 5 },
+      { shown: 1, matches: 9, searched: 9 },
+      "x",
+    ]) {
+      const { client } = await start(() => ({ tree: "main", truncated: false, found }));
+      const output = await client.callTool({ name: "read_page", arguments: { tabId: 1 } });
+      assert.equal(output.isError, undefined);
+      assert.equal(unframed(output), "main");
+    }
+  });
+
   it("refuses a read_page tree over 8 MiB as JSON text", LIMIT, async () => {
     const overhead = Buffer.byteLength(JSON.stringify(untrusted("", () => SOME_ID)));
     const page = { tree: "a".repeat(MAX_RESULT_BYTES - overhead), truncated: false };
@@ -936,6 +1097,20 @@ describe("tools", () => {
       assert.ok(Array.isArray(content) && content.length === 2);
       const measured = pretty(content).length;
       assert.ok(measured > CLAUDE_CODE_DEFAULT && measured <= declared, String(measured));
+      const most = Number.MAX_SAFE_INTEGER;
+      const found = await start(() => ({
+        tree: '"'.repeat(READ_PAGE_MAX_CHARS),
+        truncated: true,
+        found: { shown: 0, matches: most, searched: most },
+      }));
+      const finding = await found.client.callTool({
+        name: "read_page",
+        arguments: { tabId: 1, find: "x" },
+      });
+      const notes = record(finding).content;
+      assert.ok(Array.isArray(notes) && notes.length === 3);
+      const longest = pretty(notes).length;
+      assert.ok(longest > measured && longest <= declared, String(longest));
     },
   );
 

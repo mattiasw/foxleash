@@ -1,6 +1,7 @@
 import {
   DEFAULT_NETWORK_LIMIT,
   DEFAULT_WAIT_FOR_MS,
+  foundLinesOf,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
   MAX_WAIT_FOR_MS,
@@ -682,17 +683,25 @@ export function createHandlers<Handle>({
     // The reply comes from the page's content process: own fields only, and the cap again.
     const tree = isRecord(reply) ? ownField(reply, "tree") : undefined;
     const truncated = isRecord(reply) ? ownField(reply, "truncated") : undefined;
+    const unreadable = new ToolError(
+      "page_error",
+      `Foxleash could not complete the request in the page in tab ${tabId}.`,
+    );
     if (
       typeof tree !== "string" ||
       tree.length > READ_PAGE_MAX_CHARS ||
       typeof truncated !== "boolean"
     ) {
-      throw new ToolError(
-        "page_error",
-        `Foxleash could not complete the request in the page in tab ${tabId}.`,
-      );
+      throw unreadable;
     }
-    return { tree, truncated };
+    if (options.find === undefined) return { tree, truncated };
+    const found = foundLinesOf(
+      isRecord(reply) ? ownField(reply, "found") : undefined,
+      tree,
+      truncated,
+    );
+    if (found === undefined) throw unreadable;
+    return { tree, truncated, found };
   }
 
   /** Reads a page's text through the content script, which runs only after the site gate. */

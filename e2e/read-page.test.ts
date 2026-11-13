@@ -163,6 +163,37 @@ describe("read_page in real Firefox", () => {
     ]);
   });
 
+  test("find returns a line whose field value holds the text, after its ancestors", async () => {
+    const { tree, texts } = await read(formTab, { find: "ME@example.com" });
+    assert.equal(
+      withoutRefs(tree),
+      [
+        "main [*]",
+        '  form "Sign in" [*]',
+        '    textbox "Email" [*] required value="me@example.com"',
+      ].join("\n"),
+    );
+    assert.equal(texts.length, 1, texts.join("\n"));
+  });
+
+  test("find never matches what a protected field holds", async () => {
+    const secrets = Object.values(READ_SECRETS);
+    for (const secret of secrets) {
+      const text = await noMatch(formTab, { find: secret });
+      assert.match(text, /^No line matches\. Foxleash searched [0-9,]+ lines\.$/);
+      assertNoSecrets([text], secrets);
+    }
+  });
+
+  test("find with depth ends a matching line whose contents depth cut with the cut mark", async () => {
+    const { tree, texts } = await read(formTab, { find: "Sign in", depth: 2 });
+    assert.equal(
+      withoutRefs(tree),
+      ["main [*]", '  heading "Sign in" [*] level=2', '  form "Sign in" [*] …'].join("\n"),
+    );
+    assert.equal(texts.length, 1, texts.join("\n"));
+  });
+
   test("a password field a click by coordinates turns into text before any read stays protected", async () => {
     const tabId = await open("/read-form?fresh=1", TITLES.readForm);
     const context = await contextOf(fixtures.url("/read-form?fresh=1"));
@@ -459,6 +490,76 @@ describe("read_page in real Firefox", () => {
     const shallow = await read(tabId, { depth: 1 });
     assert.equal(withoutRefs(shallow.tree), "list [*] …");
     assert.deepEqual(shallow.texts.length, 1);
+  });
+
+  test("find returns the matching lines of a large page with their ancestors", async () => {
+    const tabId = await open("/read-large", TITLES.readLarge);
+    const href = fixtures.url("/a");
+    const link = (number: number) =>
+      `    link "Link ${String(number).padStart(4, "0")}" [*] href="${href}"`;
+
+    // Past the point where a full read is cut.
+    const last = await read(tabId, { find: "Link 2000" });
+    assert.equal(withoutRefs(last.tree), ["list [*]", "  listitem [*]", link(2000)].join("\n"));
+    assert.equal(last.texts.length, 1, last.texts.join("\n"));
+
+    const thousands = await read(tabId, { find: "link 1", role: "link" });
+    const links = Array.from({ length: 10 }, (_, index) => [
+      "  listitem [*]",
+      link(1000 + 100 * index),
+    ]);
+    assert.equal(withoutRefs(thousands.tree), ["list [*]", ...links.flat()].join("\n"));
+    assert.equal(thousands.texts.length, 1, thousands.texts.join("\n"));
+
+    // 1001 to 1999 without the ten links: 990 text lines.
+    const items = await read(tabId, { find: "ITEM 1" });
+    const texts = Array.from({ length: 20 }, (_, index) => [
+      "  listitem [*]",
+      `    text "Item ${1001 + index} lorem ipsum dolor sit amet"`,
+    ]);
+    assert.equal(withoutRefs(items.tree), ["list [*]", ...texts.flat()].join("\n"));
+    assert.deepEqual(items.texts.slice(1), [
+      "970 matching lines are not shown. Narrow find, add role, or read one element with ref.",
+    ]);
+
+    const addresses = await read(tabId, { find: "/a", role: "link" });
+    const all = Array.from({ length: 20 }, (_, index) => [
+      "  listitem [*]",
+      link(100 * (index + 1)),
+    ]);
+    assert.equal(withoutRefs(addresses.tree), ["list [*]", ...all.flat()].join("\n"));
+    assert.equal(addresses.texts.length, 1, addresses.texts.join("\n"));
+
+    // The list, 2,000 list items, 1,980 text lines and 20 links.
+    assert.equal(
+      await noMatch(tabId, { find: "not on the page" }),
+      "No line matches. Foxleash searched 4,001 lines.",
+    );
+  });
+
+  test("find searches only what filter, depth and ref keep", async () => {
+    const tabId = await open("/read-large", TITLES.readLarge);
+    const href = fixtures.url("/a");
+    const interactive = await read(tabId, { filter: "interactive", find: "link 1" });
+    const links = Array.from(
+      { length: 10 },
+      (_, index) => `link "Link ${1000 + 100 * index}" [*] href="${href}"`,
+    );
+    assert.equal(withoutRefs(interactive.tree), links.join("\n"));
+
+    assert.equal(
+      await noMatch(tabId, { depth: 1, find: "Link 2000" }),
+      "No line matches. Foxleash searched 1 line.",
+    );
+
+    const last = await read(tabId, { find: "Link 2000" });
+    const ref = refOf(last.tree, "  listitem");
+    const item = await read(tabId, { ref, find: "Link" });
+    assert.equal(
+      withoutRefs(item.tree),
+      ["listitem [*]", `  link "Link 2000" [*] href="${href}"`].join("\n"),
+    );
+    assert.ok(item.tree.startsWith(`listitem [${ref}]`), item.tree);
   });
 
   test("an element keeps its ref across reads", async () => {
@@ -1298,6 +1399,15 @@ describe("read_page in real Firefox", () => {
     const tree = untrustedContent(result.text);
     assert.ok(tree !== undefined, `not one untrusted frame:\n${result.text}`);
     return { tree, texts: result.texts };
+  }
+
+  /** The one text of a read with find that matched no line, which is Foxleash's own. */
+  async function noMatch(tabId: number, args: Record<string, unknown>): Promise<string> {
+    const result = await harness.call(session, "read_page", { tabId, ...args });
+    assert.equal(result.isError, false, result.text);
+    assert.deepEqual(result.texts, [result.text]);
+    assert.equal(untrustedContent(result.text), undefined, result.text);
+    return result.text;
   }
 
   async function refused(tabId: number, args: Record<string, unknown> = {}): Promise<string> {

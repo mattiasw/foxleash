@@ -120,7 +120,11 @@ only for the page they came from. A file field's line is marked `file field`, so
 find it for `upload_file` even when the page gives it no label. Hidden elements are left out,
 and frames are noted but not read. The agent can read only the interactive elements
 (`filter: "interactive"`), fewer levels (`depth`) or one element and what it contains (`ref`).
-The tree is cut at 50,000 characters, and the agent is told when it was. `read_page` works
+The tree is cut at 50,000 characters, and the agent is told when it was. With `find`, the agent
+gets only the lines that contain a text, ignoring case, optionally only those of one role
+(`role`), each after the lines of the elements it is in: at most 20, and it is told how many
+more match, or how many lines were searched when none did. `find` searches the whole page, also
+past the 50,000-character cut, but never the value of a protected field. `read_page` works
 only on a tab showing a site you approved, and never asks.
 
 A read, an action or a screenshot made while the tab is loading another page, as right after a
