@@ -349,6 +349,11 @@ export interface Methods {
     params: { name: string };
     result: { asked: boolean; allowed: string[]; blocked: string[]; refused: string[] };
   };
+  /** Asks the user to allow the sites an agent named for the session; each list in the request's order. */
+  sites_request: {
+    params: { sites: string[] };
+    result: { asked: boolean; allowed: string[]; blocked: string[]; refused: string[] };
+  };
   /** Not an MCP tool: only `foxleash probe` calls it. */
   probe_input: { params: { tabId: number }; result: ProbeResult };
 }
@@ -389,6 +394,7 @@ export const METHOD_NAMES = [
   "recipe_list",
   "recipe_get",
   "recipe_run",
+  "sites_request",
   "probe_input",
 ] as const satisfies readonly MethodName[];
 

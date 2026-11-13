@@ -84,8 +84,9 @@ in memory until the session ends. The settings page is also where you edit the b
 and where you write, edit and delete recipes: a task's steps written down with the sites it
 uses, kept in Firefox on this computer. An agent can also read the recipes you saved, ask you
 to allow a saved recipe's sites for its session, and propose a recipe, which you read and save
-in Firefox. The settings page also has the setting "Open each agent session in its own window",
-off by default.
+in Firefox. Without a recipe, an agent can ask you on one page to allow the sites a task needs
+for its session. The settings page also has the setting "Open each agent session in its own
+window", off by default.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme,
 host and port), with no path, query or title. A local file shows only as `file:`.
@@ -286,9 +287,10 @@ steps. Foxleash opens a page in the session's tab group that shows them in field
 and saves the recipe only when you click Save there; Discard drops it. When you have a recipe
 with that name, the page shows your saved version and the changes to its steps. The call
 returns at once with the page's tab id and does not tell the agent whether you saved. While
-the page is open, the session cannot open another recipe page or ask you about a site, and
-cannot close the page's tab or load another page in it. After three recipe pages that you
-discarded or closed, Foxleash opens no more in that session. A page still open when the session
+the page is open, the session cannot open another recipe page or page asking for sites, or ask
+you about a site, and cannot close the page's tab or load another page in it. After three
+recipe pages or pages asking for sites that you discarded, refused or closed, Foxleash opens no
+more in that session. A page still open when the session
 ends stays open and can still save.
 
 The agent reads your saved recipes with `list_recipes`, which gives each one's name,
@@ -304,9 +306,23 @@ never always. Sites already allowed, on the blocklist or refused in the session 
 the blocklist and your earlier answers still win. The call waits up to 30 seconds for your
 answer and returns the sites now allowed, blocked and refused; when no site needs asking, it
 returns at once without a page. The page is a recipe page, so the rules above apply to it: one
-recipe page at a time, and none after three discarded, refused or closed without an answer.
-Like a site prompt, it no longer opens once the session has stopped asking after three refused
-or closed prompts. Sites outside the recipe are still asked one by one.
+recipe page or page asking for sites at a time, and none after three discarded, refused or
+closed without an answer. Like a site prompt, it no longer opens once the session has stopped
+asking after three refused or closed prompts. Sites outside the recipe are still asked one by
+one.
+
+Without a recipe, the agent can call `request_sites` at the start of a task with the sites the
+task needs, at most 20; each address is reduced to its site. Foxleash opens a page in the
+session's tab group that lists those sites and what allowing does for each, with nothing else
+from the agent, and when you click Allow there, they are allowed for that session only, never
+always. Sites already allowed, on the blocklist or refused in the session are not asked, and
+when no site needs asking the call returns at once without a page. The call waits up to 30
+seconds for your answer and returns the sites now allowed, blocked and refused. Don't allow, or
+closing the page, fails the call and refuses nothing: each site still asks on its own when the
+agent opens it. The same limits as for recipe pages apply: one such page or recipe page at a
+time, none beside a site prompt, none after three discarded, refused or closed without an
+answer, and none once the session has stopped asking. Sites outside the list are still asked
+one by one.
 
 You can also start a saved recipe from your MCP client with the `run_recipe` prompt: in
 Claude Code, `/mcp__foxleash__run_recipe <name>`, where a part of the name that only one recipe
@@ -386,6 +402,9 @@ and no defense is complete. Foxleash limits what a fooled agent can do:
   instructions, so read it before you save it.
 - Allowing a recipe's sites takes your click too, grants them for the session only, never
   always, and sites on your blocklist or that you refused in the session stay so.
+- Allowing the sites an agent asks for takes your click too, on a page that shows only those
+  sites, at most 20, grants them for the session only, never always, and sites on your
+  blocklist or that you refused in the session stay so.
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 - Text results never return the values of password fields, of one-time code and card number

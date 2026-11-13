@@ -384,7 +384,7 @@ function checkSites(value: unknown): string[] | { problems: RecipeProblem[] } {
 }
 
 /** An entry's site, undefined for a blank one, or why it is not a site. */
-function siteOfEntry(entry: unknown): string | undefined | { problem: string } {
+export function siteOfEntry(entry: unknown): string | undefined | { problem: string } {
   if (typeof entry !== "string") return { problem: NOT_AN_ADDRESS };
   const text = entry.trim();
   if (text === "") return undefined;

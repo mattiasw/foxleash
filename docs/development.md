@@ -120,7 +120,8 @@ version from `apps/extension/package.json`, unminified `background.js`, `options
 `approve.js`, `propose.js`, `run.js` and `content.js`, the script Foxleash injects into the
 pages of the agent's tabs, the settings page `options.html`, the approval prompt
 `approve.html`, the recipe page `propose.html` and `run.html`, the page where the user allows a
-recipe's sites for a session, with their shared `pages.css`, and the icon. It then lints that
+recipe's sites, or the sites an agent asks for, for a session, with their shared `pages.css`,
+and the icon. It then lints that
 folder with web-ext, ignoring web-ext's `WEB_EXT` environment variables and config files, and
 fails on any error or warning.
 

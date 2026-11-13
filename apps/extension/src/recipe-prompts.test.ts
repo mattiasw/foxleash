@@ -40,9 +40,15 @@ const RUN_URL =
 const REFUSED = "The user did not allow the recipe's sites in this session.";
 const UNREADABLE =
   "Firefox could not read Foxleash's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.";
-const ENDED_EARLY = "The session ended before the recipe page opened.";
+const ENDED_EARLY = "The session ended before the page opened.";
 const BUDGET =
-  "Foxleash shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
+  "Foxleash opens no more recipe pages or pages asking for sites in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
+const SITES = ["https://b.example", "https://a.example"];
+const ASKING_SITES = "whether to allow the sites the agent asked for";
+const SITES_REFUSED =
+  "The user did not allow these sites in this session. Each still asks on its own when opened.";
+const SITES_UNREADABLE =
+  "Firefox could not read Foxleash's settings, so the sites were not allowed. Call request_sites with the same sites again.";
 
 describe("propose", { timeout: 10000 }, () => {
   it("opens one selected page in the session's group, drawing attention, and resolves with its tab", async () => {
@@ -102,7 +108,7 @@ describe("propose", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user in tab ${tabId} whether to save a recipe. Try again after the user has answered there.`,
     });
     assert.deepEqual(created, []);
   });
@@ -1084,7 +1090,7 @@ describe("run", { timeout: 10000 }, () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP, { ...TRIP, name: "Other" });
     const { tabId } = await openRun(fake, recipes);
-    const open = `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`;
+    const open = `Foxleash is still asking the user in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered there.`;
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Other"), { code: "recipe_prompt_open", message: open });
     await assert.rejects(recipes.propose("s1", RECIPE), {
@@ -1094,7 +1100,7 @@ describe("run", { timeout: 10000 }, () => {
     const proposed = await recipes.propose("s2", RECIPE);
     await assert.rejects(recipes.run("s2", "Trip"), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still showing the user a recipe page in tab ${proposed.tabId}. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
     });
     assert.equal(created.length, 1);
   });
@@ -1746,6 +1752,329 @@ describe("ending a run page", { timeout: 10000 }, () => {
   });
 });
 
+describe("request", { timeout: 10000 }, () => {
+  it("resolves at once without a page when no site is askable, in the request's order", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://a.example");
+    // Neither an open site prompt, a session that stopped asking nor an open page is in the way.
+    const tab = fake.openTab({ active: true });
+    await access.ask("s1", "https://e.example/", tab.id);
+    const state = {
+      allowed: new Set(["https://c.example"]),
+      refused: new Set(["https://d.example"]),
+      closed: 3,
+    };
+    sessions.set("s1", state);
+    sessions.set("s2", state);
+    await recipes.propose("s2", RECIPE);
+    const created = recordCreates(fake);
+    for (const session of ["s1", "s2"]) {
+      assert.deepEqual(
+        await recipes.request(session, [
+          "https://d.example",
+          "https://a.example",
+          "https://b.example",
+          "https://c.example",
+        ]),
+        {
+          asked: false,
+          allowed: ["https://a.example", "https://c.example"],
+          blocked: ["https://b.example"],
+          refused: ["https://d.example"],
+        },
+      );
+    }
+    assert.deepEqual(created, []);
+  });
+
+  it("opens one selected page, created unloaded, in the session's group, drawing attention", async () => {
+    const { fake, groups, recipes } = setup();
+    const created = recordCreates(fake);
+    const { tabId } = await openRequest(fake, recipes);
+    const tab = fake.tabs.get(tabId);
+    assert.ok(tab !== undefined);
+    assert.match(tab.url, RUN_URL);
+    assert.deepEqual(created, [{ url: tab.url, active: false, discarded: true }]);
+    assert.equal(tab.active, true);
+    assert.equal(tab.groupId, (await groups.groupOf("s1"))?.id);
+    assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+  });
+
+  it("sends the page only the sites and their states, again after a reload", async () => {
+    const { fake, recipes, sessions } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://c.example");
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://d.example"]), closed: 0 });
+    const { tabId } = await openRequest(fake, recipes, "s1", [
+      "https://d.example",
+      "https://a.example",
+      "https://c.example",
+      "https://b.example",
+    ]);
+    const shownStates = {
+      type: "sites",
+      sites: [
+        { site: "https://d.example", state: "refused" },
+        { site: "https://a.example", state: "askable" },
+        { site: "https://c.example", state: "allowed" },
+        { site: "https://b.example", state: "blocked" },
+      ],
+    };
+    const page = connect(fake, tabId);
+    page.deliver({ type: "ready" });
+    assert.deepEqual(page.posted, [shownStates]);
+    page.drop();
+    const reloaded = connect(fake, tabId);
+    reloaded.deliver({ type: "ready" });
+    assert.deepEqual(reloaded.posted, [shownStates]);
+  });
+
+  it("allows only the askable sites, for the session only, in the request's order", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["b.example"] });
+    await grantSite(fake.browser, "https://c.example");
+    sessions.set("s1", { allowed: new Set(), refused: new Set(["https://d.example"]), closed: 0 });
+    const before = await fake.browser.storage.local.get(null);
+    const sites = [
+      "https://e.example",
+      "https://d.example",
+      "https://c.example",
+      "https://b.example",
+      "https://a.example",
+    ];
+    const { page, answer } = await shownRequest(fake, recipes, "s1", sites);
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    const result = {
+      asked: true,
+      allowed: ["https://e.example", "https://c.example", "https://a.example"],
+      blocked: ["https://b.example"],
+      refused: ["https://d.example"],
+    };
+    assert.deepEqual(answer.value, result);
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: false });
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.deepEqual(await fake.browser.storage.local.get(null), before);
+    assert.deepEqual(
+      [...(sessions.get("s1")?.allowed ?? [])],
+      ["https://e.example", "https://a.example"],
+    );
+    assert.deepEqual([...(sessions.get("s1")?.refused ?? [])], ["https://d.example"]);
+    assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+    assert.deepEqual(await recipes.request("s1", sites), { ...result, asked: false });
+  });
+
+  it("allows nothing on a message that is not the page's allow answer", async () => {
+    const { fake, recipes, sessions } = setup();
+    const { page, answer } = await shownRequest(fake, recipes);
+    for (const message of [
+      { type: "answer", answer: "save", fields: RECIPE, shown: NEW },
+      { type: "answer", answer: "always" },
+      { type: "sites", sites: SITES },
+    ]) {
+      page.deliver(message);
+    }
+    await flush();
+    assert.equal(page.posted.length, 1);
+    assert.equal(answer.state, "pending");
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("rejects every call when the user does not allow, charges the budget, and refuses no site", async () => {
+    const { fake, access, recipes, sessions } = setup();
+    const { page, answer } = await shownRequest(fake, recipes);
+    const joined = track(recipes.request("s1", SITES));
+    await flush();
+    page.deliver({ type: "answer", answer: "no" });
+    await flush();
+    assertRejected(answer, "sites_refused", SITES_REFUSED);
+    assertRejected(joined, "sites_refused", SITES_REFUSED);
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "no", late: false });
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.equal(sessions.has("s1"), false);
+    assert.deepEqual(
+      await access.siteStates("s1", SITES),
+      new Map(SITES.map((site) => [site, "askable"])),
+    );
+    await spend(fake, recipes, 2);
+    await assert.rejects(recipes.request("s1", SITES), {
+      code: "recipe_prompt_refused",
+      message: BUDGET,
+    });
+  });
+
+  it("rejects every call when its tab closes, charging once the page connected", async () => {
+    const { fake, recipes } = setup();
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { answer, tabId } = await openRequest(fake, recipes);
+      fake.removeTab(tabId);
+      await flush();
+      assertRejected(answer, "recipe_prompt_closed", requestClosed(tabId));
+    }
+    const { answer, tabId } = await shownRequest(fake, recipes);
+    const joined = track(recipes.request("s1", SITES));
+    await flush();
+    fake.removeTab(tabId);
+    await flush();
+    assertRejected(answer, "recipe_prompt_closed", requestClosed(tabId));
+    assertRejected(joined, "recipe_prompt_closed", requestClosed(tabId));
+    await spend(fake, recipes, 2);
+    await assert.rejects(recipes.request("s1", SITES), { code: "recipe_prompt_refused" });
+  });
+
+  it("times out a call on a page the user saw, and closes a page that never connected", async () => {
+    const { fake, recipes, timers } = setup();
+    const unseen = await openRequest(fake, recipes);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(unseen.answer, "recipe_prompt_closed", requestClosed(unseen.tabId));
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    const { answer, tabId } = await shownRequest(fake, recipes);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxleash is still asking the user in tab ${tabId} to allow the sites. Tell the user to answer there, then call request_sites with the same sites again.`,
+    );
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+  });
+
+  it("joins one page and one click for the same sites in any order, each in its own order", async () => {
+    const { fake, recipes } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["c.example", "d.example"] });
+    const a = "https://a.example";
+    const b = "https://b.example";
+    const c = "https://c.example";
+    const d = "https://d.example";
+    const first = track(recipes.request("s1", [d, a, c, b]));
+    const second = track(recipes.request("s1", [c, b, d, a]));
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assert.equal(runTabs(fake).length, 1);
+    const tabId = recipes.openPrompt("s1")?.tabId ?? 0;
+    const created = recordCreates(fake);
+    const third = track(recipes.request("s1", [b, a, d, c]));
+    await flush();
+    assert.deepEqual(created, []);
+    connect(fake, tabId).deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.deepEqual(first.value, { asked: true, allowed: [a, b], blocked: [d, c], refused: [] });
+    assert.deepEqual(second.value, { asked: true, allowed: [b, a], blocked: [c, d], refused: [] });
+    assert.deepEqual(third.value, { asked: true, allowed: [b, a], blocked: [d, c], refused: [] });
+  });
+
+  it("refuses other sites, a recipe and a proposal beside its page, and itself beside theirs", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    const { tabId } = await openRequest(fake, recipes);
+    const open = `Foxleash is still asking the user in tab ${tabId} whether to allow the sites the agent asked for. Try again after the user has answered there.`;
+    const created = recordCreates(fake);
+    for (const opening of [
+      () => recipes.request("s1", ["https://a.example"]),
+      () => recipes.request("s1", [...SITES, "https://c.example"]),
+      () => recipes.run("s1", "Trip"),
+      () => recipes.propose("s1", RECIPE),
+    ]) {
+      await assert.rejects(opening(), { code: "recipe_prompt_open", message: open });
+    }
+    const run = await openRun(fake, recipes, "s2");
+    await assert.rejects(recipes.request("s2", SITES), {
+      code: "recipe_prompt_open",
+      message: `Foxleash is still asking the user in tab ${run.tabId} whether to allow the recipe's sites. Try again after the user has answered there.`,
+    });
+    const proposed = await recipes.propose("s3", RECIPE);
+    await assert.rejects(recipes.request("s3", SITES), {
+      code: "recipe_prompt_open",
+      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
+    });
+    assert.equal(created.length, 2);
+  });
+
+  it("does not join a recipe and a request that name the same text", async () => {
+    const { fake, recipes } = setup();
+    const sites = ["https://a.example", "https://b.example"];
+    const name = `sites:${sites.join(" ")}`;
+    await seed(fake, { ...TRIP, name, sites });
+    await openRequest(fake, recipes, "s1", sites);
+    await assert.rejects(recipes.run("s1", name), { code: "recipe_prompt_open" });
+    await openRun(fake, recipes, "s2", name);
+    await assert.rejects(recipes.request("s2", sites), { code: "recipe_prompt_open" });
+  });
+
+  it("refuses while the session's site prompt is open, and a site prompt while its page is", async () => {
+    const { fake, access, recipes } = setup();
+    const tab = fake.openTab({ active: true });
+    await access.ask("s1", "https://e.example/", tab.id);
+    const created = recordCreates(fake);
+    await assert.rejects(recipes.request("s1", SITES), {
+      code: "approval_pending",
+      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
+    });
+    assert.deepEqual(created, []);
+    const { tabId } = await openRequest(fake, recipes, "s2");
+    await assert.rejects(access.check("s2", "https://e.example/"), {
+      code: "approval_pending",
+      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the sites the agent asked for. Try again after the user has answered.`,
+    });
+  });
+
+  it("opens no page once the session's site prompts stopped asking", async () => {
+    const { fake, recipes, sessions } = setup();
+    sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 3 });
+    await assert.rejects(recipes.request("s1", SITES), { code: "site_refused" });
+    assert.deepEqual(runTabs(fake), []);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+  });
+
+  it("shares the budget of three with the recipe pages", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    await spend(fake, recipes, 1);
+    const run = await shownRun(fake, recipes);
+    run.page.deliver({ type: "answer", answer: "no" });
+    const request = await shownRequest(fake, recipes);
+    request.page.deliver({ type: "answer", answer: "no" });
+    for (const opening of [
+      () => recipes.request("s1", SITES),
+      () => recipes.run("s1", "Trip"),
+      () => recipes.propose("s1", RECIPE),
+    ]) {
+      await assert.rejects(opening(), { code: "recipe_prompt_refused", message: BUDGET });
+    }
+  });
+
+  it("ends with its session, and refuses when the session ended while its tab was created", async () => {
+    const { fake, access, recipes } = setup();
+    const { page, answer, tabId } = await shownRequest(fake, recipes);
+    access.endSession("s1");
+    recipes.endSession("s1");
+    await flush();
+    assertRejected(answer, "recipe_prompt_closed", requestClosed(tabId));
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
+    const release = holdCreates(fake);
+    const opening = track(recipes.request("s1", SITES));
+    await flush();
+    recipes.endSession("s1");
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(opening, "recipe_prompt_closed", ENDED_EARLY);
+  });
+
+  it("allows nothing and ends the page when the settings cannot be read", async () => {
+    const { fake, recipes, sessions } = setup();
+    const { page, answer } = await shownRequest(fake, recipes);
+    failRead(fake, 1);
+    page.deliver({ type: "answer", answer: "allow" });
+    for (let turn = 0; turn < 5; turn += 1) await flush();
+    assertRejected(answer, "recipe_prompt_closed", SITES_UNREADABLE);
+    assert.deepEqual(page.posted.at(-1), { type: "ended" });
+    assert.equal(sessions.has("s1"), false);
+  });
+});
+
 describe("isBlankPage", { timeout: 10000 }, () => {
   it("holds only for a propose page that no open or detached prompt shows", async () => {
     const { fake, recipes } = setup();
@@ -1996,6 +2325,43 @@ async function shownRun(
   page.deliver({ type: "ready" });
   assert.equal(fieldsOfMessage(page.posted[0]).type, "run");
   return { answer, tabId, page: Object.assign(page, { tabId }) };
+}
+
+/** Calls request and waits until its page is recorded and selected. */
+async function openRequest(
+  fake: FakeBrowser,
+  recipes: Recipes,
+  session = "s1",
+  sites = SITES,
+): Promise<{ answer: Tracked<RunResult>; tabId: number }> {
+  const answer = track(recipes.request(session, sites));
+  for (let turn = 0; turn < 50; turn += 1) {
+    const page = recipes.openPrompt(session);
+    if (page !== undefined && fake.tabs.get(page.tabId)?.active === true) {
+      await flush();
+      return { answer, tabId: page.tabId };
+    }
+    await flush();
+  }
+  assert.fail("no request page");
+}
+
+/** Opens a request page and connects it, which has had the sites. */
+async function shownRequest(
+  fake: FakeBrowser,
+  recipes: Recipes,
+  session = "s1",
+  sites = SITES,
+): Promise<{ answer: Tracked<RunResult>; tabId: number; page: FakePort }> {
+  const { answer, tabId } = await openRequest(fake, recipes, session, sites);
+  const page = connect(fake, tabId);
+  page.deliver({ type: "ready" });
+  assert.equal(fieldsOfMessage(page.posted[0]).type, "sites");
+  return { answer, tabId, page };
+}
+
+function requestClosed(tabId: number): string {
+  return `The page asking about the agent's sites in tab ${tabId} closed without an answer.`;
 }
 
 function tabsIn(fake: FakeBrowser, windowId: number | undefined): number[] {

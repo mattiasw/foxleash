@@ -33,7 +33,8 @@
     {
       "listing": "ask you to allow a saved recipe's sites for a session in one click",
       "tools": ["start_recipe"]
-    }
+    },
+    { "listing": "ask you on one page to allow the sites a task needs", "tools": ["request_sites"] }
   ],
   "safeguards": [
     {
@@ -91,6 +92,16 @@
       "evidence": [
         { "file": "apps/extension/src/site-access.ts", "contains": "function allowForSession" },
         { "file": "apps/extension/src/recipe-prompts.ts", "contains": "allowForSession(" }
+      ]
+    },
+    {
+      "listing": "Allowing the sites an agent asks for takes your click too",
+      "evidence": [
+        { "file": "apps/extension/src/recipe-prompts.ts", "contains": "allowForSession(" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "MAX_RECIPE_SITES" },
+        { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "recipes.request(" },
+        { "file": "apps/extension/src/recipe-prompts.ts", "contains": "\"sites_refused\"" }
       ]
     },
     {

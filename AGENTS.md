@@ -154,6 +154,8 @@ permission prompts can be switched off:
 - Financial and health sites are blocked by default.
 - A recipe is saved, and its sites granted for a session, only by a user click on an extension
   page; a recipe's sites are never granted always (ADR 0035).
+- Sites an agent names with `request_sites` are granted for a session only by a user click on an
+  extension page that lists them, at most 20, and never always (ADR 0046).
 - `upload_file` reads only from allowed folders and refuses dotfiles and key files.
 - Tool results mark page content as untrusted.
 

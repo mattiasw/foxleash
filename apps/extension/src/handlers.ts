@@ -4,6 +4,7 @@ import {
   foundLinesOf,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
+  MAX_RECIPE_SITES,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_FOR_TEXT,
   MAX_WINDOW_SIZE,
@@ -50,7 +51,7 @@ import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
 import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
 import type { RecipePrompts } from "./recipe-prompts.ts";
-import { checkRecipe, findRecipe, readRecipes, recipeName } from "./recipes.ts";
+import { checkRecipe, findRecipe, readRecipes, recipeName, siteOfEntry } from "./recipes.ts";
 import {
   captureRect,
   FIELD_MASK_CSS,
@@ -110,7 +111,7 @@ export interface HandlerDeps<Handle> {
   /** Saves files into the download folder; it imports this file too. */
   downloads: Pick<Downloads, "save">;
   /** The session's recipe pages; `import type`, since it imports this file. */
-  recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt">;
+  recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt" | "request">;
 }
 
 type Params = Record<string, unknown>;
@@ -237,6 +238,7 @@ export function createHandlers<Handle>({
     recipe_list: recipeList,
     recipe_get: recipeGet,
     recipe_run: recipeRun,
+    sites_request: sitesRequest,
     probe_input: probeInput,
   };
 
@@ -1101,6 +1103,43 @@ export function createHandlers<Handle>({
     return recipes.run(session, name);
   }
 
+  /**
+   * Asks the user to allow the sites an agent named for the session, on the run page; each entry
+   * reduced to its site as a recipe's are, duplicates collapsed, in the agent's order.
+   */
+  async function sitesRequest(session: string, params: Params): Promise<Result<"sites_request">> {
+    const given = own(params, "sites");
+    if (!Array.isArray(given)) {
+      throw new ToolError("invalid_params", "request_sites needs sites to be a list of addresses.");
+    }
+    const entries: unknown[] = given;
+    const sites = new Set<string>();
+    // By index, so a hole reads as undefined and is refused.
+    for (let index = 0; index < entries.length; index++) {
+      const site = requestedSite(entries[index]);
+      if (typeof site !== "string") {
+        throw new ToolError(
+          "invalid_params",
+          `request_sites was refused: entry ${index + 1}: ${site.problem}`,
+        );
+      }
+      sites.add(site);
+      if (sites.size > MAX_RECIPE_SITES) {
+        throw new ToolError(
+          "invalid_params",
+          `request_sites was refused: it names more than ${MAX_RECIPE_SITES} sites; ask for at most ${MAX_RECIPE_SITES}.`,
+        );
+      }
+    }
+    if (sites.size === 0) {
+      throw new ToolError(
+        "invalid_params",
+        "request_sites was refused: name at least one site, such as https://example.com.",
+      );
+    }
+    return recipes.request(session, [...sites]);
+  }
+
   /** Records the site of every URL the tab moves to until `stop`. */
   function watchSites(tabId: number): { left(site: string): boolean; stop(): void } {
     const sites = new Set<string | undefined>();
@@ -1274,10 +1313,11 @@ export function createHandlers<Handle>({
     const shown = access.openPrompt(session);
     if (shown?.tabId === tabId)
       throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);
-    if (recipes.openPrompt(session)?.tabId === tabId) {
+    const page = recipes.openPrompt(session);
+    if (page?.tabId === tabId) {
       throw new ToolError(
         "recipe_prompt_open",
-        `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+        `Foxleash is asking the user in tab ${tabId} ${page.question}; leave that tab open.`,
       );
     }
   }
@@ -1532,6 +1572,22 @@ function uploadFiles(value: unknown): { name: string; type: string; size: number
     }
     return { name, type, size };
   });
+}
+
+const HOST_LABEL = /^[a-z0-9_-]{1,63}$/;
+
+/** A request_sites entry's site, or why it is refused. */
+function requestedSite(entry: unknown): string | { problem: string } {
+  const site = siteOfEntry(entry);
+  if (site === undefined) return { problem: "this entry is blank." };
+  if (typeof site !== "string") return site;
+  // The page shows each host as it is: punctuation that no domain name has would let the agent
+  // write sentences there. The URL parser writes an IPv6 host in brackets.
+  const host = URL.parse(site)?.hostname ?? "";
+  if (!host.startsWith("[") && !host.split(".").every((label) => HOST_LABEL.test(label))) {
+    return { problem: "this address's host is not a domain name or an IP address." };
+  }
+  return site;
 }
 
 function screenshotRef(params: Params): string | undefined {

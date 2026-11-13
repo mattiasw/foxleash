@@ -1517,6 +1517,7 @@ function setup() {
     recipes: {
       propose: () => Promise.reject(new Error("unused")),
       run: () => Promise.reject(new Error("unused")),
+      request: () => Promise.reject(new Error("unused")),
       openPrompt: () => undefined,
     },
   });

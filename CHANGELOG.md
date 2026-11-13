@@ -19,6 +19,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   With it on, an agent session's tabs open in a new window of their own instead of changing the
   tab selected in your window, and Foxleash closes that window when the session ends if it
   holds only blank tabs and is not your last window.
+- An agent can ask you on one page for all the sites a task needs (`request_sites`): the page
+  lists each site and what allowing does for it, and one click on Allow allows them for the
+  agent's session, never always, instead of a prompt for each site as the agent opens it.
 
 ### Changed
 

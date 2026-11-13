@@ -78,6 +78,7 @@ describe("tools", () => {
       "read_console",
       "read_network",
       "read_page",
+      "request_sites",
       "resize_window",
       "screenshot",
       "scroll",
@@ -115,6 +116,7 @@ describe("tools", () => {
           "list_recipes",
           "get_recipe",
           "start_recipe",
+          "request_sites",
           "batch",
         ].includes(tool.name),
         tool.name,
@@ -1971,8 +1973,8 @@ describe("propose_recipe", () => {
     const { client } = await start(() => ({}));
     const { tools } = await client.listTools();
     assert.deepEqual(
-      tools.slice(-5).map(({ name }) => name),
-      ["propose_recipe", "list_recipes", "get_recipe", "start_recipe", "batch"],
+      tools.slice(-6).map(({ name }) => name),
+      ["propose_recipe", "list_recipes", "get_recipe", "start_recipe", "request_sites", "batch"],
     );
     const tool = tools.find((listed) => listed.name === "propose_recipe");
     assert.ok(tool?.description !== undefined);
@@ -2381,6 +2383,95 @@ describe("start_recipe", () => {
       const output = await client.callTool({ name: "start_recipe", arguments: { name } });
       assert.equal(output.isError, true, name.slice(0, 10));
       assert.ok(text(output).startsWith(INVALID), name.slice(0, 10));
+      assert.deepEqual(calls, []);
+    }
+  });
+});
+
+describe("request_sites", () => {
+  const RESULT = {
+    asked: true,
+    allowed: ["https://a.example"],
+    blocked: ["https://b.example"],
+    refused: [],
+  };
+  const INVALID =
+    "MCP error -32602: Input validation error: Invalid arguments for tool request_sites";
+
+  it("is described with its schema", LIMIT, async () => {
+    const { client } = await start(() => ({}));
+    const { tools } = await client.listTools();
+    const tool = tools.find((listed) => listed.name === "request_sites");
+    assert.ok(tool?.description !== undefined);
+    for (const words of [
+      "on one page and in one click, to allow for this session the sites a task needs, never always",
+      "Call it at the start of a task that spans several sites, before opening them.",
+      "a URL is reduced to its site; at most 20.",
+      "in this session's Foxleash tab group",
+      "shows nothing else from you",
+      "the blocklist and the user's earlier answers still win",
+      "waits up to 30 seconds",
+      "tell the user to answer in the named tab, then call request_sites with the same sites again",
+      "(asked)",
+      "(allowed)",
+      "(blocked)",
+      "(refused)",
+      "returns at once without a page",
+      "each site still asks on its own when you open it; do not ask again unless the user asks",
+      "Sites outside the list still ask one by one.",
+      "None opens while a site prompt is open, after the user refused, discarded or closed three of them in this session, or once Foxleash stopped asking about sites in this session.",
+      "For a saved recipe's sites, call start_recipe instead.",
+    ]) {
+      assert.ok(tool.description.includes(words), words);
+    }
+    assert.deepEqual(tool.inputSchema.required, ["sites"]);
+    const properties = record(tool.inputSchema.properties);
+    assert.match(String(record(properties.sites).description), /at most 20 sites$/);
+  });
+
+  it("asks the extension and returns its answer as untrusted text", LIMIT, async () => {
+    const { client, calls } = await start(() => RESULT);
+    const sites = ["https://a.example/x", "https://b.example"];
+    const output = await client.callTool({ name: "request_sites", arguments: { sites } });
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(RESULT));
+    assert.deepEqual(calls, [{ method: "sites_request", params: { sites } }]);
+  });
+
+  it("returns a host error as untrusted text", LIMIT, async () => {
+    const message =
+      "The user did not allow these sites in this session. Each still asks on its own when opened.";
+    const { client } = await start(() => {
+      throw new HostError("sites_refused", message);
+    });
+    const output = await client.callTool({
+      name: "request_sites",
+      arguments: { sites: ["https://a.example"] },
+    });
+    assert.equal(output.isError, true);
+    assert.equal(unframed(output), message);
+  });
+
+  it("takes 1 to 20 entries of at most 2048 characters each", LIMIT, async () => {
+    const long = `https://a.example/${"x".repeat(2048 - 18)}`;
+    const twenty = Array.from({ length: 20 }, (_, index) => `https://s${index}.example`);
+    for (const sites of [[long], twenty]) {
+      const { client, calls } = await start(() => RESULT);
+      const output = await client.callTool({ name: "request_sites", arguments: { sites } });
+      assert.equal(output.isError, undefined);
+      assert.deepEqual(calls, [{ method: "sites_request", params: { sites } }]);
+    }
+    for (const sites of [
+      [],
+      [...twenty, "https://s20.example"],
+      [`${long}x`],
+      [""],
+      "https://a.example",
+    ]) {
+      const { client, calls } = await start(() => RESULT);
+      const output = await client.callTool({ name: "request_sites", arguments: { sites } });
+      assert.equal(output.isError, true);
+      assert.ok(text(output).startsWith(INVALID), JSON.stringify(sites).slice(0, 40));
       assert.deepEqual(calls, []);
     }
   });
@@ -3279,9 +3370,9 @@ describe("batch", () => {
         .filter((name) => name !== "batch")
         .sort(),
     );
-    assert.equal(tool.enum.length, 25);
+    assert.equal(tool.enum.length, 26);
     assert.ok(tool.enum.includes("list_recipes") && tool.enum.includes("get_recipe"));
-    assert.ok(tool.enum.includes("start_recipe"));
+    assert.ok(tool.enum.includes("start_recipe") && tool.enum.includes("request_sites"));
   });
 
   it("runs each step as its tool does and returns every result in order", LIMIT, async () => {

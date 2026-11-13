@@ -8,6 +8,8 @@ type SiteState = "allowed" | "blocked" | "refused" | "askable";
 type State = "waiting" | "asking" | "answering" | "done" | "ended";
 
 const PAGE = "run page";
+const REQUEST_INTRO =
+  "The agent asks to use these sites for its task. Only the addresses come from the agent.";
 const UNARMED = "The buttons respond a moment after this window is focused.";
 const WORDS: Record<SiteState, string> = {
   askable: "will be allowed for this session",
@@ -86,8 +88,11 @@ function receive(received: unknown): void {
       typeof description === "string" &&
       shown !== undefined
     ) {
-      ask(name, description, shown);
+      ask(`Recipe ${name}: ${description}`, shown);
     }
+  } else if (message.type === "sites") {
+    const shown = sitesOf(message.sites);
+    if (state === "waiting" && shown !== undefined) ask(REQUEST_INTRO, shown);
   } else if (message.type === "done") {
     const { answer, late } = message;
     if (isAnswer(answer) && typeof late === "boolean") done(answer, late);
@@ -96,12 +101,15 @@ function receive(received: unknown): void {
   }
 }
 
-function ask(name: string, description: string, shown: { site: string; state: SiteState }[]): void {
-  recipe.textContent = `Recipe ${name}: ${description}`;
+function ask(intro: string, shown: { site: string; state: SiteState }[]): void {
+  recipe.textContent = intro;
   sites.replaceChildren(
     ...shown.map(({ site, state: siteState }) => {
       const item = document.createElement("li");
-      item.textContent = `${site}: ${WORDS[siteState]}`;
+      // In a span, so a long host wraps.
+      const text = document.createElement("span");
+      text.textContent = `${site}: ${WORDS[siteState]}`;
+      item.append(text);
       return item;
     }),
   );

@@ -16,12 +16,15 @@ import {
 
 /** The extension page that shows a proposed recipe, which only the user's click saves. */
 export const PROPOSE_PAGE = "propose.html";
-/** The extension page where only the user's click allows a saved recipe's sites for the session. */
+/**
+ * The extension page where only the user's click allows a saved recipe's sites, or the sites an
+ * agent asked for, for the session.
+ */
 export const RUN_PAGE = "run.html";
 
 const PORT_NAME = "recipe";
-// Recipe pages discarded, refused or closed without an answer that a session may have before
-// Foxleash stops opening them.
+// Recipe pages and pages asking for sites discarded, refused or closed without an answer that a
+// session may have before Foxleash stops opening them.
 const RECIPE_PROMPT_BUDGET = 3;
 const READ_FAILED = "Firefox could not read the stored recipes. Reload the page to try again.";
 
@@ -44,6 +47,12 @@ export interface RecipePrompts {
    * site is askable.
    */
   run(session: string, name: string): Promise<Result<"recipe_run">>;
+  /**
+   * Asks the user on the run page to allow the askable ones of the sites an agent named for the
+   * session, or joins the session's run page for the same sites; resolves at once, without a
+   * page, when no site is askable. Each list in the order of `sites`.
+   */
+  request(session: string, sites: string[]): Promise<Result<"sites_request">>;
   /** The session's open recipe page, and what it asks. */
   openPrompt(session: string): { tabId: number; question: string } | undefined;
   /**
@@ -65,16 +74,30 @@ interface ProposePrompt extends PageState {
 
 interface RunPrompt<Handle> extends PageState {
   kind: "run";
-  /** The stored recipe's name, description and sites, as found when the page opened. */
-  name: string;
-  description: string;
+  /** The stored recipe's name and description, as found when the page opened; none for a request. */
+  recipe: RecipeShown | undefined;
+  /** What a parallel call must match to join the page. */
+  key: string;
+  /** The recipe's or the request's sites. */
   sites: string[];
-  /** Each site's state when the page opened, in the recipe's order; what the page shows. */
+  /** Each site's state when the page opened, in the sites' order; what the page shows. */
   states: { site: string; state: SiteState }[];
   /** The sites the page shows as allowed by its Allow button. */
   askable: string[];
-  /** The start_recipe calls waiting for the answer, each with its own clock. */
+  /** The start_recipe or request_sites calls waiting for the answer, each with its own clock. */
   waiters: RunWaiter<Handle>[];
+}
+
+interface RecipeShown {
+  name: string;
+  description: string;
+}
+
+/** What a run page asks about: a saved recipe's sites, or a request's. */
+interface SitesAsked {
+  recipe: RecipeShown | undefined;
+  key: string;
+  sites: string[];
 }
 
 interface RunWaiter<Handle> {
@@ -137,7 +160,7 @@ export function createRecipePrompts<Handle>({
     }
   });
 
-  return { propose, run, openPrompt, endSession, isBlankPage };
+  return { propose, run, request, openPrompt, endSession, isBlankPage };
 
   async function propose(session: string, recipe: RecipeFields): Promise<Result<"recipe_propose">> {
     const generation = generationOf(session);
@@ -192,20 +215,42 @@ export function createRecipePrompts<Handle>({
     const generation = generationOf(session);
     const recipe = await findRecipe(browser, name);
     if (recipe === undefined) throw recipeNotFound(name);
-    const states = await access.siteStates(session, recipe.sites);
-    const askable = recipe.sites.filter((site) => states.get(site) === "askable");
+    return askForSites(session, generation, {
+      recipe: { name: recipe.name, description: recipe.description },
+      key: `recipe:${recipe.name}`,
+      sites: recipe.sites,
+    });
+  }
+
+  async function request(session: string, sites: string[]): Promise<Result<"sites_request">> {
+    const answer = await askForSites(session, generationOf(session), {
+      recipe: undefined,
+      // A site never contains a space.
+      key: `sites:${[...sites].sort().join(" ")}`,
+      sites,
+    });
+    return inOrder(answer, sites);
+  }
+
+  async function askForSites(
+    session: string,
+    generation: number,
+    { recipe, key, sites }: SitesAsked,
+  ): Promise<Result<"recipe_run">> {
+    const states = await access.siteStates(session, sites);
+    const askable = sites.filter((site) => states.get(site) === "askable");
     if (askable.length === 0) return resultOf(states, false);
-    const joined = pageToJoin(session, recipe.name);
+    const joined = pageToJoin(session, key);
     if (joined !== undefined) return join(joined);
     const pageUrl = `${browser.runtime.getURL(RUN_PAGE)}?id=${crypto.randomUUID()}`;
     // Unloaded, the page cannot connect before its prompt is recorded.
     const tab = await groups.createTab(session, { url: pageUrl, active: false, discarded: true });
     // No await from here until the prompt is recorded or joined, so parallel requests of one
-    // recipe end with one page.
+    // recipe or one set of sites end with one page.
     let again: RunPrompt<Handle> | undefined;
     try {
       refuseIfEnded(session, generation);
-      again = pageToJoin(session, recipe.name);
+      again = pageToJoin(session, key);
     } catch (error) {
       await closeNewTab(tab.id);
       throw error;
@@ -220,9 +265,9 @@ export function createRecipePrompts<Handle>({
     const prompt: RunPrompt<Handle> = {
       kind: "run",
       session,
-      name: recipe.name,
-      description: recipe.description,
-      sites: recipe.sites,
+      recipe,
+      key,
+      sites,
       states: [...states].map(([site, state]) => ({ site, state })),
       askable,
       waiters: [],
@@ -260,27 +305,24 @@ export function createRecipePrompts<Handle>({
 
   function refuseIfEnded(session: string, generation: number): void {
     if (generationOf(session) !== generation) {
-      throw new ToolError(
-        "recipe_prompt_closed",
-        "The session ended before the recipe page opened.",
-      );
+      throw new ToolError("recipe_prompt_closed", "The session ended before the page opened.");
     }
   }
 
   function refuseOpening(session: string): void {
     refuseBesideSitePrompt(session);
     const page = open.get(session);
-    if (page !== undefined) throw recipePromptOpen(page.tabId);
+    if (page !== undefined) throw recipePromptOpen(page);
     refuseOverBudget(session);
   }
 
-  /** The session's run page for the recipe named `name`, or undefined when a new one may open. */
-  function pageToJoin(session: string, name: string): RunPrompt<Handle> | undefined {
+  /** The session's run page asking what `key` names, or undefined when a new one may open. */
+  function pageToJoin(session: string, key: string): RunPrompt<Handle> | undefined {
     refuseBesideSitePrompt(session);
     const page = open.get(session);
     if (page !== undefined) {
-      if (page.kind === "run" && page.name === name) return page;
-      throw recipePromptOpen(page.tabId);
+      if (page.kind === "run" && page.key === key) return page;
+      throw recipePromptOpen(page);
     }
     refuseOverBudget(session);
     // It asks about sites, so it opens no more once the session's site prompts stopped asking.
@@ -297,7 +339,7 @@ export function createRecipePrompts<Handle>({
     if ((budget.get(session) ?? 0) >= RECIPE_PROMPT_BUDGET) {
       throw new ToolError(
         "recipe_prompt_refused",
-        "Foxleash shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
+        "Foxleash opens no more recipe pages or pages asking for sites in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
       );
     }
   }
@@ -338,7 +380,9 @@ export function createRecipePrompts<Handle>({
       waiter.reject(
         new ToolError(
           "approval_timeout",
-          `Foxleash is still asking the user in tab ${prompt.tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+          prompt.recipe === undefined
+            ? `Foxleash is still asking the user in tab ${prompt.tabId} to allow the sites. Tell the user to answer there, then call request_sites with the same sites again.`
+            : `Foxleash is still asking the user in tab ${prompt.tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
         ),
       );
     }
@@ -375,11 +419,7 @@ export function createRecipePrompts<Handle>({
   function openPrompt(session: string): { tabId: number; question: string } | undefined {
     const prompt = open.get(session);
     if (prompt === undefined) return undefined;
-    return {
-      tabId: prompt.tabId,
-      question:
-        prompt.kind === "run" ? "whether to allow the recipe's sites" : "whether to save a recipe",
-    };
+    return { tabId: prompt.tabId, question: questionOf(prompt) };
   }
 
   function endSession(session: string): void {
@@ -431,12 +471,17 @@ export function createRecipePrompts<Handle>({
     const fields = fieldsOf(message);
     if (prompt.kind === "run") {
       if (fields?.type === "ready") {
-        post(port, {
-          type: "run",
-          name: prompt.name,
-          description: prompt.description,
-          sites: prompt.states,
-        });
+        post(
+          port,
+          prompt.recipe === undefined
+            ? { type: "sites", sites: prompt.states }
+            : {
+                type: "run",
+                name: prompt.recipe.name,
+                description: prompt.recipe.description,
+                sites: prompt.states,
+              },
+        );
       } else if (fields?.type === "answer" && fields.answer === "allow") {
         void allow(prompt);
       } else if (fields?.type === "answer" && fields.answer === "no") {
@@ -563,7 +608,9 @@ export function createRecipePrompts<Handle>({
         prompt,
         new ToolError(
           "recipe_prompt_closed",
-          "Firefox could not read Foxleash's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.",
+          prompt.recipe === undefined
+            ? "Firefox could not read Foxleash's settings, so the sites were not allowed. Call request_sites with the same sites again."
+            : "Firefox could not read Foxleash's settings, so the recipe's sites were not allowed. Call start_recipe with the same name again.",
         ),
       );
       postTo(prompt, { type: "ended" });
@@ -589,7 +636,15 @@ export function createRecipePrompts<Handle>({
     const late = prompt.waiters.length === 0;
     rejectWaiters(
       prompt,
-      new ToolError("recipe_refused", "The user did not allow the recipe's sites in this session."),
+      prompt.recipe === undefined
+        ? new ToolError(
+            "sites_refused",
+            "The user did not allow these sites in this session. Each still asks on its own when opened.",
+          )
+        : new ToolError(
+            "recipe_refused",
+            "The user did not allow the recipe's sites in this session.",
+          ),
     );
     postTo(prompt, { type: "done", answer: "no", late });
   }
@@ -639,21 +694,40 @@ export function createRecipePrompts<Handle>({
   }
 }
 
-function recipePromptOpen(tabId: number): ToolError {
+function recipePromptOpen(page: RecipePage<unknown>): ToolError {
   return new ToolError(
     "recipe_prompt_open",
-    `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
+    `Foxleash is still asking the user in tab ${page.tabId} ${questionOf(page)}. Try again after the user has answered there.`,
   );
 }
 
-function recipePageClosed(prompt: { tabId: number }): ToolError {
+function questionOf(page: RecipePage<unknown>): string {
+  if (page.kind === "propose") return "whether to save a recipe";
+  return page.recipe === undefined
+    ? "whether to allow the sites the agent asked for"
+    : "whether to allow the recipe's sites";
+}
+
+function recipePageClosed(prompt: RunPrompt<unknown>): ToolError {
   return new ToolError(
     "recipe_prompt_closed",
-    `The recipe page in tab ${prompt.tabId} closed without an answer.`,
+    prompt.recipe === undefined
+      ? `The page asking about the agent's sites in tab ${prompt.tabId} closed without an answer.`
+      : `The recipe page in tab ${prompt.tabId} closed without an answer.`,
   );
 }
 
-/** start_recipe's result: the sites of each state but askable, in the recipe's order. */
+/** request_sites's result: each list put in the order the caller named the sites. */
+function inOrder(result: Result<"sites_request">, sites: string[]): Result<"sites_request"> {
+  return {
+    asked: result.asked,
+    allowed: sites.filter((site) => result.allowed.includes(site)),
+    blocked: sites.filter((site) => result.blocked.includes(site)),
+    refused: sites.filter((site) => result.refused.includes(site)),
+  };
+}
+
+/** start_recipe's and request_sites's result: the sites of each state but askable, in their order. */
 function resultOf(states: Map<string, SiteState>, asked: boolean): Result<"recipe_run"> {
   const result: Result<"recipe_run"> = { asked, allowed: [], blocked: [], refused: [] };
   for (const [site, state] of states) {

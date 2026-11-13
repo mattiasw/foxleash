@@ -6464,7 +6464,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     fake.openTab();
     const tabId = await proposed(env);
     await grant("https://a.example");
-    const keep = `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`;
+    const keep = `Foxleash is asking the user in tab ${tabId} whether to save a recipe; leave that tab open.`;
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
       message: keep,
@@ -6710,7 +6710,7 @@ describe("recipe_run", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.size, tabs);
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
-      message: `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+      message: `Foxleash is asking the user in tab ${tabId} whether to allow the recipe's sites; leave that tab open.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
   });
@@ -6748,6 +6748,190 @@ describe("recipe_run", { timeout: 10000 }, () => {
       });
     }
     assert.equal(fake.tabs.size, 0);
+  });
+});
+
+describe("sites_request", { timeout: 10000 }, () => {
+  /** Records the sites each call hands to the recipe pages, which then answer nothing asked. */
+  function recordRequests(env: ReturnType<typeof setup>): string[][] {
+    const requested: string[][] = [];
+    env.recipes.request = async (_session, sites) => {
+      requested.push(sites);
+      return { asked: false, allowed: [], blocked: [], refused: [] };
+    };
+    return requested;
+  }
+
+  it("asks on the run page and resolves with the sites allowed for the session", async () => {
+    const { fake, call, recipes, grant } = setup();
+    fake.openTab();
+    await grant("https://a.example");
+    const result = call("s1", "sites_request", { sites: ["https://shop.example/orders"] });
+    let tabId: number | undefined;
+    for (let turn = 0; turn < 50 && tabId === undefined; turn += 1) {
+      tabId = recipes.openPrompt("s1")?.tabId;
+      await flush();
+    }
+    assert.ok(tabId !== undefined);
+    assert.match(fake.tabs.get(tabId)?.url ?? "", /run\.html\?id=/);
+    const page = fake.connectPage("recipe", {
+      id: FAKE_EXTENSION_ID,
+      url: fake.tabs.get(tabId)?.url ?? "",
+      tab: { id: tabId },
+    });
+    page.deliver({ type: "ready" });
+    assert.deepEqual(page.posted, [
+      { type: "sites", sites: [{ site: "https://shop.example", state: "askable" }] },
+    ]);
+    const keep = `Foxleash is asking the user in tab ${tabId} whether to allow the sites the agent asked for; leave that tab open.`;
+    await assert.rejects(call("s1", "tab_close", { tabId }), {
+      code: "recipe_prompt_open",
+      message: keep,
+    });
+    await assert.rejects(call("s1", "navigate", { tabId, url: "https://a.example/" }), {
+      code: "recipe_prompt_open",
+      message: keep,
+    });
+    page.deliver({ type: "answer", answer: "allow" });
+    assert.deepEqual(await result, {
+      asked: true,
+      allowed: ["https://shop.example"],
+      blocked: [],
+      refused: [],
+    });
+    const opened = await call("s1", "tab_open", { url: "https://shop.example/" });
+    assert.ok("tab" in opened);
+    assert.equal(opened.tab.url, "https://shop.example/");
+  });
+
+  it("reduces each entry to its site and collapses duplicates, in the agent's order", async () => {
+    const env = setup();
+    const requested = recordRequests(env);
+    const given = [
+      "https://b.example/x?y=1",
+      " https://a.example ",
+      "https://B.example:443/",
+      "https://b.example.",
+      "http://a.example:8080/",
+      "https://a.example/z",
+      "http://[::1]:8080/x",
+      "http://2130706433/",
+      `https://${"c".repeat(63)}.my_host-2.example`,
+      "https://\u0430pple.com",
+    ];
+    assert.deepEqual(await env.call("s1", "sites_request", { sites: given }), {
+      asked: false,
+      allowed: [],
+      blocked: [],
+      refused: [],
+    });
+    assert.deepEqual(requested, [
+      [
+        "https://b.example",
+        "https://a.example",
+        "http://a.example:8080",
+        "http://[::1]:8080",
+        "http://127.0.0.1",
+        `https://${"c".repeat(63)}.my_host-2.example`,
+        "https://xn--pple-43d.com",
+      ],
+    ]);
+  });
+
+  it("takes at most 20 distinct sites, however many entries name them", async () => {
+    const env = setup();
+    const requested = recordRequests(env);
+    const twenty = Array.from({ length: 20 }, (_, index) => `https://s${index}.example`);
+    await env.call("s1", "sites_request", { sites: [...twenty, `${twenty[0]}/again`] });
+    assert.deepEqual(requested, [twenty]);
+    await assert.rejects(
+      env.call("s1", "sites_request", { sites: [...twenty, "https://s20.example", ""] }),
+      {
+        code: "invalid_params",
+        message: "request_sites was refused: it names more than 20 sites; ask for at most 20.",
+      },
+    );
+    assert.equal(requested.length, 1);
+  });
+
+  it("refuses sites that are not a list, opening nothing", async () => {
+    const env = setup();
+    const requested = recordRequests(env);
+    const params: Record<string, unknown>[] = [
+      {},
+      { sites: "https://a.example" },
+      { sites: null },
+      { sites: { 0: "https://a.example", length: 1 } },
+      Object.create({ sites: ["https://a.example"] }),
+    ];
+    for (const given of params) {
+      await assert.rejects(env.call("s1", "sites_request", given), {
+        code: "invalid_params",
+        message: "request_sites needs sites to be a list of addresses.",
+      });
+    }
+    await assert.rejects(env.call("s1", "sites_request", { sites: [] }), {
+      code: "invalid_params",
+      message: "request_sites was refused: name at least one site, such as https://example.com.",
+    });
+    assert.deepEqual(requested, []);
+    assert.equal(env.fake.tabs.size, 0);
+  });
+
+  it("refuses the first entry that is not a site, naming its place, before reading anything", async () => {
+    const env = setup();
+    const requested = recordRequests(env);
+    const reads: unknown[] = [];
+    const get = env.fake.browser.storage.local.get;
+    env.fake.browser.storage.local.get = (keys) => {
+      reads.push(keys);
+      return get(keys);
+    };
+    const notAnAddress = "this is not an http or https address.";
+    const holed: unknown[] = ["https://a.example"];
+    holed[2] = "https://b.example";
+    const cases: [unknown[], string][] = [
+      [["https://a.example", ""], "entry 2: this entry is blank."],
+      [[" \t "], "entry 1: this entry is blank."],
+      [[7, ""], `entry 1: ${notAnAddress}`],
+      [[null], `entry 1: ${notAnAddress}`],
+      [holed, `entry 2: ${notAnAddress}`],
+      [["file:///etc/passwd"], `entry 1: ${notAnAddress}`],
+      [["javascript:alert(1)"], `entry 1: ${notAnAddress}`],
+      [["about:blank"], `entry 1: ${notAnAddress}`],
+      [["moz-extension://abc/run.html"], `entry 1: ${notAnAddress}`],
+      [["a.example"], `entry 1: ${notAnAddress}`],
+      [["https://a.exa\nmple"], `entry 1: ${notAnAddress}`],
+      [["https://a.exa\tmple"], `entry 1: ${notAnAddress}`],
+      [
+        ["https://a.example", "https://user:pw@b.example/"],
+        "entry 2: this address has a user name before the site; give the site only.",
+      ],
+      [["https://*.example"], "entry 1: this address has a wildcard; list each site."],
+      [
+        [`https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(63)}.example`],
+        "entry 1: this address's host is longer than 253 characters.",
+      ],
+      ...[
+        "https://foxleash(checked),'safe'!click_allow{ok}.example",
+        'https://"allow"=$safe;~ok`.example',
+        `https://${"a".repeat(64)}.example`,
+        "https://a..example",
+        "https://.example",
+      ].map((site): [unknown[], string] => [
+        ["https://a.example", site],
+        "entry 2: this address's host is not a domain name or an IP address.",
+      ]),
+    ];
+    for (const [sites, problem] of cases) {
+      await assert.rejects(env.call("s1", "sites_request", { sites }), {
+        code: "invalid_params",
+        message: `request_sites was refused: ${problem}`,
+      });
+    }
+    assert.deepEqual(requested, []);
+    assert.deepEqual(reads, []);
+    assert.equal(env.fake.tabs.size, 0);
   });
 });
 

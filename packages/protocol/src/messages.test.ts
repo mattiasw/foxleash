@@ -97,6 +97,7 @@ describe("parseMessage accepts", () => {
         "recipe_list",
         "recipe_get",
         "recipe_run",
+        "sites_request",
         "probe_input",
       ] as const
     ).map((method) => ({

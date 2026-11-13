@@ -33,6 +33,16 @@ const LONG_DESCRIPTION =
 const ISO_TIME = /^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{3}Z$/;
 const WAITING =
   /^Waiting in Firefox: the user can edit, save or discard the recipe in tab (\d+)\.$/;
+const BUDGET =
+  "Foxleash opens no more recipe pages or pages asking for sites in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.";
+const SITES_INTRO =
+  "The agent asks to use these sites for its task. Only the addresses come from the agent.";
+const SITES_REFUSED =
+  "The user did not allow these sites in this session. Each still asks on its own when opened.";
+// Refused on its own prompt; never loaded.
+const REFUSED_SITE = "https://refused.example";
+// A host of 250 characters, near the DNS limit; never loaded.
+const LONG_SITE = `https://${["a", "b", "c"].map((letter) => letter.repeat(63)).join(".")}.${"d".repeat(50)}.example`;
 const PENDING_MS = 1500;
 // Past the 30 s a request waits for a site prompt's answer.
 const DETACHED_WAIT_MS = 35_000;
@@ -63,6 +73,12 @@ const RUN_STATE = `JSON.stringify({
   sites: [...document.querySelectorAll("#sites li")].map((item) => item.textContent),
   status: document.getElementById("status").textContent,
   after: !document.getElementById("after").hidden,
+})`;
+
+// Whether each listed site, and the page, fit their width without scrolling sideways.
+const SITES_FIT = `JSON.stringify({
+  items: [...document.querySelectorAll("#sites li")].map((item) => item.scrollWidth <= item.clientWidth),
+  page: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
 })`;
 
 // The session answers the settings page lists.
@@ -285,7 +301,7 @@ describe("recipes the agent proposes, in real Firefox", () => {
     const again = await harness.refused(session, "propose_recipe", proposal("Busy"));
     assert.ok(
       again.includes(
-        `Foxleash is still showing the user a recipe page in tab ${tabId}. Try again after the user has answered there.`,
+        `Foxleash is still asking the user in tab ${tabId} whether to save a recipe. Try again after the user has answered there.`,
       ),
       again,
     );
@@ -295,7 +311,7 @@ describe("recipes the agent proposes, in real Firefox", () => {
     const closed = await harness.refused(session, "tab_close", { tabId });
     assert.ok(
       closed.includes(
-        `Foxleash is showing the user a recipe page in tab ${tabId}; leave that tab open.`,
+        `Foxleash is asking the user in tab ${tabId} whether to save a recipe; leave that tab open.`,
       ),
       closed,
     );
@@ -322,12 +338,7 @@ describe("recipes the agent proposes, in real Firefox", () => {
       }
     }
     const refused = await harness.refused(session, "propose_recipe", proposal("Budget"));
-    assert.ok(
-      refused.includes(
-        "Foxleash shows no more recipe pages in this session after three that were discarded, refused or closed without an answer. Start a new session to be asked again.",
-      ),
-      refused,
-    );
+    assert.ok(refused.includes(BUDGET), refused);
   });
 
   test("a page left open when its session ends stays open and saves; an answered one closes with its group", {
@@ -798,6 +809,196 @@ describe("recipes the agent proposes, in real Firefox", () => {
     }
   });
 
+  test("request_sites lists each site's state, and only a trusted click on Allow grants them for the session", async (t) => {
+    const blocked = `http://localhost:${fixtures.port}`;
+    await harness.seedSettings({
+      blocklist: ["localhost"],
+      [`site:${ALWAYS}`]: { grantedAt: new Date().toISOString() },
+    });
+    t.after(() => removeStored(["blocklist", `site:${ALWAYS}`]));
+    const session = await connected(t);
+
+    // Refused on its own prompt first; the prompt loads no page, so the site needs no network.
+    const prompts = await contextsOf("approve.html");
+    const asking = pending(harness.refused(session, "tab_open", { url: `${REFUSED_SITE}/` }));
+    const prompt = await harness.promptContext(prompts);
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, NO);
+    const refusal = await asking;
+    assert.ok(refusal.includes(`did not allow Foxleash on ${REFUSED_SITE}`), refusal);
+    await firefox.closeContext(prompt);
+
+    const existing = await runContexts();
+    const requesting = pending(
+      harness.call(session, "request_sites", {
+        sites: [fixtures.url("/a"), ALWAYS, `${blocked}/x`, REFUSED_SITE, LONG_SITE],
+      }),
+    );
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await waitFor(
+      page,
+      RUN_STATE,
+      JSON.stringify({
+        heading: "Allow Foxleash on these sites for this session?",
+        title: "Allow Foxleash on these sites for this session?",
+        recipe: SITES_INTRO,
+        sites: [
+          `${fixtures.site}: will be allowed for this session`,
+          `${ALWAYS}: already allowed`,
+          `${blocked}: blocked by your blocklist, stays blocked`,
+          `${REFUSED_SITE}: refused earlier in this session, stays refused`,
+          `${LONG_SITE}: will be allowed for this session`,
+        ],
+        status: "",
+        after: false,
+      }),
+    );
+    // The long site wraps instead of widening the page.
+    assert.deepEqual(JSON.parse(String(await firefox.evaluate(page, SITES_FIT))), {
+      items: [true, true, true, true, true],
+      page: true,
+    });
+
+    // A scripted click on an armed button grants nothing.
+    await harness.waitForArmed(page, 2);
+    await firefox.evaluate(page, `document.querySelector(${JSON.stringify(ALLOW)}).click()`);
+    await stillPending(requesting, PENDING_MS);
+
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, ALLOW);
+    const result = await requesting;
+    assert.equal(result.isError, false, result.text);
+    assert.deepEqual(parseResult(result.text), {
+      asked: true,
+      allowed: [fixtures.site, ALWAYS, LONG_SITE],
+      blocked: [blocked],
+      refused: [REFUSED_SITE],
+    });
+    await waitForStatus(page, "Allowed for this session. The agent is continuing.");
+
+    // The granted site loads with no prompt; the blocked one is still refused.
+    const before = await contextsOf("approve.html");
+    const opened = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
+    assert.equal(opened.title, TITLES.a);
+    assert.deepEqual(await contextsOf("approve.html"), before);
+    const refused = await harness.refused(session, "tab_open", { url: `${blocked}/a` });
+    assert.ok(refused.includes(`Foxleash does not act on ${blocked}`), refused);
+  });
+
+  test("Don't allow fails request_sites, and the site still asks on its own", async (t) => {
+    const session = await connected(t);
+    const existing = await runContexts();
+    const requesting = pending(harness.call(session, "request_sites", { sites: [fixtures.site] }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, NO);
+    const result = await requesting;
+    assert.equal(result.isError, true);
+    assert.ok(result.text.includes(SITES_REFUSED), result.text);
+    await waitForStatus(page, "Not allowed. The agent was told.");
+
+    const prompts = await contextsOf("approve.html");
+    const opening = pending(harness.call(session, "tab_open", { url: fixtures.url("/b") }));
+    const prompt = await harness.promptContext(prompts);
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, 'button[data-answer="once"]');
+    const opened = await opening;
+    assert.equal(opened.isError, false, opened.text);
+    assert.equal(tabOf(parseResult(opened.text)).title, TITLES.b);
+  });
+
+  test("closing the page without an answer fails request_sites", async (t) => {
+    const session = await connected(t);
+    const existing = await runContexts();
+    const requesting = pending(harness.call(session, "request_sites", { sites: [fixtures.site] }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await harness.waitForArmed(page, 2);
+    await firefox.closeContext(page);
+    const result = await requesting;
+    assert.equal(result.isError, true);
+    assert.match(
+      result.text,
+      /The page asking about the agent's sites in tab \d+ closed without an answer\./,
+    );
+  });
+
+  test("request_sites returns at once without a page when no site is askable", async (t) => {
+    const blocked = `http://localhost:${fixtures.port}`;
+    await harness.seedSettings({
+      blocklist: ["localhost"],
+      [`site:${ALWAYS}`]: { grantedAt: new Date().toISOString() },
+    });
+    t.after(() => removeStored(["blocklist", `site:${ALWAYS}`]));
+    const session = await connected(t);
+    const before = await runContexts();
+    assert.deepEqual(await harness.ok(session, "request_sites", { sites: [blocked, ALWAYS] }), {
+      asked: false,
+      allowed: [ALWAYS],
+      blocked: [blocked],
+      refused: [],
+    });
+    await sleep(PENDING_MS);
+    assert.deepEqual(await runContexts(), before);
+  });
+
+  test("while a request page is open the session opens no other page; the same sites share it", async (t) => {
+    await harness.seedSettings({
+      "recipe:Busy trip": { ...storedRecipe("Busy trip", "Open it."), sites: [fixtures.site] },
+    });
+    const session = await connected(t);
+    const existing = await runContexts();
+    const first = pending(harness.call(session, "request_sites", { sites: [fixtures.site] }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    const open =
+      /Foxleash is still asking the user in tab \d+ whether to allow the sites the agent asked for\. Try again after the user has answered there\./;
+    for (const [name, args] of [
+      ["request_sites", { sites: [ALWAYS] }],
+      ["start_recipe", { name: "Busy trip" }],
+      ["propose_recipe", proposal("Busy trip")],
+    ] as const) {
+      assert.match(await harness.refused(session, name, { ...args }), open);
+    }
+    // The same site, named by another of its addresses.
+    const second = pending(harness.call(session, "request_sites", { sites: [fixtures.url("/b")] }));
+    await sleep(PENDING_MS);
+    assert.deepEqual(
+      (await runContexts()).filter((context) => !existing.includes(context)),
+      [page],
+    );
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, ALLOW);
+    for (const result of await Promise.all([first, second])) {
+      assert.equal(result.isError, false, result.text);
+      assert.deepEqual(parseResult(result.text), {
+        asked: true,
+        allowed: [fixtures.site],
+        blocked: [],
+        refused: [],
+      });
+    }
+  });
+
+  test("after three request pages refused or closed the session opens no more", async (t) => {
+    const session = await connected(t);
+    for (const close of [false, true, false]) {
+      const existing = await runContexts();
+      const requesting = pending(
+        harness.call(session, "request_sites", { sites: [fixtures.site] }),
+      );
+      const page = await harness.pageContext(RUN_PAGE, existing);
+      await harness.waitForArmed(page, 2);
+      if (close) {
+        await firefox.closeContext(page);
+      } else {
+        await firefox.click(page, NO);
+      }
+      const result = await requesting;
+      assert.equal(result.isError, true, result.text);
+    }
+    const refused = await harness.refused(session, "request_sites", { sites: [fixtures.site] });
+    assert.ok(refused.includes(BUDGET), refused);
+  });
+
   test("the run_recipe prompt gives the recipe's steps, by its name or a unique part of it", async (t) => {
     const errand = storedRecipe("Prompted errand", "Open https://shop.example/errand.\nPay.");
     await harness.seedSettings({ [`recipe:${errand.name}`]: errand });
@@ -836,7 +1037,10 @@ describe("recipes the agent proposes, in real Firefox", () => {
     const result = await pollUntil(
       async () => {
         const called = await harness.call(session, "propose_recipe", { ...recipe });
-        if (called.isError && called.text.includes("is still showing the user a recipe page")) {
+        if (
+          called.isError &&
+          called.text.includes("Try again after the user has answered there.")
+        ) {
           throw new Error(called.text);
         }
         return called;
