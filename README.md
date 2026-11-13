@@ -147,6 +147,13 @@ drag at a point, or a key pressed without an element, is refused and not sent wh
 loading another page, or loaded one, before the action could be sent: the point or the key was
 chosen for the page before, so the agent reads the new page first.
 
+`navigate` to a URL and `tab_open` with a URL return once the page's document is ready, after
+giving its images and other parts at most 0.4 seconds more to load, so the agent can read and
+act in a page that is still loading them; when Foxleash cannot tell that the document is ready,
+they return once the whole page has loaded. A tab returned while it still loads has an empty
+title. Going back or forward, or reloading the page the tab already shows, waits until the whole
+page has loaded.
+
 The agent reads a page's text with `get_page_text`: the text as the page shows it, the main
 content first (the page's main element or article, else its largest block of text), then the
 rest of the page. Text hidden with display, visibility or the hidden attribute and the values

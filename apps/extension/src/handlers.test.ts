@@ -51,7 +51,7 @@ import {
 } from "./site-access.ts";
 import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
-import { LOAD_GRACE_MS, LOAD_TIMEOUT_MS } from "./wait-for-load.ts";
+import { LOAD_AFTER_READY_MS, LOAD_GRACE_MS, LOAD_TIMEOUT_MS } from "./wait-for-load.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
   it("returns only the tabs in the session's group", async () => {
@@ -2288,6 +2288,297 @@ describe("navigate reload of a tab Firefox unloaded", { timeout: 10000 }, () => 
     ]);
     assert.equal(otherTab.discarded, false);
     assert.deepEqual(otherTab.history, ["https://a.example/page"]);
+  });
+});
+
+describe("a load whose page is ready before it completes", { timeout: 10000 }, () => {
+  it("answers navigate to a URL 0.4 s after the page's DOM is ready, with the tab as it is then", async () => {
+    const { fake, timers, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/");
+    loadUntilReady(fake);
+    let done = false;
+    const navigated = navigate("s1", { tabId: tab.id, url: "https://b.example/" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    assert.equal(loadsOf(fake, "https://b.example/"), 1);
+    timers.advance(LOAD_AFTER_READY_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(1);
+    assert.deepEqual(await navigated, {
+      id: tab.id,
+      url: "https://b.example/",
+      title: "",
+      active: true,
+    });
+    // The result leaves out the title of a tab still loading.
+    assert.equal(fake.tabs.get(tab.id)?.title, "Interim title");
+    assert.equal(fake.tabs.get(tab.id)?.status, "loading");
+  });
+
+  it("does not count the load navigate answered early as a navigation for wait_for", async () => {
+    const { fake, timers, call, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/");
+    loadUntilReady(fake);
+    const navigated = navigate("s1", { tabId: tab.id, url: "https://b.example/" });
+    await flush();
+    timers.advance(LOAD_AFTER_READY_MS);
+    await navigated;
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://b.example/" });
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(waiting, { code: "wait_timeout" });
+  });
+
+  it("does not count the load navigate answered early when it ends during a wait_for", async () => {
+    const { fake, timers, call, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    await grant("https://b.example");
+    const tab = await open("s1", "https://a.example/");
+    loadUntilReady(fake);
+    const navigated = navigate("s1", { tabId: tab.id, url: "https://b.example/" });
+    await flush();
+    timers.advance(LOAD_AFTER_READY_MS);
+    await navigated;
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://b.example/" });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(waiting, { code: "wait_timeout" });
+  });
+
+  it("does not count the load tab_open answered early when it ends during a wait_for", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://example.com");
+    loadUntilReady(fake);
+    const opening = open("s1", "https://example.com/a");
+    await flush();
+    timers.advance(LOAD_AFTER_READY_MS);
+    const tab = await opening;
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://example.com/a" });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(waiting, { code: "wait_timeout" });
+  });
+
+  it("counts the load of a navigation a click began when it ends during a wait_for", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    beginNavigation(fake, tab.id, "https://a.example/next");
+    landNavigation(fake, tab.id, "https://a.example/next");
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/next" });
+    const result = await waiting;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+  });
+
+  it("counts the load of a navigation under way when a wait_for starts, with no action before", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    beginNavigation(fake, tab.id, "https://a.example/next");
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    landNavigation(fake, tab.id, "https://a.example/next");
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/next" });
+    const result = await waiting;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+  });
+
+  it("counts the load of a navigation that was ready before a wait_for starts, with no action before", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    beginNavigation(fake, tab.id, "https://a.example/next");
+    landNavigation(fake, tab.id, "https://a.example/next");
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    completeLoad(fake, tab.id);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/next" });
+    const result = await waiting;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+  });
+
+  it("does not count the load tab_open answered early after a prompt when it ends during a wait_for", async () => {
+    const { fake, timers, call, page } = setup();
+    loadUntilReady(fake);
+    const opening = call("s1", "tab_open", { url: "https://a.example/x" });
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    await flush();
+    timers.advance(LOAD_AFTER_READY_MS);
+    const opened = await opening;
+    assert.ok("tab" in opened);
+    const waiting = call("s1", "wait_for", {
+      tabId: opened.tab.id,
+      navigation: true,
+      timeoutMs: 2000,
+    });
+    await flush();
+    completeLoad(fake, opened.tab.id);
+    fake.emitCompleted({ tabId: opened.tab.id, frameId: 0, url: "https://a.example/x" });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(waiting, { code: "wait_timeout" });
+  });
+
+  it("answers tab_open 0.4 s after the page's DOM is ready, grouped before its load, selected after", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://example.com");
+    loadUntilReady(fake);
+    const groupsAtLoad: (number | undefined)[] = [];
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      if (properties.url !== undefined) groupsAtLoad.push(fake.tabs.get(tabId)?.groupId);
+      return update(tabId, properties);
+    };
+    let opened: TabInfo | undefined;
+    open("s1", "https://example.com/a").then((tab) => {
+      opened = tab;
+    });
+    await flush();
+    assert.equal(loadsOf(fake, "https://example.com/a"), 1);
+    timers.advance(LOAD_AFTER_READY_MS - 1);
+    await flush();
+    assert.equal(opened, undefined);
+    const [load] = fake.tabUpdates;
+    assert.ok(load);
+    assert.deepEqual(fake.tabUpdates, [
+      { tabId: load.tabId, url: "https://example.com/a", loadReplace: true },
+    ]);
+    assert.deepEqual(groupsAtLoad, [groupIdOf(fake, load.tabId)]);
+    timers.advance(1);
+    await flush();
+    assert.deepEqual(opened, {
+      id: load.tabId,
+      url: "https://example.com/a",
+      title: "",
+      active: true,
+    });
+    assert.deepEqual(fake.tabUpdates.at(-1), { tabId: load.tabId, active: true });
+  });
+
+  it("answers tab_open after an approval prompt 0.4 s after the page's DOM is ready", async () => {
+    const { fake, timers, call, page } = setup();
+    loadUntilReady(fake);
+    let done = false;
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" }).finally(() => {
+      done = true;
+    });
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(loadsOf(fake, "https://a.example/x"), 1);
+    timers.advance(LOAD_AFTER_READY_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(1);
+    const result = await opened;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.equal(result.tab.title, "");
+  });
+
+  it("waits for the whole page going back, and still reloads the page Firefox loaded again", async () => {
+    const context = setup();
+    const { fake, timers, navigate } = context;
+    const tab = await historyTab(context);
+    const steps: unknown[][] = [];
+    fake.browser.tabs.goBack = async (tabId) => {
+      steps.push(["back", tabId]);
+      const shown = fake.tabs.get(tabId);
+      assert.ok(shown);
+      shown.index -= 1;
+      const url = shown.history[shown.index] ?? "";
+      send(fake, [pageRequest(tabId, url)]);
+      beginNavigation(fake, tabId, url);
+      landNavigation(fake, tabId, url);
+    };
+    const reload = fake.browser.tabs.reload;
+    fake.browser.tabs.reload = async (tabId, properties) => {
+      steps.push(["reload", tabId, properties]);
+      return reload(tabId, properties);
+    };
+    let done = false;
+    const result = navigate("s1", { tabId: tab.id, action: "back" }).finally(() => {
+      done = true;
+    });
+    await flush();
+    assert.deepEqual(steps, [["back", tab.id]]);
+    timers.advance(LOAD_AFTER_READY_MS * 5);
+    await flush();
+    assert.equal(done, false);
+    completeLoad(fake, tab.id);
+    assert.equal((await result).url, "https://a.example/a");
+    assert.deepEqual(steps, [
+      ["back", tab.id],
+      ["reload", tab.id, { bypassCache: true }],
+    ]);
+  });
+
+  it("waits for the whole page on a reload", async () => {
+    const { fake, timers, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    fake.browser.tabs.reload = async (tabId) => {
+      beginNavigation(fake, tabId, "https://a.example/page");
+      landNavigation(fake, tabId, "https://a.example/page");
+    };
+    await assertWaitsForComplete({ fake, timers }, tab.id, () =>
+      navigate("s1", { tabId: tab.id, action: "reload" }),
+    );
+  });
+
+  it("waits for the whole page on a reload of a tab Firefox unloaded", async () => {
+    const { fake, timers, navigate, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    const shown = fake.tabs.get(tab.id);
+    assert.ok(shown);
+    shown.discarded = true;
+    loadUntilReady(fake);
+    await assertWaitsForComplete({ fake, timers }, tab.id, () =>
+      navigate("s1", { tabId: tab.id, action: "reload" }),
+    );
+    assert.equal(loadsOf(fake, "https://a.example/page"), 2);
+  });
+
+  it("waits for the whole page on a reload that went through an approval prompt", async () => {
+    const { fake, timers, call, open, sessions, page } = setup();
+    sessions.set("s1", state(["https://b.example"]));
+    const tab = await open("s1", "https://b.example/page");
+    sessions.set("s1", state([]));
+    loadUntilReady(fake);
+    await assertWaitsForComplete({ fake, timers }, tab.id, async () => {
+      const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+      (await page("s1")).deliver({ type: "answer", answer: "once" });
+      const result = await reloaded;
+      assert.ok("tab" in result);
+      return result.tab;
+    });
+    assert.deepEqual(fake.tabUpdates.at(-1), {
+      tabId: tab.id,
+      url: "https://b.example/page",
+      loadReplace: true,
+    });
   });
 });
 
@@ -7608,6 +7899,58 @@ function sendOnLookup(
     if (fake.tabs.get(tabId)?.url === "https://a.example/a") send(fake, [late(tabId)]);
     return get(tabId);
   };
+}
+
+/**
+ * Makes the tabs' loads of a web URL from now on stop once the page's DOM is ready, as for a page
+ * whose images still load; `completeLoad` finishes one. The tab's title is then an interim one.
+ */
+function loadUntilReady(fake: FakeBrowser): void {
+  const update = fake.browser.tabs.update;
+  fake.browser.tabs.update = async (tabId, properties) => {
+    const tab = fake.tabs.get(tabId);
+    const { url } = properties;
+    if (tab === undefined || url === undefined || !url.startsWith("https:")) {
+      return update(tabId, properties);
+    }
+    fake.tabUpdates.push({ tabId, ...properties });
+    tab.discarded = false;
+    tab.title = "Interim title";
+    beginNavigation(fake, tabId, url);
+    landNavigation(fake, tabId, url);
+    return fake.browser.tabs.get(tabId);
+  };
+}
+
+/** The load in the tab completes: its images and frames have loaded. */
+function completeLoad(fake: FakeBrowser, tabId: number): void {
+  const tab = fake.tabs.get(tabId);
+  assert.ok(tab);
+  tab.title = `Title of ${tab.url}`;
+  fake.emitStatus(tabId, "complete");
+}
+
+/**
+ * Runs `load`, whose page stops once its DOM is ready, and asserts it answers only once the load
+ * completes, with the completed page.
+ */
+async function assertWaitsForComplete(
+  { fake, timers }: Pick<ReturnType<typeof setup>, "fake" | "timers">,
+  tabId: number,
+  load: () => Promise<TabInfo>,
+): Promise<void> {
+  let done = false;
+  const loaded = load().finally(() => {
+    done = true;
+  });
+  for (let turn = 0; turn < 5; turn += 1) await flush();
+  assert.equal(fake.tabs.get(tabId)?.status, "loading");
+  timers.advance(LOAD_AFTER_READY_MS * 5);
+  await flush();
+  assert.equal(done, false);
+  completeLoad(fake, tabId);
+  const tab = await loaded;
+  assert.equal(tab.title, `Title of ${tab.url}`);
 }
 
 /** Firefox begins a navigation of the tab's top frame; the tab still shows its page. */

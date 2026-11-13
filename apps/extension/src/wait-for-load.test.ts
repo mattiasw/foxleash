@@ -9,12 +9,22 @@ import {
   flush,
 } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
-import { LOAD_GRACE_MS, LOAD_TIMEOUT_MS, waitForLoad } from "./wait-for-load.ts";
+import { createTabNavigations } from "./tab-navigations.ts";
+import {
+  LOAD_AFTER_READY_MS,
+  LOAD_GRACE_MS,
+  LOAD_TIMEOUT_MS,
+  waitForLoad,
+} from "./wait-for-load.ts";
 
 describe("waitForLoad", { timeout: 10000 }, () => {
   it("waits about 1 s for a load to start and up to 30 s for it to finish", () => {
     assert.equal(LOAD_GRACE_MS, 1000);
     assert.equal(LOAD_TIMEOUT_MS, 30000);
+  });
+
+  it("gives a load whose document is ready 0.4 s more to finish", () => {
+    assert.equal(LOAD_AFTER_READY_MS, 400);
   });
 
   it("resolves with the loaded tab on complete after loading", async () => {
@@ -1056,6 +1066,387 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     assert.deepEqual(seen, [0]);
     assertCleanedUp(fake, timers);
   });
+
+  describe("told when the document is ready", () => {
+    const url = "https://b.example/";
+
+    /** The tab's top frame starting a load of `url`, then committing it as document "doc-b". */
+    function loadAndCommit(fake: FakeBrowser, tab: FakeTab): void {
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+      fake.emitStatus(tab.id, "loading");
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+    }
+
+    function domReady(fake: FakeBrowser, tab: FakeTab, documentId = "doc-b"): void {
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 0, url, documentId });
+    }
+
+    it("resolves 0.4 s after the committed document's DOM is ready, with the tab as it is then", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      timers.advance(LOAD_GRACE_MS);
+      await flush();
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assert.equal(wait.tab()?.status, "loading");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("resolves at a complete that comes before the 0.4 s end, and leaves no timer", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("starts no extra time at a DOMContentLoaded of the document the tab is leaving", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            fake.emitStatus(tab.id, "loading");
+            domReady(fake, tab, "doc-a");
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS);
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("never returns the page the tab is leaving, even when its load ends", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            fake.emitStatus(tab.id, "loading");
+            fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/" });
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("counts DOM ready only of the commit after the onBeforeNavigate of a tab told unloaded", async () => {
+      const { fake, timers, ready, baseline } = setupReady();
+      const stored = "https://a.example/page";
+      const tab = fake.openTab({ url: stored, discarded: true, title: "Stored title" });
+      // The tracker holds a navigation the restore began, which its commit and DOM ready end.
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: stored });
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            tab.discarded = false;
+            fake.emitStatus(tab.id, "loading");
+            fake.emitCommitted({ tabId: tab.id, frameId: 0, url: stored, documentId: "doc-a" });
+            fake.emitDOMContentLoaded({
+              tabId: tab.id,
+              frameId: 0,
+              url: stored,
+              documentId: "doc-a",
+            });
+          },
+          { unloaded: true, ready },
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      loadAndCommit(fake, tab);
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("fails at the timeout when the URL commits nothing", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            fake.emitStatus(tab.id, "loading");
+            fake.emitStatus(tab.id, "complete");
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_TIMEOUT_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await assert.rejects(wait.promise, { code: "navigation_timeout" });
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("starts no extra time when the tracker lost the navigation to a complete before its commit", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            fake.emitStatus(tab.id, "loading");
+            fake.emitStatus(tab.id, "complete");
+            tab.url = url;
+            fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("resolves 0.4 s after DOM ready when the commit came before the loading", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            tab.url = url;
+            fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+            fake.emitStatus(tab.id, "loading");
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.url, url);
+      assert.equal(wait.tab()?.status, "loading");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("waits for the complete when the commit and DOM ready both came before the loading", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => {
+            fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url });
+            tab.url = url;
+            fake.emitCommitted({ tabId: tab.id, frameId: 0, url, documentId: "doc-b" });
+            domReady(fake, tab);
+            fake.emitStatus(tab.id, "loading");
+          },
+          { ready },
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("starts no extra time when another wait's bound ended the navigation committed", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      const other = ready.settled(tab.id, 100);
+      timers.advance(100);
+      assert.equal(await other, "committed");
+      domReady(fake, tab);
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.status, "complete");
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("follows a page that leaves for another after its DOM is ready to that page's DOM ready", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const redirect = "https://c.example/";
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      domReady(fake, tab);
+      await flush();
+      timers.advance(100);
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: redirect });
+      timers.advance(200);
+      tab.url = redirect;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: redirect, documentId: "doc-c" });
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 0, url: redirect, documentId: "doc-c" });
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(wait.tab()?.url, redirect);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("counts only the DOM ready of the page the tab committed last, when the first left early", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const redirect = "https://c.example/";
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: redirect });
+      tab.url = redirect;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: redirect, documentId: "doc-c" });
+      fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 0, url: redirect, documentId: "doc-c" });
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS - 1);
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.url, redirect);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("starts no extra time when the page the tab leaves ends its load before the next commits", async () => {
+      const { fake, timers, tab, ready, baseline } = setupReady();
+      const redirect = "https://c.example/";
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready,
+        }),
+      );
+      await flush();
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: redirect });
+      fake.emitCompleted({ tabId: tab.id, frameId: 0, url });
+      await flush();
+      timers.advance(LOAD_AFTER_READY_MS * 5);
+      await flush();
+      assert.equal(wait.done(), false);
+      tab.url = redirect;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: redirect, documentId: "doc-c" });
+      fake.emitStatus(tab.id, "complete");
+      await flush();
+      assert.equal(wait.tab()?.url, redirect);
+      assertCleanedUp(fake, timers, baseline);
+    });
+
+    it("fails with the error of a readiness check that rejects", async () => {
+      const { fake, timers, tab } = setup();
+      const error = new Error("tracker failed");
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => loadAndCommit(fake, tab), {
+          ready: { settled: () => Promise.reject(error) },
+        }),
+      );
+      await assert.rejects(wait.promise, error);
+      assertCleanedUp(fake, timers);
+    });
+  });
 });
 
 function setup() {
@@ -1065,10 +1456,39 @@ function setup() {
   return { fake, timers, tab };
 }
 
-function assertCleanedUp(fake: FakeBrowser, timers: { pending(): number }): void {
-  assert.equal(fake.listenerCount(), 0, "listeners left");
-  assert.equal(fake.committedListenerCount(), 0, "commit listeners left");
-  assert.equal(fake.beforeNavigateListenerCount(), 0, "onBeforeNavigate listeners left");
+/** `setup` with the navigation tracker created first, as the background script creates it. */
+function setupReady() {
+  const { fake, timers, tab } = setup();
+  const ready = createTabNavigations({ browser: fake.browser, timers });
+  return { fake, timers, tab, ready, baseline: listenerCounts(fake) };
+}
+
+interface ListenerCounts {
+  updated: number;
+  committed: number;
+  beforeNavigate: number;
+}
+
+function listenerCounts(fake: FakeBrowser): ListenerCounts {
+  return {
+    updated: fake.listenerCount(),
+    committed: fake.committedListenerCount(),
+    beforeNavigate: fake.beforeNavigateListenerCount(),
+  };
+}
+
+function assertCleanedUp(
+  fake: FakeBrowser,
+  timers: { pending(): number },
+  baseline: ListenerCounts = { updated: 0, committed: 0, beforeNavigate: 0 },
+): void {
+  assert.equal(fake.listenerCount(), baseline.updated, "listeners left");
+  assert.equal(fake.committedListenerCount(), baseline.committed, "commit listeners left");
+  assert.equal(
+    fake.beforeNavigateListenerCount(),
+    baseline.beforeNavigate,
+    "onBeforeNavigate listeners left",
+  );
   assert.equal(timers.pending(), 0, "timers left");
 }
 

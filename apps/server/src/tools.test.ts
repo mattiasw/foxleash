@@ -139,8 +139,16 @@ describe("tools", () => {
         "Going back or forward to a page that Firefox loads again instead of keeping it in memory reloads it the same way, unless a form sent it, or a frame in it, with POST, or this session may not act on its site.",
       ),
     );
+    const loadsUntilReady =
+      "With a URL, it returns once the page's document is ready: images and other parts of the page may still be loading, and then the title it returns is empty.";
+    assert.ok(
+      navigate?.description?.includes(
+        `${loadsUntilReady} Going back or forward, or reloading the page the tab already shows, returns once the whole page has loaded.`,
+      ),
+    );
     const tabOpen = tools.find((tool) => tool.name === "tab_open");
     assert.equal(tabOpen?.inputSchema.required, undefined);
+    assert.ok(tabOpen?.description?.includes(loadsUntilReady));
     assert.equal(
       urlDescription(navigate),
       "http or https URL to load, or an address starting with / from read_page, loaded on the site the tab shows",

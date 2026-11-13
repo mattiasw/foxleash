@@ -5,6 +5,7 @@ import { type Firefox, pollUntil } from "./firefox.ts";
 import {
   counterTitle,
   type FixtureServer,
+  NAV_IMAGE_HOLD_MS,
   parseCount,
   startFixtureServer,
   TITLES,
@@ -205,6 +206,51 @@ describe("tabs in real Firefox", () => {
     } finally {
       const tabIds = second === undefined ? [first.id] : [first.id, second];
       for (const id of tabIds) await harness.ok(session, "tab_close", { tabId: id });
+    }
+  });
+
+  test("tab_open returns once the page's document is ready, while its image still loads", async () => {
+    assert.ok(NAV_IMAGE_HOLD_MS > 1000);
+    // The extra parameter only makes the URL unique.
+    const url = fixtures.url(`/nav/middle?delay=0&store=nostore&n=${Date.now()}`);
+    const started = Date.now();
+    const opened = tabOf(await harness.ok(session, "tab_open", { url }));
+    const elapsed = Date.now() - started;
+    try {
+      assert.ok(elapsed < 1000, `tab_open took ${elapsed} ms`);
+      assert.equal(opened.url, url);
+      // The image still loads, so the tab is still loading and its title is left out.
+      assert.equal(opened.title, "");
+      assert.equal(opened.active, true);
+      const read = await harness.call(session, "read_page", { tabId: opened.id });
+      assert.ok(
+        !read.isError && read.text.includes(`heading "${TITLES.navMiddle}"`),
+        `read_page returned:\n${read.text}`,
+      );
+      assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+    } finally {
+      await harness.ok(session, "tab_close", { tabId: opened.id });
+    }
+  });
+
+  test("navigate to a url returns once the page's document is ready, while its image still loads", async () => {
+    const opened = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/b") }));
+    try {
+      // The extra parameter only makes the URL unique.
+      const url = fixtures.url(`/nav/middle?delay=0&store=nostore&n=${Date.now()}`);
+      const started = Date.now();
+      const navigated = tabOf(await harness.ok(session, "navigate", { tabId: opened.id, url }));
+      const elapsed = Date.now() - started;
+      assert.ok(elapsed < 1000, `navigate took ${elapsed} ms`);
+      assert.equal(navigated.url, url);
+      assert.equal(navigated.title, "");
+      const read = await harness.call(session, "read_page", { tabId: opened.id });
+      assert.ok(
+        !read.isError && read.text.includes(`heading "${TITLES.navMiddle}"`),
+        `read_page returned:\n${read.text}`,
+      );
+    } finally {
+      await harness.ok(session, "tab_close", { tabId: opened.id });
     }
   });
 

@@ -77,7 +77,8 @@ function isRetried(error: unknown): boolean {
  * the History API and `checks` has resolved, in either order; "closed" when the tab is removed;
  * "timeout" when `timeoutMs` passes first. Rejects with the error of `checks`. The listeners go
  * in before `checks` runs, so a navigation that ends while it runs still counts, and so does a
- * load already in progress.
+ * load already in progress. A finished load counts only when `loadCounts` says so, asked as it
+ * finishes.
  */
 export function waitForNavigation<Handle>(
   {
@@ -87,21 +88,23 @@ export function waitForNavigation<Handle>(
   tabId: number,
   timeoutMs: number,
   checks: () => Promise<unknown>,
+  loadCounts: () => boolean = () => true,
 ): Promise<"navigated" | "closed" | "timeout"> {
   return new Promise((resolve, reject) => {
     let navigated = false;
     let checked = false;
     const timer = timers.setTimeout(() => finish(() => resolve("timeout")), timeoutMs);
-    const onNavigation = (details: NavigationDetails) => {
-      if (details.tabId !== tabId || details.frameId !== 0) return;
-      navigated = true;
-      if (checked) finish(() => resolve("navigated"));
+    const onLoad = (details: NavigationDetails) => {
+      if (inTopFrame(details) && loadCounts()) navigatedNow();
+    };
+    const onHistoryChange = (details: NavigationDetails) => {
+      if (inTopFrame(details)) navigatedNow();
     };
     const onRemoved = (removedId: number) => {
       if (removedId === tabId) finish(() => resolve("closed"));
     };
-    browser.webNavigation.onCompleted.addListener(onNavigation);
-    browser.webNavigation.onHistoryStateUpdated.addListener(onNavigation);
+    browser.webNavigation.onCompleted.addListener(onLoad);
+    browser.webNavigation.onHistoryStateUpdated.addListener(onHistoryChange);
     browser.tabs.onRemoved.addListener(onRemoved);
     (async () => checks())().then(
       () => {
@@ -111,10 +114,19 @@ export function waitForNavigation<Handle>(
       (error: unknown) => finish(() => reject(error)),
     );
 
+    function inTopFrame(details: NavigationDetails): boolean {
+      return details.tabId === tabId && details.frameId === 0;
+    }
+
+    function navigatedNow(): void {
+      navigated = true;
+      if (checked) finish(() => resolve("navigated"));
+    }
+
     // Settling twice is harmless: a promise keeps its first outcome, and removing again does nothing.
     function finish(settle: () => void): void {
-      browser.webNavigation.onCompleted.removeListener(onNavigation);
-      browser.webNavigation.onHistoryStateUpdated.removeListener(onNavigation);
+      browser.webNavigation.onCompleted.removeListener(onLoad);
+      browser.webNavigation.onHistoryStateUpdated.removeListener(onHistoryChange);
       browser.tabs.onRemoved.removeListener(onRemoved);
       timers.clearTimeout(timer);
       settle();

@@ -216,6 +216,9 @@ export function createHandlers<Handle>({
   settle,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const frameErrors = watchFrameErrors(browser);
+  // Tabs navigate or tab_open returned while their page still loaded, with the count of top-frame
+  // navigations begun in each then: until another begins, a load that ends is the returned one.
+  const returnedLoading = new Map<number, number>();
   const handlers: Handlers = {
     tabs_list: tabsList,
     tab_open: tabOpen,
@@ -298,13 +301,15 @@ export function createHandlers<Handle>({
       throw error;
     }
     try {
-      await waitForLoad(
-        browser,
-        timers,
-        tab.id,
-        url,
-        () => browser.tabs.update(tab.id, { url, loadReplace: true }),
-        { unloaded: true },
+      noteReturned(
+        await waitForLoad(
+          browser,
+          timers,
+          tab.id,
+          url,
+          () => browser.tabs.update(tab.id, { url, loadReplace: true }),
+          { unloaded: true, ready: navigations },
+        ),
       );
     } catch (error) {
       // Never selected, it holds nothing the user saw.
@@ -404,8 +409,9 @@ export function createHandlers<Handle>({
                 tabId,
                 target.kind === "url" ? target.url : undefined,
                 () => startNavigation(tabId, target),
-                { unloaded: tab.discarded === true },
+                { unloaded: tab.discarded === true, ready: navigations },
               );
+        noteReturned(loaded);
         const shown =
           history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
         const view = await access.view(session);
@@ -631,8 +637,15 @@ export function createHandlers<Handle>({
       // Checked in the same turn as the wait's listeners go in, so no navigation falls between. A
       // navigation under way is waited for, as before; the take after it spends what finished.
       if (navigations.underWay(tabId) || !navigations.takeFinished(session, tabId)) {
-        const outcome = await waitForNavigation({ browser, timers }, tabId, timeoutMs, () =>
-          groupTab(session, tabId),
+        // Until another navigation begins, a load that ends is the one navigate or tab_open
+        // returned the tab during, which is in their result.
+        const returned = returnedLoading.get(tabId);
+        const outcome = await waitForNavigation(
+          { browser, timers },
+          tabId,
+          timeoutMs,
+          () => groupTab(session, tabId),
+          () => navigations.begun(tabId) !== returned,
         );
         if (outcome === "closed") throw tabNotFound(tabId);
         if (outcome === "timeout") {
@@ -1287,10 +1300,21 @@ export function createHandlers<Handle>({
             tabId,
             url,
             () => browser.tabs.update(tabId, { url, loadReplace: onPrompt }),
-            { unloaded: tab.discarded === true },
+            // A reload through a prompt waits for the whole page, as every reload does.
+            {
+              unloaded: tab.discarded === true,
+              ready: target.kind === "url" ? navigations : undefined,
+            },
           );
+    noteReturned(loaded);
     const after = await access.view(session);
     return after.tabInfo(loaded);
+  }
+
+  /** Notes a tab a load returned while its page still loads, for wait_for. */
+  function noteReturned(tab: Tab): void {
+    // A note left from an earlier load never matches again: each load begins a navigation.
+    if (tab.status !== "complete") returnedLoading.set(tab.id, navigations.begun(tab.id));
   }
 
   /**

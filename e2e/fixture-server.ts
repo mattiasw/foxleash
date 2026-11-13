@@ -767,7 +767,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
 }
 
 const NAVIGATION_PAGES: readonly string[] = ["/nav/start", "/nav/middle", "/nav/target"];
-const NAV_IMAGE_HOLD_MS = 3000;
+export const NAV_IMAGE_HOLD_MS = 3000;
 const PIXEL_GIF = "R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 /** Sends a navigation page, the target after the variant's delay; 404 for another query. */

@@ -47,8 +47,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   requests.
 - A click or a drag at a point, or `press_key` without an element, is refused and not sent when
   the tab was loading another page, or loaded one, before it could be sent, since its point or
-  key was chosen for the page before. A `batch` stops before such a step in a tab an earlier step loaded another page
-  in.
+  key was chosen for the page before. A `batch` stops before such a step in a tab an earlier
+  step loaded another page in.
+- `navigate` to a URL and `tab_open` with a URL answer once the page can be read, instead of
+  after every image and script has loaded, so pages open faster. The tab they return has an
+  empty title when the page is still loading.
 
 ### Fixed
 

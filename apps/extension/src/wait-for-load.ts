@@ -7,6 +7,7 @@ import type {
 } from "./browser-api.ts";
 import { secondsText, ToolError } from "./handlers.ts";
 import { withoutFragment } from "./site.ts";
+import type { NavigationOutcome, TabNavigations } from "./tab-navigations.ts";
 
 /**
  * How long a navigation whose URL is not known may take to start loading before the tab counts as
@@ -18,6 +19,10 @@ export const LOAD_GRACE_MS = 1000;
  * the navigation may take to commit before the wait fails.
  */
 export const LOAD_TIMEOUT_MS = 30000;
+/**
+ * How long a URL load whose document is ready may take to finish before the tab is returned as it is.
+ */
+export const LOAD_AFTER_READY_MS = 400;
 
 /**
  * Runs `navigate` and resolves with the tab once its load completes. `url` is the web URL the
@@ -29,7 +34,9 @@ export const LOAD_TIMEOUT_MS = 30000;
  * starts the grace period again. `unloaded` says the tab was one Firefox had unloaded: then only a
  * top-frame commit after the tab's onBeforeNavigate counts, since the restore commits the stored URL
  * first, and no fragment navigation is assumed, since a load into a restored tab commits even when
- * only the fragment differs.
+ * only the fragment differs. With `ready` and a URL, the wait also resolves `LOAD_AFTER_READY_MS`
+ * after the DOM of the document the tab committed last is ready, as `ready.settled` reports it,
+ * with the tab as it is then; a top-frame navigation that leaves the document stops that time.
  */
 export function waitForLoad<Handle>(
   browser: BrowserApi,
@@ -40,7 +47,12 @@ export function waitForLoad<Handle>(
   {
     timeoutMs = LOAD_TIMEOUT_MS,
     unloaded = false,
-  }: { timeoutMs?: number; unloaded?: boolean } = {},
+    ready,
+  }: {
+    timeoutMs?: number;
+    unloaded?: boolean;
+    ready?: Pick<TabNavigations, "settled"> | undefined;
+  } = {},
 ): Promise<Tab> {
   return new Promise((resolve, reject) => {
     let settled = false;
@@ -57,6 +69,10 @@ export function waitForLoad<Handle>(
     // navigation begins.
     let restoring = unloaded;
     let timeoutTimer: Handle | undefined;
+    // The ask whose answer counts: the one made at the commit of the document the tab shows, until
+    // a navigation leaves it.
+    let readyAsk: object | undefined;
+    let readyTimer: Handle | undefined;
 
     // Removed when the wait settles, so it never sees a settled wait.
     const listener: TabUpdatedListener = (_tabId, changeInfo, tab) => {
@@ -87,6 +103,7 @@ export function waitForLoad<Handle>(
         return;
       }
       arrived = true;
+      askReady();
       start();
     };
 
@@ -96,7 +113,11 @@ export function waitForLoad<Handle>(
       if (details.tabId !== tabId || details.frameId !== 0) return;
       committedBeforeLoad = false;
       // A load of about:blank in the tab is not the requested navigation; its restore may follow.
-      if (details.url !== "about:blank") restoring = false;
+      if (details.url === "about:blank") return;
+      restoring = false;
+      // The page leaves the document it arrived at, as a client redirect does: the next commit asks
+      // again.
+      forgetReady();
     };
 
     browser.tabs.onUpdated.addListener(listener, { tabId, properties: ["status"] });
@@ -111,7 +132,10 @@ export function waitForLoad<Handle>(
     function start(): void {
       if (started) return;
       started = true;
-      if (committedBeforeLoad) arrived = true;
+      if (committedBeforeLoad) {
+        arrived = true;
+        askReady();
+      }
       loadStarts++;
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) return;
@@ -125,6 +149,30 @@ export function waitForLoad<Handle>(
           );
         } else currentTab().then(finish, fail);
       }, timeoutMs);
+    }
+
+    // Asked at a commit that makes the tab arrive: the tracker has then already taken the commit,
+    // so its "ready" is this document's.
+    function askReady(): void {
+      if (ready === undefined) return;
+      const ask = {};
+      readyAsk = ask;
+      ready.settled(tabId, timeoutMs).then((outcome) => {
+        if (readyAsk === ask) afterReady(outcome);
+      }, fail);
+    }
+
+    function forgetReady(): void {
+      readyAsk = undefined;
+      if (readyTimer !== undefined) timers.clearTimeout(readyTimer);
+    }
+
+    // "idle" can also mean the tracker lost this navigation to a stray complete before its commit.
+    function afterReady(outcome: NavigationOutcome): void {
+      if (settled || (outcome !== "ready" && outcome !== "ended")) return;
+      readyTimer = timers.setTimeout(() => {
+        currentTab().then(finish, fail);
+      }, LOAD_AFTER_READY_MS);
     }
 
     function restart(): void {
@@ -171,6 +219,7 @@ export function waitForLoad<Handle>(
       browser.webNavigation.onCommitted.removeListener(onCommitted);
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
+      if (readyTimer !== undefined) timers.clearTimeout(readyTimer);
     }
   });
 }

@@ -82,6 +82,8 @@ const SETTLE_SECONDS = ACT_SETTLE_CAP_MS / 1000;
 const SETTLES = `After the act, Foxleash waits for the page to settle: a page the act loads until its document is ready, up to 10 seconds; otherwise until the page has not changed for ${QUIET_SECONDS} seconds and no request it began after the act is still open, at most ${SETTLE_SECONDS} seconds. The result's after gives element, the element that took the act (its role and name as read_page shows them), and page: loaded (the tab loaded another page; url is its address), loading (the tab was still loading another page when Foxleash stopped waiting; url once the page is known), changed (the page changed, then went quiet), unchanged (no change was seen within the wait), unsettled (the page was still changing, or waiting for a request it began after the act, at ${SETTLE_SECONDS} seconds), closed (the tab closed) or unknown (Foxleash could not tell). openedTabs lists tabs that opened in this session's group, and requests counts the requests the page began after the act. Foxleash watches the elements, attributes and text of the page's own document and its shadow roots, and its fields' values; not frames, canvas drawing, or CSS animations and transitions. Since unchanged means only that no change was seen within the wait, read the page before repeating an act, also when requests shows that the page sent something.`;
 const ASKS_FIRST =
   "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer.";
+const LOADS_UNTIL_READY =
+  "With a URL, it returns once the page's document is ready: images and other parts of the page may still be loading, and then the title it returns is empty.";
 const BOTH_OR_NEITHER = "Give either url or action, not both and not neither.";
 const ONE_CONDITION = "Give exactly one of text, selector or navigation.";
 const DEFAULT_WAIT_SECONDS = DEFAULT_WAIT_FOR_MS / 1000;
@@ -276,7 +278,7 @@ export function registerTools(
   register(
     "tab_open",
     {
-      description: `Open a new tab in this session's Foxleash tab group, optionally at a URL, and return it. ${ASKS_FIRST} ${REDACTED_TABS}`,
+      description: `Open a new tab in this session's Foxleash tab group, optionally at a URL, and return it. ${LOADS_UNTIL_READY} ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
         url: z.string().optional().describe("Whole http or https URL; omit for a blank tab"),
       },
@@ -286,7 +288,7 @@ export function registerTools(
   register(
     "navigate",
     {
-      description: `Load a URL in a tab of this session's Foxleash tab group, or go back, forward or reload it, and return the tab. Give either url or action. A reload loads the page again without the browser's cache, and its form fields lose what was typed into them. Going back or forward to a page that Firefox loads again instead of keeping it in memory reloads it the same way, unless a form sent it, or a frame in it, with POST, or this session may not act on its site. ${ASKS_FIRST} ${REDACTED_TABS}`,
+      description: `Load a URL in a tab of this session's Foxleash tab group, or go back, forward or reload it, and return the tab. Give either url or action. A reload loads the page again without the browser's cache, and its form fields lose what was typed into them. Going back or forward to a page that Firefox loads again instead of keeping it in memory reloads it the same way, unless a form sent it, or a frame in it, with POST, or this session may not act on its site. ${LOADS_UNTIL_READY} Going back or forward, or reloading the page the tab already shows, returns once the whole page has loaded. ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
         tabId: z
           .number()
