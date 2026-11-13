@@ -147,6 +147,11 @@ interface HistoryLoad {
    */
   reloads(): boolean | undefined;
   /**
+   * Whether a frame request that was not a GET started from the request of the last top-level
+   * commit on, or was reported after it; true while that request is unknown.
+   */
+  framePosted(): boolean;
+  /**
    * Starts the grace of a commit kept in memory, and resolves once a request or a grace makes
    * `reloads` defined, or after `ms`.
    */
@@ -164,8 +169,10 @@ interface TopRequest {
   /** Without its fragment. */
   url: string;
   timeStamp: number;
-  /** Whether no top-level or frame request that was not a GET was reported after it. */
+  /** Whether no top-level request that was not a GET was reported after it. */
   onlyGets: boolean;
+  /** Whether no frame request that was not a GET was reported after it. */
+  framesOnlyGets: boolean;
 }
 
 type WaitCondition = { text: string } | { selector: string } | { navigation: true };
@@ -488,11 +495,11 @@ export function createHandlers<Handle>({
    * `stop`, with their start times: Firefox can report a document's own request after its commit
    * (ADR 0016), so they are matched by time, not by the order they arrive in. It `reloads` when
    * the last top-level request started by the tab's last top-level commit is for the commit's URL,
-   * and no top-level or frame request that started from that request on, or was reported after
-   * it, was not a GET. A commit of a document the tab committed before the step was kept in
-   * memory: it reloads nothing once KEPT_GRACE_MS passed with no top-level navigation begun after
-   * it, by the order Firefox reports them. The grace starts when `navigate` decides, or at a later
-   * such commit (ADR 0049).
+   * and no top-level request that started from that request on, or was reported after it, was not
+   * a GET; `framePosted` tells whether a frame request did (ADR 0052). A commit of a document the
+   * tab committed before the step was kept in memory: it reloads nothing once KEPT_GRACE_MS passed
+   * with no top-level navigation begun after it, by the order Firefox reports them. The grace
+   * starts when `navigate` decides, or at a later such commit (ADR 0049).
    */
   function watchHistoryLoad(tabId: number): HistoryLoad {
     // A copy: the record hears each commit before the listener below does.
@@ -515,25 +522,33 @@ export function createHandlers<Handle>({
     // commit or started after the one it was reported after.
     let byCommit: TopRequest | undefined;
     let next: TopRequest | undefined;
-    let nonGetStarted = Number.NEGATIVE_INFINITY;
+    let topNonGetStarted = Number.NEGATIVE_INFINITY;
+    let frameNonGetStarted = Number.NEGATIVE_INFINITY;
     let wake: (() => void) | undefined;
     const onRequest = (details: RequestDetails) => {
       if (details.tabId !== tabId) return;
       const top = details.type === "main_frame";
-      if (
-        details.method !== "GET" &&
-        // Firefox reports a load in an <object> element's frame as an object request.
-        (top || details.type === "sub_frame" || details.type === "object")
-      ) {
-        nonGetStarted = Math.max(nonGetStarted, details.timeStamp);
-        if (byCommit !== undefined) byCommit.onlyGets = false;
-        if (next !== undefined) next.onlyGets = false;
+      if (details.method !== "GET") {
+        if (top) {
+          topNonGetStarted = Math.max(topNonGetStarted, details.timeStamp);
+          if (byCommit !== undefined) byCommit.onlyGets = false;
+          if (next !== undefined) next.onlyGets = false;
+        } else if (
+          // Firefox reports a load in an <object> element's frame as an object request.
+          details.type === "sub_frame" ||
+          details.type === "object"
+        ) {
+          frameNonGetStarted = Math.max(frameNonGetStarted, details.timeStamp);
+          if (byCommit !== undefined) byCommit.framesOnlyGets = false;
+          if (next !== undefined) next.framesOnlyGets = false;
+        }
       }
       if (!top) return;
       const request = {
         url: withoutFragment(details.url),
         timeStamp: details.timeStamp,
         onlyGets: true,
+        framesOnlyGets: true,
       };
       if (commit !== undefined && request.timeStamp <= commit.timeStamp) {
         byCommit = later(byCommit, request);
@@ -569,6 +584,8 @@ export function createHandlers<Handle>({
     browser.webNavigation.onBeforeNavigate.addListener(onNavigate);
     return {
       reloads,
+      framePosted: () =>
+        byCommit?.framesOnlyGets !== true || frameNonGetStarted >= byCommit.timeStamp,
       decided: (ms) => {
         deciding = true;
         startGrace();
@@ -604,7 +621,7 @@ export function createHandlers<Handle>({
       if (commit.kept) return commit.graced && !begun ? false : undefined;
       // Firefox can report the page's own request late (ADR 0016).
       if (byCommit?.url !== commit.url) return undefined;
-      return byCommit.onlyGets && nonGetStarted < byCommit.timeStamp;
+      return byCommit.onlyGets && topNonGetStarted < byCommit.timeStamp;
     }
 
     /** Gives the last commit, once `navigate` decides and if it was kept, its grace. */
@@ -626,10 +643,10 @@ export function createHandlers<Handle>({
    * field value and sends no form again, also not a frame's; an address with a fragment would be a
    * fragment navigation, so it is reloaded without the cache instead (ADR 0051). Only in the
    * session's group, off its prompt, on a site it may act on, unless the tab shows a document from
-   * before the step that no commit during the step named, and never after a request that was not
-   * a GET. A page kept in memory waits KEPT_GRACE_MS for a navigation of its own, which is then
-   * decided on as a page loaded again, also one the tab commits while it is read before the load
-   * (ADR 0049).
+   * before the step that no commit during the step named, never after a top-level request that was
+   * not a GET, and for an address with a fragment never after a frame's (ADR 0052). A page kept in
+   * memory waits KEPT_GRACE_MS for a navigation of its own, which is then decided on as a page
+   * loaded again, also one the tab commits while it is read before the load (ADR 0049).
    */
   async function reloadHistoryLoad(
     session: string,
@@ -652,8 +669,10 @@ export function createHandlers<Handle>({
       const reloads = history.reloads();
       if (reloads === undefined) continue;
       const url = tab.url ?? "";
+      const fragment = withoutFragment(url) !== url;
       if (
         !reloads ||
+        (fragment && history.framePosted()) ||
         // A page restored from memory may commit nothing: the tab must not show it.
         !history.shows(frames?.find((frame) => frame.frameId === 0)?.documentId) ||
         group === undefined ||
@@ -670,9 +689,9 @@ export function createHandlers<Handle>({
         timers,
         tabId,
         undefined,
-        withoutFragment(url) === url
-          ? () => browser.tabs.update(tabId, { url, loadReplace: true })
-          : () => browser.tabs.reload(tabId, { bypassCache: true }),
+        fragment
+          ? () => browser.tabs.reload(tabId, { bypassCache: true })
+          : () => browser.tabs.update(tabId, { url, loadReplace: true }),
         { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS },
       );
     }

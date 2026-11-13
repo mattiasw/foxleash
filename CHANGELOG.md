@@ -63,6 +63,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page's address again instead of reloading it without the browser's cache, so a form in one of
   its frames is not sent again however late Firefox reports it (except for an address with a
   #fragment, which is still reloaded). The page may now come from the browser's cache.
+- After `navigate` goes back or forward to a page Firefox loads again that holds a frame a form
+  sent with POST, Foxleash now also loads the page's address again, so values typed or filled into
+  that frame no longer come back and the frame shows its first page (except for an address with a
+  #fragment).
 
 ### Fixed
 

@@ -1573,12 +1573,78 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     }
   });
 
-  it("does not reload after a non-GET started from the page's request on, or reported after it", async () => {
+  it("does not reload after a top-level non-GET started from the page's request on, or reported after it", async () => {
     const cases: [
       string,
       (tabId: number) => RequestDetails[],
       (tabId: number) => RequestDetails[],
     ][] = [
+      [
+        "a top-level POST started before it, reported after it and before the commit",
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+          pageRequest(tabId, "https://b.example/send", "POST", 1),
+        ],
+        () => [],
+      ],
+      [
+        "a top-level POST started before it, reported after it and the commit",
+        () => [],
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/a", "GET", 2),
+          pageRequest(tabId, "https://b.example/send", "POST", 1),
+        ],
+      ],
+    ];
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, before, after] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, before, after);
+        assert.deepEqual(
+          await pastRequestWait(context, { tabId: tab.id, action: "back" }),
+          tab,
+          `${label}, ${shown}`,
+        );
+        assert.deepEqual(steps, [["back", tab.id]], `${label}, ${shown}`);
+      }
+    }
+  });
+
+  it("does not reload after a top-level non-GET that started after the commit and one before the page's request", async () => {
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      const context = setup();
+      const tab = await historyTab(context, shown);
+      const steps = recordSteps(
+        context.fake,
+        (tabId) => [
+          pageRequest(tabId, "https://b.example/send", "POST", 60),
+          pageRequest(tabId, "https://b.example/old", "POST", 1),
+        ],
+        (tabId) => [pageRequest(tabId, "https://a.example/a", "GET", 2)],
+      );
+      const emitCommitted = context.fake.emitCommitted;
+      context.fake.emitCommitted = (details) => emitCommitted({ ...details, timeStamp: 50 });
+      assert.deepEqual(
+        await pastRequestWait(context, { tabId: tab.id, action: "back" }),
+        tab,
+        shown,
+      );
+      assert.deepEqual(steps, [["back", tab.id]], shown);
+    }
+  });
+
+  it("loads with GET after a frame non-GET started from the page's request on, or reported after it, and reloads no address with a fragment after one", async () => {
+    const cases: [
+      string,
+      (tabId: number) => RequestDetails[],
+      (tabId: number) => RequestDetails[],
+    ][] = [
+      [
+        "a frame POST started as the page's request did, reported before it",
+        (tabId) => [frameRequest(tabId, "https://f.example/form", "POST", 2)],
+        (tabId) => [pageRequest(tabId, "https://a.example/a", "GET", 2)],
+      ],
       [
         "a frame POST started after the page's request, reported before it",
         (tabId) => [frameRequest(tabId, "https://f.example/form", "POST", 3)],
@@ -1609,16 +1675,26 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         ],
       ],
     ];
-    for (const [label, before, after] of cases) {
-      const context = setup();
-      const tab = await historyTab(context);
-      const steps = recordSteps(context.fake, before, after);
-      assert.deepEqual(
-        await pastRequestWait(context, { tabId: tab.id, action: "back" }),
-        tab,
-        label,
-      );
-      assert.deepEqual(steps, [["back", tab.id]], label);
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, before, after] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, before, after);
+        const loaded = await pastRequestWait(context, { tabId: tab.id, action: "back" });
+        if (shown.includes("#")) {
+          assert.deepEqual(loaded, tab, `${label}, ${shown}`);
+          assert.deepEqual(steps, [["back", tab.id]], `${label}, ${shown}`);
+        } else {
+          assert.deepEqual(
+            steps,
+            [
+              ["back", tab.id],
+              ["load", tab.id, { url: shown, loadReplace: true }],
+            ],
+            `${label}, ${shown}`,
+          );
+        }
+      }
     }
   });
 
@@ -2358,21 +2434,37 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.deepEqual(steps, [["back", tab.id]]);
   });
 
-  it("loads the address a page moved to while it loaded, and reloads one with a fragment", async () => {
-    const moves: [string, (tabId: number) => unknown[]][] = [
+  it("loads the address a page moved to while it loaded, and reloads one with a fragment unless a frame sent a POST", async () => {
+    const moves: [string, (tabId: number) => RequestDetails[], (tabId: number) => unknown[][]][] = [
       [
         "https://a.example/a?moved",
-        (tabId) => ["load", tabId, { url: "https://a.example/a?moved", loadReplace: true }],
+        () => [],
+        (tabId) => [["load", tabId, { url: "https://a.example/a?moved", loadReplace: true }]],
       ],
-      ["https://a.example/a#moved", (tabId) => ["reload", tabId, { bypassCache: true }]],
+      [
+        "https://a.example/a#moved",
+        () => [],
+        (tabId) => [["reload", tabId, { bypassCache: true }]],
+      ],
+      [
+        "https://a.example/a?moved",
+        (tabId) => [frameRequest(tabId, "https://f.example/form", "POST")],
+        (tabId) => [["load", tabId, { url: "https://a.example/a?moved", loadReplace: true }]],
+      ],
+      [
+        "https://a.example/a#moved",
+        (tabId) => [frameRequest(tabId, "https://f.example/form", "POST")],
+        () => [],
+      ],
     ];
-    for (const [moved, load] of moves) {
+    for (const [moved, frames, load] of moves) {
       const context = setup();
       const tab = await historyTab(context);
       const fakeTab = context.fake.tabs.get(tab.id);
       assert.ok(fakeTab);
       const steps = recordSteps(context.fake, (tabId) => [
         pageRequest(tabId, "https://a.example/a"),
+        ...frames(tabId),
       ]);
       const goBack = context.fake.browser.tabs.goBack;
       context.fake.browser.tabs.goBack = (tabId) => {
@@ -2381,14 +2473,44 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         fakeTab.url = moved;
         return stepped;
       };
-      assert.equal((await context.navigate("s1", { tabId: tab.id, action: "back" })).url, moved);
-      assert.deepEqual(steps, [["back", tab.id], load(tab.id)], moved);
+      const label = `${moved}, ${frames(tab.id).length} frame POST`;
+      assert.equal(
+        (await context.navigate("s1", { tabId: tab.id, action: "back" })).url,
+        moved,
+        label,
+      );
+      assert.deepEqual(steps, [["back", tab.id], ...load(tab.id)], label);
     }
   });
 
-  it("does not reload after a top-level or frame request that is not a GET", async () => {
+  it("does not reload after a top-level request that is not a GET", async () => {
     const cases: [string, (tabId: number) => RequestDetails[]][] = [
       ["a top-level POST", (tabId) => [pageRequest(tabId, "https://a.example/a", "POST")]],
+      [
+        "a top-level POST after the GET",
+        (tabId) => [
+          pageRequest(tabId, "https://a.example/a"),
+          pageRequest(tabId, "https://a.example/a", "POST"),
+        ],
+      ],
+    ];
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, requests] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, requests);
+        assert.deepEqual(
+          await context.navigate("s1", { tabId: tab.id, action: "back" }),
+          tab,
+          `${label}, ${shown}`,
+        );
+        assert.deepEqual(steps, [["back", tab.id]], `${label}, ${shown}`);
+      }
+    }
+  });
+
+  it("loads with GET after a frame request that is not a GET, and reloads no address with a fragment after one", async () => {
+    const cases: [string, (tabId: number) => RequestDetails[]][] = [
       [
         "a frame POST",
         (tabId) => [
@@ -2403,20 +2525,27 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
           { ...frameRequest(tabId, "https://f.example/form", "POST"), type: "object" },
         ],
       ],
-      [
-        "a top-level POST after the GET",
-        (tabId) => [
-          pageRequest(tabId, "https://a.example/a"),
-          pageRequest(tabId, "https://a.example/a", "POST"),
-        ],
-      ],
     ];
-    for (const [label, requests] of cases) {
-      const context = setup();
-      const tab = await historyTab(context);
-      const steps = recordSteps(context.fake, requests);
-      assert.deepEqual(await context.navigate("s1", { tabId: tab.id, action: "back" }), tab, label);
-      assert.deepEqual(steps, [["back", tab.id]], label);
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, requests] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, requests);
+        const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
+        if (shown.includes("#")) {
+          assert.deepEqual(loaded, tab, `${label}, ${shown}`);
+          assert.deepEqual(steps, [["back", tab.id]], `${label}, ${shown}`);
+        } else {
+          assert.deepEqual(
+            steps,
+            [
+              ["back", tab.id],
+              ["load", tab.id, { url: shown, loadReplace: true }],
+            ],
+            `${label}, ${shown}`,
+          );
+        }
+      }
     }
   });
 
@@ -2439,18 +2568,27 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
   });
 
   it("reloads despite a POST that is not a page or frame load, or one in another tab", async () => {
-    const context = setup();
-    const tab = await historyTab(context);
-    const steps = recordSteps(context.fake, (tabId) => [
-      pageRequest(tabId, "https://a.example/a"),
-      { ...pageRequest(tabId, "https://a.example/api", "POST"), type: "xmlhttprequest" },
-      pageRequest(tabId + 1, "https://c.example/", "POST"),
-    ]);
-    await context.navigate("s1", { tabId: tab.id, action: "back" });
-    assert.deepEqual(steps, [
-      ["back", tab.id],
-      ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
-    ]);
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      const context = setup();
+      const tab = await historyTab(context, shown);
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+        { ...pageRequest(tabId, "https://a.example/api", "POST"), type: "xmlhttprequest" },
+        pageRequest(tabId + 1, "https://c.example/", "POST"),
+        frameRequest(tabId + 1, "https://f.example/form", "POST"),
+      ]);
+      await context.navigate("s1", { tabId: tab.id, action: "back" });
+      assert.deepEqual(
+        steps,
+        [
+          ["back", tab.id],
+          shown.includes("#")
+            ? ["reload", tab.id, { bypassCache: true }]
+            : ["load", tab.id, { url: shown, loadReplace: true }],
+        ],
+        shown,
+      );
+    }
   });
 
   it("reloads despite a frame's commit, or one in another tab, after the page's", async () => {
@@ -2488,19 +2626,23 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
         ],
       ],
     ];
-    for (const [label, requests] of cases) {
-      const context = setup();
-      const tab = await historyTab(context);
-      const steps = recordSteps(context.fake, requests);
-      await context.navigate("s1", { tabId: tab.id, action: "back" });
-      assert.deepEqual(
-        steps,
-        [
-          ["back", tab.id],
-          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
-        ],
-        label,
-      );
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, requests] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const steps = recordSteps(context.fake, requests);
+        await context.navigate("s1", { tabId: tab.id, action: "back" });
+        assert.deepEqual(
+          steps,
+          [
+            ["back", tab.id],
+            shown.includes("#")
+              ? ["reload", tab.id, { bypassCache: true }]
+              : ["load", tab.id, { url: shown, loadReplace: true }],
+          ],
+          `${label}, ${shown}`,
+        );
+      }
     }
   });
 
@@ -2625,20 +2767,49 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     assert.deepEqual(steps, [["back", tab.id]]);
   });
 
-  it("does not reload after a POST sent once the step's load completed", async () => {
-    const cases: [string, (tabId: number) => RequestDetails][] = [
-      ["a top-level POST", (tabId) => pageRequest(tabId, "https://a.example/a", "POST", 1000)],
-      ["a frame POST", (tabId) => frameRequest(tabId, "https://f.example/form", "POST", 1000)],
-    ];
-    for (const [label, late] of cases) {
+  it("does not reload after a top-level POST sent once the step's load completed", async () => {
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
       const context = setup();
-      const tab = await historyTab(context);
+      const tab = await historyTab(context, shown);
       const steps = recordSteps(context.fake, (tabId) => [
         pageRequest(tabId, "https://a.example/a"),
       ]);
-      sendOnLookup(context, late);
-      assert.deepEqual(await context.navigate("s1", { tabId: tab.id, action: "back" }), tab, label);
-      assert.deepEqual(steps, [["back", tab.id]], label);
+      sendOnLookup(
+        context,
+        (tabId) => pageRequest(tabId, "https://a.example/a", "POST", 1000),
+        shown,
+      );
+      assert.deepEqual(await context.navigate("s1", { tabId: tab.id, action: "back" }), tab, shown);
+      assert.deepEqual(steps, [["back", tab.id]], shown);
+    }
+  });
+
+  it("loads with GET after a frame POST sent once the step's load completed, and reloads no address with a fragment after one", async () => {
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      const context = setup();
+      const tab = await historyTab(context, shown);
+      const steps = recordSteps(context.fake, (tabId) => [
+        pageRequest(tabId, "https://a.example/a"),
+      ]);
+      sendOnLookup(
+        context,
+        (tabId) => frameRequest(tabId, "https://f.example/form", "POST", 1000),
+        shown,
+      );
+      const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
+      if (shown.includes("#")) {
+        assert.deepEqual(loaded, tab, shown);
+        assert.deepEqual(steps, [["back", tab.id]], shown);
+      } else {
+        assert.deepEqual(
+          steps,
+          [
+            ["back", tab.id],
+            ["load", tab.id, { url: shown, loadReplace: true }],
+          ],
+          shown,
+        );
+      }
     }
   });
 
@@ -2647,27 +2818,35 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
       ["a frame POST", (tabId) => frameRequest(tabId, "https://f.example/form", "POST", 1000)],
       ["a top-level POST", (tabId) => pageRequest(tabId, "https://a.example/a", "POST", 1000)],
     ];
-    for (const [label, late] of cases) {
-      const context = setup();
-      const tab = await historyTab(context);
-      const update = context.fake.browser.tabs.update;
-      context.fake.browser.tabs.update = async (tabId, properties) => {
-        send(context.fake, [late(tabId)]);
-        return update(tabId, properties);
-      };
-      const steps = recordSteps(context.fake, (tabId) => [
-        pageRequest(tabId, "https://a.example/a"),
-      ]);
-      const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
-      assert.equal(loaded.url, "https://a.example/a", label);
-      assert.deepEqual(
-        steps,
-        [
-          ["back", tab.id],
-          ["load", tab.id, { url: "https://a.example/a", loadReplace: true }],
-        ],
-        label,
-      );
+    for (const shown of ["https://a.example/a", "https://a.example/a#top"]) {
+      for (const [label, late] of cases) {
+        const context = setup();
+        const tab = await historyTab(context, shown);
+        const { reload, update } = context.fake.browser.tabs;
+        context.fake.browser.tabs.update = async (tabId, properties) => {
+          send(context.fake, [late(tabId)]);
+          return update(tabId, properties);
+        };
+        context.fake.browser.tabs.reload = async (tabId, properties) => {
+          send(context.fake, [late(tabId)]);
+          return reload(tabId, properties);
+        };
+        const steps = recordSteps(context.fake, (tabId) => [
+          pageRequest(tabId, "https://a.example/a"),
+        ]);
+        const loaded = await context.navigate("s1", { tabId: tab.id, action: "back" });
+        assert.equal(loaded.url, shown, `${label}, ${shown}`);
+        assert.deepEqual(
+          steps,
+          [
+            ["back", tab.id],
+            shown.includes("#")
+              ? ["reload", tab.id, { bypassCache: true }]
+              : ["load", tab.id, { url: shown, loadReplace: true }],
+          ],
+          `${label}, ${shown}`,
+        );
+      }
     }
   });
 
@@ -9141,16 +9320,17 @@ async function pastRequestWait(
 }
 
 /**
- * Sends the request `late` returns from each `tabs.get` once the tab's step has loaded, the last
- * thing `navigate` awaits before it reloads.
+ * Sends the request `late` returns from each `tabs.get` once the tab shows `url`, as after its
+ * step loaded, the last thing `navigate` awaits before it reloads.
  */
 function sendOnLookup(
   { fake }: ReturnType<typeof setup>,
   late: (tabId: number) => RequestDetails,
+  url = "https://a.example/a",
 ): void {
   const get = fake.browser.tabs.get;
   fake.browser.tabs.get = async (tabId) => {
-    if (fake.tabs.get(tabId)?.url === "https://a.example/a") send(fake, [late(tabId)]);
+    if (fake.tabs.get(tabId)?.url === url) send(fake, [late(tabId)]);
     return get(tabId);
   };
 }

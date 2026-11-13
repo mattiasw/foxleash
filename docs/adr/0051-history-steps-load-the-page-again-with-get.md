@@ -2,7 +2,10 @@
 
 **Status:** Accepted, 2026-11-13. Supersedes parts of
 [0025](0025-history-loads-and-autofilled-fields.md) and
-[0049](0049-history-steps-recognise-pages-kept-in-memory.md).
+[0049](0049-history-steps-recognise-pages-kept-in-memory.md). Its decision that the frame veto
+stays, its rejected alternative of dropping it, and its consequence that Foxleash loads nothing
+for a page holding a frame a form sent with POST, all except for a URL with a fragment, are
+superseded by [0052](0052-history-get-loads-ignore-frame-posts.md), 2026-11-13.
 
 ## Context
 
