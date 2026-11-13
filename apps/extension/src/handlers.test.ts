@@ -32,6 +32,7 @@ import {
   CAPTURE_TIMEOUT_MS,
   CLOSE_CONFIRM_TIMEOUT_MS,
   createHandlers,
+  type HandlerDeps,
   HISTORY_RELOAD_TIMEOUT_MS,
   HISTORY_REQUEST_TIMEOUT_MS,
   KEPT_GRACE_MS,
@@ -42,10 +43,13 @@ import {
   READ_CONSOLE_TIMEOUT_MS,
   SCREENSHOT_TIMEOUT_MS,
   ToolError,
+  VIEW_READ_MS,
+  VIEW_START_LIMIT_MS,
 } from "./handlers.ts";
 import type { NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
+import { createPageViews } from "./page-view.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { FIELD_MASK_CSS, FRAME_HIDE_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -7568,6 +7572,416 @@ describe("download", { timeout: 10000 }, () => {
   });
 });
 
+describe("the view of the page that results end with", { timeout: 10000 }, () => {
+  const SITE = "https://a.example";
+  const TREE = 'main\n heading "Shop" [a1]\n button "Add" [a2]\n status';
+  const ADDED = 'main\n heading "Shop" [a1]\n button "Add" [a2]\n status\n  text "Added"';
+  const CLICKED = { ref: "a2", x: 1, y: 2 };
+  const READ = { session: "s1", type: "read_page", params: { filter: "all" } };
+
+  /**
+   * A tab on SITE in s1's group whose document is live, opened without a view; the page answers
+   * read_page with `tree`, wait_for with true and anything else with CLICKED.
+   */
+  async function viewed() {
+    const context = setup({ pageViews: true });
+    await context.grant(SITE);
+    const page = { tree: TREE, truncated: false };
+    context.replyWith(async (type) => {
+      if (type === "read_page") return { ...page };
+      return type === "wait_for" ? true : CLICKED;
+    });
+    const tab = await context.open("s1", `${SITE}/`);
+    await flush();
+    assert.ok(context.views.document(tab.id) !== undefined);
+    const click = (params: Record<string, unknown> = {}) =>
+      context.callWithView("s1", "click", { tabId: tab.id, ref: "a2", ...params });
+    return { ...context, tab, page, click };
+  }
+
+  /** The reads of the page a view made, as the page was asked for them. */
+  function reads(pageCalls: readonly PageCall[]): PageCall[] {
+    return pageCalls.filter(({ type }) => type === "read_page");
+  }
+
+  it("ends tab_open, navigate and wait_for with the tree, read as read_page reads it", async () => {
+    const { grant, callWithView, replyWith, pageCalls } = setup({ pageViews: true });
+    await grant(SITE);
+    replyWith(async (type) => (type === "read_page" ? { tree: TREE, truncated: false } : true));
+    const tree = { kind: "tree", tree: TREE, omitted: 0, truncated: false };
+    const opened = await callWithView("s1", "tab_open", { url: `${SITE}/` });
+    assert.ok("tab" in opened && "view" in opened);
+    assert.deepEqual(opened.view, tree);
+    const tabId = opened.tab.id;
+    assert.deepEqual(pageCalls, [{ ...READ, tabId }]);
+    const moved = await callWithView("s1", "navigate", { tabId, url: `${SITE}/next` });
+    assert.ok("view" in moved);
+    assert.deepEqual(moved.view, tree);
+    await flush();
+    const waited = await callWithView("s1", "wait_for", { tabId, selector: "main" });
+    assert.ok("view" in waited);
+    assert.deepEqual(waited.view, { kind: "unchanged", truncated: false });
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["read_page", "read_page", "wait_for", "read_page"],
+    );
+  });
+
+  it("ends an act with the lines that changed since the last view, or a line saying none did", async () => {
+    const { click, page, timers } = await viewed();
+    const pending = timers.pending();
+    assert.deepEqual(await click(), {
+      ...CLICKED,
+      after: UNKNOWN,
+      view: { kind: "tree", tree: TREE, omitted: 0, truncated: false },
+    });
+    page.tree = ADDED;
+    assert.deepEqual((await click()) as unknown, {
+      ...CLICKED,
+      after: UNKNOWN,
+      view: { kind: "changes", lines: '  main\n   status\n+   text "Added"', truncated: false },
+    });
+    assert.deepEqual(((await click()) as { view?: unknown }).view, {
+      kind: "unchanged",
+      truncated: false,
+    });
+    assert.equal(timers.pending(), pending);
+  });
+
+  it("ends upload_file with a view, after what followed the upload", async () => {
+    const { callWithView, tab, replyWith, page } = await viewed();
+    replyWith(async (type) => (type === "read_page" ? { ...page } : { target: "input" }));
+    assert.deepEqual(
+      await callWithView("s1", "upload_file", {
+        tabId: tab.id,
+        ref: "a2",
+        upload: "none",
+        files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
+      }),
+      {
+        target: "input",
+        files: [{ name: "empty.txt", size: 0 }],
+        after: UNKNOWN,
+        view: { kind: "tree", tree: TREE, omitted: 0, truncated: false },
+      },
+    );
+  });
+
+  it("leaves the view out with view false: nothing is read or recorded", async () => {
+    const { click, pageCalls, tab, callWithView } = await viewed();
+    assert.deepEqual(await click({ view: false }), { ...CLICKED, after: UNKNOWN });
+    const blank = await callWithView("s1", "tab_open", { view: false });
+    assert.deepEqual(Object.keys(blank), ["tab"]);
+    for (const [method, params] of [
+      ["navigate", { tabId: tab.id, url: `${SITE}/next`, view: false }],
+      ["wait_for", { tabId: tab.id, selector: "main", view: false }],
+    ] as const) {
+      assert.deepEqual(Object.keys(await callWithView("s1", method, params)), ["tab"], method);
+    }
+    assert.deepEqual(reads(pageCalls), []);
+    await flush();
+    assert.equal(((await click({ view: true })) as { view?: { kind: string } }).view?.kind, "tree");
+  });
+
+  it("refuses a view that is not true or false before anything acts", async () => {
+    const { callWithView, pageCalls, fake, uploads } = setup({ pageViews: true });
+    const tabs = fake.tabs.size;
+    const tools: [MethodName, Record<string, unknown>][] = [
+      ["tab_open", {}],
+      ["navigate", { tabId: 1, url: `${SITE}/` }],
+      ["wait_for", { tabId: 1, text: "x" }],
+      ["upload_file", { tabId: 1, ref: "a2", upload: "u1", files: [] }],
+      ["click", { tabId: 1, ref: "a2" }],
+      ["hover", { tabId: 1, ref: "a2" }],
+      ["scroll", { tabId: 1, ref: "a2" }],
+      ["drag", { tabId: 1, ref: "a2", targetRef: "a1" }],
+      ["type", { tabId: 1, ref: "a2", text: "x" }],
+      ["press_key", { tabId: 1, key: "Enter" }],
+      ["fill_form", { tabId: 1, fields: [{ ref: "a2", value: "x" }] }],
+    ];
+    for (const [method, params] of tools) {
+      for (const view of ["true", 1, null, {}]) {
+        await callWithView("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+        await assert.rejects(callWithView("s1", method, { ...params, view }), {
+          code: "invalid_params",
+          message: `${method} needs view to be true or false.`,
+        });
+        // The upload's bytes are taken first, so a refused upload_file leaves nothing staged.
+        assert.equal(uploads.take("s1", "u1") === undefined, method === "upload_file", method);
+      }
+    }
+    assert.deepEqual(pageCalls, []);
+    assert.equal(fake.tabs.size, tabs);
+  });
+
+  it("shows only the site of a page the session may not read, with no title, and forgets it", async () => {
+    for (const code of ["site_not_approved", "site_blocked"]) {
+      const { click, replyWith, page, fake, tab } = await viewed();
+      await click();
+      const tabInfo = fake.tabs.get(tab.id);
+      assert.ok(tabInfo !== undefined);
+      tabInfo.title = "Secret title";
+      replyWith(async (type) => {
+        if (type === "read_page") throw new ToolError(code, "Refused.");
+        return CLICKED;
+      });
+      assert.deepEqual(((await click()) as { view?: unknown }).view, {
+        kind: "site",
+        url: `${SITE}/`,
+      });
+      replyWith(async (type) => (type === "read_page" ? { ...page } : CLICKED));
+      // Forgotten: the next view is the whole tree again, not "nothing changed".
+      assert.equal(((await click()) as { view?: { kind: string } }).view?.kind, "tree", code);
+    }
+  });
+
+  it("shows a page on a site the user did not approve as its site alone", async () => {
+    const { click, replyWith, fake } = await viewed();
+    await revokeSite(fake.browser, SITE);
+    replyWith(async (type) => {
+      if (type === "read_page") throw new ToolError("site_not_approved", "Refused.");
+      return CLICKED;
+    });
+    assert.deepEqual(((await click()) as { view?: unknown }).view, { kind: "site", url: SITE });
+  });
+
+  it("gives the unreadable line for a refused page whose tab left the session's group", async () => {
+    const { click, replyWith, fake, tab } = await viewed();
+    replyWith(async (type) => {
+      if (type !== "read_page") return CLICKED;
+      fake.ungroup(tab.id);
+      throw new ToolError("site_not_approved", "Refused.");
+    });
+    assert.deepEqual(((await click()) as { view?: unknown }).view, {
+      kind: "none",
+      reason: "unreadable",
+    });
+  });
+
+  it("shows, and does not record, a tree read while the tab has no live document", async () => {
+    const { fake, open, grant, callWithView, replyWith, views } = setup({ pageViews: true });
+    replyWith(async (type) => (type === "read_page" ? { tree: TREE, truncated: false } : CLICKED));
+    const tab = await open("s1");
+    // Committed before its site was approved, and not loaded since.
+    fake.navigateByUser(tab.id, `${SITE}/`);
+    await flush();
+    await grant(SITE);
+    await flush();
+    assert.equal(views.document(tab.id), undefined);
+    for (let call = 0; call < 2; call += 1) {
+      const result = await callWithView("s1", "click", { tabId: tab.id, ref: "a2" });
+      assert.deepEqual((result as { view?: unknown }).view, {
+        kind: "tree",
+        tree: TREE,
+        omitted: 0,
+        truncated: false,
+      });
+    }
+  });
+
+  it("shows, and does not record, a tree read while the tab committed another document", async () => {
+    const { click, replyWith, fake, tab, page } = await viewed();
+    replyWith(async (type) => {
+      if (type !== "read_page") return CLICKED;
+      fake.navigateByUser(tab.id, `${SITE}/next`);
+      return { ...page };
+    });
+    await click();
+    replyWith(async (type) => (type === "read_page" ? { ...page } : CLICKED));
+    await flush();
+    assert.equal(((await click()) as { view?: { kind: string } }).view?.kind, "tree");
+  });
+
+  it("says a page that is not a web page has no tree, and forgets the last view", async () => {
+    const { click, replyWith, page } = await viewed();
+    await click();
+    replyWith(async (type) => {
+      if (type === "read_page") throw new ToolError("page_not_web", "Not a web page.");
+      return CLICKED;
+    });
+    assert.deepEqual(((await click()) as { view?: unknown }).view, {
+      kind: "none",
+      reason: "not_web",
+    });
+    replyWith(async (type) => (type === "read_page" ? { ...page } : CLICKED));
+    assert.equal(((await click()) as { view?: { kind: string } }).view?.kind, "tree");
+  });
+
+  it("keeps the act's result, and the last view, when the view's read fails", async () => {
+    const { click, replyWith, page } = await viewed();
+    await click();
+    for (const failure of [
+      () => Promise.reject(new ToolError("page_error", "Failed.")),
+      () => Promise.reject(new Error("Gone.")),
+      async () => ({ tree: 1, truncated: false }),
+      async () => ({ tree: "x".repeat(READ_PAGE_MAX_CHARS + 1), truncated: false }),
+      async () => ({ tree: TREE }),
+      async () => Object.create({ tree: TREE, truncated: false }),
+    ]) {
+      replyWith((type) => (type === "read_page" ? failure() : Promise.resolve(CLICKED)));
+      assert.deepEqual(await click(), {
+        ...CLICKED,
+        after: UNKNOWN,
+        view: { kind: "none", reason: "unreadable" },
+      });
+    }
+    replyWith(async (type) => (type === "read_page" ? { ...page } : CLICKED));
+    assert.deepEqual(((await click()) as { view?: unknown }).view, {
+      kind: "unchanged",
+      truncated: false,
+    });
+  });
+
+  it("stops waiting for the view's read after VIEW_READ_MS, leaving no timer behind", async () => {
+    const { click, replyWith, timers } = await viewed();
+    const pending = timers.pending();
+    replyWith((type) => (type === "read_page" ? new Promise(() => {}) : Promise.resolve(CLICKED)));
+    let done = false;
+    const result = click().finally(() => {
+      done = true;
+    });
+    await flush();
+    timers.advance(VIEW_READ_MS - 1);
+    await flush();
+    assert.equal(done, false);
+    timers.advance(1);
+    assert.deepEqual(await result, {
+      ...CLICKED,
+      after: UNKNOWN,
+      view: { kind: "none", reason: "unreadable" },
+    });
+    assert.equal(timers.pending(), pending);
+  });
+
+  it("reads no view once VIEW_START_LIMIT_MS of the call has passed", async () => {
+    for (const [elapsed, kind] of [
+      [VIEW_START_LIMIT_MS, "tree"],
+      [VIEW_START_LIMIT_MS + 1, "none"],
+    ] as const) {
+      const { click, replyWith, timers, page, pageCalls } = await viewed();
+      replyWith(async (type) => {
+        if (type === "read_page") return { ...page };
+        timers.advance(elapsed);
+        return CLICKED;
+      });
+      assert.equal(((await click()) as { view?: { kind: string } }).view?.kind, kind);
+      assert.equal(reads(pageCalls).length, kind === "tree" ? 1 : 0);
+    }
+  });
+
+  it("gives no view once the act's tab closed, and no read while it loads another page", async () => {
+    for (const closes of [true, false]) {
+      const { click, replyWith, fake, tab, timers, pageCalls } = await viewed();
+      replyWith(async () => {
+        fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: `${SITE}/next` });
+        fake.emitStatus(tab.id, "loading");
+        return CLICKED;
+      });
+      const result = click();
+      await flush();
+      if (closes) fake.removeTab(tab.id);
+      else timers.advance(NAVIGATION_WAIT_MS);
+      assert.deepEqual(
+        await result,
+        closes
+          ? { ...CLICKED, after: { page: "closed" } }
+          : { ...CLICKED, after: { page: "loading" }, view: { kind: "none", reason: "loading" } },
+      );
+      assert.deepEqual(reads(pageCalls), []);
+    }
+  });
+
+  it("keeps the act's element, and the lines around it, in a view cut to its budget", async () => {
+    const links = Array.from({ length: 1500 }, (_, index) => ` link "Item ${index}" [l${index}]`);
+    links.splice(1000, 0, ' button "Act here" [b4]');
+    links.splice(1200, 0, ' button "Drop here" [b9]');
+    const big = ["main [m1]", ...links].join("\n");
+    const acts: [MethodName, Record<string, unknown>, unknown, string[]][] = [
+      ["click", { x: 1, y: 2 }, { ref: "b4", x: 1, y: 2 }, ["b4"]],
+      ["hover", { ref: "b4" }, { ref: "b4", x: 1, y: 2 }, ["b4"]],
+      ["scroll", { ref: "b4" }, { scrollLeft: 0, scrollTop: 0, moved: false }, ["b4"]],
+      [
+        "drag",
+        { ref: "b4", targetX: 1, targetY: 2 },
+        { ref: "b4", targetRef: "b9", mode: "pointer", dropped: false },
+        ["b4", "b9"],
+      ],
+      ["type", { ref: "b4", text: "x" }, { outcome: "typed", method: "native_setter" }, ["b4"]],
+      ["press_key", { ref: "b4", key: "Enter" }, { action: "none", prevented: false }, ["b4"]],
+      [
+        "fill_form",
+        {
+          fields: [
+            { ref: "b4", value: "x" },
+            { ref: "b9", value: "y" },
+          ],
+        },
+        {
+          fields: [
+            { ref: "b4", ok: true, outcome: "typed" },
+            { ref: "b9", ok: true, outcome: "typed" },
+          ],
+        },
+        ["b4", "b9"],
+      ],
+    ];
+    for (const [method, params, reply, refs] of acts) {
+      const { callWithView, replyWith, tab } = await viewed();
+      replyWith(async (type) => (type === "read_page" ? { tree: big, truncated: false } : reply));
+      const result = await callWithView("s1", method, { tabId: tab.id, ...params });
+      const view = (result as { view?: { kind: string; tree: string; omitted: number } }).view;
+      assert.equal(view?.kind, "tree", method);
+      assert.ok((view?.omitted ?? 0) > 0, method);
+      const shown = view?.tree.split("\n") ?? [];
+      for (const ref of refs) {
+        const at = shown.findIndex((line) => line.endsWith(`[${ref}]`));
+        assert.ok(at > 0, `${method} ${ref}`);
+        // The lines around it come with it.
+        assert.match(shown[at - 1] ?? "", /^ link "Item \d+"/, `${method} ${ref}`);
+        assert.match(shown[at + 1] ?? "", /^ link "Item \d+"/, `${method} ${ref}`);
+      }
+    }
+  });
+
+  it("does not count the view's read as an act for wait_for navigation", async () => {
+    const { click, replyWith, fake, tab, page, callWithView } = await viewed();
+    replyWith(async (type) => {
+      if (type === "read_page") return { ...page };
+      // The act loads another page, which finishes before the view is read.
+      fake.navigateByUser(tab.id, `${SITE}/next`);
+      return CLICKED;
+    });
+    await click();
+    const result = await callWithView("s1", "wait_for", {
+      tabId: tab.id,
+      navigation: true,
+      view: false,
+    });
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, `${SITE}/next`);
+  });
+
+  it("records a whole read_page as the last view; a part of the page or the other filter not", async () => {
+    const found = { shown: 4, matches: 4, searched: 4 };
+    for (const [params, recorded] of [
+      [{}, true],
+      [{ filter: "all" }, true],
+      [{ filter: "interactive" }, false],
+      [{ ref: "a1" }, false],
+      [{ depth: 2 }, false],
+      [{ find: "a" }, false],
+    ] as const) {
+      const { call, click, replyWith, tab } = await viewed();
+      replyWith(async (type) =>
+        type === "read_page" ? { tree: TREE, truncated: false, found } : CLICKED,
+      );
+      await call("s1", "read_page", { tabId: tab.id, ...params });
+      const view = ((await click()) as { view?: { kind: string } }).view;
+      assert.equal(view?.kind, recorded ? "unchanged" : "tree", JSON.stringify(params));
+    }
+  });
+});
+
 interface PageCall {
   session: string;
   tabId: number;
@@ -8161,7 +8575,11 @@ interface Save {
   filename: string;
 }
 
-function setup() {
+/**
+ * The handlers on a fake browser. With `pageViews`, results end with real views of the page;
+ * without, no view is read, so that no further live-documents check runs at each commit.
+ */
+function setup({ pageViews = false }: { pageViews?: boolean } = {}) {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser, undefined, (url) => recipes.isBlankPage(url));
@@ -8229,6 +8647,7 @@ function setup() {
     pages,
     now: () => 0,
   });
+  const views = pageViews ? createPageViews({ browser: fake.browser, groups, access }) : NO_VIEWS;
   const handleRequest = createHandlers({
     browser: fake.browser,
     groups,
@@ -8243,10 +8662,19 @@ function setup() {
     downloads,
     recipes,
     settle,
+    views,
+    now: () => timers.now(),
   });
   let requests = 0;
+  /** A request as the server sends it: its result ends with a view unless view is false. */
+  const callWithView = (
+    session: string,
+    method: MethodName,
+    params: Record<string, unknown> = {},
+  ) => handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
+  /** A request with the view left out, unless its params say otherwise. */
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
-    handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
+    callWithView(session, method, withoutView(method, params));
 
   async function open(session: string, url?: string): Promise<TabInfo> {
     const result = await call(session, "tab_open", url === undefined ? {} : { url });
@@ -8321,6 +8749,7 @@ function setup() {
     recipes,
     probe,
     uploads,
+    views,
     pageCalls,
     replyWith,
     liveWith,
@@ -8328,6 +8757,7 @@ function setup() {
     networkWith,
     saves,
     call,
+    callWithView,
     open,
     list,
     navigate,
@@ -8336,6 +8766,35 @@ function setup() {
     page,
     timeOut,
   };
+}
+
+/** Views for handlers whose tests leave them out: nothing is read or recorded. */
+const NO_VIEWS: HandlerDeps<number>["views"] = {
+  document: () => undefined,
+  view: () => assert.fail("a view was built without pageViews"),
+  record: () => {},
+  forget: () => {},
+};
+
+/** The tools whose results end with a view of the page. */
+const VIEW_TOOLS: readonly string[] = [
+  "tab_open",
+  "navigate",
+  "wait_for",
+  "upload_file",
+  "click",
+  "hover",
+  "scroll",
+  "drag",
+  "type",
+  "press_key",
+  "fill_form",
+] satisfies MethodName[];
+
+/** The params with view false for a tool that ends with a view, unless they set view. */
+function withoutView(method: MethodName, params: Record<string, unknown>): Record<string, unknown> {
+  if (!VIEW_TOOLS.includes(method) || Object.hasOwn(params, "view")) return params;
+  return { ...params, view: false };
 }
 
 /**

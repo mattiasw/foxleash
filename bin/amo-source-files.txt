@@ -44,6 +44,7 @@ apps/extension/src/page-text.ts
 apps/extension/src/page-tree.ts
 apps/extension/src/page-ui.ts
 apps/extension/src/page-upload.ts
+apps/extension/src/page-view.ts
 apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
 apps/extension/src/prompt-arming.ts

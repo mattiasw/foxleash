@@ -393,7 +393,7 @@ describe("runBatch", () => {
     const LARGE = "a".repeat(20_000);
     const LEFT_OUT = (step: number) =>
       textItem(
-        `Part of the result of step ${step} is left out: it is too large to return in a batch. The step ran.`,
+        `Part of the result of step ${step} is left out: it is too large to return in a batch. The step ran; read_page reads the page.`,
       );
 
     it("leaves out an item that does not fit, keeps the step's later items and runs on", async () => {
@@ -688,6 +688,83 @@ describe("runBatch on a tab an earlier step loaded another page in", () => {
     );
     assert.equal(Object.hasOwn(odd, "isError"), false);
     assert.equal(calls.length, 7);
+  });
+});
+
+describe("runBatch with tools whose results end with a view of the page", () => {
+  const VIEWED = { tabId: z.number(), view: z.boolean().optional() };
+
+  function viewTools() {
+    return registry({
+      acts: { shape: VIEWED, result: { content: [textItem("acted")] } },
+      reads: { shape: { tabId: z.number() }, result: { content: [textItem("read")] } },
+    });
+  }
+
+  it("leaves the view out of every step but the last", async () => {
+    const { tools, calls } = viewTools();
+    const steps = [
+      { tool: "acts", args: { tabId: 1 } },
+      { tool: "reads", args: { tabId: 1 } },
+      { tool: "acts", args: { tabId: 1, view: true } },
+      { tool: "acts", args: { tabId: 1 } },
+    ];
+    const result = await runBatch(steps, tools, extra(), MAX_BYTES);
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(calls, [
+      { tool: "acts", args: { tabId: 1, view: false } },
+      { tool: "reads", args: { tabId: 1 } },
+      { tool: "acts", args: { tabId: 1, view: false } },
+      { tool: "acts", args: { tabId: 1 } },
+    ]);
+    // The batch's own view true changes nothing.
+    await runBatch(steps.slice(2), tools, extra(), MAX_BYTES, true);
+    assert.deepEqual(calls.slice(4), [
+      { tool: "acts", args: { tabId: 1, view: false } },
+      { tool: "acts", args: { tabId: 1 } },
+    ]);
+  });
+
+  it("leaves the last step's view out too when the batch's view is false", async () => {
+    const { tools, calls } = viewTools();
+    await runBatch(
+      [
+        { tool: "acts", args: { tabId: 1 } },
+        { tool: "acts", args: { tabId: 2, view: true } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+      false,
+    );
+    assert.deepEqual(calls, [
+      { tool: "acts", args: { tabId: 1, view: false } },
+      { tool: "acts", args: { tabId: 2, view: false } },
+    ]);
+  });
+
+  it("keeps a step's own view false, also on the last step", async () => {
+    const { tools, calls } = viewTools();
+    await runBatch([{ tool: "acts", args: { tabId: 1, view: false } }], tools, extra(), MAX_BYTES);
+    assert.deepEqual(calls, [{ tool: "acts", args: { tabId: 1, view: false } }]);
+  });
+
+  it("adds nothing to a tool without a view, last step or not", async () => {
+    const { tools, calls } = viewTools();
+    await runBatch(
+      [
+        { tool: "reads", args: { tabId: 1 } },
+        { tool: "reads", args: { tabId: 2 } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+      false,
+    );
+    assert.deepEqual(calls, [
+      { tool: "reads", args: { tabId: 1 } },
+      { tool: "reads", args: { tabId: 2 } },
+    ]);
   });
 });
 

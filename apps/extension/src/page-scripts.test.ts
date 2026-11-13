@@ -27,6 +27,7 @@ import {
   TAG_BLOCK,
   TAG_RESERVE_MS,
 } from "./page-scripts.ts";
+import { createPageViews } from "./page-view.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite, TAG_MARK_KEY } from "./settings.ts";
 import { createSiteAccess, type OpenPrompt, type SessionMemory } from "./site-access.ts";
@@ -1689,10 +1690,19 @@ function setup() {
       openPrompt: () => undefined,
     },
     settle,
+    views: createPageViews({ browser: fake.browser, groups, access }),
+    now: () => timers.now(),
   });
   let requests = 0;
+  // The view's read is a page request of its own, which these tests do not count.
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
-    handleRequest({ type: "request", id: `r${++requests}`, session, method, params });
+    handleRequest({
+      type: "request",
+      id: `r${++requests}`,
+      session,
+      method,
+      params: { ...params, view: false },
+    });
 
   async function open(session: string, url?: string): Promise<TabInfo> {
     const result = await call(session, "tab_open", url === undefined ? {} : { url });

@@ -88,6 +88,37 @@ describe("batch in real Firefox", () => {
     assert.equal(await evaluate(act, 'document.getElementById("field").value'), "Batch text");
   });
 
+  test("only the last step of a batch ends with a view of the page", async () => {
+    const act = await open("/act", TITLES.act);
+    const toggle = refOf(act.tree, 'button "Toggle"');
+    const field = refOf(act.tree, 'textbox "Field"');
+    const result = await harness.call(session, "batch", {
+      steps: [
+        { tool: "click", args: { tabId: act.tabId, ref: toggle } },
+        { tool: "type", args: { tabId: act.tabId, ref: field, text: "Viewed" } },
+      ],
+    });
+    assert.equal(result.isError, false, result.texts.join("\n"));
+    const [first, clicked, second, typed, ...view] = result.texts;
+    assert.equal(first, "Step 1 of 2, click: ok");
+    assert.equal(withoutAfter(parseResult(clicked ?? "")).ref, toggle);
+    assert.equal(second, "Step 2 of 2, type: ok");
+    assert.equal(withoutAfter(parseResult(typed ?? "")).outcome, "typed");
+    // The type step's view: what changed since the read in open, which shows both steps.
+    assert.equal(
+      view[0],
+      "What changed in the page since this session's last view of it: + added, - removed; unmarked lines show where.",
+      result.texts.join("\n"),
+    );
+    const lines = untrustedContent(view[1] ?? "") ?? "";
+    assert.match(lines, new RegExp(`^\\+ +button "Toggle" \\[${toggle}\\] expanded=true`, "m"));
+    assert.match(
+      lines,
+      new RegExp(`^\\+ +textbox "Field" \\[${field}\\][^\\n]* value="Viewed"`, "m"),
+    );
+    assert.equal(view.length, 2, result.texts.join("\n"));
+  });
+
   test("a batch stops at a step on a site the user has not approved", async () => {
     const act = await open("/act", TITLES.act);
     const tab = tabOf(

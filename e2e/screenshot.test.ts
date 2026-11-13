@@ -313,7 +313,8 @@ describe("screenshot in real Firefox", () => {
   });
 
   test("a password field turned into text after a first screenshot hides every input of the page", async () => {
-    const tabId = await open(session, "/shot-fields?fresh=1", TITLES.shotFields);
+    // Without tab_open's view, whose read would remember the password field first.
+    const tabId = await open(session, "/shot-fields?fresh=1", TITLES.shotFields, { view: false });
     const context = await contextOf(fixtures.url("/shot-fields?fresh=1"));
     assertNone(await shotOf({ tabId }), PROTECTED, "protected");
     await firefox.evaluate(context, 'document.getElementById("pw").type = "text"');
@@ -506,8 +507,13 @@ describe("screenshot in real Firefox", () => {
     return onlyImage(result);
   }
 
-  async function open(on: Session, path: string, title: string): Promise<number> {
-    const tab = tabOf(await harness.ok(on, "tab_open", { url: fixtures.url(path) }));
+  async function open(
+    on: Session,
+    path: string,
+    title: string,
+    args: Record<string, unknown> = {},
+  ): Promise<number> {
+    const tab = tabOf(await harness.ok(on, "tab_open", { url: fixtures.url(path), ...args }));
     assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
     return tab.id;
   }

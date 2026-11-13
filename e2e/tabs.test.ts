@@ -214,7 +214,7 @@ describe("tabs in real Firefox", () => {
     // The extra parameter only makes the URL unique.
     const url = fixtures.url(`/nav/middle?delay=0&store=nostore&n=${Date.now()}`);
     const started = Date.now();
-    const opened = tabOf(await harness.ok(session, "tab_open", { url }));
+    const opened = tabOf(await harness.ok(session, "tab_open", { url, view: false }));
     const elapsed = Date.now() - started;
     try {
       assert.ok(elapsed < 1000, `tab_open took ${elapsed} ms`);
@@ -239,7 +239,9 @@ describe("tabs in real Firefox", () => {
       // The extra parameter only makes the URL unique.
       const url = fixtures.url(`/nav/middle?delay=0&store=nostore&n=${Date.now()}`);
       const started = Date.now();
-      const navigated = tabOf(await harness.ok(session, "navigate", { tabId: opened.id, url }));
+      const navigated = tabOf(
+        await harness.ok(session, "navigate", { tabId: opened.id, url, view: false }),
+      );
       const elapsed = Date.now() - started;
       assert.ok(elapsed < 1000, `navigate took ${elapsed} ms`);
       assert.equal(navigated.url, url);

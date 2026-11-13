@@ -83,9 +83,9 @@ describe("createMcpServer", () => {
     assert.deepEqual(client.getServerVersion(), { name: "foxleash", version: SERVER_VERSION });
     for (const phrase of [
       "Each tool call is a round trip that costs the user seconds, so use few.",
-      "Read a page once, with read_page for its text and element references or get_page_text for long text.",
+      "Do not read a page after tab_open, navigate, wait_for or an act: their results end with it, whole or what changed, and fill_form's says which fields were filled.",
+      "Use read_page for a part left out, get_page_text for long text.",
       "Put steps you can already spell out into one batch call, such as typing into a search field and pressing Enter, or filling a form and clicking its button.",
-      "Do not read a form again to check fill_form: its result says for each field whether it was filled.",
       "If your client loads tools on demand, load all the tools the task needs in one request, including batch.",
       "tab group named Foxleash",
       "Tabs outside it are refused, so open the tabs you need with tab_open.",

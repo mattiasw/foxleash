@@ -56,6 +56,39 @@ export interface ProbeResult {
 export const READ_PAGE_MAX_CHARS = 50_000;
 /** The most matching lines a read_page with find shows. */
 export const READ_PAGE_MAX_MATCHES = 20;
+/** The longest text a view of the page carries: its tree or changed lines, placeholders included. */
+export const PAGE_VIEW_MAX_CHARS = 8_000;
+
+/**
+ * The view of the page an action's result ends with. `tree`, `lines` and `url` are page text;
+ * `kind`, `omitted`, `truncated` and `reason` are Foxleash's own.
+ */
+export type PageView =
+  /**
+   * The tree: the whole read, or the lines the relevance cut kept with `omitted` lines left out
+   * (0 when whole); `truncated` when the read itself stopped at READ_PAGE_MAX_CHARS.
+   */
+  | { kind: "tree"; tree: string; omitted: number; truncated: boolean }
+  /**
+   * The lines that changed since the last view of the same document: `+ ` added, `- ` removed, each
+   * change after its unchanged ancestor lines, which start with two spaces; `truncated` when a
+   * read stopped at READ_PAGE_MAX_CHARS, so the comparison covers only the start of the tree.
+   */
+  | { kind: "changes"; lines: string; truncated: boolean }
+  /** Nothing changed since the last view of the same document, within the read. */
+  | { kind: "unchanged"; truncated: boolean }
+  /** The tab shows a site this session may not act on: its site, as tabs_list shows it. */
+  | { kind: "site"; url: string }
+  /** No tree: not an http(s) page, still loading another page, or not readable in time. */
+  | { kind: "none"; reason: PageViewGap };
+
+export type PageViewGap = "not_web" | "loading" | "unreadable";
+
+const PAGE_VIEW_GAPS: readonly unknown[] = [
+  "not_web",
+  "loading",
+  "unreadable",
+] satisfies PageViewGap[];
 
 /**
  * What a read_page with find counted: the matching lines in the tree, all matching lines, and all
@@ -163,6 +196,9 @@ export const MAX_WAIT_FOR_TEXT = 1_000;
 /** The smallest and largest width and height resize_window takes, in pixels. */
 export const MIN_WINDOW_SIZE = 100;
 export const MAX_WINDOW_SIZE = 10_000;
+
+/** wait_for's params besides its one condition. */
+type WaitParams = { tabId: number; timeoutMs?: number; view?: boolean };
 
 /** A recipe as the user keeps it: written steps for a task, with the sites it uses. */
 export interface RecipeFields {
@@ -278,25 +314,27 @@ export const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
 /**
  * The acts' results carry `after` once the extension has watched the page after the act; the
- * page's own part of the result has none, and an extension older than the field sends none.
+ * page's own part of the result has none, and an extension older than the field sends none. The
+ * acts, tab_open, navigate and wait_for end their results with `view`, unless their `view` param is
+ * false; an extension older than the field sends none.
  */
 export interface Methods {
   tabs_list: { params: Record<string, never>; result: { tabs: TabInfo[] } };
-  tab_open: { params: { url?: string }; result: { tab: TabInfo } };
+  tab_open: { params: { url?: string; view?: boolean }; result: { tab: TabInfo; view?: PageView } };
   navigate: {
     params:
-      | { tabId: number; url: string; action?: never }
-      | { tabId: number; action: NavigateAction; url?: never };
-    result: { tab: TabInfo };
+      | { tabId: number; url: string; action?: never; view?: boolean }
+      | { tabId: number; action: NavigateAction; url?: never; view?: boolean };
+    result: { tab: TabInfo; view?: PageView };
   };
   tab_close: { params: { tabId: number }; result: { tabs: TabInfo[] } };
   tab_select: { params: { tabId: number }; result: { tab: TabInfo } };
   wait_for: {
     params:
-      | { tabId: number; text: string; selector?: never; navigation?: never; timeoutMs?: number }
-      | { tabId: number; selector: string; text?: never; navigation?: never; timeoutMs?: number }
-      | { tabId: number; navigation: true; text?: never; selector?: never; timeoutMs?: number };
-    result: { tab: TabInfo };
+      | (WaitParams & { text: string; selector?: never; navigation?: never })
+      | (WaitParams & { selector: string; text?: never; navigation?: never })
+      | (WaitParams & { navigation: true; text?: never; selector?: never });
+    result: { tab: TabInfo; view?: PageView };
   };
   resize_window: {
     params: { width: number; height: number };
@@ -332,28 +370,30 @@ export interface Methods {
       ref: string;
       upload: string;
       files: { name: string; type: string; size: number }[];
+      view?: boolean;
     };
     result: {
       target: "input" | "drop";
       files: { name: string; size: number }[];
       after?: ActAfter;
+      view?: PageView;
     };
   };
   /** `ref` is the element the events went to, `x` and `y` the point in the viewport. */
   click: {
-    params: { tabId: number; button?: ClickButton; doubleClick?: boolean } & Target;
-    result: { ref: string; x: number; y: number; after?: ActAfter };
+    params: { tabId: number; button?: ClickButton; doubleClick?: boolean; view?: boolean } & Target;
+    result: { ref: string; x: number; y: number; after?: ActAfter; view?: PageView };
   };
   hover: {
-    params: { tabId: number } & Target;
-    result: { ref: string; x: number; y: number; after?: ActAfter };
+    params: { tabId: number; view?: boolean } & Target;
+    result: { ref: string; x: number; y: number; after?: ActAfter; view?: PageView };
   };
   /**
    * With a direction, at the target or the viewport's centre; without one, `ref` is scrolled
    * into view. `ref` in the result is absent when the page itself scrolled.
    */
   scroll: {
-    params: { tabId: number; direction?: ScrollDirection; amount?: number } & (
+    params: { tabId: number; direction?: ScrollDirection; amount?: number; view?: boolean } & (
       | Target
       | { ref?: never; x?: never; y?: never }
     );
@@ -363,30 +403,32 @@ export interface Methods {
       scrollTop: number;
       moved: boolean;
       after?: ActAfter;
+      view?: PageView;
     };
   };
   drag: {
-    params: { tabId: number } & Target & DragEnd;
+    params: { tabId: number; view?: boolean } & Target & DragEnd;
     result: {
       ref: string;
       targetRef: string;
       mode: DragMode;
       dropped: boolean;
       after?: ActAfter;
+      view?: PageView;
     };
   };
   type: {
-    params: { tabId: number; ref: string; text: string };
-    result: { outcome: TypeOutcome; method: TypeMethod; after?: ActAfter };
+    params: { tabId: number; ref: string; text: string; view?: boolean };
+    result: { outcome: TypeOutcome; method: TypeMethod; after?: ActAfter; view?: PageView };
   };
   /** `prevented` is true when the page cancelled keydown or keypress. */
   press_key: {
-    params: { tabId: number; key: string; ref?: string };
-    result: { action: KeyAction; prevented: boolean; after?: ActAfter };
+    params: { tabId: number; key: string; ref?: string; view?: boolean };
+    result: { action: KeyAction; prevented: boolean; after?: ActAfter; view?: PageView };
   };
   fill_form: {
-    params: { tabId: number; fields: { ref: string; value: FillValue }[] };
-    result: { fields: FillResult[]; after?: ActAfter };
+    params: { tabId: number; fields: { ref: string; value: FillValue }[]; view?: boolean };
+    result: { fields: FillResult[]; after?: ActAfter; view?: PageView };
   };
   /** `recording` is false when Foxleash has not recorded the page since it loaded. */
   read_console: {
@@ -504,6 +546,60 @@ export function foundLinesOf(
   const lines = tree === "" ? 0 : tree.split("\n").length;
   if (shown > lines || lines > searched) return undefined;
   return { shown, matches, searched };
+}
+
+/**
+ * A view of the page as the extension sent it, checked field by field, as a fresh object; undefined
+ * for anything else. Its texts are at most PAGE_VIEW_MAX_CHARS long.
+ */
+export function pageViewOf(value: unknown): PageView | undefined {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return undefined;
+  const kind = Object.hasOwn(value, "kind") ? Reflect.get(value, "kind") : undefined;
+  switch (kind) {
+    case "tree": {
+      const tree = viewText(value, "tree");
+      const omitted = countField(value, "omitted");
+      const truncated = booleanField(value, "truncated");
+      if (tree === undefined || omitted === undefined || truncated === undefined) return undefined;
+      // A line left out holds at least its newline.
+      if (omitted > READ_PAGE_MAX_CHARS) return undefined;
+      return { kind, tree, omitted, truncated };
+    }
+    case "changes": {
+      const lines = viewText(value, "lines");
+      const truncated = booleanField(value, "truncated");
+      if (lines === undefined || truncated === undefined) return undefined;
+      return { kind, lines, truncated };
+    }
+    case "unchanged": {
+      const truncated = booleanField(value, "truncated");
+      return truncated === undefined ? undefined : { kind, truncated };
+    }
+    case "site": {
+      const url = viewText(value, "url");
+      return url === undefined ? undefined : { kind, url };
+    }
+    case "none": {
+      const reason = Object.hasOwn(value, "reason") ? Reflect.get(value, "reason") : undefined;
+      return isPageViewGap(reason) ? { kind, reason } : undefined;
+    }
+    default:
+      return undefined;
+  }
+}
+
+function viewText(value: object, key: string): string | undefined {
+  const field = Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
+  return typeof field === "string" && field.length <= PAGE_VIEW_MAX_CHARS ? field : undefined;
+}
+
+function booleanField(value: object, key: string): boolean | undefined {
+  const field = Object.hasOwn(value, key) ? Reflect.get(value, key) : undefined;
+  return typeof field === "boolean" ? field : undefined;
+}
+
+function isPageViewGap(value: unknown): value is PageViewGap {
+  return PAGE_VIEW_GAPS.includes(value);
 }
 
 function countField(value: object, key: string): number | undefined {

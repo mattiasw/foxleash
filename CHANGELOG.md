@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   action, and whether the tab loaded another page (with its address), the page changed, nothing
   changed, the page kept changing, the tab closed, or tabs opened. A read right after an action,
   also in the same `batch`, sees the page the action left, and the agent needs fewer reads.
+- The results of actions, `tab_open`, `navigate` and `wait_for` end with a view of the page, so
+  the agent does not read the page after each step: the page itself the first time the agent
+  gets it, cut to its most relevant lines on a large page with a note on how to read the rest,
+  then only the lines that changed, or a line saying nothing changed. `view: false` leaves it
+  out, and a `batch` gives one view, after its last step.
 
 ### Changed
 

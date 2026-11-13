@@ -121,7 +121,8 @@ describe("upload_file in real Firefox", () => {
   );
 
   test("a file over 1 MB reaches a file field byte for byte, with input and change", async () => {
-    const result = await upload(refs.single, [join(allowed, "big.bin")]);
+    // Without the view, so the result is the note and the act's after alone.
+    const result = await upload(refs.single, [join(allowed, "big.bin")], { view: false });
     assert.equal(result.isError, false, result.text);
     const [, framed, ...rest] = result.texts;
     assert.deepEqual(rest, []);
@@ -274,8 +275,8 @@ describe("upload_file in real Firefox", () => {
     );
   });
 
-  function upload(ref: string, paths: string[]) {
-    return harness.call(session, "upload_file", { tabId, ref, paths });
+  function upload(ref: string, paths: string[], args: Record<string, unknown> = {}) {
+    return harness.call(session, "upload_file", { tabId, ref, paths, ...args });
   }
 
   async function received(): Promise<Received> {

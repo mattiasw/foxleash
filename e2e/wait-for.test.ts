@@ -126,7 +126,9 @@ describe("wait_for in real Firefox", () => {
     // So the load's end has surely reached the extension before the call.
     await sleep(300);
     const start = Date.now();
-    const moved = tabOf(await harness.ok(session, "wait_for", { tabId, navigation: true }));
+    const moved = tabOf(
+      await harness.ok(session, "wait_for", { tabId, navigation: true, view: false }),
+    );
     const elapsed = Date.now() - start;
     assert.equal(moved.id, tabId);
     assert.equal(moved.url, fixtures.url("/a"));

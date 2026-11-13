@@ -73,7 +73,7 @@ describe("acts wait for the page to settle in real Firefox", () => {
       const page = await settlePage(hidden);
       const ref = refOf(page.tree, 'button "Quiet"');
       const { value, ms } = await timed(() =>
-        harness.ok(session, "click", { tabId: page.tabId, ref }),
+        harness.ok(session, "click", { tabId: page.tabId, ref, view: false }),
       );
       t.diagnostic(`quiet click ${where}: ${ms} ms`);
       assert.deepEqual(afterOf(value), {
@@ -124,7 +124,7 @@ describe("acts wait for the page to settle in real Firefox", () => {
       const ref = refOf(page.tree, 'button "Ticker"');
       try {
         const { value, ms } = await timed(() =>
-          harness.ok(session, "click", { tabId: page.tabId, ref }),
+          harness.ok(session, "click", { tabId: page.tabId, ref, view: false }),
         );
         t.diagnostic(`click on a never-quiet page ${where}: ${ms} ms`);
         const settled = afterOf(value);

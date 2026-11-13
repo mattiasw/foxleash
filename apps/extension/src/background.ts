@@ -7,6 +7,7 @@ import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
 import { createNetworkLog } from "./network-log.ts";
 import { createPageScripts } from "./page-scripts.ts";
+import { createPageViews } from "./page-view.ts";
 import { probePage } from "./probe-page.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -36,12 +37,14 @@ const access = createSiteAccess({
   onWithdraw: (session, site) => {
     recordings.withdraw(session, site);
     network.withdraw(session, site);
+    views.withdraw(session, site);
   },
   otherPrompt: (session) => recipes.openPrompt(session),
 });
 const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });
 const recordings = createConsoleRecording({ browser, groups, access, timers });
 const network = createNetworkLog({ browser, groups, access });
+const views = createPageViews({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });
 const settle = createActSettle({
@@ -80,6 +83,8 @@ const handleRequest = createHandlers({
   downloads,
   recipes,
   settle,
+  views,
+  now: () => Date.now(),
 });
 const connection = createConnection({
   browser,
@@ -87,6 +92,7 @@ const connection = createConnection({
   endSession: (session) => {
     access.endSession(session);
     uploads.endSession(session);
+    views.endSession(session);
     recipes.endSession(session);
     return groups.endSession(session);
   },

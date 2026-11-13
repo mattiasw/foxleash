@@ -70,7 +70,16 @@ export const TITLES = {
   navTarget: "Fixture navigation target",
   settle: "Fixture settle",
   settleNext: "Fixture settle next",
+  viewShop: "Fixture view shop",
+  viewLarge: "Fixture view large",
 } as const;
+
+/** What the view shop page's status says once Add to cart is clicked. */
+export const VIEW_ADDED_TEXT = "Added to cart";
+/** What the view large page's status says, early in the page. */
+export const VIEW_LARGE_STATUS = "Showing 3000 rows";
+/** The rows of the view large page: its tree is far past read_page's 50,000 characters. */
+const VIEW_LARGE_ROWS = 3000;
 
 /** The text the settle page adds once its slow request answers. */
 export const SETTLE_SLOW_TEXT = "The slow answer arrived";
@@ -631,6 +640,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         path === "/settle/slow" ? SETTLE_SLOW_MS : SETTLE_TICK_MS,
       );
       timers.add(timer);
+    } else if (path === "/view-shop") {
+      sendHtml(response, VIEW_SHOP_PAGE);
+    } else if (path === "/view-large") {
+      sendHtml(response, viewLargePage());
+    } else if (path === "/view-away") {
+      // To the same server under another site, which the tests never approve.
+      response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/a` });
+      response.end();
     } else if (path === "/act-redirect") {
       // To the act page on another site, which the tests never approve.
       response.writeHead(302, { Location: `http://localhost:${request.socket.localPort}/act` });
@@ -2162,6 +2179,67 @@ document.getElementById("ticker").addEventListener("click", async () => {
 </script>
 </body></html>
 `;
+
+// A small shop page: Add to cart changes the cart link and fills the status region; Compare
+// changes nothing; the partner link leads, through a redirect, to a site the tests never approve.
+const VIEW_SHOP_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.viewShop}</title></head>
+<body>
+<header>
+<a href="/view-shop">Lumen Lamps</a>
+<nav aria-label="Categories"><a href="/view-shop?c=desk">Desk lamps</a> <a href="/view-shop?c=floor">Floor lamps</a></nav>
+<a id="cart" href="/view-shop?cart">Cart (0)</a>
+</header>
+<main>
+<h1>Brass desk lamp</h1>
+<p>Price: 420 kr</p>
+<p>In stock: 5</p>
+<button id="add">Add to cart</button>
+<button id="compare">Compare</button>
+<a href="/view-away">Partner offer</a>
+<div role="status" id="status"></div>
+</main>
+<footer><p>Lumen Lamps, a fixture shop</p></footer>
+<script>
+document.getElementById("add").addEventListener("click", () => {
+  document.getElementById("cart").textContent = "Cart (1)";
+  document.getElementById("status").textContent = ${JSON.stringify(VIEW_ADDED_TEXT)};
+});
+document.getElementById("compare").addEventListener("click", () => {});
+</script>
+</body></html>
+`;
+
+/**
+ * A page whose tree runs far past read_page's cut: landmarks, headings, a form and a status region
+ * first, then thousands of rows with a link in every fiftieth.
+ */
+function viewLargePage(): string {
+  const rows: string[] = [];
+  for (let index = 1; index <= VIEW_LARGE_ROWS; index += 1) {
+    const number = String(index).padStart(4, "0");
+    rows.push(
+      index % 50 === 0
+        ? `<li><a href="/a">Row ${number} details</a></li>`
+        : `<li>Row ${number} lorem ipsum dolor sit amet</li>`,
+    );
+  }
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.viewLarge}</title></head>
+<body>
+<header><nav aria-label="Site"><a href="/a">Home</a> <a href="/b">About</a></nav></header>
+<main>
+<h1>${TITLES.viewLarge}</h1>
+<form aria-label="Filter"><label>Name <input id="name"></label> <button type="button">Filter</button></form>
+<div role="status">${VIEW_LARGE_STATUS}</div>
+<section aria-label="Rows"><h2>Rows</h2><ul>
+${rows.join("\n")}
+</ul></section>
+</main>
+<footer><p>The end of the rows</p></footer>
+</body></html>
+`;
+}
 
 // Elements at fixed places for click and hover, each recording what reaches it in window.log as
 // "type:id", with "type:id:detail" for clicks and "type:id:pointerId:pointerType" for pointer

@@ -116,6 +116,32 @@ describe("reads right after a navigation in real Firefox", () => {
       }
     });
 
+    test(`the view that ends a click on a link shows the new page (${name})`, async () => {
+      const tabId = await openTab();
+      for (let repetition = 1; repetition <= REPEAT; repetition += 1) {
+        const label = `${name}, repetition ${repetition}`;
+        const start = await showStart(tabId, variant, repetition);
+        const result = await harness.call(session, "click", {
+          tabId,
+          ref: refOf(start.tree, 'link "Go to target"'),
+        });
+        // The page loaded: the view is the new document's whole tree.
+        assert.equal(
+          result.texts[1],
+          "The page, as read_page shows it:",
+          `${label}: ${result.texts.join("\n")}`,
+        );
+        assertTarget(
+          {
+            isError: result.isError,
+            text: result.texts.join("\n"),
+            tree: untrustedContent(result.texts[2] ?? "") ?? "",
+          },
+          label,
+        );
+      }
+    });
+
     test(`wait_for a text only the new page has, right after a click, finds it (${name})`, async () => {
       const tabId = await openTab();
       for (let repetition = 1; repetition <= REPEAT; repetition += 1) {

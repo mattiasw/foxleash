@@ -105,7 +105,7 @@ describe("fill_form in real Firefox", () => {
     const result = await harness.call(session, "fill_form", { tabId: form.tabId, fields });
     assert.equal(result.isError, false, result.text);
     for (const secret of [FILL_PASSWORD, "pw-fill-new-Lm8"]) {
-      assert.equal(result.text.includes(secret), false, result.text);
+      for (const text of result.texts) assert.equal(text.includes(secret), false, text);
     }
     const outcomes = [
       "typed",
@@ -461,7 +461,7 @@ describe("fill_form in real Firefox", () => {
       value: values[index],
     }));
     const started = Date.now();
-    const results = await fill(page, fields);
+    const results = await fill(page, fields, { view: false });
     const took = Date.now() - started;
     assert.deepEqual(
       results,
@@ -526,9 +526,10 @@ describe("fill_form in real Firefox", () => {
   async function fill(
     page: Page,
     fields: { ref: string; value: unknown }[],
+    args: Record<string, unknown> = {},
   ): Promise<FieldResult[]> {
     const result = withoutAfter(
-      await harness.ok(session, "fill_form", { tabId: page.tabId, fields }),
+      await harness.ok(session, "fill_form", { tabId: page.tabId, fields, ...args }),
     );
     assert.ok(Array.isArray(result.fields), JSON.stringify(result));
     return result.fields.map(record);

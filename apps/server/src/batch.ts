@@ -30,13 +30,15 @@ type Content = CallToolResult["content"];
  * Runs the steps in order, each as a direct call of its tool runs, and stops at the first step
  * that fails or when the call is cancelled. It also stops before a step that aims at a point or at
  * the focused element in a tab an earlier step loaded another page in: its args were fixed before
- * that page was seen. The result's content stays within `maxBytes` as JSON.
+ * that page was seen. The result's content stays within `maxBytes` as JSON. Only the last step's
+ * result ends with a view of the page, unless `view` is false.
  */
 export async function runBatch<Extra extends { signal: AbortSignal }>(
   steps: readonly BatchStep[],
   tools: ReadonlyMap<string, BatchTool<Extra>>,
   extra: Extra,
   maxBytes: number,
+  view?: boolean,
 ): Promise<CallToolResult> {
   const content: Content = [];
   let budget = maxBytes - (steps.length * 2 + 1) * NOTE_ALLOWANCE;
@@ -55,7 +57,8 @@ export async function runBatch<Extra extends { signal: AbortSignal }>(
       return { content, isError: true };
     }
     const tool = tools.get(step.tool);
-    const result = await runStep(step, tool, extra);
+    const viewed = index === steps.length - 1 && view !== false;
+    const result = await runStep(step, tool, extra, viewed);
     const failed = result.isError === true;
     if (!failed && tabId !== undefined && tool?.loaded?.(result) === true) {
       loadedIn.set(tabId, index);
@@ -88,17 +91,22 @@ function tabOf(step: BatchStep): number | undefined {
   return typeof tabId === "number" && Number.isSafeInteger(tabId) && tabId >= 0 ? tabId : undefined;
 }
 
-/** The step's result, with isError set when it failed in any way. */
+/**
+ * The step's result, with isError set when it failed in any way. Unless `viewed`, a tool whose
+ * result ends with a view of the page runs with it left out; a step never gets one it left out.
+ */
 async function runStep<Extra>(
   step: BatchStep,
   tool: BatchTool<Extra> | undefined,
   extra: Extra,
+  viewed: boolean,
 ): Promise<CallToolResult> {
   if (tool === undefined) return errorResult(`${step.tool} is not a tool batch can run.`);
   const parsed = await z.object(tool.shape).safeParseAsync(step.args ?? {});
   if (!parsed.success) {
     return errorResult(`Invalid arguments for ${step.tool}: ${issuesText(parsed.error.issues)}`);
   }
+  if (!viewed && Object.hasOwn(tool.shape, "view")) parsed.data.view = false;
   let result: CallToolResult;
   try {
     result = await tool.callback(parsed.data, extra);
@@ -142,7 +150,7 @@ function header(index: number, total: number, tool: string, failed: boolean): Co
 function tooLargeNote(index: number): Content[number] {
   return {
     type: "text",
-    text: `Part of the result of step ${index + 1} is left out: it is too large to return in a batch. The step ran.`,
+    text: `Part of the result of step ${index + 1} is left out: it is too large to return in a batch. The step ran; read_page reads the page.`,
   };
 }
 

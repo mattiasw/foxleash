@@ -51,7 +51,7 @@ The agent can:
 
 - open tabs and navigate them,
 - read pages,
-- click, type and fill in forms, and learn from each action's result what changed in the page,
+- click, type and fill in forms, and learn from each action's result what changed in the page: the results of actions, and of opening, navigating and waiting in a tab, also carry a view of the page (the page itself the first time, then only what changed), read like any page and only on sites you approved,
 - take screenshots,
 - read the console and network activity,
 - upload files from allowed folders,

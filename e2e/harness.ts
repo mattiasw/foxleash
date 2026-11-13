@@ -555,6 +555,23 @@ function killHostIfOurs(pid: number, run: string): void {
   }
 }
 
+/**
+ * The items of a result's view of the page: those after its first framed item, which is the
+ * result's own JSON (upload_file's after). Each framed item is given as the text inside its frame.
+ */
+export function viewItemsOf(result: ToolResult): { own: string[]; framed: string[] } {
+  const first = result.texts.findIndex((text) => untrustedContent(text) !== undefined);
+  assert.ok(first !== -1, `the result has no framed part:\n${result.texts.join("\n")}`);
+  const items = result.texts.slice(first + 1);
+  return {
+    own: items.filter((text) => untrustedContent(text) === undefined),
+    framed: items.flatMap((text) => {
+      const inner = untrustedContent(text);
+      return inner === undefined ? [] : [inner];
+    }),
+  };
+}
+
 /** Calls a tool and returns whether it failed and its text content. */
 async function callTool(
   session: Session,

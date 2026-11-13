@@ -222,6 +222,19 @@ drawing, or CSS animations and transitions, so the agent reads the page before r
 action whose result says nothing changed. An action on a quiet page takes about 120 to 150 ms
 longer than the action itself.
 
+The results of these actions, and of `tab_open`, `navigate` and `wait_for`, end with a view of
+the tab's page, so the agent does not read the page again after each step. The first time the
+agent's session gets a page in a tab, the view is the page as `read_page` shows it; past 8,000
+characters it keeps the most relevant lines (the element the action aimed at and the lines
+around it, status messages and dialogs, headings and landmarks, fields and buttons, then links)
+and says how many lines it left out, each run of them shown as one `… N lines` line, which the
+agent reads with `read_page` and `ref` or `find`. After that, for the same page, the view holds
+only the lines that changed since the session's last view of it, after the lines that contain
+them, or one line saying nothing changed; a `read_page` of the whole page counts as such a view.
+The view is read exactly as `read_page` reads the page, so it shows protected fields as
+protected and works only on a site you approved: a tab that went to another site shows only that
+site's address. The argument `view: false` leaves the view out.
+
 The agent types text with `type`, into a text field or an editable area from `read_page`.
 Foxleash focuses the element, adds the text and reads it back. A text field gets the text after
 what it already holds. An editable area gets it at its caret when the caret is in it, and
@@ -260,14 +273,15 @@ The agent runs several tool calls in one call with `batch`, up to 20, one after 
 order, with arguments it already has: a step cannot use what an earlier step returns. It stops
 at the first step that fails, a `fill_form` with a field that was not filled included, and says
 which steps did not run. Since each action waits for the page to settle, a read after it in the
-same batch sees what the action changed. A batch also stops before a click or a drag at a point,
-or a key pressed without an element, in a tab where an earlier step loaded another page, since
-that step's point or key was chosen before the page was seen. Each step is checked exactly as
-when its tool is called on its own: a step that reads or acts in a page on a site you have not
-approved fails, and a `tab_open` or `navigate` step asks you first. An MCP client that asks you
-before each tool call asks once for the whole batch, and a rule in your client that denies or
-asks for one tool does not cover that tool inside `batch`: deny or ask for `batch` too to keep
-it. Foxleash's own checks apply to every step.
+same batch sees what the action changed. Only the last step's result ends with a view of the
+page, and the batch's own `view: false` leaves that out too. A batch also stops before a click
+or a drag at a point, or a key pressed without an element, in a tab where an earlier step loaded
+another page, since that step's point or key was chosen before the page was seen. Each step is
+checked exactly as when its tool is called on its own: a step that reads or acts in a page on a
+site you have not approved fails, and a `tab_open` or `navigate` step asks you first. An MCP
+client that asks you before each tool call asks once for the whole batch, and a rule in your
+client that denies or asks for one tool does not cover that tool inside `batch`: deny or ask for
+`batch` too to keep it. Foxleash's own checks apply to every step.
 
 The agent takes a PNG screenshot with `screenshot`: of the part of the page a tab shows, also
 when the tab is in the background, or with `ref` of one element from `read_page`. For an

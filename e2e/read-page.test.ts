@@ -195,7 +195,8 @@ describe("read_page in real Firefox", () => {
   });
 
   test("a password field a click by coordinates turns into text before any read stays protected", async () => {
-    const tabId = await open("/read-form?fresh=1", TITLES.readForm);
+    // Without tab_open's view, which reads the page.
+    const tabId = await open("/read-form?fresh=1", TITLES.readForm, { view: false });
     const context = await contextOf(fixtures.url("/read-form?fresh=1"));
     const answer = await firefox.evaluate(
       context,
@@ -207,8 +208,11 @@ describe("read_page in real Firefox", () => {
       })()`,
     );
     const centre: { x: number; y: number } = JSON.parse(String(answer));
-    // No ref: getting one needs read_page, which would remember the password fields first.
-    await harness.ok(session, "click", { tabId, x: centre.x, y: centre.y });
+    // No ref: getting one needs read_page, which would remember the password fields first. The
+    // click's view is the first read, after the field turned into text.
+    const clicked = await harness.call(session, "click", { tabId, x: centre.x, y: centre.y });
+    assert.equal(clicked.isError, false, clicked.text);
+    assertNoSecrets(clicked.texts, [READ_SECRETS.toggled]);
     await pollUntil(
       async () =>
         (await firefox.evaluate(context, 'document.getElementById("toggle").type')) === "text"
@@ -636,7 +640,8 @@ describe("read_page in real Firefox", () => {
 
   test("a ref read in another tab of the same page is refused as stale", async () => {
     const first = await open("/read-refs", TITLES.readRefs);
-    const second = await open("/read-refs", TITLES.readRefs);
+    // Without tab_open's view, whose read would give out the second tab's refs.
+    const second = await open("/read-refs", TITLES.readRefs, { view: false });
     const ref = refOf((await read(first)).tree, 'button "Keep"');
     const stale = `Element ${ref} is from a page the tab no longer shows; read the page`;
     // Before and after the other tab's page handed out refs of its own.
@@ -1336,11 +1341,11 @@ describe("read_page in real Firefox", () => {
 
   test("going back to a page Firefox kept in memory keeps it filled and protected", async () => {
     const path = "/autofill?kept";
-    const tabId = await filledTab(path);
+    const tabId = await filledTab(path, { view: false });
     const context = await contextOf(fixtures.url(path));
-    // No Foxleash page tool before leaving: the page stays as Firefox would keep it. The note in
-    // sessionStorage outlives a reload in the tab, so it tells whether Firefox showed this
-    // document again from memory, whatever happened after.
+    // No Foxleash page tool before leaving, not even a view: the page stays as Firefox would keep
+    // it. The note in sessionStorage outlives a reload in the tab, so it tells whether Firefox
+    // showed this document again from memory, whatever happened after.
     assert.equal(
       await firefox.evaluate(
         context,
@@ -1355,7 +1360,7 @@ describe("read_page in real Firefox", () => {
     const before = fixtures.hits("/autofill");
     await harness.ok(session, "navigate", { tabId, url: fixtures.url("/a?kept") });
     const started = Date.now();
-    await harness.ok(session, "navigate", { tabId, action: "back" });
+    await harness.ok(session, "navigate", { tabId, action: "back", view: false });
     const elapsed = Date.now() - started;
     if ((await firefox.evaluate(context, 'sessionStorage.getItem("shown-from-memory")')) === null) {
       // Firefox did not keep the page this time and loaded it again.
@@ -1378,10 +1383,10 @@ describe("read_page in real Firefox", () => {
     // Not /a: it is served no-store, which Firefox never keeps in memory.
     const first = fixtures.url("/autofill?mem-1");
     const second = fixtures.url("/autofill?mem-2");
-    const tabId = await open("/autofill?mem-1", TITLES.autofill);
-    // No Foxleash page tool on these pages: they stay as Firefox would keep them.
+    // No Foxleash page tool on these pages, not even a view: they stay as Firefox would keep them.
+    const tabId = await open("/autofill?mem-1", TITLES.autofill, { view: false });
     await markForMemory(await contextOf(first));
-    await harness.ok(session, "navigate", { tabId, url: second });
+    await harness.ok(session, "navigate", { tabId, url: second, view: false });
     await markForMemory(await contextOf(second));
     const moves: ["back" | "forward", string][] = [
       ["back", first],
@@ -1393,7 +1398,7 @@ describe("read_page in real Firefox", () => {
         const label = `${action} in round ${round}`;
         const hits = fixtures.hits("/autofill");
         const started = Date.now();
-        await harness.ok(session, "navigate", { tabId, action });
+        await harness.ok(session, "navigate", { tabId, action, view: false });
         const elapsed = Date.now() - started;
         const context = await contextOf(shown);
         // A page shown from memory can read a stale sessionStorage: compare a time, not a count.
@@ -1536,8 +1541,12 @@ describe("read_page in real Firefox", () => {
     assert.ok(text.includes("Foxleash's blocklist"), text);
   });
 
-  async function open(path: string, title: string): Promise<number> {
-    const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url(path) }));
+  async function open(
+    path: string,
+    title: string,
+    args: Record<string, unknown> = {},
+  ): Promise<number> {
+    const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url(path), ...args }));
     assert.equal(tab.title, title, `unexpected tab ${JSON.stringify(tab)}`);
     return tab.id;
   }
@@ -1570,10 +1579,10 @@ describe("read_page in real Firefox", () => {
   }
 
   /** Opens `path` in a new tab and returns its id once Firefox filled in the saved login. */
-  function filledTab(path: string): Promise<number> {
+  function filledTab(path: string, args: Record<string, unknown> = {}): Promise<number> {
     return withLogin(async () => {
       // tab_open makes the tab active: login autofill waits for a visible document.
-      const tabId = await open(path, TITLES.autofill);
+      const tabId = await open(path, TITLES.autofill, args);
       await waitForFill(fixtures.url(path));
       return tabId;
     });

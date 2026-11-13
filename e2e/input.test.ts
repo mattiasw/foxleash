@@ -489,7 +489,8 @@ describe("type and press_key in real Firefox", () => {
       "the tab to be hidden",
     );
     const started = Date.now();
-    assert.equal((await type(background, 'textbox "Plain"', "!")).outcome, "typed");
+    const typed = await type(background, 'textbox "Plain"', "!", { view: false });
+    assert.equal(typed.outcome, "typed");
     const took = Date.now() - started;
     // type waits 100 ms for the page, and Firefox delays a hidden tab's timers to a second.
     assert.ok(took >= 100, `type took ${took} ms`);
@@ -760,9 +761,14 @@ describe("type and press_key in real Firefox", () => {
     return { url, tabId: tab.id, context: found.context, tree: untrustedContent(read.text) ?? "" };
   }
 
-  async function type(page: Page, line: string, text: string): Promise<Record<string, unknown>> {
+  async function type(
+    page: Page,
+    line: string,
+    text: string,
+    args: Record<string, unknown> = {},
+  ): Promise<Record<string, unknown>> {
     const ref = refOf(page.tree, line);
-    return record(await acted(session, "type", { tabId: page.tabId, ref, text }));
+    return record(await acted(session, "type", { tabId: page.tabId, ref, text, ...args }));
   }
 
   async function press(page: Page, key: string, line: string): Promise<unknown> {

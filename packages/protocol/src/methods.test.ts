@@ -5,6 +5,9 @@ import {
   type FoundLines,
   fillChars,
   foundLinesOf,
+  PAGE_VIEW_MAX_CHARS,
+  pageViewOf,
+  READ_PAGE_MAX_CHARS,
   READ_PAGE_MAX_MATCHES,
 } from "./methods.ts";
 
@@ -125,6 +128,68 @@ describe("foundLinesOf", () => {
         JSON.stringify([counts, tree, truncated]),
       );
     }
+  });
+});
+
+describe("pageViewOf", () => {
+  const LONGEST = "x".repeat(PAGE_VIEW_MAX_CHARS);
+  const VIEWS = [
+    { kind: "tree", tree: "main", omitted: 0, truncated: false },
+    { kind: "tree", tree: LONGEST, omitted: READ_PAGE_MAX_CHARS, truncated: true },
+    { kind: "tree", tree: "", omitted: 3, truncated: false },
+    { kind: "changes", lines: "+ main", truncated: false },
+    { kind: "changes", lines: LONGEST, truncated: true },
+    { kind: "unchanged", truncated: false },
+    { kind: "unchanged", truncated: true },
+    { kind: "site", url: "https://a.example" },
+    { kind: "site", url: LONGEST },
+    { kind: "none", reason: "not_web" },
+    { kind: "none", reason: "loading" },
+    { kind: "none", reason: "unreadable" },
+  ];
+
+  it("accepts each kind of view as a fresh object of its own fields", () => {
+    for (const view of VIEWS) {
+      const checked = pageViewOf({ ...view, extra: "page" });
+      assert.deepEqual(checked, view);
+      assert.notEqual(checked, view);
+    }
+  });
+
+  it("refuses anything else", () => {
+    const bad: unknown[] = [
+      undefined,
+      null,
+      "tree",
+      [],
+      [{ kind: "unchanged", truncated: false }],
+      {},
+      { kind: "other", truncated: false },
+      Object.create({ kind: "unchanged", truncated: false }),
+      { kind: "tree", tree: `${LONGEST}x`, omitted: 0, truncated: false },
+      { kind: "tree", tree: 1, omitted: 0, truncated: false },
+      { kind: "tree", omitted: 0, truncated: false },
+      { kind: "tree", tree: "a", omitted: -1, truncated: false },
+      { kind: "tree", tree: "a", omitted: 0.5, truncated: false },
+      { kind: "tree", tree: "a", omitted: "1", truncated: false },
+      { kind: "tree", tree: "a", omitted: READ_PAGE_MAX_CHARS + 1, truncated: false },
+      { kind: "tree", tree: "a", omitted: 0, truncated: "false" },
+      { kind: "tree", tree: "a", omitted: 0 },
+      Object.assign(Object.create({ tree: "a" }), { kind: "tree", omitted: 0, truncated: false }),
+      { kind: "changes", lines: `${LONGEST}x`, truncated: false },
+      { kind: "changes", lines: ["+ a"], truncated: false },
+      { kind: "changes", lines: "+ a" },
+      { kind: "unchanged" },
+      { kind: "unchanged", truncated: 0 },
+      Object.assign(Object.create({ truncated: true }), { kind: "unchanged" }),
+      { kind: "site", url: `${LONGEST}x` },
+      { kind: "site" },
+      { kind: "site", url: null },
+      { kind: "none", reason: "blocked" },
+      { kind: "none" },
+      Object.assign(Object.create({ reason: "loading" }), { kind: "none" }),
+    ];
+    for (const value of bad) assert.equal(pageViewOf(value), undefined, JSON.stringify(value));
   });
 });
 

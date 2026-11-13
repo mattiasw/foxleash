@@ -13,6 +13,7 @@ import {
   MIN_WAIT_FOR_MS,
   MIN_WINDOW_SIZE,
   type NavigateAction,
+  type PageView,
   type ProbeResult,
   type RequestMessage,
   type Result,
@@ -51,7 +52,8 @@ import { pressKeyOptions, pressKeyResultOf, typeOptions, typeResultOf } from "./
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
-import { READ_PAGE_MAX_CHARS, readPageOptions } from "./page-tree.ts";
+import { READ_PAGE_MAX_CHARS, type ReadPageOptions, readPageOptions } from "./page-tree.ts";
+import { type PageViews, type TreeRead, VIEW_FILTER } from "./page-view.ts";
 import type { RecipePrompts } from "./recipe-prompts.ts";
 import { checkRecipe, findRecipe, readRecipes, recipeName, siteOfEntry } from "./recipes.ts";
 import {
@@ -119,6 +121,10 @@ export interface HandlerDeps<Handle> {
   recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt" | "request">;
   /** Watches the page after an act; `import type`, since it imports this file. */
   settle: Pick<ActSettle, "begin">;
+  /** The views of the page that results end with, and each session's last one per tab. */
+  views: Pick<PageViews, "document" | "view" | "record" | "forget">;
+  /** The time in ms since the epoch, which bounds the view's read. */
+  now: () => number;
 }
 
 type Params = Record<string, unknown>;
@@ -224,6 +230,16 @@ export const BLANK_RELOAD_TIMEOUT_MS = 20_000;
  * removal until the user answers it.
  */
 export const CLOSE_CONFIRM_TIMEOUT_MS = 5_000;
+/**
+ * A result starts no read of its view after this long into the call: with VIEW_READ_MS, a call
+ * answers within 55 s, below the host's 60 s request timeout, which shuts the host down when it
+ * fires.
+ */
+export const VIEW_START_LIMIT_MS = 50_000;
+/** Bounds the read of a result's view; see VIEW_START_LIMIT_MS. */
+export const VIEW_READ_MS = 5_000;
+
+const UNREADABLE_VIEW: PageView = { kind: "none", reason: "unreadable" };
 
 export function createHandlers<Handle>({
   browser,
@@ -239,6 +255,8 @@ export function createHandlers<Handle>({
   downloads,
   recipes,
   settle,
+  views,
+  now,
 }: HandlerDeps<Handle>): (request: RequestMessage) => Promise<Result<MethodName>> {
   const frameErrors = watchFrameErrors(browser);
   const knownDocuments = watchTopDocuments(browser);
@@ -293,6 +311,13 @@ export function createHandlers<Handle>({
   }
 
   async function tabOpen(session: string, params: Params): Promise<Result<"tab_open">> {
+    const started = now();
+    const viewed = viewParam(params, "tab_open");
+    const { tab } = await openTab(session, params);
+    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+  }
+
+  async function openTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
     const url = tabOpenUrl(params);
     const decision = url === undefined ? undefined : await access.check(session, url);
     if (url !== undefined && decision?.decision === "join") {
@@ -397,6 +422,13 @@ export function createHandlers<Handle>({
   }
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {
+    const started = now();
+    const viewed = viewParam(params, "navigate");
+    const { tab } = await navigateTab(session, params);
+    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+  }
+
+  async function navigateTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
     const tabId = tabIdParam(params, "navigate");
     const request = navigationTarget(params);
     const tab = await existingTab(tabId);
@@ -726,6 +758,13 @@ export function createHandlers<Handle>({
    * when the wait ends.
    */
   async function waitFor(session: string, params: Params): Promise<Result<"wait_for">> {
+    const started = now();
+    const viewed = viewParam(params, "wait_for");
+    const { tab } = await waitInTab(session, params);
+    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+  }
+
+  async function waitInTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
     const tabId = tabIdParam(params, "wait_for");
     const condition = waitCondition(params);
     const timeoutMs = waitTimeoutMs(params);
@@ -802,28 +841,20 @@ export function createHandlers<Handle>({
     const tabId = tabIdParam(params, "read_page");
     const options = readPageOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
+    const before = views.document(tabId);
     const reply = await pages.request(session, tabId, "read_page", options);
-    // The reply comes from the page's content process: own fields only, and the cap again.
-    const tree = isRecord(reply) ? ownField(reply, "tree") : undefined;
-    const truncated = isRecord(reply) ? ownField(reply, "truncated") : undefined;
-    const unreadable = new ToolError(
-      "page_error",
-      `Foxleash could not complete the request in the page in tab ${tabId}.`,
-    );
-    if (
-      typeof tree !== "string" ||
-      tree.length > READ_PAGE_MAX_CHARS ||
-      typeof truncated !== "boolean"
-    ) {
-      throw unreadable;
+    const { tree, truncated } = treeReadOf(reply, tabId);
+    if (options.find === undefined) {
+      // What the model now has of the page: the next view says what changed since.
+      if (isWholeView(options)) views.record(session, tabId, before, { tree, truncated });
+      return { tree, truncated };
     }
-    if (options.find === undefined) return { tree, truncated };
     const found = foundLinesOf(
       isRecord(reply) ? ownField(reply, "found") : undefined,
       tree,
       truncated,
     );
-    if (found === undefined) throw unreadable;
+    if (found === undefined) throw pageError(tabId);
     return { tree, truncated, found };
   }
 
@@ -1063,6 +1094,8 @@ export function createHandlers<Handle>({
       throw new ToolError("invalid_params", "upload_file needs upload to be a string.");
     }
     const staged = uploads.take(session, upload) ?? new Uint8Array(0);
+    const started = now();
+    const viewed = viewParam(params, "upload_file");
     const tabId = tabIdParam(params, "upload_file");
     const ref = own(params, "ref");
     if (typeof ref !== "string") {
@@ -1083,6 +1116,7 @@ export function createHandlers<Handle>({
       return { name, type, bytes };
     });
     const watch = settle.begin(session, tabId);
+    let result: Result<"upload_file"> & { after: ActAfter };
     try {
       const reply = await pages.request(session, tabId, "upload_file", { ref, files: handed }, () =>
         watch.sent(),
@@ -1096,10 +1130,11 @@ export function createHandlers<Handle>({
         );
       }
       const listed = files.map(({ name, size }) => ({ name, size }));
-      return { target, files: listed, after: await watch.after(reply) };
+      result = { target, files: listed, after: await watch.after(reply) };
     } finally {
       watch.stop();
     }
+    return viewed ? withActView(session, tabId, result, [ref], started) : result;
   }
 
   /**
@@ -1113,27 +1148,113 @@ export function createHandlers<Handle>({
     tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form",
     parse: (params: Params) => O | string,
     check: (reply: unknown, options: O) => R | undefined,
-  ): Promise<R & { after: ActAfter }> {
+  ): Promise<R & { after: ActAfter; view?: PageView }> {
+    const started = now();
+    const viewed = viewParam(params, tool);
     const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     const watch = settle.begin(session, tabId);
+    let result: R & { after: ActAfter };
     try {
       const reply = await pages.request(session, tabId, tool, options, () => {
         navigations.acted(session, tabId);
         watch.sent();
       });
       // The reply comes from the page's content process: own fields only, of exact types.
-      const result = check(reply, options);
-      if (result === undefined) {
+      const checked = check(reply, options);
+      if (checked === undefined) {
         throw new ToolError(
           "page_error",
           `Foxleash could not complete the request in the page in tab ${tabId}.`,
         );
       }
-      return { ...result, after: await watch.after(reply) };
+      result = { ...checked, after: await watch.after(reply) };
     } finally {
       watch.stop();
+    }
+    return viewed
+      ? withActView(session, tabId, result, actFocus(options, result), started)
+      : result;
+  }
+
+  /**
+   * The act's result with the view of the page after it: none once the tab closed, and no read
+   * while the tab still loads another page, which would wait for the load past VIEW_READ_MS.
+   */
+  async function withActView<R extends { after: ActAfter }>(
+    session: string,
+    tabId: number,
+    result: R,
+    focus: readonly string[],
+    started: number,
+  ): Promise<R & { view?: PageView }> {
+    const { page } = result.after;
+    if (page === "closed") return result;
+    const view: PageView =
+      page === "loading"
+        ? { kind: "none", reason: "loading" }
+        : await pageView(session, tabId, focus, started);
+    return { ...result, view };
+  }
+
+  /**
+   * The view of the page in the tab, read as read_page reads it, through the same gate. Never
+   * rejects: the call's own result stands whatever the view's read does.
+   */
+  async function pageView(
+    session: string,
+    tabId: number,
+    focus: readonly string[],
+    started: number,
+  ): Promise<PageView> {
+    if (now() - started > VIEW_START_LIMIT_MS) return UNREADABLE_VIEW;
+    const before = views.document(tabId);
+    let read: TreeRead;
+    try {
+      read = await viewRead(session, tabId);
+    } catch (error: unknown) {
+      return refusedView(session, tabId, error);
+    }
+    return views.view(session, tabId, before, read, focus);
+  }
+
+  /** The tree the view shows, within VIEW_READ_MS; not an act, so wait_for's mark stays. */
+  async function viewRead(session: string, tabId: number): Promise<TreeRead> {
+    const { promise: timedOut, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(
+      () => reject(new Error("The view's read timed out.")),
+      VIEW_READ_MS,
+    );
+    try {
+      const reply = await Promise.race([
+        pages.request(session, tabId, "read_page", { filter: VIEW_FILTER }),
+        timedOut,
+      ]);
+      return treeReadOf(reply, tabId);
+    } finally {
+      timers.clearTimeout(timer);
+    }
+  }
+
+  /**
+   * The view after a failed read: a page the session may not read gives its site alone, as
+   * tabs_list shows it, and the memory of it is dropped.
+   */
+  async function refusedView(session: string, tabId: number, error: unknown): Promise<PageView> {
+    const code = error instanceof ToolError ? error.code : undefined;
+    if (code === "page_not_web") {
+      views.forget(session, tabId);
+      return { kind: "none", reason: "not_web" };
+    }
+    if (code !== "site_not_approved" && code !== "site_blocked") return UNREADABLE_VIEW;
+    views.forget(session, tabId);
+    try {
+      const tab = await groupTab(session, tabId);
+      const view = await access.view(session);
+      return { kind: "site", url: view.tabInfo(tab).url };
+    } catch {
+      return UNREADABLE_VIEW;
     }
   }
 
@@ -1615,6 +1736,52 @@ function tabIdParam(params: Params, method: string): number {
     );
   }
   return tabId;
+}
+
+/** Whether the result ends with a view of the page: unless the view param is false. */
+function viewParam(params: Params, method: string): boolean {
+  const view = own(params, "view");
+  if (view === undefined || view === true) return true;
+  if (view === false) return false;
+  throw new ToolError("invalid_params", `${method} needs view to be true or false.`);
+}
+
+/** A read_page reply from the page's content process: own fields only, and the cap again. */
+function treeReadOf(reply: unknown, tabId: number): TreeRead {
+  const tree = isRecord(reply) ? ownField(reply, "tree") : undefined;
+  const truncated = isRecord(reply) ? ownField(reply, "truncated") : undefined;
+  if (
+    typeof tree !== "string" ||
+    tree.length > READ_PAGE_MAX_CHARS ||
+    typeof truncated !== "boolean"
+  ) {
+    throw pageError(tabId);
+  }
+  return { tree, truncated };
+}
+
+function pageError(tabId: number): ToolError {
+  return new ToolError(
+    "page_error",
+    `Foxleash could not complete the request in the page in tab ${tabId}.`,
+  );
+}
+
+/** Whether a read_page without find reads what a view reads: the whole document, in its filter. */
+function isWholeView(options: ReadPageOptions): boolean {
+  return options.filter === VIEW_FILTER && options.ref === undefined && options.depth === undefined;
+}
+
+/** The refs an act aimed at, from its options and its result: ref, targetRef and each field's. */
+function actFocus(options: object, result: object): string[] {
+  const refs: unknown[] = [];
+  for (const source of [options, result]) {
+    refs.push(ownField(source, "ref"), ownField(source, "targetRef"));
+    const fields = ownField(source, "fields");
+    if (!Array.isArray(fields)) continue;
+    for (const field of fields) if (isRecord(field)) refs.push(ownField(field, "ref"));
+  }
+  return refs.filter((ref) => typeof ref === "string");
 }
 
 /** wait_for's one condition: a text, a selector the page may be asked about, or navigation. */
