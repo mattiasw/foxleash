@@ -207,12 +207,13 @@ describe("each agent session in its own window, in real Firefox", () => {
       const opening = harness.ok(asking, "tab_open", { url: other.url("/a") });
       opening.catch(() => {});
       const prompt = await harness.promptContext();
+      // The tab shows the prompt's URL for a moment before its page has `browser`.
+      await harness.waitForArmed(prompt);
       const promptTab = Number(
         await firefox.evaluate(prompt, "browser.tabs.getCurrent().then((tab) => tab.id)"),
       );
       const window = await windowOf(promptTab);
       assert.notEqual(window.id, userWindow);
-      await harness.waitForArmed(prompt);
       await firefox.click(prompt, 'button[data-answer="once"]');
       const tab = tabOf(await opening);
       assert.equal(tab.id, promptTab);
