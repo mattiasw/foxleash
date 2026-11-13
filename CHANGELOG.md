@@ -36,6 +36,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as `b12`, a link to the page's own site shows its address as a path starting with `/`, and
   each level is indented by one space. `navigate` takes such a path and loads it on the site the
   tab shows; `tab_open` and `download` ask for the whole address.
+- Agents are told at the start how to finish a browser task in fewer steps: put the steps they
+  can already spell out into one `batch` call, read each page once, and, in clients that load
+  tools on demand, load all the tools a task needs at once. Browser tasks take fewer model
+  requests.
 
 ### Fixed
 
