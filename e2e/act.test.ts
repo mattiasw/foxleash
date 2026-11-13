@@ -606,6 +606,40 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     assert.deepEqual(await evaluate(page, "window.log"), ["started", "dropped"]);
   });
 
+  test("drag in a tab that is not the active one lets the page start the drag first", async () => {
+    const page = await open("/act-sortable", TITLES.actSortable);
+    await open("/act-sortable", TITLES.actSortable);
+    await pollUntil(
+      async () =>
+        (await evaluate(page, "document.visibilityState")) === "hidden" ? true : undefined,
+      PAGE_TIMEOUT_MS,
+      "the tab to be hidden",
+    );
+    const ref = refOf(page.tree, 'listitem "Item 1"');
+    const targetRef = refOf(page.tree, 'listitem "Item 3"');
+    // A hidden tab runs its timers about once a second, so after this one the page's next timer,
+    // the one that starts its drag, waits up to a second.
+    await firefox.evaluate(
+      page.context,
+      "new Promise((resolve) => setTimeout(() => resolve(true), 0))",
+    );
+    assert.deepEqual(await harness.ok(session, "drag", { tabId: page.tabId, ref, targetRef }), {
+      ref,
+      targetRef,
+      mode: "html5",
+      dropped: true,
+    });
+    assert.deepEqual(await evaluate(page, "window.order()"), [
+      "Item 2",
+      "Item 3",
+      "Item 1",
+      "Item 4",
+      "Item 5",
+      "Item 6",
+    ]);
+    assert.deepEqual(await evaluate(page, "window.log"), ["started", "dropped"]);
+  });
+
   test("drag to a point does not scroll to its start, which must be in view", async () => {
     const page = await open("/act-drag", TITLES.actDrag);
     const ref = refOf(page.tree, 'button "Far item"');

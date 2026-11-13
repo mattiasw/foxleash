@@ -576,7 +576,8 @@ async function dropOnEnd(
   endBox: DOMRect,
   transfer: DataTransfer,
 ): Promise<boolean> {
-  await wait(DRAG_START_MS);
+  // In a hidden tab Firefox delays the page's timers too, and pages start a drag in a timer.
+  await Promise.all([wait(DRAG_START_MS), timerTurn()]);
   const point = movedPoint(end, endBox);
   sendDrag(source, "drag", start.point, transfer);
   sendDrag(end.hit, "dragenter", point, transfer);
@@ -584,6 +585,11 @@ async function dropOnEnd(
   sendDrag(end.hit, accepted ? "drop" : "dragleave", point, transfer);
   sendDrag(source, "dragend", start.point, transfer);
   return accepted;
+}
+
+/** One turn of the content script's timers, which Firefox runs after the page's earlier ones. */
+function timerTurn(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 /**

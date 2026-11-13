@@ -430,6 +430,52 @@ describe("fill_form in real Firefox", () => {
     );
   });
 
+  test("five text fields in a tab that is not the active one are all filled in one call", async () => {
+    const page = await open("/fill-form", TITLES.fillForm);
+    await open("/fill-form", TITLES.fillForm);
+    await pollUntil(
+      async () =>
+        (await evaluate(page, "document.visibilityState")) === "hidden" ? true : undefined,
+      PAGE_TIMEOUT_MS,
+      "the tab to be hidden",
+    );
+    const lines = [
+      'textbox "Text"',
+      'textbox "Area"',
+      'textbox "Email"',
+      'textbox "Password"',
+      'textbox "React"',
+    ];
+    const values = [
+      "New text",
+      "First\nSecond",
+      "new@example.com",
+      "pw-fill-new-Lm8",
+      "react text",
+    ];
+    const fields = lines.map((line, index) => ({
+      ref: refOf(page.tree, line),
+      value: values[index],
+    }));
+    const started = Date.now();
+    const results = await fill(page, fields);
+    const took = Date.now() - started;
+    assert.deepEqual(
+      results,
+      fields.map(({ ref }) => ({ ref, ok: true, outcome: "typed" })),
+    );
+    assert.deepEqual(
+      await evaluate(
+        page,
+        '["text", "area", "email", "password", "react"].map((id) => document.getElementById(id).value)',
+      ),
+      values,
+    );
+    // Each text field waits 100 ms for the page, and Firefox delays a hidden tab's timers to a
+    // second.
+    assert.ok(took < 2_000, `fill_form took ${took} ms`);
+  });
+
   test("a field Firefox autofilled from a saved login is refused and stays autofilled", async () => {
     let page: Page;
     await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);

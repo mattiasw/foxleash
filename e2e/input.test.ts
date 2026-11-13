@@ -472,7 +472,18 @@ describe("type and press_key in real Firefox", () => {
     await open("/input-frames", TITLES.inputFrames);
     const tabs = tabsOf(await harness.ok(session, "tabs_list"));
     assert.equal(tabs.find(({ id }) => id === background.tabId)?.active, false);
+    await pollUntil(
+      async () =>
+        (await evaluate(background, "document.visibilityState")) === "hidden" ? true : undefined,
+      PAGE_TIMEOUT_MS,
+      "the tab to be hidden",
+    );
+    const started = Date.now();
     assert.equal((await type(background, 'textbox "Plain"', "!")).outcome, "typed");
+    const took = Date.now() - started;
+    // type waits 100 ms for the page, and Firefox delays a hidden tab's timers to a second.
+    assert.ok(took >= 100, `type took ${took} ms`);
+    assert.ok(took < 500, `type took ${took} ms`);
     assert.equal(await evaluate(background, 'document.getElementById("plain").value'), "Hello!");
   });
 

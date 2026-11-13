@@ -356,8 +356,22 @@ export function execCommand(doc: Document, text: string): boolean {
   }
 }
 
+// Firefox delays a hidden tab's timers to a second; it does not delay message turns.
 export function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  const deadline = performance.now() + ms;
+  const { port1, port2 } = new MessageChannel();
+  return new Promise((resolve) => {
+    port2.onmessage = () => {
+      if (performance.now() < deadline) {
+        port1.postMessage(null);
+        return;
+      }
+      port1.close();
+      port2.close();
+      resolve();
+    };
+    port1.postMessage(null);
+  });
 }
 
 function takenOrRefused(ref: string): PageError {
