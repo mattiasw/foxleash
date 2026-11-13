@@ -1,9 +1,22 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { ActAfter } from "@foxleash/protocol";
-import { createActSettle, MIN_SETTLE_MS, QUIET_MS, SETTLE_CAP_MS } from "./act-settle.ts";
-import { createFakeBrowser, createFakeTimers, type FakeTab, flush } from "./fake-browser.ts";
+import {
+  createActSettle,
+  MIN_SETTLE_MS,
+  QUIET_MS,
+  RESPONSE_WAIT_MS,
+  SETTLE_CAP_MS,
+} from "./act-settle.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  type FakeTab,
+  type FakeTimers,
+  flush,
+} from "./fake-browser.ts";
 import { NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
+import type { RequestCounts } from "./network-log.ts";
 import { PAGE_REQUEST_MS } from "./page-scripts.ts";
 import { MAX_FIELD_CHARS } from "./page-tree.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -92,6 +105,108 @@ describe("act settle", { timeout: 10000 }, () => {
         assert.deepEqual(value, { element: BUTTON, page: expected, requests: 1 });
         assert.equal(elapsed, renders ? 320 + QUIET_MS + 30 : 300 + QUIET_MS);
       }
+    });
+
+    it("waits for the page to show a fetch's answer, from the answer on", async () => {
+      for (const spinner of [false, true]) {
+        const { act, finish, network, page, timers, sentAt } = await started();
+        network.begun = 1;
+        network.open = 1;
+        const { after } = await act();
+        if (spinner) timers.setTimeout(() => page.change(), 100);
+        answerAt(300, network, timers, sentAt);
+        timers.setTimeout(() => page.change(), 600);
+        const { value, elapsed } = await finish(after);
+        assert.deepEqual(value, { element: BUTTON, page: "changed", requests: 1 });
+        assert.equal(elapsed, 600 + QUIET_MS);
+        assert.ok(network.sinces.every((since) => since === sentAt()));
+      }
+    });
+
+    it("answers unchanged RESPONSE_WAIT_MS after a fetch's answer the page did not show", async () => {
+      const { act, finish, network, timers, sentAt } = await started();
+      network.begun = 1;
+      network.open = 1;
+      const { after } = await act();
+      answerAt(300, network, timers, sentAt);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "unchanged", requests: 1 });
+      assert.equal(elapsed, 300 + RESPONSE_WAIT_MS);
+      assert.ok(network.sinces.every((since) => since === sentAt()));
+    });
+
+    it("waits RESPONSE_WAIT_MS after a fetch that answers at once on a page that never changed", async () => {
+      const { act, finish, network, page, timers, sentAt, answerWith } = await started();
+      network.begun = 1;
+      network.open = 1;
+      // With no change the quiet time counts from the watch's start, and it reaches the background
+      // a poll's return trip after the page read it.
+      answerWith(async () => ({
+        state: "current",
+        changes: page.changes,
+        quietMs: Math.max(timers.now() - page.lastChange - 20, 0),
+      }));
+      const { after } = await act();
+      answerAt(0, network, timers, sentAt);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "unchanged", requests: 1 });
+      assert.equal(elapsed, RESPONSE_WAIT_MS);
+    });
+
+    it("sees a change late in the window that the page read after a poll's answer returned", async () => {
+      const { act, finish, network, page, timers, sentAt, answerWith } = await started();
+      network.begun = 1;
+      network.open = 1;
+      // The page reads itself when asked, and its answer arrives a 20 ms return trip later.
+      answerWith(async () => {
+        const read = {
+          state: "current",
+          changes: page.changes,
+          quietMs: timers.now() - page.lastChange,
+        };
+        await new Promise<void>((resolve) => timers.setTimeout(resolve, 20));
+        return read;
+      });
+      const { after } = await act();
+      answerAt(340, network, timers, sentAt);
+      timers.setTimeout(() => page.change(), 340 + RESPONSE_WAIT_MS - 10);
+      const { value } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "changed", requests: 1 });
+    });
+
+    it("waits only QUIET_MS after a change that followed a fetch's answer", async () => {
+      const { act, finish, network, page, timers, sentAt } = await started();
+      network.begun = 1;
+      network.open = 1;
+      const { after } = await act();
+      answerAt(300, network, timers, sentAt);
+      timers.setTimeout(() => page.change(), 320);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "changed", requests: 1 });
+      assert.equal(elapsed, 320 + QUIET_MS);
+    });
+
+    it("does not take a change in the same ms as a fetch's answer for the page showing it", async () => {
+      const { act, finish, network, page, timers, sentAt } = await started();
+      network.begun = 1;
+      network.open = 1;
+      const { after } = await act();
+      answerAt(300, network, timers, sentAt);
+      timers.setTimeout(() => page.change(), 300);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "changed", requests: 1 });
+      assert.equal(elapsed, 300 + RESPONSE_WAIT_MS);
+    });
+
+    it("answers by the count at the cap when it cuts the wait after a fetch's answer", async () => {
+      const { act, finish, network, timers, sentAt } = await started();
+      network.begun = 1;
+      network.open = 1;
+      const { after } = await act();
+      answerAt(SETTLE_CAP_MS - 300, network, timers, sentAt);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "unchanged", requests: 1 });
+      assert.equal(elapsed, SETTLE_CAP_MS);
     });
 
     it("answers unsettled at the cap when a request ended just before it", async () => {
@@ -692,6 +807,7 @@ async function started() {
     begun: 0,
     open: 0,
     lastEnd: undefined as number | undefined,
+    lastFetchEnd: undefined as number | undefined,
     sinces: [] as number[],
   };
   const epoch = 1_000_000;
@@ -705,8 +821,11 @@ async function started() {
     network: {
       requestsSince: (_tabId: number, since: number) => {
         network.sinces.push(since);
-        const { begun, open, lastEnd } = network;
-        return lastEnd === undefined ? { begun, open } : { begun, open, lastEnd };
+        const { begun, open, lastEnd, lastFetchEnd } = network;
+        const counts: RequestCounts = { begun, open };
+        if (lastEnd !== undefined) counts.lastEnd = lastEnd;
+        if (lastFetchEnd !== undefined) counts.lastFetchEnd = lastFetchEnd;
+        return counts;
       },
     },
     pages,
@@ -761,6 +880,20 @@ async function started() {
       answer = next;
     },
   };
+}
+
+/** The page's one fetch answers `ms` after the act. */
+function answerAt(
+  ms: number,
+  network: { open: number; lastEnd: number | undefined; lastFetchEnd: number | undefined },
+  timers: FakeTimers,
+  sentAt: () => number,
+): void {
+  timers.setTimeout(() => {
+    network.open = 0;
+    network.lastEnd = sentAt() + ms;
+    network.lastFetchEnd = sentAt() + ms;
+  }, ms);
 }
 
 function track(promise: Promise<unknown>): () => boolean {

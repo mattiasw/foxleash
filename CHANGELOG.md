@@ -25,8 +25,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Actions (`click`, `hover`, `scroll`, `drag`, `type`, `press_key`, `fill_form` and
   `upload_file`) wait for the page to settle and then say what happened: which element took the
   action, and whether the tab loaded another page (with its address), the page changed, nothing
-  changed, the page kept changing, the tab closed, or tabs opened. A read right after an action,
-  also in the same `batch`, sees the page the action left, and the agent needs fewer reads.
+  changed, the page kept changing, the tab closed, or tabs opened. A change the page shows up to
+  1.2 seconds after a fetch or XMLHttpRequest it sent answers, such as a cart count shown after a
+  short delay, is waited for too. A read right after an action, also in the same `batch`, sees
+  the page the action left, and the agent needs fewer reads.
 - The results of actions, `tab_open`, `navigate` and `wait_for` end with a view of the page, so
   the agent does not read the page after each step: the page itself the first time the agent
   gets it, cut to its most relevant lines on a large page with a note on how to read the rest,

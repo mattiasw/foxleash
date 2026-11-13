@@ -212,6 +212,11 @@ After each action (`click`, `hover`, `scroll`, `drag`, `type`, `press_key`, `fil
 `upload_file`), Foxleash waits for the page to settle before it answers: for a page the action
 loads, until that page is ready, up to 10 seconds; otherwise until the page has not changed for
 a tenth of a second and no request it began after the action is still open, at most 2 seconds.
+When a fetch or XMLHttpRequest the page began after the action has answered, Foxleash also waits
+until the page changes or 1.2 seconds have passed since that answer, within the same 2 seconds,
+because some pages show an answer only after a short timer, which Firefox runs only after about
+a second in a tab that is not selected; so an action whose request changes nothing on the page,
+such as an analytics request, takes up to about 1.1 seconds longer.
 The result then says which element took the action (its role and name, as `read_page` shows
 them) and what followed: the tab loaded another page (with its address, shown as `tabs_list`
 shows it), is still loading one, the page changed, nothing changed, the page was still changing

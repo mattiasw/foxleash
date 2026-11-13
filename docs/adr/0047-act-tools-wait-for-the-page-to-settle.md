@@ -1,6 +1,7 @@
 # 0047: Act tools wait for the page to settle and say what followed
 
-**Status:** Accepted, 2026-11-13.
+**Status:** Accepted, 2026-11-13. Its quiet rule after a request is extended, for a fetch or
+XMLHttpRequest, by [0055](0055-act-settle-waits-for-the-page-to-show-a-fetch-answer.md), 2026-11-13.
 
 ## Context
 

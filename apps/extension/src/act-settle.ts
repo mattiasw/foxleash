@@ -1,4 +1,10 @@
-import { ACT_QUIET_MS, ACT_SETTLE_CAP_MS, type ActAfter, type ActPage } from "@foxleash/protocol";
+import {
+  ACT_QUIET_MS,
+  ACT_RESPONSE_WAIT_MS,
+  ACT_SETTLE_CAP_MS,
+  type ActAfter,
+  type ActPage,
+} from "@foxleash/protocol";
 import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
 import { NAVIGATION_WAIT_MS } from "./handlers.ts";
 import type { NetworkLog } from "./network-log.ts";
@@ -11,6 +17,8 @@ import type { NavigationOutcome, TabNavigations } from "./tab-navigations.ts";
 
 /** How long the page must show no change, with no request it began after the act open. */
 export const QUIET_MS = ACT_QUIET_MS;
+/** After a fetch the page began after the act answers, the longest the settle waits for a change. */
+export const RESPONSE_WAIT_MS = ACT_RESPONSE_WAIT_MS;
 /** The longest the settle polls the page, from the act's reply. */
 export const SETTLE_CAP_MS = ACT_SETTLE_CAP_MS;
 /** The shortest gap between two polls. */
@@ -174,6 +182,7 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
           }
           if (capped) return atCap(last);
           if (watch === undefined) return { page: "unknown" };
+          const asked = now();
           const poll = await raced(
             pages.request(session, tabId, "page_changes", { watch }).then(
               (answer) => answer,
@@ -191,17 +200,28 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
           const read = readOf(poll);
           if (read === "other") return { page: "loaded", withUrl: true };
           if (read === undefined || read === "superseded") return { page: "unknown" };
-          const { open, lastEnd } = network.requestsSince(tabId, before.since);
+          const { open, lastEnd, lastFetchEnd } = network.requestsSince(tabId, before.since);
+          const at = now();
           // A page shows what a request brought only after the request ended.
           const quietMs =
-            lastEnd === undefined ? read.quietMs : Math.min(read.quietMs, now() - lastEnd);
+            lastEnd === undefined ? read.quietMs : Math.min(read.quietMs, at - lastEnd);
           last = { changes: read.changes, quietMs, open };
-          if (quietMs >= QUIET_MS && open === 0 && !early) {
+          // Some pages show a fetch's answer only in a timer of their own: while the page has not
+          // changed since the answer, wait until it read itself RESPONSE_WAIT_MS after it, which is
+          // after `asked`. With no change, quietMs counts from the watch's start, which a fetch that
+          // answers at once can trail by less than the poll's return trip.
+          const answered = lastFetchEnd ?? Number.NEGATIVE_INFINITY;
+          const sinceAnswer = at - answered;
+          const awaiting =
+            asked - answered < RESPONSE_WAIT_MS &&
+            (read.changes === 0 || read.quietMs >= sinceAnswer);
+          if (!awaiting && quietMs >= QUIET_MS && open === 0 && !early) {
             return { page: read.changes > 0 ? "changed" : "unchanged" };
           }
           const { promise: paused, resolve } = Promise.withResolvers<void>();
           // A pause the cap or the deadline cut short is cleared below.
-          pauseTimer = startTimer(Math.max(QUIET_MS - quietMs, POLL_MS), resolve);
+          const pause = awaiting ? POLL_MS : Math.max(QUIET_MS - quietMs, POLL_MS);
+          pauseTimer = startTimer(pause, resolve);
           await raced(paused, cap.promise);
         }
       } finally {

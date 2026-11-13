@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import { ACT_QUIET_MS, ACT_SETTLE_CAP_MS } from "@foxleash/protocol";
+import { ACT_QUIET_MS, ACT_RESPONSE_WAIT_MS, ACT_SETTLE_CAP_MS } from "@foxleash/protocol";
 import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
+  SETTLE_LATER_MS,
+  SETTLE_LATER_TEXT,
   SETTLE_SLOW_MS,
   SETTLE_SLOW_TEXT,
   startFixtureServer,
@@ -17,6 +19,7 @@ import {
   type Session,
   tabOf,
   untrustedContent,
+  viewItemsOf,
 } from "./harness.ts";
 
 const REF = "([a-z]{1,7}[1-9][0-9]*)";
@@ -103,6 +106,38 @@ describe("acts wait for the page to settle in real Firefox", () => {
       assert.deepEqual(settled.element, { role: "button", name: "Slow" });
       assert.ok(Number(settled.requests) >= 1, JSON.stringify(settled));
       assert.ok((untrustedContent(read ?? "") ?? "").includes(SETTLE_SLOW_TEXT), String(read));
+      // A page that shows a fetch's answer at once ends the wait after it: held for the window, the
+      // call would take at least the request plus ACT_RESPONSE_WAIT_MS.
+      assert.ok(ms < SETTLE_SLOW_MS + ACT_RESPONSE_WAIT_MS, `${ms} ms`);
+    });
+
+    test(`a click whose page shows its request's answer in a timer answers changed, with the answer in its view, ${where}`, async (t) => {
+      const page = await settlePage(hidden);
+      const ref = refOf(page.tree, 'button "Later"');
+      const { value: result, ms } = await timed(() =>
+        harness.call(session, "click", { tabId: page.tabId, ref }),
+      );
+      const laterMs = await pollUntil(
+        async () => {
+          const value = await firefox.evaluate(page.context, "window.laterMs");
+          return typeof value === "number" ? value : undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        "the page's timer to run",
+      );
+      t.diagnostic(
+        `click whose page shows its answer ${SETTLE_LATER_MS} ms after it, ${where}: ${ms} ms; the page's timer ran ${laterMs} ms after the answer`,
+      );
+      assert.equal(result.isError, false, result.texts.join("\n"));
+      const settled = afterOf(parseResult(result.text));
+      assert.equal(settled.page, "changed", JSON.stringify(settled));
+      assert.deepEqual(settled.element, { role: "button", name: "Later" });
+      assert.ok(Number(settled.requests) >= 1, JSON.stringify(settled));
+      const view = viewItemsOf(result).framed.join("\n");
+      assert.ok(view.includes(SETTLE_LATER_TEXT), view);
+      // The wait ends when the page changes, about QUIET_MS after the page's timer, not after the
+      // whole window. A hidden tab runs that timer itself only after about a second.
+      if (!hidden) assert.ok(ms < ACT_RESPONSE_WAIT_MS, `${ms} ms`);
     });
 
     test(`a click on a same-site link answers loaded with the new page's address, ${where}`, async (t) => {

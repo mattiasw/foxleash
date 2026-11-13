@@ -1089,8 +1089,73 @@ describe("network log", { timeout: 10000 }, () => {
           fake.emitWebRequest("onCompleted", { ...details, statusCode: 200, fromCache: false });
         }
       }
-      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 3, open: 0, lastEnd: 1500 });
-      assert.deepEqual(network.requestsSince(tab.id, 1100), { begun: 2, open: 0, lastEnd: 1300 });
+      assert.deepEqual(network.requestsSince(tab.id, 1000), {
+        begun: 3,
+        open: 0,
+        lastEnd: 1500,
+        lastFetchEnd: 1500,
+      });
+      assert.deepEqual(network.requestsSince(tab.id, 1100), {
+        begun: 2,
+        open: 0,
+        lastEnd: 1300,
+        lastFetchEnd: 1300,
+      });
+    });
+
+    it("gives the latest end of the top document's fetches apart from that of every request", async () => {
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      const ends: [string, number][] = [
+        [request(tab.id, `${SITE}/api`, { timeStamp: 1000 }), 1200],
+        [request(tab.id, `${SITE}/early`, { timeStamp: 1000 }), 1100],
+        [request(tab.id, `${SITE}/pixel.png`, { timeStamp: 1000, type: "image" }), 1500],
+        [request(tab.id, `${SITE}/app.js`, { timeStamp: 1000, type: "script" }), 1400],
+      ];
+      for (const [requestId, timeStamp] of ends) {
+        const details = { requestId, tabId: tab.id, timeStamp };
+        fake.emitWebRequest("onCompleted", { ...details, statusCode: 200, fromCache: false });
+      }
+      assert.deepEqual(network.requestsSince(tab.id, 1000), {
+        begun: 4,
+        open: 0,
+        lastEnd: 1500,
+        lastFetchEnd: 1200,
+      });
+    });
+
+    it("gives no fetch end while no fetch begun since the time ended", async () => {
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      const before = request(tab.id, `${SITE}/before`, { timeStamp: 999 });
+      request(tab.id, `${SITE}/open`, { timeStamp: 1000 });
+      const image = request(tab.id, `${SITE}/pixel.png`, { timeStamp: 1000, type: "image" });
+      for (const [requestId, timeStamp] of [
+        [before, 1300],
+        [image, 1200],
+      ] as const) {
+        const details = { requestId, tabId: tab.id, timeStamp };
+        fake.emitWebRequest("onCompleted", { ...details, statusCode: 200, fromCache: false });
+      }
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 2, open: 1, lastEnd: 1200 });
+    });
+
+    it("gives no fetch end for a frame's fetch, which ends like any request", async () => {
+      const { fake, network, request, tabIn } = setup();
+      const tab = await tabIn("s1", URL_A);
+      const framed = request(tab.id, `${SITE}/frame-api`, {
+        frameId: 3,
+        documentUrl: `${SITE}/frame`,
+        frameAncestors: [{ url: URL_A, frameId: 0 }],
+      });
+      fake.emitWebRequest("onCompleted", {
+        requestId: framed,
+        tabId: tab.id,
+        timeStamp: 1200,
+        statusCode: 200,
+        fromCache: false,
+      });
+      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 1, open: 0, lastEnd: 1200 });
     });
 
     it("counts the requests begun at or after the time, and those of them not ended", async () => {
@@ -1106,8 +1171,18 @@ describe("network log", { timeout: 10000 }, () => {
         statusCode: 200,
         fromCache: false,
       });
-      assert.deepEqual(network.requestsSince(tab.id, 1000), { begun: 2, open: 1, lastEnd: 1002 });
-      assert.deepEqual(network.requestsSince(tab.id, 999), { begun: 3, open: 2, lastEnd: 1002 });
+      assert.deepEqual(network.requestsSince(tab.id, 1000), {
+        begun: 2,
+        open: 1,
+        lastEnd: 1002,
+        lastFetchEnd: 1002,
+      });
+      assert.deepEqual(network.requestsSince(tab.id, 999), {
+        begun: 3,
+        open: 2,
+        lastEnd: 1002,
+        lastFetchEnd: 1002,
+      });
       assert.deepEqual(network.requestsSince(tab.id, 1001), { begun: 1, open: 1 });
       assert.deepEqual(network.requestsSince(tab.id, 1002), { begun: 0, open: 0 });
     });

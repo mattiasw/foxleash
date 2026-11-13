@@ -85,6 +85,10 @@ const VIEW_LARGE_ROWS = 3000;
 export const SETTLE_SLOW_TEXT = "The slow answer arrived";
 /** How long the server holds the settle page's slow request, and each of its ticker's. */
 export const SETTLE_SLOW_MS = 400;
+/** The text the settle page adds SETTLE_LATER_MS after its Later request answers. */
+export const SETTLE_LATER_TEXT = "The later answer showed";
+/** How long the settle page's own timer waits after its Later request answers. */
+export const SETTLE_LATER_MS = 300;
 const SETTLE_TICK_MS = 30;
 
 /** The text only the navigation target page shows. */
@@ -688,6 +692,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         path === "/settle/slow" ? SETTLE_SLOW_MS : SETTLE_TICK_MS,
       );
       timers.add(timer);
+    } else if (path === "/settle/later") {
+      response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+      response.end("ok");
     } else if (path === "/view-shop") {
       sendHtml(response, VIEW_SHOP_PAGE);
     } else if (path === "/view-large") {
@@ -2230,13 +2237,17 @@ document.addEventListener("drop", () => {
 </body></html>
 `;
 
-// Quiet does nothing; Slow adds a paragraph once its request answers; Ticker starts a chain of
-// requests that never ends, each changing the count.
+// Quiet does nothing; Slow adds a paragraph once its request answers; Later adds one in the page's
+// own timer SETTLE_LATER_MS after its request answers, as a shop page that shows the cart count
+// 300 ms after its fetch answers, and records in window.laterMs how late that timer ran (unlike
+// the other buttons it uses a page timer on purpose: a hidden tab runs it only after about a
+// second); Ticker starts a chain of requests that never ends, each changing the count.
 const SETTLE_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.settle}</title></head>
 <body>
 <button id="quiet">Quiet</button>
 <button id="slow">Slow</button>
+<button id="later">Later</button>
 <button id="ticker">Ticker</button>
 <a href="/settle-next">Next page</a>
 <p id="count">0</p>
@@ -2248,6 +2259,16 @@ document.getElementById("slow").addEventListener("click", async () => {
   const answer = document.createElement("p");
   answer.textContent = ${JSON.stringify(SETTLE_SLOW_TEXT)};
   document.getElementById("out").append(answer);
+});
+document.getElementById("later").addEventListener("click", async () => {
+  await (await fetch("/settle/later")).text();
+  const answered = performance.now();
+  setTimeout(() => {
+    window.laterMs = Math.round(performance.now() - answered);
+    const answer = document.createElement("p");
+    answer.textContent = ${JSON.stringify(SETTLE_LATER_TEXT)};
+    document.getElementById("out").append(answer);
+  }, ${SETTLE_LATER_MS});
 });
 document.getElementById("ticker").addEventListener("click", async () => {
   for (let ticks = 1; ; ticks += 1) {

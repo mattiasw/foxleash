@@ -270,6 +270,8 @@ export type KeyAction =
 export const ACT_QUIET_MS = 100;
 /** The longest an act's result waits for the page to go quiet, from the act's reply. */
 export const ACT_SETTLE_CAP_MS = 2_000;
+/** After a fetch or XMLHttpRequest the page began after an act answers, the longest the settle waits for the page to change. */
+export const ACT_RESPONSE_WAIT_MS = 1_200;
 
 /** What followed an act, as the extension saw it once the page settled or the wait ended. */
 export type ActPage =

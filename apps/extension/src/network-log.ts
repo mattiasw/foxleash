@@ -66,8 +66,9 @@ export interface NetworkLog {
   /**
    * The requests of the tab's live document that began at or after `since` (ms since the epoch,
    * as webRequest's timeStamp): how many began, how many of those have not ended, and when the
-   * last of them to end ended, absent when none has. Left out: websockets and media streams, which
-   * stay open for as long as the connection or the playback runs, and beacons, pings and CSP
+   * last of them to end ended, absent when none has, and likewise when the last fetch or
+   * XMLHttpRequest of the top document among them ended. Left out: websockets and media streams,
+   * which stay open for as long as the connection or the playback runs, and beacons, pings and CSP
    * reports, which cannot change the page.
    */
   requestsSince(tabId: number, since: number): RequestCounts;
@@ -77,6 +78,7 @@ export interface RequestCounts {
   begun: number;
   open: number;
   lastEnd?: number;
+  lastFetchEnd?: number;
 }
 
 interface Entry {
@@ -84,6 +86,8 @@ interface Entry {
   request: NetworkRequest;
   /** The length of all the request's strings. */
   chars: number;
+  /** The request came from the tab's top document, not a frame. */
+  top: boolean;
 }
 
 /** The requests of one top-frame document, in start order. */
@@ -317,12 +321,13 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
       begun: begun.length,
       open: [...log.open.values()].filter(counted).length,
     };
-    for (const { request } of begun) {
+    for (const { request, top } of begun) {
       if (request.durationMs === undefined) continue;
-      counts.lastEnd = Math.max(
-        counts.lastEnd ?? -Infinity,
-        request.startTime + request.durationMs,
-      );
+      const end = request.startTime + request.durationMs;
+      counts.lastEnd = Math.max(counts.lastEnd ?? -Infinity, end);
+      if (top && request.type === "xmlhttprequest") {
+        counts.lastFetchEnd = Math.max(counts.lastFetchEnd ?? -Infinity, end);
+      }
     }
     return counts;
   }
@@ -375,7 +380,12 @@ function entryOf(details: RequestDetails): Entry {
     requestHeaders: [],
     responseHeaders: [],
   };
-  return { requestId: details.requestId, request, chars: charsOf(request) };
+  return {
+    requestId: details.requestId,
+    request,
+    chars: charsOf(request),
+    top: details.frameId === 0,
+  };
 }
 
 /** The URL of the request's top-level document; `frameAncestors` ends at the top one. */
