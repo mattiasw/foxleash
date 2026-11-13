@@ -38,9 +38,9 @@ import {
 } from "./harness.ts";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-const BOX_REF = /button "Shot box" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
-const CARD_REF = /textbox "Card number" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
-const COVER_REF = /button "Frame cover" \[([0-9a-f]{8}-[1-9][0-9]*)\]/;
+const BOX_REF = /button "Shot box" \[([a-z]{1,7}[1-9][0-9]*)\]/;
+const CARD_REF = /textbox "Card number" \[([a-z]{1,7}[1-9][0-9]*)\]/;
+const COVER_REF = /button "Frame cover" \[([a-z]{1,7}[1-9][0-9]*)\]/;
 // An add-on that shows a frame of its own page where a page asks for one, as a password manager
 // shows its menu.
 const OTHER_EXTENSION = fileURLToPath(new URL("./other-extension", import.meta.url));

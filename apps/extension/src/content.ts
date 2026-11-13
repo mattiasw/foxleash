@@ -22,12 +22,8 @@ const STARTED = "foxleashPageScript";
 
 // The background injects this on every request; only the first run in a document sets up.
 if (!Object.hasOwn(globalThis, STARTED)) {
-  // Not crypto.randomUUID, which plain http pages lack (secure contexts only).
-  const bytes = crypto.getRandomValues(new Uint8Array(4));
-  const docId = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
   // An element the page moved into another document, such as a frame's, is not this one's.
   const refs = createElementRefs<Element>(
-    docId,
     (element) => element.isConnected && element.ownerDocument === document,
   );
   const passwordFields = new WeakSet<Element>();
@@ -60,6 +56,7 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     handlePageMessage(message, {
       site: siteOf(location.href),
       handlers,
+      adopt: (tag) => refs.adopt(tag),
       before: () => notePasswordFields({ passwordFields }),
     }),
   );

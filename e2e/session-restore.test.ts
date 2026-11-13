@@ -16,7 +16,7 @@ import {
   untrustedContent,
 } from "./harness.ts";
 
-const REFS = /\[[0-9a-f]{8}-[1-9][0-9]*\]/g;
+const REFS = /\[[a-z]{1,7}[1-9][0-9]*\]/g;
 const AUTOFILLED = 'document.getElementById("login-name").matches(":autofill")';
 // The login name field's value only as a category, so no assertion message holds the login.
 // sinceLoad is in the page's clock, null until the load event has finished.

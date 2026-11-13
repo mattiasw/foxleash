@@ -4,6 +4,11 @@ export interface PageRequest {
   type: string;
   /** The site the background checked, as `siteOf` returns it. */
   site: string;
+  /**
+   * A tag no document has had: a document takes the tag of the first request it gets and keeps
+   * it, as the first part of every element reference it hands out.
+   */
+  tag: string;
   params: Record<string, unknown>;
 }
 
@@ -16,6 +21,16 @@ export type PageReply =
 export type PageHandlers = Record<string, (params: Record<string, unknown>) => unknown>;
 
 export const PAGE_REQUEST_KIND = "foxleash-page";
+
+/** The most letters a document's tag has. */
+export const MAX_TAG_LETTERS = 7;
+
+const PAGE_TAG = new RegExp(`^[a-z]{1,${MAX_TAG_LETTERS}}$`);
+
+/** Whether the value has the shape of a document's tag. */
+export function isPageTag(value: unknown): value is string {
+  return typeof value === "string" && PAGE_TAG.test(value);
+}
 
 /** The codes the background passes through from a content script's error reply. */
 export const PAGE_ERROR_CODES: readonly string[] = [
@@ -58,23 +73,36 @@ export function ownField(value: object, key: string): unknown {
 /**
  * The content script's answer to a message: undefined, synchronously, for anything that is not
  * a Foxleash page request, so Firefox sends no reply; else a reply promise that never rejects.
+ * `adopt` gets the tag of every request that can be read, before anything else is checked.
  * `before` runs right before every handler, so memory the handlers share sees the page before the
  * handler changes it; a throw from it fails the request.
  */
 export function handlePageMessage(
   message: unknown,
-  ctx: { site: string | undefined; handlers: PageHandlers; before: () => void },
+  ctx: {
+    site: string | undefined;
+    handlers: PageHandlers;
+    adopt: (tag: string) => void;
+    before: () => void;
+  },
 ): Promise<PageReply> | undefined {
   if (!isRecord(message) || ownField(message, "kind") !== PAGE_REQUEST_KIND) return undefined;
   const site = ctx.site ?? "";
   const type = ownField(message, "type");
   const requestSite = ownField(message, "site");
   const params = ownField(message, "params");
-  if (typeof type !== "string" || typeof requestSite !== "string" || !isRecord(params)) {
+  const tag = ownField(message, "tag");
+  if (
+    typeof type !== "string" ||
+    typeof requestSite !== "string" ||
+    !isRecord(params) ||
+    !isPageTag(tag)
+  ) {
     return Promise.resolve(
       failure(site, "invalid_params", "Foxleash's page script got a request it cannot read."),
     );
   }
+  ctx.adopt(tag);
   if (ctx.site !== requestSite) {
     return Promise.resolve(
       failure(

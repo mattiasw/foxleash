@@ -134,6 +134,11 @@ describe("tools", () => {
     );
     const tabOpen = tools.find((tool) => tool.name === "tab_open");
     assert.equal(tabOpen?.inputSchema.required, undefined);
+    assert.equal(
+      urlDescription(navigate),
+      "http or https URL to load, or an address starting with / from read_page, loaded on the site the tab shows",
+    );
+    assert.equal(urlDescription(tabOpen), "Whole http or https URL; omit for a blank tab");
     for (const tool of [tabOpen, navigate]) {
       assert.equal(tool?.description?.includes(ASKS_FIRST), true, tool?.name ?? "missing");
     }
@@ -157,6 +162,7 @@ describe("tools", () => {
       "50,000 characters",
       "A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it.",
       "read_page never asks",
+      "A link to the page's own site shows its address as a path starting with /, on that site; a link to another site shows its whole address. navigate takes such a path, while tab_open and download need the whole address.",
       "read less with find (only the lines that contain a text), ref (one element and what it contains)",
       "With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most 20, with the number of other lines that match, or the number of lines searched when none does.",
       'in find, write a quote as " and a backslash as \\, not \\" or \\\\.',
@@ -235,6 +241,10 @@ describe("tools", () => {
     assert.equal(download?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(download?.inputSchema.required, ["url", "filename"]);
     assert.deepEqual(Object.keys(download?.inputSchema.properties ?? {}), ["url", "filename"]);
+    assert.equal(
+      urlDescription(download),
+      "The whole http or https URL of the file; a link address read_page shows as a path starting with / needs the page's site in front",
+    );
     for (const words of [
       "into the user's Firefox download folder",
       "return its absolute path and size in bytes",
@@ -3649,4 +3659,11 @@ function record(value: unknown): Record<string, unknown> {
 
 function pretty(value: unknown): string {
   return JSON.stringify(value, null, 2);
+}
+
+/** The description of a tool's url parameter. */
+function urlDescription(
+  tool: { inputSchema: { properties?: Record<string, object> | undefined } } | undefined,
+): unknown {
+  return record(tool?.inputSchema.properties?.url).description;
 }

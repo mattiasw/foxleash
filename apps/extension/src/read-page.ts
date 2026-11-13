@@ -18,6 +18,7 @@ import {
   LANDMARK_ROLES,
   type Line,
   type LineStates,
+  linkAddress,
   NAME_FROM_CONTENT_ROLES,
   type ReadPageOptions,
   readPageOptions,
@@ -1143,7 +1144,7 @@ function statesOf(
   const field = fieldOf(element, role, page, state);
   if (field !== undefined) states.field = field;
   if (role === "link" && element instanceof HTMLAnchorElement && element.hasAttribute("href")) {
-    states.href = element.href;
+    states.href = linkAddress(element.href, document.URL);
   }
   return states;
 }

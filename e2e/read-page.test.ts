@@ -26,8 +26,8 @@ import {
   untrustedContent,
 } from "./harness.ts";
 
-const REF = /\[([0-9a-f]{8}-[1-9][0-9]*)\]/;
-const REFS = /\[[0-9a-f]{8}-[1-9][0-9]*\]/g;
+const REF = /\[([a-z]{1,7}[1-9][0-9]*)\]/;
+const REFS = /\[[a-z]{1,7}[1-9][0-9]*\]/g;
 const TREE_CUT =
   "The page tree was cut at 50,000 characters. Read a part of it with ref, or use filter interactive or a smaller depth.";
 // Everything a test compares before and after a read: read_page must not change the page.
@@ -113,32 +113,32 @@ describe("read_page in real Firefox", () => {
     ]);
     assertLines(tree, [
       "main [*]",
-      '  heading "Sign in" [*] level=2',
-      '  form "Sign in" [*]',
-      '    textbox "Email" [*] required value="me@example.com"',
-      '    textbox "Password" [*] protected filled',
-      '    textbox "Second password" [*] protected filled',
-      '    textbox "Empty password" [*] protected',
-      '    textbox "Code" [*] protected filled',
-      '    searchbox "Search the site" [*]',
-      '    checkbox "Remember me" [*] checked',
-      '    combobox "Plan" [*] value="Pro"',
-      '      option "Free" [*]',
-      '      option "Pro" [*] selected',
-      '    textbox "Notes" [*] disabled',
-      '    textbox "Backup code" [*] protected filled',
-      '    button "Use code" [*]',
-      '    textbox "Account" [*] readonly value="acct-1"',
-      '    textbox "Day" [*]',
-      '    textbox "Nickname" [*]',
-      '    textbox "Toggled password" [*] protected filled',
-      "    textbox [*] protected filled",
-      '    button "Sign in" [*]',
+      ' heading "Sign in" [*] level=2',
+      ' form "Sign in" [*]',
+      '  textbox "Email" [*] required value="me@example.com"',
+      '  textbox "Password" [*] protected filled',
+      '  textbox "Second password" [*] protected filled',
+      '  textbox "Empty password" [*] protected',
+      '  textbox "Code" [*] protected filled',
+      '  searchbox "Search the site" [*]',
+      '  checkbox "Remember me" [*] checked',
+      '  combobox "Plan" [*] value="Pro"',
+      '   option "Free" [*]',
+      '   option "Pro" [*] selected',
+      '  textbox "Notes" [*] disabled',
+      '  textbox "Backup code" [*] protected filled',
+      '  button "Use code" [*]',
+      '  textbox "Account" [*] readonly value="acct-1"',
+      '  textbox "Day" [*]',
+      '  textbox "Nickname" [*]',
+      '  textbox "Toggled password" [*] protected filled',
+      "  textbox [*] protected filled",
+      '  button "Sign in" [*]',
     ]);
     assert.equal(tree.includes(READ_HIDDEN.labelPart), false, tree);
     // The date input is one line: nothing of Firefox's own date widget is read.
-    const day = lines(tree).findIndex((line) => line.startsWith('    textbox "Day"'));
-    assert.match(lines(tree)[day + 1] ?? "", /^ {4}text "Nickname"$/, tree);
+    const day = lines(tree).findIndex((line) => line.startsWith('  textbox "Day"'));
+    assert.match(lines(tree)[day + 1] ?? "", /^ {2}text "Nickname"$/, tree);
   });
 
   test("a password field the page turns into text or a button stays protected", async () => {
@@ -156,10 +156,10 @@ describe("read_page in real Firefox", () => {
     const { tree, texts } = await read(formTab);
     assertNoSecrets(texts, [READ_SECRETS.toggled, READ_SECRETS.bare, READ_SECRETS.hidden]);
     assertLines(tree, [
-      '    textbox "Toggled password" [*] protected filled',
+      '  textbox "Toggled password" [*] protected filled',
       // Hidden at every earlier read, so the walk never reached it there.
-      '    textbox "Hidden password" [*] protected filled',
-      "    button [*] protected filled",
+      '  textbox "Hidden password" [*] protected filled',
+      "  button [*] protected filled",
     ]);
   });
 
@@ -169,8 +169,8 @@ describe("read_page in real Firefox", () => {
       withoutRefs(tree),
       [
         "main [*]",
-        '  form "Sign in" [*]',
-        '    textbox "Email" [*] required value="me@example.com"',
+        ' form "Sign in" [*]',
+        '  textbox "Email" [*] required value="me@example.com"',
       ].join("\n"),
     );
     assert.equal(texts.length, 1, texts.join("\n"));
@@ -189,7 +189,7 @@ describe("read_page in real Firefox", () => {
     const { tree, texts } = await read(formTab, { find: "Sign in", depth: 2 });
     assert.equal(
       withoutRefs(tree),
-      ["main [*]", '  heading "Sign in" [*] level=2', '  form "Sign in" [*] …'].join("\n"),
+      ["main [*]", ' heading "Sign in" [*] level=2', ' form "Sign in" [*] …'].join("\n"),
     );
     assert.equal(texts.length, 1, texts.join("\n"));
   });
@@ -219,7 +219,7 @@ describe("read_page in real Firefox", () => {
     );
     const { tree, texts } = await read(tabId);
     assertNoSecrets(texts, [READ_SECRETS.toggled]);
-    assertLines(tree, ['    textbox "Toggled password" [*] protected filled']);
+    assertLines(tree, ['  textbox "Toggled password" [*] protected filled']);
   });
 
   test("an editable area's line shows the text the user sees in it as its value", async () => {
@@ -234,7 +234,7 @@ describe("read_page in real Firefox", () => {
     const message = 'textbox "Message Body" [*] value="Hello Ann, See you soon."';
     const outer = 'textbox "Outer" [*] value="Outer text inner text"';
     // Only the editing host has a value, not an editable element inside it.
-    const inner = '  textbox "Inner" [*]';
+    const inner = ' textbox "Inner" [*]';
     const fields = [
       message,
       `textbox "Long" [*] value="${READ_EDITABLE_LONG.slice(0, 200)}…"`,
@@ -259,43 +259,44 @@ describe("read_page in real Firefox", () => {
     const at = allFound.indexOf(message);
     assert.deepEqual(
       allFound.slice(at + 1, at + 3),
-      ['  text "Hello Ann,"', '  text "See you soon."'],
+      [' text "Hello Ann,"', ' text "See you soon."'],
       all.tree,
     );
   });
 
   test("landmarks nest, with their headings and text", async () => {
     const tabId = await open("/read-landmarks", TITLES.readLandmarks);
-    const home = fixtures.url("/a");
-    const docs = fixtures.url("/b");
+    // Links to the page's own site show their address after the origin.
+    const home = "/a";
+    const docs = "/b";
     assert.equal(
       withoutRefs((await read(tabId)).tree),
       [
         "banner [*]",
-        '  navigation "Main" [*]',
-        `    link "Home" [*] href="${home}"`,
-        `    link "Docs" [*] href="${docs}"`,
+        ' navigation "Main" [*]',
+        `  link "Home" [*] href="${home}"`,
+        `  link "Docs" [*] href="${docs}"`,
         "main [*]",
-        '  heading "Landmarks" [*] level=1',
-        '  heading "Article title" [*] level=3',
-        '  text "Article text"',
-        '  region "News" [*]',
-        '    heading "News" [*] level=2',
-        '    text "News text"',
-        '  text "Unnamed section text"',
+        ' heading "Landmarks" [*] level=1',
+        ' heading "Article title" [*] level=3',
+        ' text "Article text"',
+        ' region "News" [*]',
+        '  heading "News" [*] level=2',
+        '  text "News text"',
+        ' text "Unnamed section text"',
         "complementary [*]",
-        '  text "Aside text"',
+        ' text "Aside text"',
         "contentinfo [*]",
-        '  text "Footer text"',
+        ' text "Footer text"',
       ].join("\n"),
     );
     assert.equal(
       withoutRefs((await read(tabId, { filter: "interactive" })).tree),
       [
         "banner [*]",
-        '  navigation "Main" [*]',
-        `    link "Home" [*] href="${home}"`,
-        `    link "Docs" [*] href="${docs}"`,
+        ' navigation "Main" [*]',
+        `  link "Home" [*] href="${home}"`,
+        `  link "Docs" [*] href="${docs}"`,
       ].join("\n"),
     );
     assert.equal(
@@ -332,26 +333,26 @@ describe("read_page in real Firefox", () => {
     assertLines(tree, [
       'button "Visible child" [*]',
       "group [*]",
-      '  button "Question" [*]',
+      ' button "Question" [*]',
       `text "${READ_VISIBLE_MARKER}"`,
-      '  button "Namespaced" [*]',
-      '  button "Foreign" [*]',
+      ' button "Namespaced" [*]',
+      ' button "Foreign" [*]',
       'group "Visibility box" [*]',
-      '  button "Visibility" [*]',
-      '  button "Content visibility" [*]',
-      '  button "Display" [*]',
+      ' button "Visibility" [*]',
+      ' button "Content visibility" [*]',
+      ' button "Display" [*]',
       'button "Pressable" [*]',
-      '  button "Shown" [*]',
-      `  text "${READ_OPEN_DETAILS.answer}"`,
-      `  text "${READ_OPEN_DETAILS.paragraph}"`,
-      `  text "${READ_OPEN_DETAILS.contentsChild}"`,
+      ' button "Shown" [*]',
+      ` text "${READ_OPEN_DETAILS.answer}"`,
+      ` text "${READ_OPEN_DETAILS.paragraph}"`,
+      ` text "${READ_OPEN_DETAILS.contentsChild}"`,
       'heading "Named Inner" [*] level=2',
       `heading "Plain Sum ${READ_OPEN_DETAILS.inName}" [*] level=2`,
       `text "${READ_OPEN_DETAILS.revealed}"`,
     ]);
     const sub = await read(tabId, { ref: refOf(tree, 'group "Visibility box"') });
     assertNoSecrets(sub.texts, [READ_HIDDEN.detailsVisibility]);
-    assertLines(sub.tree, ['group "Visibility box" [*]', '  button "Visibility" [*]']);
+    assertLines(sub.tree, ['group "Visibility box" [*]', ' button "Visibility" [*]']);
   });
 
   test("a full read leaves out what Firefox does not render in a canvas, object, embed, select, svg, wbr or column", async () => {
@@ -389,15 +390,15 @@ describe("read_page in real Firefox", () => {
       'group "Card" [*]',
       'button "Delete" [*]',
       'combobox "Plan" [*] value="Free"',
-      '  option "Free" [*] selected',
+      ' option "Free" [*] selected',
       'combobox "Labelled pick" [*] value="Labelled free"',
-      '  option "Labelled free" [*] selected',
+      ' option "Labelled free" [*] selected',
       `text "${READ_RENDERED.svgText}"`,
       `text "${READ_RENDERED.foreign}"`,
       `text "${READ_RENDERED.objectFallback}"`,
       `text "${READ_RENDERED.embedFallback}"`,
-      `  option "${READ_RENDERED.wrappedOption}" [*]`,
-      '  option "List choice" [*]',
+      ` option "${READ_RENDERED.wrappedOption}" [*]`,
+      ' option "List choice" [*]',
     ]);
     assert.ok(tree.includes(READ_RENDERED.svgLink), tree);
   });
@@ -430,7 +431,7 @@ describe("read_page in real Firefox", () => {
     const panel = refOf(tree, 'group "Closed button panel"');
     assert.equal(
       withoutRefs((await read(tabId, { ref: panel })).tree),
-      'group "Closed button panel" [*]\n  button "Closed button inside" [*]',
+      'group "Closed button panel" [*]\n button "Closed button inside" [*]',
     );
     await firefox.evaluate(
       context,
@@ -480,7 +481,7 @@ describe("read_page in real Firefox", () => {
     const last = lines(all.tree).at(-1) ?? "";
     assert.match(
       last,
-      /^( {2}listitem \[[0-9a-f]{8}-[0-9]+\]| {4}text "Item [0-9]{4} lorem ipsum dolor sit amet"| {4}link "Link [0-9]{4}" \[[0-9a-f]{8}-[0-9]+\] href="[^"]+\/a")$/,
+      /^( listitem \[[a-z]{1,7}[1-9][0-9]*\]| {2}text "Item [0-9]{4} lorem ipsum dolor sit amet"| {2}link "Link [0-9]{4}" \[[a-z]{1,7}[1-9][0-9]*\] href="\/a")$/,
     );
     assert.deepEqual(all.texts.slice(1), [TREE_CUT]);
 
@@ -494,18 +495,18 @@ describe("read_page in real Firefox", () => {
 
   test("find returns the matching lines of a large page with their ancestors", async () => {
     const tabId = await open("/read-large", TITLES.readLarge);
-    const href = fixtures.url("/a");
+    const href = "/a";
     const link = (number: number) =>
-      `    link "Link ${String(number).padStart(4, "0")}" [*] href="${href}"`;
+      `  link "Link ${String(number).padStart(4, "0")}" [*] href="${href}"`;
 
     // Past the point where a full read is cut.
     const last = await read(tabId, { find: "Link 2000" });
-    assert.equal(withoutRefs(last.tree), ["list [*]", "  listitem [*]", link(2000)].join("\n"));
+    assert.equal(withoutRefs(last.tree), ["list [*]", " listitem [*]", link(2000)].join("\n"));
     assert.equal(last.texts.length, 1, last.texts.join("\n"));
 
     const thousands = await read(tabId, { find: "link 1", role: "link" });
     const links = Array.from({ length: 10 }, (_, index) => [
-      "  listitem [*]",
+      " listitem [*]",
       link(1000 + 100 * index),
     ]);
     assert.equal(withoutRefs(thousands.tree), ["list [*]", ...links.flat()].join("\n"));
@@ -514,8 +515,8 @@ describe("read_page in real Firefox", () => {
     // 1001 to 1999 without the ten links: 990 text lines.
     const items = await read(tabId, { find: "ITEM 1" });
     const texts = Array.from({ length: 20 }, (_, index) => [
-      "  listitem [*]",
-      `    text "Item ${1001 + index} lorem ipsum dolor sit amet"`,
+      " listitem [*]",
+      `  text "Item ${1001 + index} lorem ipsum dolor sit amet"`,
     ]);
     assert.equal(withoutRefs(items.tree), ["list [*]", ...texts.flat()].join("\n"));
     assert.deepEqual(items.texts.slice(1), [
@@ -524,7 +525,7 @@ describe("read_page in real Firefox", () => {
 
     const addresses = await read(tabId, { find: "/a", role: "link" });
     const all = Array.from({ length: 20 }, (_, index) => [
-      "  listitem [*]",
+      " listitem [*]",
       link(100 * (index + 1)),
     ]);
     assert.equal(withoutRefs(addresses.tree), ["list [*]", ...all.flat()].join("\n"));
@@ -539,7 +540,7 @@ describe("read_page in real Firefox", () => {
 
   test("find searches only what filter, depth and ref keep", async () => {
     const tabId = await open("/read-large", TITLES.readLarge);
-    const href = fixtures.url("/a");
+    const href = "/a";
     const interactive = await read(tabId, { filter: "interactive", find: "link 1" });
     const links = Array.from(
       { length: 10 },
@@ -553,11 +554,11 @@ describe("read_page in real Firefox", () => {
     );
 
     const last = await read(tabId, { find: "Link 2000" });
-    const ref = refOf(last.tree, "  listitem");
+    const ref = refOf(last.tree, " listitem");
     const item = await read(tabId, { ref, find: "Link" });
     assert.equal(
       withoutRefs(item.tree),
-      ["listitem [*]", `  link "Link 2000" [*] href="${href}"`].join("\n"),
+      ["listitem [*]", ` link "Link 2000" [*] href="${href}"`].join("\n"),
     );
     assert.ok(item.tree.startsWith(`listitem [${ref}]`), item.tree);
   });
@@ -569,7 +570,7 @@ describe("read_page in real Firefox", () => {
     assert.equal(second.tree, first.tree);
     // A link role on an anchor with no address carries no href; an image's alt and a
     // descendant's aria-label name the button and link they are in, also in filter interactive.
-    const home = fixtures.url("/a");
+    const home = "/a";
     assertLines(first.tree, [
       'link "No address" [*]',
       'button "Close" [*]',
@@ -602,6 +603,66 @@ describe("read_page in real Firefox", () => {
       text.includes(`Element ${keepRef} is from a page the tab no longer shows; read the page`),
       text,
     );
+  });
+
+  test("a ref from before a reload is refused as stale", async () => {
+    const tabId = await open("/read-refs", TITLES.readRefs);
+    const ref = refOf((await read(tabId)).tree, 'button "Keep"');
+    tabOf(await harness.ok(session, "navigate", { tabId, action: "reload" }));
+    const text = await refused(tabId, { ref });
+    assert.ok(
+      text.includes(`Element ${ref} is from a page the tab no longer shows; read the page`),
+      text,
+    );
+    // The reloaded page hands out refs of its own.
+    const again = refOf((await read(tabId)).tree, 'button "Keep"');
+    assert.notEqual(again, ref);
+    assert.equal((await read(tabId, { ref: again })).tree, `button "Keep" [${again}]`);
+  });
+
+  test("a ref from the page left by going back is refused as stale", async () => {
+    const tabId = await open("/read-refs", TITLES.readRefs);
+    await read(tabId);
+    tabOf(await harness.ok(session, "navigate", { tabId, url: fixtures.url("/read-landmarks") }));
+    const ref = refOf((await read(tabId)).tree, '  link "Home"');
+    const back = tabOf(await harness.ok(session, "navigate", { tabId, action: "back" }));
+    assert.equal(back.title, TITLES.readRefs);
+    const text = await refused(tabId, { ref });
+    assert.ok(
+      text.includes(`Element ${ref} is from a page the tab no longer shows; read the page`),
+      text,
+    );
+  });
+
+  test("a ref read in another tab of the same page is refused as stale", async () => {
+    const first = await open("/read-refs", TITLES.readRefs);
+    const second = await open("/read-refs", TITLES.readRefs);
+    const ref = refOf((await read(first)).tree, 'button "Keep"');
+    const stale = `Element ${ref} is from a page the tab no longer shows; read the page`;
+    // Before and after the other tab's page handed out refs of its own.
+    const unread = await refused(second, { ref });
+    assert.ok(unread.includes(stale), unread);
+    await read(second);
+    const text = await refused(second, { ref });
+    assert.ok(text.includes(stale), text);
+  });
+
+  test("a link to the page's own site shows a path that navigate takes on that site", async () => {
+    const tabId = await open("/act-links", TITLES.actLinks);
+    const { tree } = await read(tabId);
+    const shown = lines(withoutRefs(tree)).map((line) => line.trimStart());
+    for (const line of [
+      `link "Other site" [*] href="http://localhost:${fixtures.port}/a"`,
+      'link "Same site" [*] href="/a"',
+      'link "Mail link" [*] href="mailto:someone@example.org?body=x"',
+    ]) {
+      assert.ok(shown.includes(line), `no line ${JSON.stringify(line)} in:\n${tree}`);
+    }
+    const same = /link "Same site" \[[a-z]{1,7}[1-9][0-9]*\] href="([^"]+)"/.exec(tree)?.[1];
+    assert.equal(same, "/a");
+    const tab = tabOf(await harness.ok(session, "navigate", { tabId, url: same }));
+    assert.equal(tab.url, fixtures.url("/a"));
+    assert.equal(tab.title, TITLES.a);
   });
 
   test("a ref read_page did not give out is refused", async () => {
@@ -708,16 +769,16 @@ describe("read_page in real Firefox", () => {
     // Each element named from its content gets new text (in `inner` when given), then the page
     // hides it or not.
     const named = [
-      { id: "button-closed", line: '  button "Go closed"', role: "button", shown: false },
-      { id: "button-box", line: '  button "Go box"', role: "button", shown: false },
+      { id: "button-closed", line: ' button "Go closed"', role: "button", shown: false },
+      { id: "button-box", line: ' button "Go box"', role: "button", shown: false },
       { id: "button-display", line: 'button "Go display"', role: "button", shown: false },
       { id: "button-contents", line: 'button "Go contents"', role: "button", shown: false },
-      { id: "option-hidden", line: '  option "Two"', role: "option", shown: false },
-      { id: "option-contents", line: '  option "Six"', role: "option", shown: false },
-      { id: "option-own", line: '  option "Eight"', role: "option", shown: false },
-      { id: "option-group", line: '  option "Nine"', role: "option", shown: false },
+      { id: "option-hidden", line: ' option "Two"', role: "option", shown: false },
+      { id: "option-contents", line: ' option "Six"', role: "option", shown: false },
+      { id: "option-own", line: ' option "Eight"', role: "option", shown: false },
+      { id: "option-group", line: ' option "Nine"', role: "option", shown: false },
       { id: "button-control", line: 'button "Go control"', role: "button", shown: true },
-      { id: "option-control", line: '  option "Four"', role: "option", shown: true },
+      { id: "option-control", line: ' option "Four"', role: "option", shown: true },
       {
         id: "button-canvas",
         line: 'button "Go canvas"',
@@ -733,8 +794,8 @@ describe("read_page in real Firefox", () => {
         inner: "button-defs-label",
       },
       // Firefox lists an option in a div in its select, not one in an hr.
-      { id: "option-wrapped", line: '  option "Wrapped two"', role: "option", shown: true },
-      { id: "option-in-rule", line: '  option "Rule two"', role: "option", shown: false },
+      { id: "option-wrapped", line: ' option "Wrapped two"', role: "option", shown: true },
+      { id: "option-in-rule", line: ' option "Rule two"', role: "option", shown: false },
     ].map((name) => ({
       ...name,
       ref: refOf(tree, name.line),
@@ -808,7 +869,7 @@ describe("read_page in real Firefox", () => {
       if (lines(sub.tree)[0] !== `group "${label}" [${ref}]`) wrong.push("first line");
       for (const token of [own, child]) {
         const right = shown
-          ? lines(sub.tree).some((line) => line.startsWith('  text "') && line.includes(token))
+          ? lines(sub.tree).some((line) => line.startsWith(' text "') && line.includes(token))
           : !sub.texts.some((text) => text.includes(token));
         if (!right) wrong.push(shown ? `no text line with ${token}` : `${token} read`);
       }
@@ -888,9 +949,9 @@ describe("read_page in real Firefox", () => {
       'option "Shown multiple choice" [*]',
       // A list box shows its selection only in the rows it paints.
       `${listBox} [*] ${listBoxValue}`,
-      '  option "Shown list value one" [*] selected',
-      '  option "Shown list value two" [*] selected',
-      '  option "Shown row label" [*] selected',
+      ' option "Shown list value one" [*] selected',
+      ' option "Shown list value two" [*] selected',
+      ' option "Shown row label" [*] selected',
       // Firefox draws a drop-down's selected option's whole label however it is hidden.
       'combobox "Drawn hidden pick" [*] value="Drawn hidden choice"',
       'combobox "Drawn child pick" [*] value="Drawn child drawn tail"',
@@ -914,7 +975,7 @@ describe("read_page in real Firefox", () => {
     const select = 'document.getElementById("select-dropdown-hidden").style';
     assert.equal(await firefox.evaluate(context, `${select}.visibility = "visible"`), "visible");
     const shown = (await read(tabId)).tree;
-    const option = `  option "${READ_HIDDEN.optionDropDown}"`;
+    const option = ` option "${READ_HIDDEN.optionDropDown}"`;
     assertLines(shown, ['combobox "Hidden drop-down pick" [*] value="Drop one"', `${option} [*]`]);
     const selectRef = refOf(shown, 'combobox "Hidden drop-down pick"');
     const optionRef = refOf(shown, option);
@@ -969,7 +1030,7 @@ describe("read_page in real Firefox", () => {
       },
       {
         id: "closed-legend-Sd4",
-        line: '  group "Closed legend"',
+        line: ' group "Closed legend"',
         change: `document.getElementById("legend-closed").textContent = token;
           document.getElementById("details-legend").open = false;`,
         first: (ref: string) => `group [${ref}]`,

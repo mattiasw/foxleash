@@ -7,7 +7,7 @@ import {
   type LiveDocumentsDeps,
 } from "./live-documents.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite, revokeSite } from "./settings.ts";
+import { grantSite, revokeSite, TAG_MARK_KEY } from "./settings.ts";
 import { createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 const SITE = "https://a.example";
@@ -178,6 +178,26 @@ describe("live documents", { timeout: 10000 }, () => {
     assert.ok(documents.live(tab.id) !== undefined);
 
     await fake.browser.storage.local.set({ "recipe:c": {}, [`site:${SITE}`]: null });
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(warned(), [
+      { event: "ignored_setting", key: `site:${SITE}` },
+      { event: "test_failed", tabId: tab.id, reason: "refused", code: "site_not_approved" },
+    ]);
+  });
+
+  it("rechecks nothing at a change of the tag mark, and rechecks when a site key changes too", async (t) => {
+    const warned = quiet(t);
+    const { fake, documents, liveTab } = setup({});
+    const tab = await liveTab();
+    const get = t.mock.method(fake.browser.storage.local, "get");
+    await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 100 });
+    await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 200, "recipe:a": {} });
+    await flush();
+    assert.equal(get.mock.callCount(), 0);
+    assert.ok(documents.live(tab.id) !== undefined);
+
+    await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 300, [`site:${SITE}`]: null });
     await flush();
     assert.equal(documents.live(tab.id), undefined);
     assert.deepEqual(warned(), [

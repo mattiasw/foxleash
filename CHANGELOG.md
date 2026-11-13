@@ -29,6 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   update the checkout, remove the Foxhand extension in Firefox, then run `npm run setup`.
   Approved sites, blocklist edits and recipes stay with the old extension and have to be
   entered again.
+- `read_page` trees are shorter, so they cost fewer tokens: element references are short, such
+  as `b12`, a link to the page's own site shows its address as a path starting with `/`, and
+  each level is indented by one space. `navigate` takes such a path and loads it on the site the
+  tab shows; `tab_open` and `download` ask for the whole address.
 
 ### Fixed
 

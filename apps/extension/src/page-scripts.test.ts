@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import type { MethodName, TabInfo } from "@foxleash/protocol";
-import { type ContentScript, createFakeBrowser, createFakeTimers, flush } from "./fake-browser.ts";
+import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
+import {
+  type ContentScript,
+  createFakeBrowser,
+  createFakeTimers,
+  flush,
+  type TabMessage,
+} from "./fake-browser.ts";
 import { createHandlers, NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
 import {
   handlePageMessage,
@@ -15,9 +22,11 @@ import {
   PAGE_INJECTION_MS,
   PAGE_REPLY_MS,
   parsePageReply,
+  TAG_BLOCK,
+  TAG_RESERVE_MS,
 } from "./page-scripts.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite, revokeSite } from "./settings.ts";
+import { grantSite, revokeSite, TAG_MARK_KEY } from "./settings.ts";
 import { createSiteAccess, type OpenPrompt, type SessionMemory } from "./site-access.ts";
 import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
@@ -128,7 +137,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.deepEqual(fake.injections, [
       { tabId: tab.id, frameIds: [0], files: [CONTENT_SCRIPT], injectImmediately: true },
     ]);
-    const message = { kind: "foxleash-page", type: "echo", site: SITE, params };
+    const message = { kind: "foxleash-page", type: "echo", site: SITE, tag: "a", params };
     assert.deepEqual(fake.tabMessages, [{ tabId: tab.id, message, frameId: 0 }]);
     assert.deepEqual(seen, [message]);
     assert.equal(timers.pending(), timersBefore);
@@ -186,7 +195,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     for (const site of ["https://b.example", undefined]) {
       fake.setContentScript(tab.id, (message) =>
-        handlePageMessage(message, { site, handlers, before: noop }),
+        handlePageMessage(message, { site, handlers, adopt: noop, before: noop }),
       );
       await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
         code: "page_changed",
@@ -523,6 +532,289 @@ describe("page script requests", { timeout: 10000 }, () => {
     await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_error");
   });
 
+  describe("tags each message for the document that takes it", () => {
+    const REFUSED = (tabId: number) => ({
+      code: "page_error",
+      message: `Foxleash could not prepare its request to the page in tab ${tabId}; try again.`,
+    });
+
+    it("gives every message its own tag from one counter for every tab", async () => {
+      const { fake, pages, open, tab } = await grantedTab();
+      const other = await open("s1", `${SITE}/other`);
+      fake.setContentScript(other.id, contentScript(SITE));
+      await pages.request("s1", other.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", other.id, "echo", {});
+      assert.deepEqual(tagsSent(fake), ["a", "b", "c"]);
+      assert.deepEqual(
+        fake.tabMessages.map((sent) => sent.tabId),
+        [other.id, tab.id, other.id],
+      );
+      assert.equal(TAG_BLOCK, 100);
+      assert.equal(await storedMark(fake), TAG_BLOCK);
+    });
+
+    it("stores the next mark before it hands out a tag above the stored one", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      const set = fake.browser.storage.local.set;
+      const marks: [unknown, number][] = [];
+      t.mock.method(fake.browser.storage.local, "set", async (items: Record<string, unknown>) => {
+        await set(items);
+        if (Object.hasOwn(items, TAG_MARK_KEY)) {
+          marks.push([items[TAG_MARK_KEY], fake.tabMessages.length]);
+        }
+      });
+      for (let sent = 0; sent < TAG_BLOCK + 1; sent += 1) {
+        await pages.request("s1", tab.id, "echo", {});
+      }
+      assert.deepEqual(marks, [
+        [TAG_BLOCK, 0],
+        [2 * TAG_BLOCK, TAG_BLOCK],
+      ]);
+      const tags = tagsSent(fake);
+      assert.equal(new Set(tags).size, TAG_BLOCK + 1);
+      assert.equal(tags.at(-1), documentTag(TAG_BLOCK + 1));
+      assert.equal(tags.at(-1), "cw");
+    });
+
+    it("hands out tags above the stored mark after a restart", async () => {
+      const { fake, pages, tab, restart } = await grantedTab();
+      await pages.request("s1", tab.id, "echo", {});
+      const restarted = restart();
+      await restarted.request("s1", tab.id, "echo", {});
+      await restarted.request("s1", tab.id, "echo", {});
+      assert.deepEqual(tagsSent(fake), [
+        "a",
+        documentTag(TAG_BLOCK + 1),
+        documentTag(TAG_BLOCK + 2),
+      ]);
+      assert.equal(await storedMark(fake), 2 * TAG_BLOCK);
+    });
+
+    it("reads the stored mark once, and shares one read and one write between first requests", async (t) => {
+      const { fake, pages, tab, restart } = await grantedTab();
+      const get = t.mock.method(fake.browser.storage.local, "get");
+      const set = t.mock.method(fake.browser.storage.local, "set");
+      await pages.request("s1", tab.id, "echo", {});
+      const first = get.mock.callCount();
+      get.mock.resetCalls();
+      await pages.request("s1", tab.id, "echo", {});
+      // The gate reads storage too: what a request reads once the mark is known.
+      const gate = get.mock.callCount();
+      assert.equal(first, gate + 1);
+      get.mock.resetCalls();
+      set.mock.resetCalls();
+      const restarted = restart();
+      const requests = [1, 2, 3].map(() => restarted.request("s1", tab.id, "echo", {}));
+      await Promise.all(requests);
+      assert.equal(get.mock.callCount(), 3 * gate + 1);
+      assert.equal(set.mock.callCount(), 1);
+      assert.deepEqual(
+        tagsSent(fake).slice(2).sort(),
+        [TAG_BLOCK + 1, TAG_BLOCK + 2, TAG_BLOCK + 3].map(documentTag).sort(),
+      );
+    });
+
+    it("sends nothing until the mark is stored", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      const set = fake.browser.storage.local.set;
+      const stored = Promise.withResolvers<void>();
+      t.mock.method(fake.browser.storage.local, "set", async (items: Record<string, unknown>) => {
+        if (Object.hasOwn(items, TAG_MARK_KEY)) await stored.promise;
+        await set(items);
+      });
+      const request = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      assert.equal(request.settled(), false);
+      assertNothingSent(fake);
+      stored.resolve();
+      assert.deepEqual(await request.request, { echoed: {} });
+      assert.deepEqual(tagsSent(fake), ["a"]);
+    });
+
+    it("fails a request whose mark is not stored in time, and goes on once it is", async (t) => {
+      const warned = warnings(t);
+      const { fake, pages, tab, timers } = await grantedTab();
+      const set = fake.browser.storage.local.set;
+      const stored = Promise.withResolvers<void>();
+      const mock = t.mock.method(
+        fake.browser.storage.local,
+        "set",
+        async (items: Record<string, unknown>) => {
+          if (Object.hasOwn(items, TAG_MARK_KEY)) await stored.promise;
+          await set(items);
+        },
+      );
+      const timersBefore = timers.pending();
+      const first = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      timers.advance(TAG_RESERVE_MS - 1);
+      await flush();
+      assert.equal(first.settled(), false);
+      timers.advance(1);
+      await assert.rejects(first.request, REFUSED(tab.id));
+      // A later request waits on the same write, which is not started again.
+      const second = track(pages.request("s1", tab.id, "echo", {}));
+      await flush();
+      timers.advance(TAG_RESERVE_MS);
+      await assert.rejects(second.request, REFUSED(tab.id));
+      assertNothingSent(fake);
+      assert.equal(mock.mock.callCount(), 1);
+      stored.resolve();
+      await flush();
+      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}), { echoed: {} });
+      assert.deepEqual(tagsSent(fake), ["a"]);
+      assert.equal(timers.pending(), timersBefore);
+      assert.deepEqual(warned(), []);
+      assert.equal(TAG_RESERVE_MS, 5_000);
+    });
+
+    it("waits for its tag at most TAG_RESERVE_MS in all, also over two writes", async (t) => {
+      const { fake, pages, tab, timers } = await grantedTab();
+      const set = fake.browser.storage.local.set;
+      const writes: PromiseWithResolvers<void>[] = [];
+      t.mock.method(fake.browser.storage.local, "set", async (items: Record<string, unknown>) => {
+        if (Object.hasOwn(items, TAG_MARK_KEY)) {
+          const write = Promise.withResolvers<void>();
+          writes.push(write);
+          await write.promise;
+        }
+        await set(items);
+      });
+      const requests = Array.from({ length: TAG_BLOCK + 1 }, () =>
+        track(pages.request("s1", tab.id, "echo", {})),
+      );
+      for (let turn = 0; turn < 5; turn += 1) await flush();
+      assert.equal(writes.length, 1);
+      timers.advance(TAG_RESERVE_MS - 1);
+      writes[0]?.resolve();
+      for (let turn = 0; turn < 20; turn += 1) await flush();
+      // The block is used up: the last request waits on the next write.
+      assert.equal(writes.length, 2);
+      assert.equal(requests.filter((request) => request.settled()).length, TAG_BLOCK);
+      const last = requests.at(-1);
+      assert.ok(last !== undefined);
+      assert.equal(last.settled(), false);
+      timers.advance(1);
+      await flush();
+      assert.equal(last.settled(), true, "the last request is still waiting");
+      await assert.rejects(last.request, REFUSED(tab.id));
+      assert.equal(new Set(tagsSent(fake)).size, TAG_BLOCK);
+      writes[1]?.resolve();
+    });
+
+    it("fails a request when the mark cannot be stored, and tries again on the next", async (t) => {
+      const warned = warnings(t);
+      const { fake, pages, tab, restart } = await grantedTab();
+      fake.failNextSet();
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      assertNothingSent(fake);
+      assert.equal(await storedMark(fake), undefined);
+      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}), { echoed: {} });
+      const restarted = restart();
+      fake.failNextSet();
+      await assert.rejects(restarted.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      await restarted.request("s1", tab.id, "echo", {});
+      assert.deepEqual(tagsSent(fake), ["a", documentTag(TAG_BLOCK + 1)]);
+      assert.deepEqual(warned(), [
+        { event: "tag_mark_failed", error: "Error: Storage is full" },
+        { event: "tag_mark_failed", error: "Error: Storage is full" },
+      ]);
+    });
+
+    it("fails a request when the mark cannot be read, and reads it again on the next", async (t) => {
+      const warned = warnings(t);
+      const { fake, tab, restart } = await grantedTab();
+      await fake.browser.storage.local.set({ [TAG_MARK_KEY]: TAG_BLOCK });
+      const pages = restart();
+      const get = fake.browser.storage.local.get;
+      let reads = 0;
+      let failAt = 0;
+      t.mock.method(fake.browser.storage.local, "get", async (keys: null) => {
+        reads += 1;
+        if (reads === failAt) throw new Error("Storage is gone");
+        return get(keys);
+      });
+      // The gate's reads in a request once the mark is known.
+      const known = restart();
+      await known.request("s1", tab.id, "echo", {});
+      const before = reads;
+      await known.request("s1", tab.id, "echo", {});
+      // The gate runs before the tag is reserved, after the injection and after the answer.
+      const gateReads = (reads - before) / 3;
+      assert.ok(Number.isInteger(gateReads) && gateReads > 0);
+      failAt = reads + gateReads + 1;
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      assert.equal(reads, failAt);
+      await pages.request("s1", tab.id, "echo", {});
+      assert.deepEqual(tagsSent(fake), [
+        documentTag(TAG_BLOCK + 1),
+        documentTag(TAG_BLOCK + 2),
+        documentTag(2 * TAG_BLOCK + 1),
+      ]);
+      assert.deepEqual(warned(), [{ event: "tag_mark_failed", error: "Error: Storage is gone" }]);
+    });
+
+    for (const mark of ["5", -1, 1.5, {}, null, MAX_TAG_NUMBER + 1, Number.NaN]) {
+      it(`refuses to hand out tags over the stored mark ${JSON.stringify(mark)}`, async (t) => {
+        const warned = warnings(t);
+        const { fake, tab, restart } = await grantedTab();
+        await fake.browser.storage.local.set({ [TAG_MARK_KEY]: mark });
+        const pages = restart();
+        await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+        await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+        assertNothingSent(fake);
+        assert.deepEqual(warned(), [{ event: "ignored_tag_mark" }, { event: "ignored_tag_mark" }]);
+        // Read again on each request, so a repaired mark needs no restart.
+        await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 7 });
+        await pages.request("s1", tab.id, "echo", {});
+        assert.deepEqual(tagsSent(fake), [documentTag(8)]);
+      });
+    }
+
+    it("keeps counting from its own mark when the stored one goes down", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      await pages.request("s1", tab.id, "echo", {});
+      await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 0 });
+      for (let sent = 1; sent < TAG_BLOCK + 1; sent += 1) {
+        await pages.request("s1", tab.id, "echo", {});
+      }
+      const tags = tagsSent(fake);
+      assert.equal(new Set(tags).size, TAG_BLOCK + 1);
+      assert.equal(tags.at(-1), documentTag(TAG_BLOCK + 1));
+      assert.equal(await storedMark(fake), 2 * TAG_BLOCK);
+    });
+
+    it("refuses at once when the stored mark is the last tag's", async (t) => {
+      const warned = warnings(t);
+      const { fake, tab, restart } = await grantedTab();
+      await fake.browser.storage.local.set({ [TAG_MARK_KEY]: MAX_TAG_NUMBER });
+      await assert.rejects(restart().request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      assertNothingSent(fake);
+      assert.deepEqual(warned(), [{ event: "tags_used_up" }]);
+    });
+
+    it("hands out the last tag, then refuses", async (t) => {
+      const warned = warnings(t);
+      const { fake, tab, restart } = await grantedTab();
+      await fake.browser.storage.local.set({ [TAG_MARK_KEY]: MAX_TAG_NUMBER - 1 });
+      const pages = restart();
+      await pages.request("s1", tab.id, "echo", {});
+      assert.equal(await storedMark(fake), MAX_TAG_NUMBER);
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      assert.deepEqual(tagsSent(fake), ["zzzzzzz"]);
+      assert.deepEqual(warned(), [{ event: "tags_used_up" }]);
+    });
+
+    it("refuses a tab outside the group before it reserves a tag", async () => {
+      const { fake, pages } = await grantedTab();
+      const outside = fake.openTab({ url: `${SITE}/` });
+      await rejectsWith(pages.request("s1", outside.id, "echo", {}), "tab_not_in_group");
+      assert.equal(await storedMark(fake), undefined);
+      assertNothingSent(fake);
+    });
+  });
+
   describe("waits for a navigation under way", () => {
     const NEXT = `${SITE}/next`;
     const LOADING = {
@@ -652,6 +944,8 @@ describe("page script requests", { timeout: 10000 }, () => {
       land(fake, tab.id, NEXT, answering("new page"));
       assert.equal(await request, "new page");
       assert.equal(fake.tabMessages.length, 2);
+      // The leaving document may have taken the first tag.
+      assert.deepEqual(tagsSent(fake), ["a", "b"]);
       assert.equal(fake.injections.length, 2);
       assert.equal(timers.pending(), timersBefore);
     });
@@ -956,8 +1250,9 @@ describe("page script requests", { timeout: 10000 }, () => {
 
     it("bounds a request with its waits below the host's 60 s request timeout", () => {
       assert.equal(NAVIGATION_WAIT_MS, 10_000);
-      assert.equal(2 * NAVIGATION_WAIT_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS, 50_000);
-      assert.ok(2 * NAVIGATION_WAIT_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS < 60_000);
+      const worst = 2 * NAVIGATION_WAIT_MS + TAG_RESERVE_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS;
+      assert.equal(worst, 55_000);
+      assert.ok(worst < 60_000);
     });
   });
 });
@@ -1249,7 +1544,24 @@ function setup() {
     assert.fail(`session ${session} has no prompt`);
   }
 
-  return { fake, timers, sessions, access, navigations, pages, call, open, grant, promptOf };
+  /** The page scripts of a background started again, on the same browser. */
+  function restart() {
+    return createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
+  }
+
+  return {
+    fake,
+    timers,
+    sessions,
+    access,
+    navigations,
+    pages,
+    call,
+    open,
+    grant,
+    promptOf,
+    restart,
+  };
 }
 
 /** A content script on `site` that answers with Foxleash's dispatcher. */
@@ -1263,7 +1575,25 @@ function contentScript(site: string): ContentScript {
       throw new Error(`secret ${site}/private`);
     },
   };
-  return (message) => handlePageMessage(message, { site, handlers, before: noop });
+  return (message) => handlePageMessage(message, { site, handlers, adopt: noop, before: noop });
+}
+
+/** The tag of each message sent, in order. */
+function tagsSent(fake: { tabMessages: TabMessage[] }): unknown[] {
+  return fake.tabMessages.map(({ message }) =>
+    typeof message === "object" && message !== null ? Reflect.get(message, "tag") : undefined,
+  );
+}
+
+/** The stored tag mark. */
+async function storedMark(fake: Env["fake"]): Promise<unknown> {
+  return (await fake.browser.storage.local.get(null))[TAG_MARK_KEY];
+}
+
+/** Collects what is logged with console.warn, parsed. */
+function warnings(t: TestContext): () => unknown[] {
+  const warn = t.mock.method(console, "warn", () => {});
+  return () => warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
 }
 
 function assertNothingSent(fake: { injections: unknown[]; tabMessages: unknown[] }): void {

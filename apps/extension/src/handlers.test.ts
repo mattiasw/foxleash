@@ -466,6 +466,22 @@ describe("tab_open", { timeout: 10000 }, () => {
     });
   });
 
+  it("refuses an address starting with / and says what to do instead", async () => {
+    const { fake, call } = setup();
+    for (const url of ["/x", "/", "/\\evil.example"]) {
+      await assert.rejects(call("s1", "tab_open", { url }), {
+        code: "invalid_url",
+        message:
+          "tab_open needs a whole http or https URL. An address starting with / from read_page is on the site of the page it was read from: put that site in front of it, or use navigate in that page's tab.",
+      });
+    }
+    await assert.rejects(call("s1", "tab_open", { url: "//a.example/x" }), {
+      code: "invalid_url",
+      message: "Foxleash opens only http and https URLs, or about:blank.",
+    });
+    assert.equal(fake.tabs.size, 0);
+  });
+
   it("refuses a url that is not a string", async () => {
     const { call } = setup();
     for (const url of [1, null, ["https://example.com/"]]) {
@@ -839,6 +855,153 @@ describe("navigate", { timeout: 10000 }, () => {
   it("accepts tab id 0", async () => {
     const { call } = setup();
     await rejectsWith(call("s1", "navigate", { tabId: 0, action: "reload" }), "tab_not_found");
+  });
+
+  describe("an address starting with /", () => {
+    const LEAVES =
+      "An address starting with / must stay on the site the tab shows; give the whole URL.";
+    const NOT_WEB =
+      "navigate takes an address starting with / only in a tab that shows an http or https page; give the whole URL.";
+
+    it("loads it on the site the tab shows", async () => {
+      const { fake, navigate, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/start?x=1#top");
+      for (const [path, url] of [
+        ["/path?q#f", "https://a.example/path?q#f"],
+        ["/", "https://a.example/"],
+        ["/wiki/Foo?x=1#y", "https://a.example/wiki/Foo?x=1#y"],
+        ["/a b", "https://a.example/a%20b"],
+        ["/..//evil.example/x", "https://a.example//evil.example/x"],
+      ] as const) {
+        assert.equal((await navigate("s1", { tabId: tab.id, url: path })).url, url, path);
+        assert.deepEqual(fake.tabUpdates.at(-1), { tabId: tab.id, url }, path);
+      }
+    });
+
+    it("keeps the port and leaves out a user name in the tab's address", async () => {
+      const { fake, navigate, open, grant } = setup();
+      await grant("http://a.example:8080");
+      const tab = await open("s1", "http://a.example:8080/");
+      fake.navigateByUser(tab.id, "http://user:secret@a.example:8080/start");
+      await flush();
+      assert.equal(
+        (await navigate("s1", { tabId: tab.id, url: "/next" })).url,
+        "http://a.example:8080/next",
+      );
+      assert.deepEqual(fake.tabUpdates.at(-1), {
+        tabId: tab.id,
+        url: "http://a.example:8080/next",
+      });
+    });
+
+    it("asks about the resolved address on a site the session may not act on yet", async () => {
+      const { fake, call, open, page, promptOf } = setup();
+      const tab = await open("s1");
+      fake.navigateByUser(tab.id, "https://c.example/start");
+      await flush();
+      const navigated = call("s1", "navigate", { tabId: tab.id, url: "/next?q=1" });
+      const shown = await page("s1");
+      const prompt = await promptOf("s1");
+      assert.equal(prompt.url, "https://c.example/next?q=1");
+      assert.equal(prompt.site, "https://c.example");
+      shown.deliver({ type: "answer", answer: "once" });
+      const result = await navigated;
+      assert.ok("tab" in result);
+      assert.equal(result.tab.url, "https://c.example/next?q=1");
+    });
+
+    it("refuses one that the URL parser takes to another site", async () => {
+      const { fake, call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      const updates = fake.tabUpdates.length;
+      for (const url of [
+        "/\\evil.example/x",
+        "/\\\\evil.example",
+        "/\t/evil.example/x",
+        "/\n/evil.example/x",
+        "/\t\\evil.example",
+        "/\r/evil.example",
+      ]) {
+        await assert.rejects(
+          call("s1", "navigate", { tabId: tab.id, url }),
+          { code: "invalid_url", message: LEAVES },
+          JSON.stringify(url),
+        );
+      }
+      assert.equal(fake.tabUpdates.length, updates);
+      assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/");
+    });
+
+    it("refuses one in a tab that does not show an http or https page", async (t) => {
+      const { fake, call, open, promptOf } = setup();
+      const tab = await open("s1");
+      for (const url of ["about:blank", "file:///home/x.html"]) {
+        fake.navigateByUser(tab.id, url);
+        await flush();
+        await assert.rejects(call("s1", "navigate", { tabId: tab.id, url: "/x" }), {
+          code: "invalid_url",
+          message: NOT_WEB,
+        });
+      }
+      const opened = call("s1", "tab_open", { url: "https://b.example/" });
+      const prompt = await promptOf("s1");
+      await assert.rejects(call("s1", "navigate", { tabId: prompt.tabId, url: "/x" }), {
+        code: "invalid_url",
+        message: NOT_WEB,
+      });
+      void opened.catch(() => {});
+      const get = fake.browser.tabs.get;
+      t.mock.method(fake.browser.tabs, "get", async (tabId: number) => {
+        const { url: _url, ...rest } = await get(tabId);
+        return rest;
+      });
+      await assert.rejects(call("s1", "navigate", { tabId: tab.id, url: "/x" }), {
+        code: "invalid_url",
+        message: NOT_WEB,
+      });
+    });
+
+    it("takes a tab whose host ends in a dot on that same host", async () => {
+      const { fake, navigate, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      fake.navigateByUser(tab.id, "https://a.example./start");
+      await flush();
+      assert.equal(
+        (await navigate("s1", { tabId: tab.id, url: "/next" })).url,
+        "https://a.example./next",
+      );
+    });
+
+    it("refuses one for a tab outside the group, or no tab, before looking at the address", async () => {
+      const { fake, call } = setup();
+      const outside = fake.openTab({ url: "https://a.example/" });
+      await rejectsWith(
+        call("s1", "navigate", { tabId: outside.id, url: "/x" }),
+        "tab_not_in_group",
+      );
+      const blank = fake.openTab({ url: "about:blank" });
+      await rejectsWith(call("s1", "navigate", { tabId: blank.id, url: "/x" }), "tab_not_in_group");
+      await rejectsWith(
+        call("s1", "navigate", { tabId: 99, url: "/\\evil.example" }),
+        "tab_not_found",
+      );
+    });
+
+    it("refuses every other relative address as before", async () => {
+      const { call, open, grant } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      for (const url of ["//b.example/x", "path", "example.com", "?q", "#f", " /x", "\\x", ""]) {
+        await assert.rejects(
+          call("s1", "navigate", { tabId: tab.id, url }),
+          { code: "invalid_url", message: "Foxleash navigates only to http and https URLs." },
+          url,
+        );
+      }
+    });
   });
 
   it("refuses URLs other than http and https", async () => {
@@ -4280,8 +4443,8 @@ describe("read_network", { timeout: 10000 }, () => {
 });
 
 describe("the tools that act in the page", { timeout: 10000 }, () => {
-  const REF = "0a1b2c3d-4";
-  const TARGET_REF = "0a1b2c3d-9";
+  const REF = "b4";
+  const TARGET_REF = "b9";
   const tools: {
     method: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form";
     params: Record<string, unknown>;
@@ -4301,6 +4464,7 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
       reply: { ref: REF, x: 10, y: 20.5 },
       badReplies: [
         { ref: "1", x: 10, y: 20 },
+        { ref: "0a1b2c3d-4", x: 10, y: 20 },
         { ref: REF, x: -1, y: 0 },
         { ref: REF, x: 1 },
       ],
@@ -5940,7 +6104,7 @@ describe("upload_chunk", { timeout: 10000 }, () => {
 });
 
 describe("upload_file", { timeout: 10000 }, () => {
-  const REF = "0a1b2c3d-5";
+  const REF = "b5";
 
   it("hands each file its slice of the staged bytes, and answers from the request", async () => {
     const { call, pageCalls, replyWith } = setup();
@@ -6153,6 +6317,22 @@ describe("download", { timeout: 10000 }, () => {
         message: "Foxleash downloads only http and https URLs.",
       });
     }
+    assert.deepEqual(saves, []);
+  });
+
+  it("refuses an address starting with / and says what to do instead", async () => {
+    const { call, saves } = setup();
+    for (const url of ["/x.pdf", "/"]) {
+      await assert.rejects(call("s1", "download", { url, filename: "x.pdf" }), {
+        code: "invalid_url",
+        message:
+          "download needs a whole http or https URL. An address starting with / from read_page is on the site of the page it was read from: put that site in front of it.",
+      });
+    }
+    await assert.rejects(call("s1", "download", { url: "//a.example/x", filename: "x.pdf" }), {
+      code: "invalid_url",
+      message: "Foxleash downloads only http and https URLs.",
+    });
     assert.deepEqual(saves, []);
   });
 

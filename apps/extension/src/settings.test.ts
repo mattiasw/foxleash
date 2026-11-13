@@ -11,6 +11,7 @@ import {
   SITE_KEY_PREFIX,
   saveBlocklist,
   saveSessionWindow,
+  TAG_MARK_KEY,
 } from "./settings.ts";
 
 const GRANT = { grantedAt: "2026-01-02T03:04:05.000Z" };
@@ -127,6 +128,21 @@ describe("readSettings", () => {
     });
     assert.deepEqual(settings, { sites: [], blocklist: undefined, sessionWindow: false });
     assert.deepEqual(warnings(), [{ event: "ignored_setting", key: "site:https://a.example" }]);
+  });
+
+  it("skips the tag mark without a warning", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      [TAG_MARK_KEY]: 300,
+      "site:https://a.example": GRANT,
+    });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://a.example"],
+      blocklist: undefined,
+      sessionWindow: false,
+    });
+    assert.deepEqual(warnings(), []);
+    assert.equal(TAG_MARK_KEY, "tagMark");
   });
 
   it("reads the session window setting as on only for a stored true", async (t) => {
@@ -387,6 +403,24 @@ describe("onSettingsChanged", () => {
     assert.equal(calls, 3);
     await revokeSite(fake.browser, "https://a.example");
     assert.equal(calls, 3);
+  });
+
+  it("does not call the listener for a change of only the tag mark", async (t) => {
+    const { fake } = setup(t);
+    let calls = 0;
+    onSettingsChanged(fake.browser, () => {
+      calls += 1;
+    });
+    await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 100 });
+    await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 200 });
+    assert.equal(calls, 0);
+    await fake.browser.storage.local.set({
+      [TAG_MARK_KEY]: 300,
+      "site:https://a.example": GRANT,
+    });
+    assert.equal(calls, 1);
+    await saveSessionWindow(fake.browser, true);
+    assert.equal(calls, 2);
   });
 
   it("does not call the listener for another storage area", (t) => {

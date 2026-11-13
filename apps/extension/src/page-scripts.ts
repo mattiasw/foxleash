@@ -1,6 +1,8 @@
 import type { MethodName } from "@foxleash/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
+import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
 import { allowedPageSite, NAVIGATION_WAIT_MS, pageLoading, ToolError } from "./handlers.ts";
+import { warn } from "./log.ts";
 import {
   capText,
   MAX_ERROR_MESSAGE,
@@ -11,7 +13,7 @@ import {
   type PageRequest,
 } from "./page-messages.ts";
 import type { SessionGroups } from "./session-groups.ts";
-import { isRecord } from "./settings.ts";
+import { isRecord, TAG_MARK_KEY } from "./settings.ts";
 import type { SiteAccess } from "./site-access.ts";
 import type { TabNavigations } from "./tab-navigations.ts";
 
@@ -20,11 +22,15 @@ export const CONTENT_SCRIPT = "content.js";
 /**
  * A request waits at most NAVIGATION_WAIT_MS for each navigation, and starts a wait or its second
  * run only in its first NAVIGATION_WAIT_MS, so it answers within 2 * NAVIGATION_WAIT_MS +
- * PAGE_INJECTION_MS + PAGE_REPLY_MS = 50 s, below the host's 60 s request timeout, which shuts the
- * host down.
+ * TAG_RESERVE_MS + PAGE_INJECTION_MS + PAGE_REPLY_MS = 55 s, below the host's 60 s request
+ * timeout, which shuts the host down.
  */
 export const PAGE_INJECTION_MS = 20_000;
 export const PAGE_REPLY_MS = 10_000;
+export const TAG_RESERVE_MS = 5_000;
+
+/** The document tags reserved by one write of the stored mark. */
+export const TAG_BLOCK = 100;
 
 /**
  * Request types that, repeated, do something twice that the agent may not be able to undo (text
@@ -41,7 +47,7 @@ const ACTING_REQUEST_TYPES: readonly string[] = [
 ] satisfies readonly MethodName[];
 
 export interface PageScriptsDeps<Handle> {
-  browser: Pick<BrowserApi, "tabs" | "scripting">;
+  browser: Pick<BrowserApi, "tabs" | "scripting" | "storage">;
   groups: Pick<SessionGroups, "groupOf">;
   access: Pick<SiteAccess, "view" | "openPrompt">;
   timers: Timers<Handle>;
@@ -66,6 +72,11 @@ export interface PageScripts {
 
 export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageScripts {
   const { browser, groups, timers, navigations } = deps;
+  // Tag numbers: the last one handed out, and the stored mark no tag handed out may pass.
+  let handed = 0;
+  let reserved = 0;
+  let loaded = false;
+  let extending: Promise<void> | undefined;
   return { request };
 
   async function request(
@@ -106,11 +117,13 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       let sent = false;
       try {
         const site = await allowedPageSite(deps, session, tabId);
+        // A fresh tag for every message, so no two documents can take the same one.
+        const tag = await reserveTag(tabId);
         await inject(tabId);
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
         sent = true;
-        const message: PageRequest = { kind: PAGE_REQUEST_KIND, type, site, params };
+        const message: PageRequest = { kind: PAGE_REQUEST_KIND, type, site, tag, params };
         const reply = await bounded(
           () => browser.tabs.sendMessage(tabId, message, { frameId: 0 }),
           PAGE_REPLY_MS,
@@ -150,6 +163,59 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     if (late() || (await navigations.settled(tabId, NAVIGATION_WAIT_MS)) === "timeout") {
       throw pageLoading(tabId, ran);
     }
+  }
+
+  /**
+   * The next document tag, never handed out before: also not before a restart, as the stored mark
+   * is written before any tag up to it is handed out. One read or write of the mark runs at a
+   * time, and a timed-out one is left to finish rather than raced by another. The wait for a tag
+   * takes at most TAG_RESERVE_MS in all, however many writes it spans.
+   */
+  async function reserveTag(tabId: number): Promise<string> {
+    const refusal = new ToolError(
+      "page_error",
+      `Foxleash could not prepare its request to the page in tab ${tabId}; try again.`,
+    );
+    const { promise: expired, reject } = Promise.withResolvers<never>();
+    const timer = timers.setTimeout(() => reject(refusal), TAG_RESERVE_MS);
+    try {
+      while (handed >= reserved) {
+        extending ??= extend().finally(() => {
+          extending = undefined;
+        });
+        await Promise.race([extending, expired]);
+      }
+    } catch {
+      throw refusal;
+    } finally {
+      timers.clearTimeout(timer);
+    }
+    // In the same turn as the check above, so no other request takes this number first.
+    handed += 1;
+    return documentTag(handed);
+  }
+
+  /** Reads the stored mark on first use, then stores a mark TAG_BLOCK above it. */
+  async function extend(): Promise<void> {
+    if (!loaded) {
+      const items = await logged(browser.storage.local.get(null));
+      const mark = Object.hasOwn(items, TAG_MARK_KEY) ? items[TAG_MARK_KEY] : 0;
+      if (!isTagMark(mark)) {
+        // Starting again from 0 could hand out tags that old refs carry.
+        warn({ event: "ignored_tag_mark" });
+        throw new Error("The stored tag mark is malformed.");
+      }
+      handed = mark;
+      reserved = mark;
+      loaded = true;
+    }
+    if (reserved >= MAX_TAG_NUMBER) {
+      warn({ event: "tags_used_up" });
+      throw new Error("Every document tag is used up.");
+    }
+    const next = Math.min(reserved + TAG_BLOCK, MAX_TAG_NUMBER);
+    await logged(browser.storage.local.set({ [TAG_MARK_KEY]: next }));
+    reserved = next;
   }
 
   async function inGroup(session: string, tabId: number): Promise<boolean> {
@@ -236,6 +302,25 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
   ): Promise<void> {
     if ((await allowedPageSite(deps, session, tabId)) !== site) throw pageChanged(tabId, ran);
   }
+}
+
+/** The storage call's result, with its failure logged. */
+async function logged<T>(call: Promise<T>): Promise<T> {
+  try {
+    return await call;
+  } catch (error: unknown) {
+    warn({ event: "tag_mark_failed", error: String(error) });
+    throw error;
+  }
+}
+
+function isTagMark(value: unknown): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= 0 &&
+    value <= MAX_TAG_NUMBER
+  );
 }
 
 function isPageNotWeb(error: unknown): boolean {

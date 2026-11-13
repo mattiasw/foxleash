@@ -9,6 +9,12 @@ export const SITE_KEY_PREFIX = "site:";
 /** A recipe is stored as `recipe:<name>`; recipes.ts reads and writes them. */
 export const RECIPE_KEY_PREFIX = "recipe:";
 
+/**
+ * The highest document tag number page-scripts.ts has reserved, so tags never repeat across
+ * restarts; not a setting.
+ */
+export const TAG_MARK_KEY = "tagMark";
+
 const BLOCKLIST_KEY = "blocklist";
 const SESSION_WINDOW_KEY = "sessionWindow";
 
@@ -42,7 +48,7 @@ export async function readSettings(browser: SettingsBrowser): Promise<Settings> 
       if (!sessionWindow) warn({ event: "ignored_setting", key });
       continue;
     }
-    if (key.startsWith(RECIPE_KEY_PREFIX)) continue;
+    if (key.startsWith(RECIPE_KEY_PREFIX) || key === TAG_MARK_KEY) continue;
     const site = grantedSite(key, items[key]);
     if (site === undefined) warn({ event: "ignored_setting", key });
     else sites.push(site);
@@ -89,8 +95,11 @@ export function saveSessionWindow(browser: SettingsBrowser, on: boolean): Promis
 
 /** Calls `listener` whenever the stored settings change. */
 export function onSettingsChanged(browser: SettingsBrowser, listener: () => void): void {
-  browser.storage.onChanged.addListener((_changes, areaName) => {
-    if (areaName === "local") listener();
+  browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName !== "local") return;
+    const keys = Object.keys(changes);
+    if (keys.length === 1 && keys[0] === TAG_MARK_KEY) return;
+    listener();
   });
 }
 

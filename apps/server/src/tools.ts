@@ -92,7 +92,7 @@ const TREE_MAX = READ_PAGE_MAX_CHARS.toLocaleString("en-US");
 const NARROW_FIND_OR_ROLE = "Narrow find, add role, or read one element with ref.";
 const NARROW_FIND = "Narrow find, or read one element with ref.";
 const TREE_CUT = `The page tree was cut at ${TREE_MAX} characters. Read a part of it with ref, or use filter interactive or a smaller depth.`;
-const READ_PAGE = `Read the page in a tab of this session's Foxleash tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxleash tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at ${TREE_MAX} characters; read less with find (only the lines that contain a text), ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most ${READ_PAGE_MAX_MATCHES}, with the number of other lines that match, or the number of lines searched when none does. The text is compared before the tree escapes it: in find, write a quote as " and a backslash as \\, not \\" or \\\\. Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree. A protected field's value is never matched. role, given with find, keeps only matching lines of that role, such as link, button, heading or text. find searches the whole page, past the ${TREE_MAX}-character cut too, within what ref, filter and depth keep. The tab must show a site the user approved; read_page never asks.`;
+const READ_PAGE = `Read the page in a tab of this session's Foxleash tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A link to the page's own site shows its address as a path starting with /, on that site; a link to another site shows its whole address. navigate takes such a path, while tab_open and download need the whole address. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxleash tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at ${TREE_MAX} characters; read less with find (only the lines that contain a text), ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most ${READ_PAGE_MAX_MATCHES}, with the number of other lines that match, or the number of lines searched when none does. The text is compared before the tree escapes it: in find, write a quote as " and a backslash as \\, not \\" or \\\\. Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree. A protected field's value is never matched. role, given with find, keeps only matching lines of that role, such as link, button, heading or text. find searches the whole page, past the ${TREE_MAX}-character cut too, within what ref, filter and depth keep. The tab must show a site the user approved; read_page never asks.`;
 const DEFAULT_TEXT = DEFAULT_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const MAX_TEXT = MAX_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const GET_PAGE_TEXT = `Read the text of the page in a tab of this session's Foxleash tab group, as the page shows it: first its main content (the page's main element or article, else its largest block of text), then the rest of the page. The result gives the source of the main content (main, role_main, article, largest_block, or body when the whole page is the main content), main, rest, totalChars, truncated and, when truncated is true, nextOffset. Main and rest together are cut to maxChars characters, ${DEFAULT_TEXT} unless given and at most ${MAX_TEXT}. When truncated is true, passing nextOffset as offset returns the text that follows; offsets count characters into main and rest together, and a page that changed between reads may shift them. Text hidden with display, visibility or the hidden attribute is left out, and so are the values of form fields; text made invisible another way (transparent, zero-sized or off screen) is included. Frames are not read. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. The tab must show a site the user approved; get_page_text never asks.`;
@@ -272,7 +272,7 @@ export function registerTools(
     {
       description: `Open a new tab in this session's Foxleash tab group, optionally at a URL, and return it. ${ASKS_FIRST} ${REDACTED_TABS}`,
       inputSchema: {
-        url: z.string().optional().describe("http or https URL; omit for a blank tab"),
+        url: z.string().optional().describe("Whole http or https URL; omit for a blank tab"),
       },
     },
     ({ url }) => run(bridge, "tab_open", url === undefined ? {} : { url }),
@@ -287,7 +287,12 @@ export function registerTools(
           .int()
           .min(0)
           .describe("The id of a tab in this session's Foxleash tab group"),
-        url: z.string().optional().describe("http or https URL to load"),
+        url: z
+          .string()
+          .optional()
+          .describe(
+            "http or https URL to load, or an address starting with / from read_page, loaded on the site the tab shows",
+          ),
         action: z
           .enum(["back", "forward", "reload"])
           .optional()
@@ -568,7 +573,11 @@ export function registerTools(
     {
       description: DOWNLOAD,
       inputSchema: {
-        url: z.string().describe("The http or https URL of the file, such as a link's href"),
+        url: z
+          .string()
+          .describe(
+            "The whole http or https URL of the file; a link address read_page shows as a path starting with / needs the page's site in front",
+          ),
         filename: z
           .string()
           .describe(

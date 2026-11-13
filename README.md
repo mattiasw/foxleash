@@ -123,18 +123,21 @@ opens Foxleash's settings.
 
 The agent reads a page with `read_page`, which returns the page as an accessibility tree: one
 line per element with its role, name and state (such as checked, disabled, the value of a field
-or an editable area, or a link's address), and the page's visible text. Each element line
-carries an element reference that later tools use to act on that element; references are valid
-only for the page they came from. A file field's line is marked `file field`, so the agent can
-find it for `upload_file` even when the page gives it no label. Hidden elements are left out,
-and frames are noted but not read. The agent can read only the interactive elements
-(`filter: "interactive"`), fewer levels (`depth`) or one element and what it contains (`ref`).
-The tree is cut at 50,000 characters, and the agent is told when it was. With `find`, the agent
-gets only the lines that contain a text, ignoring case, optionally only those of one role
-(`role`), each after the lines of the elements it is in: at most 20, and it is told how many
-more match, or how many lines were searched when none did. `find` searches the whole page, also
-past the 50,000-character cut, but never the value of a protected field. `read_page` works
-only on a tab showing a site you approved, and never asks.
+or an editable area, or a link's address), and the page's visible text, indented by one space
+per level. Each element line carries a short element reference, such as `b12`, that later tools
+use to act on that element; references are valid only for the page they came from. A link to the
+page's own site shows its address as a path starting with `/`, on that site, and a link to
+another site its whole address. `navigate` takes such a path and loads it on the site the tab
+shows, while `tab_open` and `download` need the whole address. A file field's line is marked
+`file field`, so the agent can find it for `upload_file` even when the page gives it no label.
+Hidden elements are left out, and frames are noted but not read. The agent can read only the
+interactive elements (`filter: "interactive"`), fewer levels (`depth`) or one element and what
+it contains (`ref`). The tree is cut at 50,000 characters, and the agent is told when it was.
+With `find`, the agent gets only the lines that contain a text, ignoring case, optionally only
+those of one role (`role`), each after the lines of the elements it is in: at most 20, and it is
+told how many more match, or how many lines were searched when none did. `find` searches the
+whole page, also past the 50,000-character cut, but never the value of a protected field.
+`read_page` works only on a tab showing a site you approved, and never asks.
 
 A read, an action or a screenshot made while the tab is loading another page, as right after a
 click on a link or a form submit, waits up to 10 seconds for that page and then works on it.
@@ -266,17 +269,17 @@ only from the upload folders (see Security below), never files or folders whose 
 with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
 works only on a tab showing a site you approved, and never asks.
 
-The agent saves a file from the web with `download`, giving its URL (such as a link's address
-from `read_page`) and a plain file name such as `receipt.pdf`. Foxleash fetches the file with
-your cookies for the site, as following the link would, saves it in your Firefox download
-folder and returns its absolute path and size; the agent can move it from there. The file is
-saved even where Firefox would open it in another application, such as a PDF set to open in a
-PDF viewer. The URL, and the address the file comes from after any redirects, must be on sites
-you approved, and `download` never asks. The name must not contain a slash or backslash, control
-or formatting characters, or start with a dot, and Firefox refuses some others, such as names
-ending in `.desktop`; Firefox adds a number when the name is taken, so an existing file is never
-replaced. At most 100 MiB and 50 seconds per file, one download at a time. Each download shows
-in Firefox's downloads panel and history.
+The agent saves a file from the web with `download`, giving its whole URL (with the page's site
+in front of a link address that `read_page` shows as a path) and a plain file name such as
+`receipt.pdf`. Foxleash fetches the file with your cookies for the site, as following the link
+would, saves it in your Firefox download folder and returns its absolute path and size; the
+agent can move it from there. The file is saved even where Firefox would open it in another
+application, such as a PDF set to open in a PDF viewer. The URL, and the address the file comes
+from after any redirects, must be on sites you approved, and `download` never asks. The name
+must not contain a slash or backslash, control or formatting characters, or start with a dot,
+and Firefox refuses some others, such as names ending in `.desktop`; Firefox adds a number when
+the name is taken, so an existing file is never replaced. At most 100 MiB and 50 seconds per
+file, one download at a time. Each download shows in Firefox's downloads panel and history.
 
 The agent proposes a recipe with `propose_recipe`, giving its name, description, sites and
 steps. Foxleash opens a page in the session's tab group that shows them in fields you can edit,

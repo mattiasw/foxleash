@@ -16,7 +16,7 @@ import {
   untrustedContent,
 } from "./harness.ts";
 
-const REF = "([0-9a-f]{8}-[1-9][0-9]*)";
+const REF = "([a-z]{1,7}[1-9][0-9]*)";
 // What the page got: per target the name, size, type and SHA-256 of each file, and its events.
 const RECEIVED = `(async () => {
   const hex = async (file) => Array.from(

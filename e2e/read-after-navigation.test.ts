@@ -16,7 +16,7 @@ import {
   untrustedContent,
 } from "./harness.ts";
 
-const REF = "([0-9a-f]{8}-[1-9][0-9]*)";
+const REF = "([a-z]{1,7}[1-9][0-9]*)";
 // Without the wait, the old page or an error came back in 6 to 8 of 8 tries: one pass is not
 // enough to tell.
 const REPEAT = 5;

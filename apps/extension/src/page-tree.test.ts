@@ -13,6 +13,7 @@ import {
   isProtectedField,
   LANDMARK_ROLES,
   type Line,
+  linkAddress,
   MAX_FIELD_CHARS,
   NAME_FROM_CONTENT_ROLES,
   quote,
@@ -122,7 +123,7 @@ describe("formatLine", () => {
         level: 2,
         role: "textbox",
         name: "Email",
-        ref: "0a1b2c3d-8",
+        ref: "b8",
         states: {
           href: "https://example.com/",
           field: { value: "me@example.com" },
@@ -138,31 +139,31 @@ describe("formatLine", () => {
           checked: "mixed",
         },
       }),
-      '    textbox "Email" [0a1b2c3d-8] mixed selected expanded=false pressed disabled readonly required invalid focused level=3 value="me@example.com" href="https://example.com/"',
+      '  textbox "Email" [b8] mixed selected expanded=false pressed disabled readonly required invalid focused level=3 value="me@example.com" href="https://example.com/"',
     );
   });
 
   it("marks a file field straight after its reference", () => {
     assert.equal(
-      formatLine({ level: 0, role: "button", ref: "0a1b2c3d-4", states: { file: true } }),
-      "button [0a1b2c3d-4] file field",
+      formatLine({ level: 0, role: "button", ref: "b4", states: { file: true } }),
+      "button [b4] file field",
     );
     assert.equal(
       formatLine({
         level: 0,
         role: "button",
         name: "Resume",
-        ref: "0a1b2c3d-5",
+        ref: "b5",
         states: { required: true, disabled: true, file: true },
       }),
-      'button "Resume" [0a1b2c3d-5] file field disabled required',
+      'button "Resume" [b5] file field disabled required',
     );
     assert.equal(
       formatLine({
         level: 2,
         role: "textbox",
         name: "Email",
-        ref: "0a1b2c3d-8",
+        ref: "b8",
         states: {
           frame: true,
           href: "https://example.com/",
@@ -180,13 +181,13 @@ describe("formatLine", () => {
           file: true,
         },
       }),
-      '    textbox "Email" [0a1b2c3d-8] file field mixed selected expanded=false pressed disabled readonly required invalid focused level=3 value="me@example.com" href="https://example.com/" frame content not read',
+      '  textbox "Email" [b8] file field mixed selected expanded=false pressed disabled readonly required invalid focused level=3 value="me@example.com" href="https://example.com/" frame content not read',
     );
   });
 
   it("writes only the role when nothing else is given", () => {
     assert.equal(formatLine({ level: 0, role: "main" }), "main");
-    assert.equal(formatLine({ level: 1, role: "main", states: {} }), "  main");
+    assert.equal(formatLine({ level: 1, role: "main", states: {} }), " main");
   });
 
   it("leaves out an empty name, an empty value and false states", () => {
@@ -195,7 +196,7 @@ describe("formatLine", () => {
         level: 0,
         role: "textbox",
         name: " \n\t",
-        ref: "0a1b2c3d-1",
+        ref: "b1",
         states: {
           field: { value: "  " },
           selected: false,
@@ -207,7 +208,7 @@ describe("formatLine", () => {
           focused: false,
         },
       }),
-      "textbox [0a1b2c3d-1]",
+      "textbox [b1]",
     );
   });
 
@@ -228,10 +229,10 @@ describe("formatLine", () => {
         level: 0,
         role: "textbox",
         name: "Password",
-        ref: "0a1b2c3d-9",
+        ref: "b9",
         states: { required: true, field: { protected: true, filled: true }, href: "x" },
       }),
-      'textbox "Password" [0a1b2c3d-9] required protected filled href="x"',
+      'textbox "Password" [b9] required protected filled href="x"',
     );
     assert.equal(
       formatLine({
@@ -249,10 +250,10 @@ describe("formatLine", () => {
         level: 1,
         role: "iframe",
         name: "Chat",
-        ref: "0a1b2c3d-12",
+        ref: "b12",
         states: { frame: true },
       }),
-      '  iframe "Chat" [0a1b2c3d-12] frame content not read',
+      ' iframe "Chat" [b12] frame content not read',
     );
   });
 
@@ -292,6 +293,66 @@ describe("quote", () => {
   });
 });
 
+describe("linkAddress", () => {
+  const PAGE = "https://site.example/wiki/Page?from=1#top";
+
+  it("shows a link to the page's own origin as the address after the origin", () => {
+    const cases = [
+      ["https://site.example/wiki/Foo?x=1#y", "/wiki/Foo?x=1#y"],
+      ["https://site.example/", "/"],
+      ["https://site.example/page#", "/page#"],
+      ["https://site.example/page?", "/page?"],
+      ["https://site.example/wiki/Page?from=1#top", "/wiki/Page?from=1#top"],
+      ["https://site.example:443/x", "/x"],
+      ["https://SITE.example/x", "/x"],
+      ["https://site.example/a/../b", "/b"],
+    ] as const;
+    for (const [href, shown] of cases) assert.equal(linkAddress(href, PAGE), shown, href);
+    assert.equal(linkAddress("http://site.example:8080/x", "http://site.example:8080/"), "/x");
+  });
+
+  it("keeps the whole address of a link to another origin, or one a path cannot stand for", () => {
+    for (const href of [
+      "https://other.example/x",
+      "https://sub.site.example/x",
+      "http://site.example/x",
+      "https://site.example:8443/x",
+      "https://site.example./x",
+      "mailto:me@site.example",
+      "javascript:void(0)",
+      "ftp://site.example/x",
+      "data:text/html,hi",
+      "not a url",
+      "",
+      "https://user@site.example/x",
+      "https://:secret@site.example/x",
+      "https://user:secret@site.example/x",
+      // A user name that starts with the site, which the address after the origin would cut.
+      "https://site.example@site.example/x",
+      "https://site.example:secret@site.example/x",
+      "https://site.example//other.example/x",
+      "https://site.example//",
+    ]) {
+      assert.equal(linkAddress(href, PAGE), href, href);
+    }
+  });
+
+  it("keeps the whole address on a page that is not an http or https page", () => {
+    const href = "https://site.example/x";
+    for (const page of [
+      "about:blank",
+      "not a url",
+      "",
+      "https://site.example./",
+      "blob:https://site.example/0b6c5d1e-2f3a-4b5c-8d7e-9f0a1b2c3d4e",
+      "file:///home/page.html",
+    ]) {
+      assert.equal(linkAddress(href, page), href, page);
+    }
+    assert.equal(linkAddress("https://site.example./x", "https://site.example./"), "/x");
+  });
+});
+
 describe("textLine", () => {
   it("gives a text line at its level, written as a text line always was", () => {
     const line = textLine(0, " Forgot  your password? ");
@@ -301,7 +362,7 @@ describe("textLine", () => {
     const deep = textLine(2, "a");
     assert.deepEqual(deep, { level: 2, role: "text", name: "a" });
     assert.ok(deep !== undefined);
-    assert.equal(formatLine(deep), '    text "a"');
+    assert.equal(formatLine(deep), '  text "a"');
   });
 
   it("writes nothing for whitespace", () => {
@@ -411,12 +472,12 @@ describe("createTreeText", () => {
 
 describe("createTreeLines", () => {
   const page: Line[] = [
-    { level: 0, role: "main", ref: "0a1b2c3d-1" },
+    { level: 0, role: "main", ref: "b1" },
     {
       level: 1,
       role: "link",
       name: "Docs",
-      ref: "0a1b2c3d-2",
+      ref: "b2",
       states: { href: "https://example.com/" },
     },
     { level: 1, role: "text", name: "Some  text" },
@@ -428,7 +489,7 @@ describe("createTreeLines", () => {
     tree.markCut();
     assert.equal(tree.full, false);
     assert.deepEqual(tree.result(), {
-      tree: 'main [0a1b2c3d-1]\n  link "Docs" [0a1b2c3d-2] href="https://example.com/"\n  text "Some text" …',
+      tree: 'main [b1]\n link "Docs" [b2] href="https://example.com/"\n text "Some text" …',
       truncated: false,
     });
   });
@@ -460,28 +521,28 @@ describe("createTreeLines", () => {
 
 describe("createLineFinder", () => {
   const form: Line[] = [
-    { level: 0, role: "main", ref: "0a1b2c3d-1" },
-    { level: 1, role: "heading", name: "Sign in", ref: "0a1b2c3d-2", states: { level: 2 } },
-    { level: 1, role: "form", name: "Sign in", ref: "0a1b2c3d-3" },
+    { level: 0, role: "main", ref: "b1" },
+    { level: 1, role: "heading", name: "Sign in", ref: "b2", states: { level: 2 } },
+    { level: 1, role: "form", name: "Sign in", ref: "b3" },
     {
       level: 2,
       role: "textbox",
       name: "Email",
-      ref: "0a1b2c3d-4",
+      ref: "b4",
       states: { required: true, field: { value: "Me@Example.com" } },
     },
     {
       level: 2,
       role: "textbox",
       name: "Password",
-      ref: "0a1b2c3d-5",
+      ref: "b5",
       states: { field: { protected: true, filled: true } },
     },
     {
       level: 2,
       role: "checkbox",
       name: "Remember",
-      ref: "0a1b2c3d-6",
+      ref: "b6",
       states: { checked: "checked" },
     },
     { level: 2, role: "text", name: "Forgot  your\n password?" },
@@ -489,16 +550,16 @@ describe("createLineFinder", () => {
       level: 1,
       role: "link",
       name: "Help",
-      ref: "0a1b2c3d-7",
+      ref: "b7",
       states: { href: "https://example.com/help" },
     },
   ];
-  const MAIN = "main [0a1b2c3d-1]";
-  const FORM = '  form "Sign in" [0a1b2c3d-3]';
-  const EMAIL = '    textbox "Email" [0a1b2c3d-4] required value="Me@Example.com"';
-  const PASSWORD = '    textbox "Password" [0a1b2c3d-5] protected filled';
-  const FORGOT = '    text "Forgot your password?"';
-  const HELP = '  link "Help" [0a1b2c3d-7] href="https://example.com/help"';
+  const MAIN = "main [b1]";
+  const FORM = ' form "Sign in" [b3]';
+  const EMAIL = '  textbox "Email" [b4] required value="Me@Example.com"';
+  const PASSWORD = '  textbox "Password" [b5] protected filled';
+  const FORGOT = '  text "Forgot your password?"';
+  const HELP = ' link "Help" [b7] href="https://example.com/help"';
 
   it("finds a name, a field value, a link address and a text, ignoring case", () => {
     const cases: [string, string[]][] = [
@@ -531,7 +592,7 @@ describe("createLineFinder", () => {
       found: { shown: 4, matches: 4, searched: 8 },
     });
     assert.deepEqual(search("sign in", undefined, form), {
-      tree: [MAIN, '  heading "Sign in" [0a1b2c3d-2] level=2', FORM].join("\n"),
+      tree: [MAIN, ' heading "Sign in" [b2] level=2', FORM].join("\n"),
       truncated: false,
       found: { shown: 2, matches: 2, searched: 8 },
     });
@@ -544,7 +605,7 @@ describe("createLineFinder", () => {
       { level: 2, role: "link", name: "Item 1 details" },
     ];
     assert.deepEqual(search("item", undefined, lines), {
-      tree: 'list "Items"\n  listitem "Item 1"\n    link "Item 1 details"',
+      tree: 'list "Items"\n listitem "Item 1"\n  link "Item 1 details"',
       truncated: false,
       found: { shown: 3, matches: 3, searched: 3 },
     });
@@ -552,7 +613,7 @@ describe("createLineFinder", () => {
 
   it("keeps only lines of the role given, compared cleaned and in lower case", () => {
     assert.deepEqual(search("sign in", " HEADING\n", form), {
-      tree: [MAIN, '  heading "Sign in" [0a1b2c3d-2] level=2'].join("\n"),
+      tree: [MAIN, ' heading "Sign in" [b2] level=2'].join("\n"),
       truncated: false,
       found: { shown: 1, matches: 1, searched: 8 },
     });
@@ -585,13 +646,13 @@ describe("createLineFinder", () => {
   it("never matches role words, state words or refs", () => {
     const lines: Line[] = [
       ...form,
-      { level: 0, role: "button", ref: "0a1b2c3d-8", states: { file: true } },
-      { level: 0, role: "iframe", name: "", ref: "0a1b2c3d-9", states: { frame: true } },
+      { level: 0, role: "button", ref: "b8", states: { file: true } },
+      { level: 0, role: "iframe", name: "", ref: "b9", states: { frame: true } },
       {
         level: 0,
         role: "button",
         name: "Go",
-        ref: "0a1b2c3d-10",
+        ref: "b10",
         states: { pressed: true, expanded: true, disabled: true, selected: true },
       },
     ];
@@ -615,8 +676,8 @@ describe("createLineFinder", () => {
       "value=",
       "href=",
       '"Go"',
-      "[0a1b2c3d-10]",
-      "0a1b2c3d",
+      "[b10]",
+      "b10",
     ];
     for (const find of words) {
       assert.deepEqual(
@@ -662,12 +723,9 @@ describe("createLineFinder", () => {
       { level: 4, role: "text", name: "B" },
       { level: 2, role: "link", name: "C" },
     ];
-    assert.equal(search("a", undefined, lines).tree, 'main\n      link "A"');
-    assert.equal(
-      search("b", undefined, lines).tree,
-      'main\n  list\n    listitem\n        text "B"',
-    );
-    assert.equal(search("c", undefined, lines).tree, 'main\n  list\n    link "C"');
+    assert.equal(search("a", undefined, lines).tree, 'main\n   link "A"');
+    assert.equal(search("b", undefined, lines).tree, 'main\n list\n  listitem\n    text "B"');
+    assert.equal(search("c", undefined, lines).tree, 'main\n list\n  link "C"');
   });
 
   it("shows the first 20 matches and counts the rest", () => {
@@ -694,7 +752,7 @@ describe("createLineFinder", () => {
       assert.equal(finder.full, false);
     }
     assert.deepEqual(finder.result(), {
-      tree: 'list\n  listitem "Item 01"',
+      tree: 'list\n listitem "Item 01"',
       truncated: true,
       found: { shown: 1, matches: 5, searched: 6 },
     });
@@ -723,7 +781,7 @@ describe("createLineFinder", () => {
     finder.add({ level: 1, role: "listitem", name: "Item 1" });
     finder.markCut();
     finder.add({ level: 1, role: "listitem", name: "Item 2" });
-    assert.equal(finder.result().tree, 'list\n  listitem "Item 1" …\n  listitem "Item 2"');
+    assert.equal(finder.result().tree, 'list\n listitem "Item 1" …\n listitem "Item 2"');
   });
 
   it("marks a line not yet written as cut when it is written later", () => {
@@ -731,7 +789,7 @@ describe("createLineFinder", () => {
     finder.add({ level: 0, role: "list" });
     finder.markCut();
     finder.add({ level: 1, role: "listitem", name: "Item 1" });
-    assert.equal(finder.result().tree, 'list …\n  listitem "Item 1"');
+    assert.equal(finder.result().tree, 'list …\n listitem "Item 1"');
   });
 
   it("does nothing for a cut mark before the first line", () => {

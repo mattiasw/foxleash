@@ -3,7 +3,9 @@ import { describe, it } from "node:test";
 import {
   capText,
   handlePageMessage,
+  isPageTag,
   MAX_PAGE_REPLY_CHARS,
+  MAX_TAG_LETTERS,
   ownField,
   PAGE_ERROR_CODES,
   PAGE_REQUEST_KIND,
@@ -12,6 +14,7 @@ import {
 } from "./page-messages.ts";
 
 const SITE = "https://a.example";
+const TAG = "b";
 const UNREADABLE = {
   ok: false,
   site: SITE,
@@ -49,10 +52,13 @@ describe("handlePageMessage", () => {
       {},
       { kind: "other", type: "echo", site: SITE, params: {} },
       { type: "echo", site: SITE, params: {} },
-      Object.create({ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }),
+      Object.create({ kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: {} }),
     ];
     for (const message of messages) {
-      assert.equal(handlePageMessage(message, { site: SITE, handlers, before: noop }), undefined);
+      assert.equal(
+        handlePageMessage(message, { site: SITE, handlers, adopt: noop, before: noop }),
+        undefined,
+      );
     }
     assert.deepEqual(calls, []);
   });
@@ -61,21 +67,30 @@ describe("handlePageMessage", () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     const requests: unknown[] = [
-      { kind: PAGE_REQUEST_KIND, site: SITE, params: {} },
-      { kind: PAGE_REQUEST_KIND, type: 1, site: SITE, params: {} },
-      { kind: PAGE_REQUEST_KIND, type: "echo", params: {} },
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: 1, params: {} },
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE },
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: null },
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: [] },
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: "x" },
-      withInherited({ kind: PAGE_REQUEST_KIND, site: SITE, params: {} }, { type: "echo" }),
-      withInherited({ kind: PAGE_REQUEST_KIND, type: "echo", params: {} }, { site: SITE }),
-      withInherited({ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE }, { params: {} }),
+      { kind: PAGE_REQUEST_KIND, tag: TAG, site: SITE, params: {} },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: 1, site: SITE, params: {} },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", params: {} },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: 1, params: {} },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: null },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: [] },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: "x" },
+      withInherited(
+        { kind: PAGE_REQUEST_KIND, tag: TAG, site: SITE, params: {} },
+        { type: "echo" },
+      ),
+      withInherited(
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", params: {} },
+        { site: SITE },
+      ),
+      withInherited(
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE },
+        { params: {} },
+      ),
     ];
     for (const request of requests) {
       assert.deepEqual(
-        await handlePageMessage(request, { site: SITE, handlers, before: noop }),
+        await handlePageMessage(request, { site: SITE, handlers, adopt: noop, before: noop }),
         UNREADABLE,
         JSON.stringify(request),
       );
@@ -83,19 +98,99 @@ describe("handlePageMessage", () => {
     assert.deepEqual(calls, []);
   });
 
+  it("refuses a request without a well-formed tag, and adopts none", async () => {
+    const calls: unknown[] = [];
+    const adopted: string[] = [];
+    const handlers: PageHandlers = { echo: (params) => calls.push(params) };
+    const request = { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} };
+    const requests: unknown[] = [
+      request,
+      { ...request, tag: 1 },
+      { ...request, tag: null },
+      { ...request, tag: ["b"] },
+      { ...request, tag: "" },
+      { ...request, tag: "B" },
+      { ...request, tag: "aB" },
+      { ...request, tag: "abcdefgh" },
+      { ...request, tag: "a1" },
+      { ...request, tag: " b" },
+      { ...request, tag: "b\n" },
+      { ...request, tag: "é" },
+      withInherited(request, { tag: TAG }),
+    ];
+    for (const each of requests) {
+      assert.deepEqual(
+        await handlePageMessage(each, {
+          site: SITE,
+          handlers,
+          adopt: (tag) => adopted.push(tag),
+          before: noop,
+        }),
+        UNREADABLE,
+        JSON.stringify(each),
+      );
+    }
+    assert.deepEqual(calls, []);
+    assert.deepEqual(adopted, []);
+  });
+
+  it("adopts the tag of a readable request before its handler runs", async () => {
+    const calls: string[] = [];
+    const handlers: PageHandlers = {
+      echo: () => {
+        calls.push("handler");
+        return "echoed";
+      },
+    };
+    const ctx = {
+      handlers,
+      adopt: (tag: string) => calls.push(`adopt ${tag}`),
+      before: () => calls.push("before"),
+    };
+    const request = {
+      kind: PAGE_REQUEST_KIND,
+      tag: "abcdefg",
+      type: "echo",
+      site: SITE,
+      params: {},
+    };
+    assert.deepEqual(await handlePageMessage(request, { ...ctx, site: SITE }), {
+      ok: true,
+      site: SITE,
+      result: "echoed",
+    });
+    assert.deepEqual(calls, ["adopt abcdefg", "before", "handler"]);
+    calls.length = 0;
+    // Also when the request is then refused: the tag is the request's, whatever its fate.
+    assert.deepEqual(await handlePageMessage(request, { ...ctx, site: "https://b.example" }), {
+      ...CHANGED,
+      site: "https://b.example",
+    });
+    assert.deepEqual(
+      await handlePageMessage({ ...request, tag: "z", type: "missing" }, { ...ctx, site: SITE }),
+      NO_SUCH_TYPE,
+    );
+    assert.deepEqual(calls, ["adopt abcdefg", "adopt z"]);
+  });
+
   it("refuses a request for another site without running its handler", async () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
-    const request = { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} };
+    const request = { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: {} };
     assert.deepEqual(
-      await handlePageMessage(request, { site: "https://b.example", handlers, before: noop }),
+      await handlePageMessage(request, {
+        site: "https://b.example",
+        handlers,
+        adopt: noop,
+        before: noop,
+      }),
       {
         ...CHANGED,
         site: "https://b.example",
       },
     );
     assert.deepEqual(
-      await handlePageMessage(request, { site: undefined, handlers, before: noop }),
+      await handlePageMessage(request, { site: undefined, handlers, adopt: noop, before: noop }),
       {
         ...CHANGED,
         site: "",
@@ -108,9 +203,9 @@ describe("handlePageMessage", () => {
     it(`refuses the request type ${type}`, async () => {
       const calls: unknown[] = [];
       const handlers: PageHandlers = { echo: (params) => calls.push(params) };
-      const request = { kind: PAGE_REQUEST_KIND, type, site: SITE, params: {} };
+      const request = { kind: PAGE_REQUEST_KIND, tag: TAG, type, site: SITE, params: {} };
       assert.deepEqual(
-        await handlePageMessage(request, { site: SITE, handlers, before: noop }),
+        await handlePageMessage(request, { site: SITE, handlers, adopt: noop, before: noop }),
         NO_SUCH_TYPE,
       );
       assert.deepEqual(calls, []);
@@ -129,8 +224,8 @@ describe("handlePageMessage", () => {
     const params = { text: "hi" };
     assert.deepEqual(
       await handlePageMessage(
-        { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params },
-        { site: SITE, handlers, before: noop },
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params },
+        { site: SITE, handlers, adopt: noop, before: noop },
       ),
       { ok: true, site: SITE, result: { echoed: "hi" } },
     );
@@ -138,8 +233,8 @@ describe("handlePageMessage", () => {
     assert.equal(calls[0], params);
     assert.deepEqual(
       await handlePageMessage(
-        { kind: PAGE_REQUEST_KIND, type: "later", site: SITE, params: {} },
-        { site: SITE, handlers, before: noop },
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "later", site: SITE, params: {} },
+        { site: SITE, handlers, adopt: noop, before: noop },
       ),
       { ok: true, site: SITE, result: "done" },
     );
@@ -200,8 +295,8 @@ describe("handlePageMessage", () => {
             },
       };
       const reply = handlePageMessage(
-        { kind: PAGE_REQUEST_KIND, type: "act", site: SITE, params: {} },
-        { site: SITE, handlers, before: () => calls.push("before") },
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "act", site: SITE, params: {} },
+        { site: SITE, handlers, adopt: noop, before: () => calls.push("before") },
       );
       assert.deepEqual(calls, ["before", "handler"], `async: ${later}`);
       assert.deepEqual(await reply, { ok: true, site: SITE, result: "done" });
@@ -217,13 +312,16 @@ describe("handlePageMessage", () => {
     };
     const requests: [unknown, string | undefined][] = [
       [{ kind: "other", type: "echo", site: SITE, params: {} }, SITE],
-      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: null }, SITE],
-      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }, "https://b.example"],
-      [{ kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} }, undefined],
-      [{ kind: PAGE_REQUEST_KIND, type: "missing", site: SITE, params: {} }, SITE],
+      [{ kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: null }, SITE],
+      [
+        { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: {} },
+        "https://b.example",
+      ],
+      [{ kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: {} }, undefined],
+      [{ kind: PAGE_REQUEST_KIND, tag: TAG, type: "missing", site: SITE, params: {} }, SITE],
     ];
     for (const [request, site] of requests) {
-      const reply = await handlePageMessage(request, { site, handlers, before });
+      const reply = await handlePageMessage(request, { site, handlers, adopt: noop, before });
       assert.notEqual(reply?.ok, true, JSON.stringify(request));
       assert.equal(runs, 0, JSON.stringify(request));
     }
@@ -233,10 +331,11 @@ describe("handlePageMessage", () => {
     const calls: unknown[] = [];
     const handlers: PageHandlers = { echo: (params) => calls.push(params) };
     const reply = await handlePageMessage(
-      { kind: PAGE_REQUEST_KIND, type: "echo", site: SITE, params: {} },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type: "echo", site: SITE, params: {} },
       {
         site: SITE,
         handlers,
+        adopt: noop,
         before: () => {
           throw new Error("secret https://a.example/private");
         },
@@ -249,10 +348,20 @@ describe("handlePageMessage", () => {
 
   function call(handlers: PageHandlers, type: string): Promise<unknown> | undefined {
     return handlePageMessage(
-      { kind: PAGE_REQUEST_KIND, type, site: SITE, params: {} },
-      { site: SITE, handlers, before: noop },
+      { kind: PAGE_REQUEST_KIND, tag: TAG, type, site: SITE, params: {} },
+      { site: SITE, handlers, adopt: noop, before: noop },
     );
   }
+});
+
+describe("isPageTag", () => {
+  it("takes 1 to 7 lowercase letters", () => {
+    assert.equal(MAX_TAG_LETTERS, 7);
+    for (const tag of ["a", "z", "ab", "zzzzzzz"]) assert.equal(isPageTag(tag), true, tag);
+    for (const tag of ["", "zzzzzzzz", "A", "a1", "a-", 1, undefined, new String("a")]) {
+      assert.equal(isPageTag(tag), false, String(tag));
+    }
+  });
 });
 
 describe("capText", () => {

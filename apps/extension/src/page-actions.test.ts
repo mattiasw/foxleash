@@ -21,8 +21,9 @@ import {
   wheelScrolls,
 } from "./page-actions.ts";
 
-const REF = "0a1b2c3d-4";
-const OTHER_REF = "0a1b2c3d-17";
+const REF = "b4";
+const OTHER_REF = "b17";
+const OLD_REF = "0a1b2c3d-4";
 const NOT_COORDINATES: readonly unknown[] = [
   -1,
   -0.001,
@@ -368,6 +369,7 @@ describe("pointResultOf", () => {
       [good],
       { ...good, ref: "not a ref" },
       { ...good, ref: `${REF}\n` },
+      { ...good, ref: OLD_REF },
       { ...good, ref: 4 },
       { x: 1, y: 2 },
       ...NOT_COORDINATES.flatMap((bad) => [
@@ -410,6 +412,7 @@ describe("scrollResultOf", () => {
       null,
       [],
       { ...good, ref: "x" },
+      { ...good, ref: OLD_REF },
       { ...good, ref: null },
       { ...good, scrollLeft: Number.NaN },
       { ...good, scrollTop: Number.POSITIVE_INFINITY },
@@ -442,6 +445,8 @@ describe("dragResultOf", () => {
       "drag",
       { ...good, ref: "bad" },
       { ...good, targetRef: "bad" },
+      { ...good, ref: OLD_REF },
+      { ...good, targetRef: OLD_REF },
       { ...good, targetRef: undefined },
       { ...good, mode: "native" },
       { ...good, dropped: 1 },

@@ -121,6 +121,9 @@ type Handlers = {
 
 type NavigationTarget = { kind: "url"; url: string } | { kind: "action"; action: NavigateAction };
 
+/** A navigate request as read from its params: a path is resolved once the tab is known. */
+type NavigationRequest = NavigationTarget | { kind: "path"; path: string };
+
 /** What `navigate` watched while it went back or forward. */
 interface HistoryLoad {
   /** Undefined while the request of the tab's last top-level commit has not been reported. */
@@ -354,10 +357,12 @@ export function createHandlers<Handle>({
 
   async function navigate(session: string, params: Params): Promise<Result<"navigate">> {
     const tabId = tabIdParam(params, "navigate");
-    const target = navigationTarget(params);
+    const request = navigationTarget(params);
     const tab = await existingTab(tabId);
     const group = await groups.groupOf(session);
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    const target: NavigationTarget =
+      request.kind === "path" ? { kind: "url", url: pathUrl(request.path, tab.url) } : request;
     // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
     const prompt = access.openPrompt(session);
     if (prompt?.tabId === tabId) {
@@ -1031,6 +1036,12 @@ export function createHandlers<Handle>({
     if (typeof url !== "string") {
       throw new ToolError("invalid_params", "download needs url to be a string.");
     }
+    if (isSitePath(url)) {
+      throw new ToolError(
+        "invalid_url",
+        "download needs a whole http or https URL. An address starting with / from read_page is on the site of the page it was read from: put that site in front of it.",
+      );
+    }
     const href = webUrl(url, "Foxleash downloads only http and https URLs.");
     const filename = own(params, "filename");
     const problem = downloadNameProblem(filename);
@@ -1347,7 +1358,18 @@ function tabOpenUrl(params: Params): string | undefined {
     throw new ToolError("invalid_params", "tab_open needs url to be a string.");
   }
   if (url === "about:blank") return undefined;
+  if (isSitePath(url)) {
+    throw new ToolError(
+      "invalid_url",
+      "tab_open needs a whole http or https URL. An address starting with / from read_page is on the site of the page it was read from: put that site in front of it, or use navigate in that page's tab.",
+    );
+  }
   return webUrl(url, "Foxleash opens only http and https URLs, or about:blank.");
+}
+
+/** An address starting with a single /, as read_page shows a link to the page's own site. */
+function isSitePath(url: string): boolean {
+  return url.startsWith("/") && !url.startsWith("//");
 }
 
 function tabIdParam(params: Params, method: string): number {
@@ -1608,7 +1630,7 @@ function networkOptions(params: Params): NetworkReadOptions {
   return pattern === undefined ? { limit } : { pattern, limit };
 }
 
-function navigationTarget(params: Params): NavigationTarget {
+function navigationTarget(params: Params): NavigationRequest {
   const hasUrl = Object.hasOwn(params, "url");
   const hasAction = Object.hasOwn(params, "action");
   if (hasUrl && hasAction) {
@@ -1619,6 +1641,7 @@ function navigationTarget(params: Params): NavigationTarget {
     if (typeof url !== "string") {
       throw new ToolError("invalid_params", "navigate needs url to be a string.");
     }
+    if (isSitePath(url)) return { kind: "path", path: url };
     return { kind: "url", url: webUrl(url, "Foxleash navigates only to http and https URLs.") };
   }
   if (!hasAction) throw new ToolError("invalid_params", "navigate needs a url or an action.");
@@ -1629,9 +1652,29 @@ function navigationTarget(params: Params): NavigationTarget {
   return { kind: "action", action };
 }
 
+/**
+ * The address of a path on the site of the tab's page. Resolved against the page's origin, so
+ * nothing else of the page's URL, such as a user name, is carried over.
+ */
+function pathUrl(path: string, tabUrl: string | undefined): string {
+  const page = tabUrl === undefined || siteOf(tabUrl) === undefined ? null : URL.parse(tabUrl);
+  if (page === null) {
+    throw new ToolError(
+      "invalid_url",
+      "navigate takes an address starting with / only in a tab that shows an http or https page; give the whole URL.",
+    );
+  }
+  const leaving =
+    "An address starting with / must stay on the site the tab shows; give the whole URL.";
+  const href = webUrl(path, leaving, page.origin);
+  // A backslash, tab or newline after the / can make the parser read another host.
+  if (URL.parse(href)?.origin !== page.origin) throw new ToolError("invalid_url", leaving);
+  return href;
+}
+
 /** The parsed href, so the URL that was checked is the URL that is opened. */
-function webUrl(url: string, refusal: string): string {
-  const parsed = URL.parse(url);
+function webUrl(url: string, refusal: string, base?: string): string {
+  const parsed = URL.parse(url, base);
   if (parsed === null || (parsed.protocol !== "http:" && parsed.protocol !== "https:")) {
     throw new ToolError("invalid_url", refusal);
   }

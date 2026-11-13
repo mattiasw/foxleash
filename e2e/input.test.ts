@@ -13,7 +13,7 @@ import {
   untrustedContent,
 } from "./harness.ts";
 
-const REF = "([0-9a-f]{8}-[1-9][0-9]*)";
+const REF = "([a-z]{1,7}[1-9][0-9]*)";
 // Long enough for a submission or click Firefox itself would queue to have happened.
 const SETTLE_MS = 300;
 

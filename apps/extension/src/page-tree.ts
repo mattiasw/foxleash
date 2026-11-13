@@ -1,5 +1,6 @@
 import { type FoundLines, READ_PAGE_MAX_CHARS, READ_PAGE_MAX_MATCHES } from "@foxleash/protocol";
 import { capText, ownField } from "./page-messages.ts";
+import { siteOf } from "./site.ts";
 
 export { READ_PAGE_MAX_CHARS };
 
@@ -263,9 +264,9 @@ export function readPageOptions(params: Record<string, unknown>): ReadPageOption
   return options;
 }
 
-/** One line of the tree: `<indent><role> <name> [<ref>] <states>`. */
+/** One line of the tree: `<indent><role> <name> [<ref>] <states>`, one space per level. */
 export function formatLine({ level, role, name, ref, states = {} }: Line): string {
-  const parts = [`${"  ".repeat(level)}${role}`];
+  const parts = [`${" ".repeat(level)}${role}`];
   if (name !== undefined && clean(name) !== "") parts.push(quote(name));
   if (ref !== undefined) parts.push(`[${ref}]`);
   if (states.file === true) parts.push("file field");
@@ -294,6 +295,33 @@ export function formatLine({ level, role, name, ref, states = {} }: Line): strin
 export function textLine(level: number, text: string): Line | undefined {
   if (clean(text) === "") return undefined;
   return { level, role: "text", name: text };
+}
+
+/**
+ * The address a link line shows: the part after the origin for a link to the page's own origin,
+ * which navigate takes on that site, else the whole address. The rest after the origin keeps a
+ * bare `?` or `#`, which `pathname + search + hash` would drop.
+ */
+export function linkAddress(href: string, pageUrl: string): string {
+  const parsed = URL.parse(href);
+  const page = URL.parse(pageUrl);
+  if (
+    parsed === null ||
+    page === null ||
+    siteOf(href) === undefined ||
+    // A blob: page has its creator's origin, but navigate takes a path only on a web page.
+    siteOf(pageUrl) === undefined ||
+    // As written: a site with a trailing dot is the same site, but not the same origin.
+    parsed.origin !== page.origin ||
+    // A path cannot carry a user name or password.
+    parsed.username !== "" ||
+    parsed.password !== ""
+  ) {
+    return href;
+  }
+  const path = parsed.href.slice(parsed.origin.length);
+  // `//host/x` reads as an address on another site.
+  return path.startsWith("//") ? href : path;
 }
 
 /**
