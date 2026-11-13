@@ -329,15 +329,17 @@ Claude Code, `/mcp__foxleash__run_recipe <name>`, where a part of the name that 
 has is enough. It tells the agent to call `start_recipe` and then follow the recipe's steps.
 
 The agent waits with `wait_for` until a page shows some text, until an element matching a CSS
-selector exists in it, or until the next navigation in a tab finishes: 10 seconds unless it
-asks for up to 30. Text is matched in the text the page shows, without the values of form
-fields. A selector that contains `[` together with `value` or `ng-reflect` is refused, since it
-could test what a password field holds, which Angular development builds can copy into
-`ng-reflect` attributes. A page that changes its address with its own scripts
-(`history.pushState` or `replaceState`) counts as a navigation. Waiting for text or a selector
-while the tab loads another page, as right after a click or a form submit, checks that page
-once it has arrived. Waiting for text or a selector works only on a tab showing a site you
-approved, and never asks.
+selector exists in it, or until a navigation in a tab finishes: 10 seconds unless it asks for up
+to 30. When no navigation is in progress in the tab, one that began and finished since the
+session's last `click`, `hover`, `scroll`, `drag`, `type`, `press_key` or `fill_form` there, or
+since `navigate` there returned, counts at once, unless an earlier `wait_for` already returned
+for it. Text is matched in the text the page shows, without the values of form fields. A
+selector that contains `[` together with `value` or `ng-reflect` is refused, since it could test
+what a password field holds, which Angular development builds can copy into `ng-reflect`
+attributes. A page that changes its address with its own scripts (`history.pushState` or
+`replaceState`) counts as a navigation. Waiting for text or a selector while the tab loads
+another page, as right after a click or a form submit, checks that page once it has arrived.
+Waiting for text or a selector works only on a tab showing a site you approved, and never asks.
 
 ## Faster tasks in Claude Code
 

@@ -100,8 +100,11 @@ export interface HandlerDeps<Handle> {
   probe: (site: string, cutoff: number) => Promise<ProbeResult | null>;
   /** Requests to Foxleash's content script; `import type`, since page-scripts.ts imports this file. */
   pages: Pick<PageScripts, "request">;
-  /** The navigations under way in each tab, which a screenshot and read_console wait for. */
-  navigations: Pick<TabNavigations, "settled" | "underWay" | "begun">;
+  /**
+   * The navigations under way in each tab, which a screenshot and read_console wait for, and each
+   * session's mark of its last action in a tab, which wait_for navigation reads.
+   */
+  navigations: Pick<TabNavigations, "settled" | "underWay" | "begun" | "acted" | "takeFinished">;
   /** The bytes upload_chunk stages; `import type`, since uploads.ts imports this file. */
   uploads: Pick<Uploads, "add" | "take">;
   /** Which tabs' console records may be read; `import type`, since it imports this file. */
@@ -363,44 +366,51 @@ export function createHandlers<Handle>({
     const tab = await existingTab(tabId);
     const group = await groups.groupOf(session);
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
-    const target: NavigationTarget =
-      request.kind === "path" ? { kind: "url", url: pathUrl(request.path, tab.url) } : request;
-    // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
-    const prompt = access.openPrompt(session);
-    if (prompt?.tabId === tabId) {
-      const url = retryUrl(prompt, target);
-      return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
-    }
-    // A reload of a prompt the user has answered loads the page it asked about.
-    const asked = isReload(target) ? access.askedUrl(session, tab) : undefined;
-    if (asked !== undefined) {
-      return { tab: await approveAndLoad(session, tabId, asked, { kind: "url", url: asked }) };
-    }
-    const gated = await gate(session, tab, target);
-    if (gated !== undefined && gated.decision.decision !== "allowed") {
-      return { tab: await approveAndLoad(session, tabId, gated.url, target) };
-    }
-    keepPrompt(session, tabId);
-    const history =
-      target.kind === "action" && target.action !== "reload" ? watchHistoryLoad(tabId) : undefined;
     try {
-      const loaded =
-        isReload(target) && gated !== undefined
-          ? await reloadPage(session, tab, gated.url)
-          : await waitForLoad(
-              browser,
-              timers,
-              tabId,
-              target.kind === "url" ? target.url : undefined,
-              () => startNavigation(tabId, target),
-              { unloaded: tab.discarded === true },
-            );
-      const shown =
-        history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
-      const view = await access.view(session);
-      return { tab: view.tabInfo(shown) };
+      const target: NavigationTarget =
+        request.kind === "path" ? { kind: "url", url: pathUrl(request.path, tab.url) } : request;
+      // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
+      const prompt = access.openPrompt(session);
+      if (prompt?.tabId === tabId) {
+        const url = retryUrl(prompt, target);
+        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
+      }
+      // A reload of a prompt the user has answered loads the page it asked about.
+      const asked = isReload(target) ? access.askedUrl(session, tab) : undefined;
+      if (asked !== undefined) {
+        return { tab: await approveAndLoad(session, tabId, asked, { kind: "url", url: asked }) };
+      }
+      const gated = await gate(session, tab, target);
+      if (gated !== undefined && gated.decision.decision !== "allowed") {
+        return { tab: await approveAndLoad(session, tabId, gated.url, target) };
+      }
+      keepPrompt(session, tabId);
+      const history =
+        target.kind === "action" && target.action !== "reload"
+          ? watchHistoryLoad(tabId)
+          : undefined;
+      try {
+        const loaded =
+          isReload(target) && gated !== undefined
+            ? await reloadPage(session, tab, gated.url)
+            : await waitForLoad(
+                browser,
+                timers,
+                tabId,
+                target.kind === "url" ? target.url : undefined,
+                () => startNavigation(tabId, target),
+                { unloaded: tab.discarded === true },
+              );
+        const shown =
+          history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
+        const view = await access.view(session);
+        return { tab: view.tabInfo(shown) };
+      } finally {
+        history?.stop();
+      }
     } finally {
-      history?.stop();
+      // Its own load is in its result: only a navigation after it returns counts for wait_for.
+      navigations.acted(session, tabId);
     }
   }
 
@@ -604,22 +614,31 @@ export function createHandlers<Handle>({
   /**
    * Waits until the page in a tab of the session's group shows a text or has an element matching
    * a selector, read through the content script after the site gate, or until a navigation in the
-   * tab finishes. The tab must still be in the group when the wait ends.
+   * tab finishes; a navigation that began and finished since the session's last action in the
+   * tab, and that no earlier wait returned for, counts at once. The tab must still be in the group
+   * when the wait ends.
    */
   async function waitFor(session: string, params: Params): Promise<Result<"wait_for">> {
     const tabId = tabIdParam(params, "wait_for");
     const condition = waitCondition(params);
     const timeoutMs = waitTimeoutMs(params);
     if ("navigation" in condition) {
-      const outcome = await waitForNavigation({ browser, timers }, tabId, timeoutMs, () =>
-        groupTab(session, tabId),
-      );
-      if (outcome === "closed") throw tabNotFound(tabId);
-      if (outcome === "timeout") {
-        throw new ToolError(
-          "wait_timeout",
-          `Tab ${tabId} did not finish a navigation within ${secondsText(timeoutMs)}.`,
+      // Checked in the same turn as the wait's listeners go in, so no navigation falls between. A
+      // navigation under way is waited for, as before; the take after it spends what finished.
+      if (navigations.underWay(tabId) || !navigations.takeFinished(session, tabId)) {
+        const outcome = await waitForNavigation({ browser, timers }, tabId, timeoutMs, () =>
+          groupTab(session, tabId),
         );
+        if (outcome === "closed") throw tabNotFound(tabId);
+        if (outcome === "timeout") {
+          throw new ToolError(
+            "wait_timeout",
+            `Tab ${tabId} did not finish a navigation within ${secondsText(timeoutMs)}.`,
+          );
+        }
+        // Spends the navigation this wait returned for: the tracker's listeners, added first,
+        // have numbered it.
+        navigations.takeFinished(session, tabId);
       }
     } else if (!(await waitForPage({ pages, timers }, session, tabId, condition, timeoutMs))) {
       const what = "text" in condition ? "that text" : "an element matching that selector";
@@ -975,8 +994,11 @@ export function createHandlers<Handle>({
     const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
+    const reply = await pages.request(session, tabId, tool, options, () =>
+      navigations.acted(session, tabId),
+    );
     // The reply comes from the page's content process: own fields only, of exact types.
-    const result = check(await pages.request(session, tabId, tool, options), options);
+    const result = check(reply, options);
     if (result === undefined) {
       throw new ToolError(
         "page_error",

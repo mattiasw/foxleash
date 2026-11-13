@@ -50,6 +50,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before repeating it, instead of asking to try again.
 - `type` and `fill_form` no longer take about a second per text field in a tab that is not the
   active tab of its window, and `fill_form` there no longer stops after four text fields.
+- `wait_for` with `navigation` true, called right after a click on a link, no longer waits its
+  whole timeout and fails when the new page has already loaded.
 
 ## [0.3.0] - 2026-11-06
 

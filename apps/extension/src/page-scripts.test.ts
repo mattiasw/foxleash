@@ -155,6 +155,27 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.equal(fake.tabMessages.length, 2);
   });
 
+  it("does not call onSend for a request refused before its message is sent", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    await open("s1", `${SITE}/`);
+    const outside = fake.openTab({ url: `${SITE}/` });
+    const approvedNot = await open("s1");
+    fake.navigateByUser(approvedNot.id, "https://c.example/");
+    await flush();
+    let sends = 0;
+    const onSend = () => {
+      sends += 1;
+    };
+    await rejectsWith(pages.request("s1", outside.id, "click", {}, onSend), "tab_not_in_group");
+    await rejectsWith(
+      pages.request("s1", approvedNot.id, "click", {}, onSend),
+      "site_not_approved",
+    );
+    assert.equal(sends, 0);
+    assertNothingSent(fake);
+  });
+
   it("acts on a site the session allowed only for itself", async () => {
     const { fake, pages, open, sessions } = setup();
     const tab = await open("s1");
@@ -1138,6 +1159,42 @@ describe("page script requests", { timeout: 10000 }, () => {
       });
       await rejectsWith(pages.request("s1", tab.id, "type", {}), "page_changed");
       assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("calls onSend right before each send of the message, after the injection", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      fake.setContentScript(tab.id, answering("clicked"));
+      const seen: [number, number][] = [];
+      const onSend = () => seen.push([fake.injections.length, fake.tabMessages.length]);
+      assert.equal(await pages.request("s1", tab.id, "click", {}, onSend), "clicked");
+      assert.deepEqual(seen, [[1, 0]]);
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        return { ok: true, site: SITE, result: "old page" };
+      });
+      const request = pages.request("s1", tab.id, "read_page", {}, onSend);
+      await flush();
+      land(fake, tab.id, NEXT, answering("new page"));
+      assert.equal(await request, "new page");
+      assert.deepEqual(seen, [
+        [1, 0],
+        [2, 1],
+        [3, 2],
+      ]);
+    });
+
+    it("calls onSend only once a navigation under way has settled", async () => {
+      const { fake, pages, tab } = await grantedTab();
+      let sends = 0;
+      begin(fake, tab.id, NEXT);
+      const request = pages.request("s1", tab.id, "click", {}, () => {
+        sends += 1;
+      });
+      await flush();
+      assert.equal(sends, 0);
+      land(fake, tab.id, NEXT, answering("clicked"));
+      assert.equal(await request, "clicked");
+      assert.equal(sends, 1);
     });
 
     it("refuses a page the navigation brings from a site the session may not act on", async () => {

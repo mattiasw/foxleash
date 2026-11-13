@@ -3786,6 +3786,131 @@ describe("wait_for", { timeout: 10000 }, () => {
     assert.equal(fake.navigationListenerCount(), listeners);
     assert.equal(fake.removedListenerCount(), removed);
   });
+
+  it("returns at once for a navigation that finished since the session's last act, once", async () => {
+    const { fake, call, open, grant, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    assert.deepEqual(await call("s1", "wait_for", { tabId: tab.id, navigation: true }), {
+      tab: { ...tab, url: "https://a.example/next", title: "Title of https://a.example/next" },
+    });
+    const again = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await assert.rejects(again, {
+      code: "wait_timeout",
+      message: `Tab ${tab.id} did not finish a navigation within 2 seconds.`,
+    });
+  });
+
+  it("does not return again for a navigation a wait already returned for", async () => {
+    const { fake, call, open, grant, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    await flush();
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    const result = await waiting;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+    const again = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await rejectsWith(again, "wait_timeout");
+  });
+
+  it("does not count navigate's own load, but a navigation after navigate returned", async () => {
+    const { fake, call, open, grant, navigate, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await navigate("s1", { tabId: tab.id, url: "https://a.example/other" });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/other" });
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await rejectsWith(waiting, "wait_timeout");
+    await navigate("s1", { tabId: tab.id, url: "https://a.example/again" });
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    assert.deepEqual(await call("s1", "wait_for", { tabId: tab.id, navigation: true }), {
+      tab: { ...tab, url: "https://a.example/next", title: "Title of https://a.example/next" },
+    });
+  });
+
+  it("marks navigate's end also when navigate fails after the group check", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await rejectsWith(
+      call("s1", "navigate", { tabId: tab.id, url: "/\\evil.example/x" }),
+      "invalid_url",
+    );
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    const result = await call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+  });
+
+  it("returns at once for a History API change since the session's last act", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    fake.pushState(tab.id, "https://a.example/step-2");
+    assert.deepEqual(await call("s1", "wait_for", { tabId: tab.id, navigation: true }), {
+      tab: { ...tab, url: "https://a.example/step-2" },
+    });
+  });
+
+  it("keeps another session's act in the tab from moving this session's mark", async () => {
+    const { fake, call, open, grant, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s2", tab.id, call, replyWith);
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await rejectsWith(waiting, "wait_timeout");
+    await click("s1", tab.id, call, replyWith);
+    fake.navigateByUser(tab.id, "https://a.example/again");
+    await flush();
+    await click("s2", tab.id, call, replyWith);
+    const result = await call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/again");
+  });
+
+  it("waits for a navigation under way, though an earlier one finished since the act", async () => {
+    const { fake, call, open, grant, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "https://a.example/redirect" });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://a.example/redirect" });
+    let done = false;
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true }).finally(() => {
+      done = true;
+    });
+    await flush();
+    assert.equal(done, false);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "https://a.example/redirect" });
+    const result = await waiting;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.id, tab.id);
+    const again = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    await rejectsWith(again, "wait_timeout");
+  });
 });
 
 describe("read_page", { timeout: 10000 }, () => {
@@ -4571,6 +4696,21 @@ describe("the tools that act in the page", { timeout: 10000 }, () => {
       replyWith(async () => ({ ...reply, extra: "page" }));
       assert.deepEqual(await call("s2", method, { tabId: 0, ...params }), reply);
       assert.deepEqual(pageCalls, [{ session: "s2", tabId: 0, type: method, params: options }]);
+    }
+  });
+
+  it("marks the act, so wait_for returns at once for a navigation that finished after it", async () => {
+    for (const { method, params, reply } of tools) {
+      const { fake, call, open, grant, replyWith } = setup();
+      await grant("https://a.example");
+      const tab = await open("s1", "https://a.example/");
+      replyWith(async () => reply);
+      await call("s1", method, { tabId: tab.id, ...params });
+      fake.navigateByUser(tab.id, "https://a.example/next");
+      await flush();
+      const result = await call("s1", "wait_for", { tabId: tab.id, navigation: true });
+      assert.ok("tab" in result, method);
+      assert.equal(result.tab.url, "https://a.example/next", method);
     }
   });
 
@@ -6990,8 +7130,15 @@ function setup() {
   const pageCalls: PageCall[] = [];
   let pageReply: PageReply = defaultReply;
   const pages = {
-    async request(session: string, tabId: number, type: string, params: Record<string, unknown>) {
+    async request(
+      session: string,
+      tabId: number,
+      type: string,
+      params: Record<string, unknown>,
+      onSend?: () => void,
+    ) {
       pageCalls.push({ session, tabId, type, params });
+      onSend?.();
       return pageReply(type);
     },
   };
@@ -7415,4 +7562,15 @@ function frameRequest(tabId: number, url: string, method = "GET", timeStamp = 1)
     type: "sub_frame",
     timeStamp,
   };
+}
+
+/** A click in the tab that the page answers. */
+async function click(
+  session: string,
+  tabId: number,
+  call: ReturnType<typeof setup>["call"],
+  replyWith: (reply: PageReply) => void,
+): Promise<void> {
+  replyWith(async () => ({ ref: "b4", x: 1, y: 2 }));
+  await call(session, "click", { tabId, ref: "b4" });
 }

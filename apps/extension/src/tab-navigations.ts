@@ -16,11 +16,36 @@ export interface TabNavigations {
    * (`ms` passed before any commit while Firefox still reports the tab loading).
    */
   settled(tabId: number, ms: number): Promise<NavigationOutcome>;
+  /** Marks the session's action in the tab: only a later navigation can count for the session. */
+  acted(session: string, tabId: number): void;
+  /**
+   * Whether a top-frame navigation of the tab began and finished since the session's mark there;
+   * it then moves the mark past it, so each finished navigation counts once. False with no mark.
+   */
+  takeFinished(session: string, tabId: number): boolean;
 }
 
 export interface TabNavigationsDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "webNavigation">;
   timers: Timers<Handle>;
+}
+
+/**
+ * A tab's navigation numbers: the last one handed out, the ones the navigations that began and
+ * committed last got, and the ones of the last load that completed and the last History API change.
+ */
+interface Numbers {
+  latest: number;
+  lastBegun: number;
+  lastCommitted: number;
+  loaded: number;
+  changed: number;
+}
+
+/** The numbers at or below which a session has spent a tab's loads and History API changes. */
+interface Mark {
+  loaded: number;
+  changed: number;
 }
 
 /** A tab's navigation under way; one object from its start to its end. */
@@ -42,19 +67,34 @@ export function createTabNavigations<Handle>({
   const navigations = new Map<number, Navigation>();
   const counts = new Map<number, number>();
   const waiters = new Map<number, Set<Settle>>();
+  const numbers = new Map<number, Numbers>();
+  // Tab, then session.
+  const marks = new Map<number, Map<string, Mark>>();
 
   // Firefox swaps a document in through about:blank, and a new tab starts on its own: neither is
   // the navigation's page.
   browser.webNavigation.onBeforeNavigate.addListener(({ tabId, frameId, url }) => {
     if (frameId !== 0 || url === "about:blank") return;
     counts.set(tabId, begun(tabId) + 1);
+    const tabNumbers = numbered(tabId);
+    tabNumbers.latest += 1;
+    tabNumbers.lastBegun = tabNumbers.latest;
     const navigation = navigations.get(tabId);
     if (navigation === undefined) navigations.set(tabId, { phase: "begun", documentId: undefined });
     // A navigation that supersedes it, or the swap's second onBeforeNavigate for the same URL.
     else navigation.phase = "begun";
   });
+  // Not a begun navigation: a pushState must not make a page request run again.
+  browser.webNavigation.onHistoryStateUpdated.addListener(({ tabId, frameId }) => {
+    if (frameId !== 0) return;
+    const tabNumbers = numbered(tabId);
+    tabNumbers.latest += 1;
+    tabNumbers.changed = tabNumbers.latest;
+  });
   browser.webNavigation.onCommitted.addListener(({ tabId, frameId, url, documentId }) => {
     if (frameId !== 0 || url === "about:blank") return;
+    const tabNumbers = numbers.get(tabId);
+    if (tabNumbers !== undefined) tabNumbers.lastCommitted = tabNumbers.lastBegun;
     const navigation = navigations.get(tabId);
     if (navigation === undefined) return;
     navigation.phase = "committed";
@@ -73,6 +113,11 @@ export function createTabNavigations<Handle>({
   // A redirect's end can carry either URL, so none is compared.
   browser.webNavigation.onCompleted.addListener(({ tabId, frameId, url }) => {
     if (frameId !== 0 || url === "about:blank") return;
+    // It finishes the navigation that committed last and takes that one's number: a completion
+    // after a mark (navigate's own load) is at or below the mark, and a navigation that never
+    // commits (a download) lends its number to no other page's completion.
+    const tabNumbers = numbers.get(tabId);
+    if (tabNumbers !== undefined) tabNumbers.loaded = tabNumbers.lastCommitted;
     if (navigations.has(tabId)) end(tabId, "ended");
   });
   // A 204, a download, a page from the back-forward cache, which brings no commit.
@@ -81,13 +126,27 @@ export function createTabNavigations<Handle>({
   });
   browser.tabs.onRemoved.addListener((tabId) => {
     counts.delete(tabId);
+    numbers.delete(tabId);
+    marks.delete(tabId);
     end(tabId, "removed");
   });
 
-  return { underWay, begun, settled };
+  return { underWay, begun, settled, acted, takeFinished };
 
   function begun(tabId: number): number {
     return counts.get(tabId) ?? 0;
+  }
+
+  function numbered(tabId: number): Numbers {
+    const tabNumbers = numbers.get(tabId) ?? {
+      latest: 0,
+      lastBegun: 0,
+      lastCommitted: 0,
+      loaded: 0,
+      changed: 0,
+    };
+    numbers.set(tabId, tabNumbers);
+    return tabNumbers;
   }
 
   /** Ends the tab's navigation, settling every wait for it with `outcome`. */
@@ -131,5 +190,24 @@ export function createTabNavigations<Handle>({
       // The tracker missed the navigation's end.
       else end(tabId, "ended");
     }
+  }
+
+  function acted(session: string, tabId: number): void {
+    const tabMarks = marks.get(tabId) ?? new Map<string, Mark>();
+    marks.set(tabId, tabMarks);
+    const latest = numbers.get(tabId)?.latest ?? 0;
+    tabMarks.set(session, { loaded: latest, changed: latest });
+  }
+
+  function takeFinished(session: string, tabId: number): boolean {
+    const mark = marks.get(tabId)?.get(session);
+    const tabNumbers = numbers.get(tabId);
+    if (mark === undefined || tabNumbers === undefined) return false;
+    if (tabNumbers.loaded <= mark.loaded && tabNumbers.changed <= mark.changed) return false;
+    // Each kind to its own last finished one, never to the latest: a load that began before a
+    // History API change, or after the last load completed, still counts once it completes.
+    mark.loaded = Math.max(mark.loaded, tabNumbers.loaded);
+    mark.changed = Math.max(mark.changed, tabNumbers.changed);
+    return true;
   }
 }

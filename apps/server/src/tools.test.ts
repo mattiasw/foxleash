@@ -1493,7 +1493,8 @@ describe("wait_for", () => {
       'a selector that contains "[" together with "value" or "ng-reflect", in any letter case or escaped, is refused',
       "which Angular development builds can copy into ng-reflect attributes",
       "history.pushState or replaceState",
-      "or navigation true, to wait until the next navigation in the tab finishes",
+      "or navigation true, to wait until a navigation in the tab finishes, also one already in progress when the call starts",
+      "when none is in progress, one that began and finished since this session's last click, hover, scroll, drag, type, press_key or fill_form in the tab, or since navigate in it returned, counts at once unless an earlier wait_for returned for it",
       "10 unless given, at most 30",
       "With text or selector, a call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and checks it.",
       "wait_for never asks",
@@ -1503,7 +1504,7 @@ describe("wait_for", () => {
     assert.equal(tool?.description?.includes(ASKS_FIRST), false);
     assert.deepEqual(
       record(tool?.inputSchema.properties?.navigation).description,
-      "true to wait for the next navigation in the tab to finish",
+      "true to wait for a navigation in the tab to finish; when none is in progress, one that began and finished since this session's last action in the tab counts at once",
     );
   });
 

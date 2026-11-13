@@ -60,13 +60,15 @@ export interface PageScripts {
    * Sends a request to Foxleash's content script in the top frame of a tab the session may act
    * in, injecting the script first, and returns the result of the request's page handler. Waits
    * first for a navigation under way in the tab, and runs once more after one that began while
-   * it ran, unless it is an act already sent.
+   * it ran, unless it is an act already sent. `onSend` runs right before each send of the
+   * request's message to the page, after the waits and the gate's checks.
    */
   request(
     session: string,
     tabId: number,
     type: string,
     params: Record<string, unknown>,
+    onSend?: () => void,
   ): Promise<unknown>;
 }
 
@@ -84,13 +86,14 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     tabId: number,
     type: string,
     params: Record<string, unknown>,
+    onSend?: () => void,
   ): Promise<unknown> {
     let late = false;
     const cutoff = timers.setTimeout(() => {
       late = true;
     }, NAVIGATION_WAIT_MS);
     try {
-      return await run(session, tabId, type, params, () => late);
+      return await run(session, tabId, type, params, () => late, onSend);
     } finally {
       timers.clearTimeout(cutoff);
     }
@@ -107,6 +110,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     type: string,
     params: Record<string, unknown>,
     late: () => boolean,
+    onSend: (() => void) | undefined,
   ): Promise<unknown> {
     const acting = ACTING_REQUEST_TYPES.includes(type);
     for (let second = false; ; second = true) {
@@ -123,6 +127,8 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
         sent = true;
+        // Here, not when the request starts: a navigation an act first waits for is not the act's.
+        onSend?.();
         const message: PageRequest = { kind: PAGE_REQUEST_KIND, type, site, tag, params };
         const reply = await bounded(
           () => browser.tabs.sendMessage(tabId, message, { frameId: 0 }),

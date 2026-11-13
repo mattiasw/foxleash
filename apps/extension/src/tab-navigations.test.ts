@@ -326,6 +326,157 @@ describe("settled", { timeout: 10000 }, () => {
   });
 });
 
+describe("navigations finished since a session's action", { timeout: 10000 }, () => {
+  it("counts none for a session with no action in the tab, and makes no mark", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    load(fake, tab.id, URL_B);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("counts a navigation that began and finished after the action once", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_B });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_B, documentId: "new" });
+    fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 0, url: URL_B, documentId: "new" });
+    assert.equal(navigations.underWay(tab.id), false);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("does not count a navigation that began before the action and finished after it", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_B });
+    navigations.acted("s1", tab.id);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_B });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("does not credit a page's completion to a later navigation that never committed", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_B });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_B, documentId: "new" });
+    fake.emitDOMContentLoaded({ tabId: tab.id, frameId: 0, url: URL_B, documentId: "new" });
+    navigations.acted("s1", tab.id);
+    // A download: it begins, and brings no commit and no completion of its own.
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: `${URL_A}file.zip` });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    load(fake, tab.id, URL_A);
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+  });
+
+  it("still counts a navigation that began before a take and finished after it", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    load(fake, tab.id, URL_B);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_A });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_A });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("counts a History API change of the top frame, without counting it as begun", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    fake.emitHistoryStateUpdated({ tabId: tab.id, frameId: 1, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitHistoryStateUpdated({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.begun(tab.id), 0);
+    assert.equal(navigations.underWay(tab.id), false);
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("does not count a frame's navigation or a completion of about:blank", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    load(fake, tab.id, URL_B);
+    navigations.acted("s1", tab.id);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 1, url: URL_B });
+    fake.emitCompleted({ tabId: tab.id, frameId: 1, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_B });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_B });
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: "about:blank" });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("still counts a load under way when a History API change during it was taken", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_B });
+    // The leaving page changes its address while the next one loads.
+    fake.emitHistoryStateUpdated({ tabId: tab.id, frameId: 0, url: `${URL_A}?step=2` });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("does not let a take lower the mark below a load that began before the action", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    load(fake, tab.id, URL_B);
+    fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: URL_A });
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A });
+    navigations.acted("s1", tab.id);
+    fake.emitHistoryStateUpdated({ tabId: tab.id, frameId: 0, url: `${URL_A}?step=2` });
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    fake.emitCompleted({ tabId: tab.id, frameId: 0, url: URL_A });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+
+  it("keeps each session's mark apart", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    navigations.acted("s2", tab.id);
+    load(fake, tab.id, URL_B);
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+    assert.equal(navigations.takeFinished("s2", tab.id), true);
+    load(fake, tab.id, URL_A);
+    navigations.acted("s2", tab.id);
+    assert.equal(navigations.takeFinished("s2", tab.id), false);
+    assert.equal(navigations.takeFinished("s1", tab.id), true);
+  });
+
+  it("drops a closed tab's marks", () => {
+    const { fake, navigations } = setup();
+    const tab = fake.openTab({ url: URL_A });
+    navigations.acted("s1", tab.id);
+    fake.removeTab(tab.id);
+    fake.emitHistoryStateUpdated({ tabId: tab.id, frameId: 0, url: URL_B });
+    assert.equal(navigations.takeFinished("s1", tab.id), false);
+  });
+});
+
+/** A top-frame navigation of the tab from its start to its completion. */
+function load(fake: ReturnType<typeof createFakeBrowser>, tabId: number, url: string): void {
+  fake.emitBeforeNavigate({ tabId, frameId: 0, url });
+  fake.emitCommitted({ tabId, frameId: 0, url });
+  fake.emitCompleted({ tabId, frameId: 0, url });
+}
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
