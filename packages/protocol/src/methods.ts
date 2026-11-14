@@ -56,6 +56,12 @@ export interface ProbeResult {
 export const READ_PAGE_MAX_CHARS = 50_000;
 /** The most matching lines a read_page with find shows. */
 export const READ_PAGE_MAX_MATCHES = 20;
+/**
+ * The most entries read_page's finds takes. A reply holds one tree more, and a tree's JSON is at
+ * most twice its length (only `"` and `\` are escaped, to 2 units; `quote` escapes the rest), so
+ * it stays under the background's cap of 2,000,000 units on a page's reply.
+ */
+export const READ_PAGE_MAX_FINDS = 18;
 /** The longest text a view of the page carries: its tree or changed lines, placeholders included. */
 export const PAGE_VIEW_MAX_CHARS = 8_000;
 
@@ -98,6 +104,13 @@ export interface FoundLines {
   shown: number;
   matches: number;
   searched: number;
+}
+
+/** A read_page find's answer: the tree of its matching lines and what it counted. */
+export interface FoundTree {
+  tree: string;
+  truncated: boolean;
+  found: FoundLines;
 }
 
 /** get_page_text's cut when the request gives none. */
@@ -350,9 +363,14 @@ export interface Methods {
       ref?: string;
       find?: string;
       role?: string;
+      /** Further finds the same walk answers; only together with `find`. */
+      finds?: { find: string; role?: string }[];
     };
-    /** `found` is there exactly when `find` was given. */
-    result: { tree: string; truncated: boolean; found?: FoundLines };
+    /**
+     * `found` is there exactly when `find` was given, and answers it. `finds` is there exactly when
+     * `finds` was given: one answer per entry, in order.
+     */
+    result: { tree: string; truncated: boolean; found?: FoundLines; finds?: FoundTree[] };
   };
   get_page_text: {
     params: { tabId: number; maxChars?: number; offset?: number };
@@ -522,6 +540,14 @@ export function fillChars(fields: readonly { value: FillValue }[]): number {
 
 function stringChars(text: string): number {
   return Math.max(1, text.length);
+}
+
+/**
+ * Whether the text is empty or only whitespace as read_page cleans text, NEL included: a find or
+ * role read_page refuses.
+ */
+export function onlySpaces(text: string): boolean {
+  return /^[\s\u0085]*$/.test(text);
 }
 
 /**

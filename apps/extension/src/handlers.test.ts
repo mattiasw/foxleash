@@ -5615,6 +5615,124 @@ describe("read_page", { timeout: 10000 }, () => {
     }
   });
 
+  it("asks the page with finds for each find's answer and returns them as fresh objects", async () => {
+    const { call, pageCalls, replyWith } = setup();
+    const found = { shown: 1, matches: 3, searched: 40, extra: "page text" };
+    const second = { tree: "", truncated: false, found: { shown: 0, matches: 0, searched: 40 } };
+    const third = {
+      tree: "main\n  heading",
+      truncated: false,
+      found: { ...found, shown: 2, matches: 2 },
+    };
+    replyWith(async () => ({
+      tree: "main\n  link",
+      truncated: true,
+      found,
+      finds: [{ ...second, extra: 1 }, third],
+      extra: 1,
+    }));
+    const finds = [
+      { find: "b", other: true },
+      { find: "c", role: "heading" },
+    ];
+    const result = await call("s1", "read_page", { tabId: 3, find: "link", depth: 2, finds });
+    assert.deepEqual(pageCalls, [
+      {
+        session: "s1",
+        tabId: 3,
+        type: "read_page",
+        params: {
+          filter: "all",
+          depth: 2,
+          find: "link",
+          finds: [{ find: "b" }, { find: "c", role: "heading" }],
+        },
+      },
+    ]);
+    assert.deepEqual(result, {
+      tree: "main\n  link",
+      truncated: true,
+      found: { shown: 1, matches: 3, searched: 40 },
+      finds: [
+        second,
+        {
+          tree: "main\n  heading",
+          truncated: false,
+          found: { shown: 2, matches: 2, searched: 40 },
+        },
+      ],
+    });
+    assert.ok(typeof result === "object" && result !== null);
+    const parts: unknown = Reflect.get(result, "finds");
+    assert.ok(Array.isArray(parts));
+    assert.deepEqual(Object.keys(parts[0]), ["tree", "truncated", "found"]);
+    assert.notEqual(parts[1], third);
+    assert.notEqual(Reflect.get(parts[1], "found"), third.found);
+  });
+
+  it("refuses bad finds with their sentence before asking the page", async () => {
+    const { call, pageCalls } = setup();
+    const cases: [Record<string, unknown>, string][] = [
+      [{ finds: [{ find: "b" }] }, "read_page takes finds only together with find."],
+      [{ find: "a", finds: [] }, "read_page needs finds to be a list of 1 to 18 entries."],
+      [
+        { find: "a", finds: [{ find: " " }] },
+        "read_page needs each entry of finds to have a find that is text that is not only spaces.",
+      ],
+      [
+        { find: "a", finds: [{ find: "b", role: "" }] },
+        "read_page needs each entry of finds to have a role name as its role, such as link or heading.",
+      ],
+    ];
+    for (const [options, message] of cases) {
+      await assert.rejects(call("s1", "read_page", { tabId: 3, ...options }), {
+        code: "invalid_params",
+        message,
+      });
+    }
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("refuses with finds a reply whose finds it cannot read as page_error", async () => {
+    const { call, replyWith } = setup();
+    const found = { shown: 1, matches: 1, searched: 1 };
+    const part = { tree: "main", truncated: false, found };
+    const withFinds = (finds: unknown): unknown => ({ ...part, finds });
+    const replies: unknown[] = [
+      part,
+      withFinds(null),
+      withFinds(part),
+      withFinds([]),
+      withFinds([part]),
+      withFinds([part, part, part]),
+      // biome-ignore lint/suspicious/noSparseArray: a hole in the reply is a case of its own
+      withFinds([part, ,]),
+      withFinds([part, null]),
+      withFinds([part, "main"]),
+      withFinds([part, { tree: 1, truncated: false, found }]),
+      withFinds([part, { tree: "a".repeat(READ_PAGE_MAX_CHARS + 1), truncated: true, found }]),
+      withFinds([part, { tree: "main", found }]),
+      withFinds([part, { tree: "main", truncated: false }]),
+      withFinds([part, { tree: "main", truncated: false, found: { ...found, shown: 2 } }]),
+      withFinds([
+        part,
+        Object.assign(Object.create({ found }), { tree: "main", truncated: false }),
+      ]),
+      Object.assign(Object.create({ finds: [part, part] }), part),
+    ];
+    for (const [index, reply] of replies.entries()) {
+      replyWith(async () => reply);
+      await assert.rejects(
+        call("s1", "read_page", { tabId: 3, find: "main", finds: [{ find: "a" }, { find: "b" }] }),
+        {
+          code: "page_error",
+          message: "Foxleash could not complete the request in the page in tab 3.",
+        },
+        String(index),
+      );
+    }
+  });
+
   it("passes on no counts without find", async () => {
     const { call, replyWith } = setup();
     replyWith(async () => ({
@@ -8555,11 +8673,11 @@ describe("the view of the page that results end with", { timeout: 10000 }, () =>
       [{ ref: "a1" }, false],
       [{ depth: 2 }, false],
       [{ find: "a" }, false],
+      [{ find: "a", finds: [{ find: "b" }] }, false],
     ] as const) {
       const { call, click, replyWith, tab } = await viewed();
-      replyWith(async (type) =>
-        type === "read_page" ? { tree: TREE, truncated: false, found } : CLICKED,
-      );
+      const part = { tree: TREE, truncated: false, found };
+      replyWith(async (type) => (type === "read_page" ? { ...part, finds: [part] } : CLICKED));
       await call("s1", "read_page", { tabId: tab.id, ...params });
       const view = ((await click()) as { view?: { kind: string } }).view;
       assert.equal(view?.kind, recorded ? "unchanged" : "tree", JSON.stringify(params));

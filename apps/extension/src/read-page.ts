@@ -1,4 +1,4 @@
-import type { FoundLines } from "@foxleash/protocol";
+import type { FoundLines, FoundTree } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import {
   detailsSummaryOf,
@@ -10,6 +10,7 @@ import {
 import { PageError } from "./page-messages.ts";
 import {
   createLineFinder,
+  createLineFinders,
   createTextBuffer,
   createTreeLines,
   explicitRole,
@@ -114,16 +115,21 @@ const VALUE_ROLES: ReadonlySet<string> = new Set([
 ]);
 const BUTTON_INPUTS: ReadonlySet<string> = new Set(["submit", "reset", "button"]);
 const SECTIONING = "article, aside, main, nav, section";
+// In a content script an instanceof on a page element costs as much as about a dozen property
+// reads, so the checks on each element test its local name or namespace first.
+const HTML_NAMESPACE = "http://www.w3.org/1999/xhtml";
+const SVG_NAMESPACE = "http://www.w3.org/2000/svg";
+const ELEMENT_NODE = 1;
+const TEXT_NODE = 3;
 
 /** read_page in the page: the tree of the document, or of the element `ref` names. */
 export function readPage(
   params: Record<string, unknown>,
   page: PageMemory,
-): { tree: string; truncated: boolean; found?: FoundLines } {
+): { tree: string; truncated: boolean; found?: FoundLines; finds?: FoundTree[] } {
   const options = readPageOptions(params);
   if (typeof options === "string") throw new PageError("invalid_params", options);
-  const tree =
-    options.find === undefined ? createTreeLines() : createLineFinder(options.find, options.role);
+  const tree = treeLinesFor(options);
   if (options.ref === undefined) {
     const start = document.body ?? document.documentElement;
     if (start !== null) {
@@ -156,6 +162,12 @@ export function readPage(
   return tree.result();
 }
 
+function treeLinesFor(options: ReadPageOptions): TreeLines {
+  if (options.find === undefined) return createTreeLines();
+  if (options.finds === undefined) return createLineFinder(options.find, options.role);
+  return createLineFinders(options.find, options.role, options.finds);
+}
+
 /**
  * Whether the page turned a remembered password field into another kind, so a screenshot must
  * hide the text of every input.
@@ -165,6 +177,7 @@ export function passwordFieldsRevealed(page: Pick<PageMemory, "passwordFields">)
 } {
   for (const element of documentElements()) {
     if (
+      element.localName === "input" &&
       element instanceof HTMLInputElement &&
       page.passwordFields.has(element) &&
       element.type !== "password"
@@ -408,13 +421,17 @@ export function walkChildren(
     if (step === undefined) return;
     if ("leave" in step) {
       walker.leave(step.leave);
-    } else if (step.node.nodeType === Node.TEXT_NODE) {
+    } else if (step.node.nodeType === TEXT_NODE) {
       walker.text(step.node.nodeValue ?? "");
-    } else if (step.node instanceof Element && walker.enter(step.node)) {
+    } else if (isElementNode(step.node) && walker.enter(step.node)) {
       steps.push({ leave: step.node });
       pushChildren(steps, step.node, children);
     }
   }
+}
+
+function isElementNode(node: Node): node is Element {
+  return node.nodeType === ELEMENT_NODE;
 }
 
 function pushChildren(
@@ -441,7 +458,7 @@ export function childrenOf(element: Element): ArrayLike<Node> {
   }
   const shadow = shadowRootOf(element);
   if (shadow !== null) return shadow.childNodes;
-  if (element instanceof HTMLSlotElement) {
+  if (element.localName === "slot" && element instanceof HTMLSlotElement) {
     const assigned = element.assignedNodes();
     if (assigned.length > 0) return assigned;
   }
@@ -451,9 +468,11 @@ export function childrenOf(element: Element): ArrayLike<Node> {
 /** read_page's children of an element: those of `childrenOf` that Firefox renders. */
 function renderedChildrenOf(element: Element): ArrayLike<Node> {
   // Firefox's drop-down lists the options wherever they sit in the select, and nothing else.
-  if (element instanceof HTMLSelectElement) return element.options;
+  if (element.localName === "select" && element instanceof HTMLSelectElement) {
+    return element.options;
+  }
   const nodes = childrenOf(element);
-  if (element instanceof SVGElement) {
+  if (isSvgElement(element)) {
     return Array.from(nodes).filter((node) => svgRendersChild(element, node));
   }
   return rendersChildren(element) ? nodes : [];
@@ -462,14 +481,27 @@ function renderedChildrenOf(element: Element): ArrayLike<Node> {
 /** Whether Firefox renders the children of an element outside SVG. */
 function rendersChildren(element: Element): boolean {
   // Firefox lays out canvas fallback, but never shows it.
-  if (element instanceof HTMLCanvasElement) return false;
+  if (element.localName === "canvas" && element instanceof HTMLCanvasElement) return false;
   // An object or embed that shows its data gives its children no box.
-  if (element instanceof HTMLObjectElement || element instanceof HTMLEmbedElement) {
+  if (
+    (element.localName === "object" && element instanceof HTMLObjectElement) ||
+    (element.localName === "embed" && element instanceof HTMLEmbedElement)
+  ) {
     return hasRects(element);
   }
   // Firefox's drop-down shows an option's label instead of its content.
-  if (element instanceof HTMLOptionElement) return (element.getAttribute("label") ?? "") === "";
-  return !(element instanceof HTMLElement && element.localName === "wbr");
+  if (element.localName === "option" && element instanceof HTMLOptionElement) {
+    return (element.getAttribute("label") ?? "") === "";
+  }
+  return !(element.localName === "wbr" && isHtmlElement(element));
+}
+
+function isHtmlElement(element: Element): element is HTMLElement {
+  return element.namespaceURI === HTML_NAMESPACE;
+}
+
+function isSvgElement(element: Element): element is SVGElement {
+  return element.namespaceURI === SVG_NAMESPACE && element instanceof SVGElement;
 }
 
 function hasRects(holder: Element): boolean {
@@ -522,7 +554,11 @@ export function focusedElement(): Element | null {
  */
 export function notePasswordFields(page: Pick<PageMemory, "passwordFields">): void {
   for (const element of documentElements()) {
-    if (element instanceof HTMLInputElement && element.type === "password") {
+    if (
+      element.localName === "input" &&
+      element instanceof HTMLInputElement &&
+      element.type === "password"
+    ) {
       page.passwordFields.add(element);
     }
   }
@@ -546,7 +582,13 @@ export function* documentElements(from: ParentNode = document): Generator<Elemen
 /** True for an element that is hidden with all it contains, whatever its style. */
 function skipped(element: Element): boolean {
   if (isAriaHidden(element) || isInert(element)) return true;
-  if (element instanceof HTMLInputElement && element.type === "hidden") return true;
+  if (
+    element.localName === "input" &&
+    element instanceof HTMLInputElement &&
+    element.type === "hidden"
+  ) {
+    return true;
+  }
   return UNREAD.has(element.localName);
 }
 
@@ -555,7 +597,7 @@ function isAriaHidden(element: Element): boolean {
 }
 
 function isInert(element: Element): boolean {
-  return element instanceof HTMLElement && element.inert;
+  return isHtmlElement(element) && element.inert;
 }
 
 /** True when the element or an ancestor, shadow hosts included, hides everything inside it. */
@@ -582,7 +624,7 @@ function rendersNothing(element: Element, style: CSSStyleDeclaration): boolean {
   // In SVG, display contents shows nothing, and Firefox may skip an element for its conditional
   // attributes while it stays visible.
   return (
-    element instanceof SVGElement &&
+    isSvgElement(element) &&
     (style.display === "contents" ||
       element.hasAttribute("systemLanguage") ||
       element.hasAttribute("requiredExtensions"))
@@ -690,7 +732,7 @@ function laidOut(start: Element, startStyle: CSSStyleDeclaration): boolean {
 
 /** The select that lists `element` among its options, if it is such an option. */
 function listingSelect(element: Element): HTMLSelectElement | undefined {
-  if (!(element instanceof HTMLOptionElement)) return undefined;
+  if (!(element.localName === "option" && element instanceof HTMLOptionElement)) return undefined;
   const select = element.closest("select");
   return select instanceof HTMLSelectElement && Array.from(select.options).includes(element)
     ? select
@@ -701,10 +743,16 @@ function listingSelect(element: Element): HTMLSelectElement | undefined {
 function rendersChildOf(holder: Element, child: Element): boolean {
   if (holder.localName === "br") return false;
   // The same answers as the lists below, without building a list per call.
-  if (holder instanceof SVGElement) {
+  if (isSvgElement(holder)) {
     return child.parentNode === holder && svgRendersChild(holder, child);
   }
-  if (holder instanceof HTMLSlotElement && child.assignedSlot === holder) return true;
+  if (
+    holder.localName === "slot" &&
+    holder instanceof HTMLSlotElement &&
+    child.assignedSlot === holder
+  ) {
+    return true;
+  }
   const nodes = renderedChildrenOf(holder);
   // A node is always among its parent's childNodes, the same object on every call.
   if (nodes === child.parentNode?.childNodes) return true;
@@ -721,7 +769,7 @@ function rendersChildOf(holder: Element, child: Element): boolean {
  * namespace included: it has no such box, but a page may still give that pseudo a style.
  */
 export function detailsContent(element: Element, own: TextState): TextState | undefined {
-  if (!(element instanceof HTMLDetailsElement)) return undefined;
+  if (!(element.localName === "details" && element instanceof HTMLDetailsElement)) return undefined;
   // Before Firefox 143 there is no ::details-content, and no page can style that box.
   if (!CSS.supports("selector(::details-content)")) return own;
   const style = getComputedStyle(element, "::details-content");
@@ -783,7 +831,7 @@ function roleOf(element: Element, page: PageMemory): string | undefined {
 
 /** HTML-AAM's role for the common HTML elements. */
 function implicitRole(element: Element, page: PageMemory): string | undefined {
-  if (!(element instanceof HTMLElement)) return undefined;
+  if (!isHtmlElement(element)) return undefined;
   const heading = HEADING.exec(element.localName);
   if (heading !== null) return "heading";
   switch (element.localName) {
@@ -793,11 +841,17 @@ function implicitRole(element: Element, page: PageMemory): string | undefined {
     case "summary":
       return "button";
     case "input":
-      return element instanceof HTMLInputElement ? inputRole(element) : undefined;
+      return element.localName === "input" && element instanceof HTMLInputElement
+        ? inputRole(element)
+        : undefined;
     case "textarea":
       return "textbox";
     case "select":
-      return element instanceof HTMLSelectElement && isListBox(element) ? "listbox" : "combobox";
+      return element.localName === "select" &&
+        element instanceof HTMLSelectElement &&
+        isListBox(element)
+        ? "listbox"
+        : "combobox";
     case "option":
       return "option";
     case "img":
@@ -888,7 +942,11 @@ function isInteractive(element: Element, role: string | undefined): boolean {
     case "summary":
       return true;
     case "input":
-      return !(element instanceof HTMLInputElement && element.type === "hidden");
+      return !(
+        element.localName === "input" &&
+        element instanceof HTMLInputElement &&
+        element.type === "hidden"
+      );
   }
   if (role !== undefined && INTERACTIVE_ROLES.has(role)) return true;
   const explicit = explicitRole(element.getAttribute("role"));
@@ -896,13 +954,13 @@ function isInteractive(element: Element, role: string | undefined): boolean {
   if (isEditingHost(element)) return true;
   return (
     element.hasAttribute("tabindex") &&
-    (element instanceof HTMLElement || element instanceof SVGElement) &&
+    (isHtmlElement(element) || isSvgElement(element)) &&
     element.tabIndex >= 0
   );
 }
 
 export function isEditingHost(element: Element): boolean {
-  if (!(element instanceof HTMLElement) || !element.isContentEditable) return false;
+  if (!isHtmlElement(element) || !element.isContentEditable) return false;
   const parent = element.parentElement;
   return !(parent instanceof HTMLElement && parent.isContentEditable);
 }
@@ -948,7 +1006,7 @@ function labelledByText(element: Element): string {
 
 /** The name an element gets from its own markup, or undefined to go on with the content. */
 function ownName(element: Element, page: PageMemory, startState?: TextState): string | undefined {
-  if (element instanceof HTMLInputElement) {
+  if (element.localName === "input" && element instanceof HTMLInputElement) {
     return first(
       labelsText(element.labels, startState),
       ...(element.type === "image" ? [element.getAttribute("alt")] : []),
@@ -963,14 +1021,17 @@ function ownName(element: Element, page: PageMemory, startState?: TextState): st
       element.getAttribute("placeholder"),
     );
   }
-  if (element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
+  if (
+    (element.localName === "textarea" && element instanceof HTMLTextAreaElement) ||
+    (element.localName === "select" && element instanceof HTMLSelectElement)
+  ) {
     return first(
       labelsText(element.labels, startState),
       element.getAttribute("title"),
       element.getAttribute("placeholder"),
     );
   }
-  if (element instanceof HTMLOptionElement) {
+  if (element.localName === "option" && element instanceof HTMLOptionElement) {
     return nonEmpty(element.getAttribute("label")?.trim() ?? "");
   }
   switch (element.localName) {
@@ -982,7 +1043,9 @@ function ownName(element: Element, page: PageMemory, startState?: TextState): st
     case "figure":
       return childText(element, "figcaption");
     case "table":
-      return element instanceof HTMLTableElement && element.caption !== null
+      return element.localName === "table" &&
+        element instanceof HTMLTableElement &&
+        element.caption !== null
         ? nonEmpty(
             collectText(
               element.caption,
@@ -1139,10 +1202,19 @@ function statesOf(
   state?: TextState,
 ): LineStates {
   const states: LineStates = {};
-  if (element instanceof HTMLInputElement && element.type === "file") states.file = true;
+  if (
+    element.localName === "input" &&
+    element instanceof HTMLInputElement &&
+    element.type === "file"
+  ) {
+    states.file = true;
+  }
   const checked = checkedOf(element);
   if (checked !== undefined) states.checked = checked;
-  if ((element instanceof HTMLOptionElement && element.selected) || ariaTrue(element, "selected")) {
+  if (
+    (element.localName === "option" && element instanceof HTMLOptionElement && element.selected) ||
+    ariaTrue(element, "selected")
+  ) {
     states.selected = true;
   }
   const expanded = element.getAttribute("aria-expanded")?.trim().toLowerCase();
@@ -1150,7 +1222,8 @@ function statesOf(
   if (ariaTrue(element, "pressed")) states.pressed = true;
   if (element.matches(":disabled") || ariaTrue(element, "disabled")) states.disabled = true;
   if (
-    ((element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) &&
+    (((element.localName === "input" && element instanceof HTMLInputElement) ||
+      (element.localName === "textarea" && element instanceof HTMLTextAreaElement)) &&
       element.readOnly) ||
     ariaTrue(element, "readonly")
   ) {
@@ -1163,7 +1236,12 @@ function statesOf(
   if (role === "heading") states.level = headingLevel(element);
   const field = fieldOf(element, role, page, state);
   if (field !== undefined) states.field = field;
-  if (role === "link" && element instanceof HTMLAnchorElement && element.hasAttribute("href")) {
+  if (
+    role === "link" &&
+    element.localName === "a" &&
+    element instanceof HTMLAnchorElement &&
+    element.hasAttribute("href")
+  ) {
     states.href = linkAddress(element.href, document.URL);
   }
   return states;
@@ -1171,6 +1249,7 @@ function statesOf(
 
 function checkedOf(element: Element): "checked" | "mixed" | undefined {
   if (
+    element.localName === "input" &&
     element instanceof HTMLInputElement &&
     (element.type === "checkbox" || element.type === "radio")
   ) {
@@ -1188,9 +1267,9 @@ function ariaTrue(element: Element, state: string): boolean {
 
 function isRequired(element: Element): boolean {
   return (
-    (element instanceof HTMLInputElement ||
-      element instanceof HTMLSelectElement ||
-      element instanceof HTMLTextAreaElement) &&
+    ((element.localName === "input" && element instanceof HTMLInputElement) ||
+      (element.localName === "select" && element instanceof HTMLSelectElement) ||
+      (element.localName === "textarea" && element instanceof HTMLTextAreaElement)) &&
     element.required
   );
 }
@@ -1216,16 +1295,22 @@ function fieldOf(
   page: PageMemory,
   state?: TextState,
 ): LineStates["field"] {
-  if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+  if (
+    (element.localName === "input" && element instanceof HTMLInputElement) ||
+    (element.localName === "textarea" && element instanceof HTMLTextAreaElement)
+  ) {
     if (isProtected(element, page)) return { protected: true, filled: element.value !== "" };
     if (element.type === "file") return undefined;
     if (state !== undefined && !state.visible) return undefined;
-    if (element instanceof HTMLTextAreaElement || VALUE_ROLES.has(role)) {
+    if (
+      (element.localName === "textarea" && element instanceof HTMLTextAreaElement) ||
+      VALUE_ROLES.has(role)
+    ) {
       return { value: element.value };
     }
     return undefined;
   }
-  if (element instanceof HTMLSelectElement) {
+  if (element.localName === "select" && element instanceof HTMLSelectElement) {
     if (state !== undefined && !state.visible) return undefined;
     const selected = Array.from(element.selectedOptions);
     // Firefox draws a closed drop-down's selected option's whole label however the option, its

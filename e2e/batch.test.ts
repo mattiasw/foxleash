@@ -164,6 +164,79 @@ describe("batch in real Firefox", () => {
     );
   });
 
+  test("a batch of finds on one tab returns what each find returns alone", async () => {
+    const large = await open("/read-large", TITLES.readLarge);
+    const steps = [
+      { find: "Link 2000" },
+      { find: "link 1", role: "link" },
+      { find: "ITEM 1" },
+      { find: "not on the page" },
+    ];
+    const joined = await findsInBatch(large.tabId, steps);
+    assert.deepEqual(joined, await findsAlone(large.tabId, steps));
+    assert.equal(joined.at(-1), "No line matches. Foxleash searched 4,001 lines.");
+  });
+
+  test("a batch of finds with other filters and depths gives each find its own result", async () => {
+    const large = await open("/read-large", TITLES.readLarge);
+    const steps = [
+      { find: "link 1" },
+      { find: "link 1", filter: "interactive" },
+      { depth: 1, find: "Link 2000" },
+    ];
+    const results = await findsInBatch(large.tabId, steps);
+    assert.deepEqual(results, await findsAlone(large.tabId, steps));
+    const links = Array.from(
+      { length: 10 },
+      (_, index) => `link "Link ${1000 + 100 * index}" [*] href="/a"`,
+    );
+    const second = results.indexOf("Step 2 of 3, read_page: ok");
+    assert.equal(withoutRefs(results[second + 1] ?? ""), links.join("\n"));
+    assert.deepEqual(results.slice(second + 2), [
+      "Step 3 of 3, read_page: ok",
+      "No line matches. Foxleash searched 1 line.",
+    ]);
+  });
+
+  test("a batch of finds with depth ends each cut line with the cut mark", async () => {
+    const form = await open("/read-form", TITLES.readForm);
+    const steps = [
+      { find: "Email", depth: 2 },
+      { find: "Sign in", depth: 2 },
+    ];
+    const results = await findsInBatch(form.tabId, steps);
+    assert.deepEqual(results, await findsAlone(form.tabId, steps));
+    const second = results.indexOf("Step 2 of 2, read_page: ok");
+    assert.equal(results.length, second + 2, results.join("\n"));
+    assert.equal(
+      withoutRefs(results[second + 1] ?? ""),
+      ["main [*]", ' heading "Sign in" [*] level=2', ' form "Sign in" [*] …'].join("\n"),
+    );
+  });
+
+  /** The texts of a batch of read_page steps in the tab, each frame's content without its frame. */
+  async function findsInBatch(tabId: number, steps: Record<string, unknown>[]): Promise<string[]> {
+    const result = await harness.call(session, "batch", {
+      steps: steps.map((args) => ({ tool: "read_page", args: { tabId, ...args } })),
+    });
+    assert.equal(result.isError, false, result.texts.join("\n"));
+    return result.texts.map(unframed);
+  }
+
+  /** What the same steps return as read_page calls of their own, each after its batch header. */
+  async function findsAlone(tabId: number, steps: Record<string, unknown>[]): Promise<string[]> {
+    const texts: string[] = [];
+    for (const [index, args] of steps.entries()) {
+      const result = await harness.call(session, "read_page", { tabId, ...args });
+      assert.equal(result.isError, false, result.texts.join("\n"));
+      texts.push(
+        `Step ${index + 1} of ${steps.length}, read_page: ok`,
+        ...result.texts.map(unframed),
+      );
+    }
+    return texts;
+  }
+
   /** Opens a fixture page in a new tab, under a query of its own, and reads it. */
   async function open(path: string, title: string): Promise<Page> {
     opened += 1;
@@ -189,6 +262,15 @@ describe("batch in real Firefox", () => {
     return log.filter((entry) => typeof entry === "string" && /^(click|dblclick):/.test(entry));
   }
 });
+
+/** The content of an untrusted frame, whose id differs per result; any other text as it is. */
+function unframed(text: string): string {
+  return untrustedContent(text) ?? text;
+}
+
+function withoutRefs(tree: string): string {
+  return tree.replaceAll(new RegExp(`\\[${REF}\\]`, "g"), "[*]");
+}
 
 function refOf(tree: string, line: string): string {
   const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];

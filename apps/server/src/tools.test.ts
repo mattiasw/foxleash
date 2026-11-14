@@ -10,16 +10,19 @@ import {
   PAGE_VIEW_MAX_CHARS,
   type Params,
   READ_PAGE_MAX_CHARS,
+  READ_PAGE_MAX_FINDS,
   UPLOAD_CHUNK_BYTES,
 } from "@foxleash/protocol";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { CallToolResult } from "@modelcontextprotocol/sdk/types.js";
+import { MAX_BATCH_STEPS } from "./batch.ts";
 import { BridgeError, HostError } from "./bridge.ts";
 import { NATIVE_MESSAGE_LIMIT } from "./framing.ts";
 import { createMcpServer } from "./mcp.ts";
 import {
   actLoaded,
+  findStepOf,
   prettyJsonLength,
   SCREENSHOT_NOTE,
   someFieldFailed,
@@ -39,7 +42,7 @@ interface Harness {
   calls: Call[];
 }
 
-type Answer = (method: MethodName) => unknown;
+type Answer = (method: MethodName, params: unknown) => unknown;
 
 // Every frame id has this length, so a frame's size does not depend on its id.
 const SOME_ID = "0123456789abcdef";
@@ -4190,6 +4193,309 @@ describe("batch", () => {
   }
 });
 
+describe("batch of read_page finds", () => {
+  const UNREADABLE = "Firefox returned a page tree Foxleash cannot read.";
+
+  /** A find's answer on a fake page: none for "none", 25 matches for "many", else one line. */
+  function found(query: unknown): unknown {
+    const find = String(record(query).find);
+    if (find === "none")
+      return { tree: "", truncated: false, found: { shown: 0, matches: 0, searched: 9 } };
+    const role = record(query).role ?? "text";
+    if (find === "many") {
+      const lines = Array.from({ length: 20 }, (_, index) => `${role} "many ${index}"`);
+      return {
+        tree: lines.join("\n"),
+        truncated: false,
+        found: { shown: 20, matches: 25, searched: 90 },
+      };
+    }
+    return {
+      tree: `${role} "${find}"`,
+      truncated: find === "cut",
+      found: { shown: 1, matches: 1, searched: 9 },
+    };
+  }
+
+  /** The page's answer to read_page, with finds when asked for them and `withFinds`. */
+  function page(withFinds: boolean): Answer {
+    return (_method, params) => {
+      const finds = record(params).finds;
+      const answer = record(found(params));
+      return withFinds && Array.isArray(finds) ? { ...answer, finds: finds.map(found) } : answer;
+    };
+  }
+
+  function step(args: Record<string, unknown>): { tool: string; args: Record<string, unknown> } {
+    return { tool: "read_page", args: { tabId: 3, ...args } };
+  }
+
+  /** The output's texts with each untrusted frame's id made the same. */
+  function sameIds(output: unknown): string[] {
+    return texts(output).map((each) => {
+      const match = UNTRUSTED_FRAME.exec(each);
+      return match === null ? each : untrusted(match[2] ?? "", () => SOME_ID);
+    });
+  }
+
+  /** What the step's own read_page call returns, after its header. */
+  async function alone(args: Record<string, unknown>): Promise<string[]> {
+    const { client } = await start(page(true));
+    const output = await client.callTool({ name: "read_page", arguments: { tabId: 3, ...args } });
+    return sameIds(output);
+  }
+
+  it("sends a batch's longest run of finds in as many requests as finds needs", LIMIT, async () => {
+    const steps = Array.from({ length: MAX_BATCH_STEPS }, (_, index) => ({
+      find: `find ${index}`,
+    }));
+    const { client, calls } = await start(page(true));
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: steps.map(step) },
+    });
+    assert.equal(output.isError, undefined);
+    // The first request answers 1 + READ_PAGE_MAX_FINDS steps; the one left is read alone.
+    assert.equal(MAX_BATCH_STEPS, READ_PAGE_MAX_FINDS + 2);
+    assert.deepEqual(
+      calls.map(({ params }) => params),
+      [
+        { tabId: 3, find: "find 0", finds: steps.slice(1, READ_PAGE_MAX_FINDS + 1) },
+        { tabId: 3, find: `find ${READ_PAGE_MAX_FINDS + 1}` },
+      ],
+    );
+    const expected: string[] = [];
+    for (const [index, args] of steps.entries()) {
+      expected.push(
+        `Step ${index + 1} of ${MAX_BATCH_STEPS}, read_page: ok`,
+        ...(await alone(args)),
+      );
+    }
+    assert.deepEqual(sameIds(output), expected);
+  });
+
+  it(
+    "reads consecutive finds on one tab with one request, each step as it reads alone",
+    LIMIT,
+    async () => {
+      const steps = [
+        { find: "many", role: "link", depth: 2 },
+        { find: "a", depth: 2 },
+        { find: "none", role: "link", depth: 2 },
+        { find: "many", depth: 2 },
+        { find: "cut", role: "heading", depth: 2 },
+      ];
+      const { client, calls } = await start(page(true));
+      const output = await client.callTool({
+        name: "batch",
+        arguments: { steps: steps.map(step) },
+      });
+      assert.equal(output.isError, undefined);
+      assert.deepEqual(calls, [
+        {
+          method: "read_page",
+          params: {
+            tabId: 3,
+            depth: 2,
+            find: "many",
+            role: "link",
+            finds: [
+              { find: "a" },
+              { find: "none", role: "link" },
+              { find: "many" },
+              { find: "cut", role: "heading" },
+            ],
+          },
+        },
+      ]);
+      const expected: string[] = [];
+      for (const [index, args] of steps.entries()) {
+        expected.push(`Step ${index + 1} of 5, read_page: ok`, ...(await alone(args)));
+      }
+      assert.deepEqual(sameIds(output), expected);
+      assert.ok(expected.some((each) => each.startsWith("No line matches.")));
+      assert.ok(
+        expected.includes(
+          "5 matching lines are not shown. Narrow find, or read one element with ref.",
+        ),
+      );
+      assert.ok(
+        expected.includes(
+          "5 matching lines are not shown. Narrow find, add role, or read one element with ref.",
+        ),
+      );
+      assert.ok(expected.some((each) => each.startsWith("The page tree was cut")));
+    },
+  );
+
+  it("does not join steps that differ or that must fail alone", LIMIT, async () => {
+    const long = "a".repeat(1_001);
+    const cases: [Record<string, unknown>, Record<string, unknown>][] = [
+      [{ find: "a" }, { tabId: 4, find: "b" }],
+      [{ find: "a" }, { find: "b", filter: "all" }],
+      [
+        { find: "a", filter: "interactive" },
+        { find: "b", filter: "all" },
+      ],
+      [{ find: "a" }, { find: "b", depth: 2 }],
+      [
+        { find: "a", depth: 3 },
+        { find: "b", depth: 2 },
+      ],
+      [{ find: "a" }, { find: "b", ref: "0a1b2c3d-4" }],
+      [
+        { find: "a", ref: "0a1b2c3d-5" },
+        { find: "b", ref: "0a1b2c3d-4" },
+      ],
+      [{ find: "a" }, { find: " \u0085" }],
+      [{ find: " " }, { find: "a" }],
+      [{ find: "a" }, { find: "b", role: " " }],
+      [{ find: "a", role: "\n" }, { find: "b" }],
+      [{ find: "a" }, { find: long }],
+      [{ find: long }, { find: "a" }],
+      [{ find: "a" }, { find: "b", role: long }],
+      [{ find: "a", role: long }, { find: "b" }],
+      [
+        { find: "a", ref: long },
+        { find: "b", ref: long },
+      ],
+      [{ find: "a" }, {}],
+      [{}, { find: "a" }],
+    ];
+    for (const [first, next] of cases) {
+      const { client, calls } = await start(page(true));
+      await client.callTool({ name: "batch", arguments: { steps: [step(first), step(next)] } });
+      assert.equal(calls.length, 2, JSON.stringify([first, next]));
+      assert.ok(calls.every((call) => !Object.hasOwn(record(call.params), "finds")));
+    }
+  });
+
+  it("joins finds, roles and refs of 1,000 characters", LIMIT, async () => {
+    const most = "a".repeat(1_000);
+    const { client, calls } = await start(page(true));
+    await client.callTool({
+      name: "batch",
+      arguments: {
+        steps: [
+          step({ find: most, role: most, ref: most }),
+          step({ find: "b", role: most, ref: most }),
+        ],
+      },
+    });
+    assert.deepEqual(calls, [
+      {
+        method: "read_page",
+        params: { tabId: 3, ref: most, find: most, role: most, finds: [{ find: "b", role: most }] },
+      },
+    ]);
+  });
+
+  it("asks again for the steps a reply without finds did not answer", LIMIT, async () => {
+    const steps = [{ find: "a" }, { find: "b", role: "link" }, { find: "c" }];
+    const { client, calls } = await start(page(false));
+    const output = await client.callTool({ name: "batch", arguments: { steps: steps.map(step) } });
+    assert.deepEqual(
+      calls.map((call) => call.params),
+      [
+        { tabId: 3, find: "a", finds: [{ find: "b", role: "link" }, { find: "c" }] },
+        { tabId: 3, find: "b", role: "link", finds: [{ find: "c" }] },
+        { tabId: 3, find: "c" },
+      ],
+    );
+    const expected: string[] = [];
+    for (const [index, args] of steps.entries()) {
+      expected.push(`Step ${index + 1} of 3, read_page: ok`, ...(await alone(args)));
+    }
+    assert.deepEqual(sameIds(output), expected);
+  });
+
+  it(
+    "takes a reply's finds only with one answer for each step after the first",
+    LIMIT,
+    async () => {
+      for (const [finds, requests] of [
+        [[found({ find: "c" })], 2],
+        [[1, 2, 3], 3],
+        [[], 3],
+        ["c", 3],
+        [null, 3],
+      ] as const) {
+        const { client, calls } = await start((_method, params) =>
+          Object.hasOwn(record(params), "finds")
+            ? { ...record(found(params)), finds }
+            : found(params),
+        );
+        const output = await client.callTool({
+          name: "batch",
+          arguments: { steps: [step({ find: "a" }), step({ find: "b" }), step({ find: "c" })] },
+        });
+        assert.equal(output.isError, undefined, JSON.stringify(finds));
+        assert.equal(calls.length, requests, JSON.stringify(finds));
+      }
+    },
+  );
+
+  it("fails a step whose answer in the reply's finds it cannot read", LIMIT, async () => {
+    const { client } = await start((_method, params) => ({
+      ...record(found(params)),
+      finds: [found({ find: "b" }), { tree: 1, truncated: false }],
+    }));
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: [step({ find: "a" }), step({ find: "b" }), step({ find: "c" })] },
+    });
+    assert.equal(output.isError, true);
+    assert.deepEqual(sameIds(output).slice(2), [
+      "Step 2 of 3, read_page: ok",
+      ...(await alone({ find: "b" })),
+      "Step 3 of 3, read_page: failed",
+      UNREADABLE,
+    ]);
+  });
+
+  it("fails the first step with a bridge error and runs no other", LIMIT, async () => {
+    const sentence = "The Foxleash native host did not answer in time.";
+    const { client, calls } = await start(() => {
+      throw new BridgeError(sentence);
+    });
+    const output = await client.callTool({
+      name: "batch",
+      arguments: { steps: [step({ find: "a" }), step({ find: "b" }), step({ find: "c" })] },
+    });
+    assert.equal(calls.length, 1);
+    assert.deepEqual(texts(output), [
+      "Step 1 of 3, read_page: failed",
+      sentence,
+      "Steps 2 to 3 (read_page, read_page) were not run because step 1 failed.",
+    ]);
+  });
+
+  it("reads a step's args only with find and with the types read_page's shape gives", () => {
+    assert.deepEqual(findStepOf({ tabId: 1, find: "a" }), {
+      tabId: 1,
+      filter: undefined,
+      depth: undefined,
+      ref: undefined,
+      find: "a",
+      role: undefined,
+    });
+    const full = { tabId: 1, filter: "interactive", depth: 2, ref: "r", find: "a", role: "link" };
+    assert.deepEqual(findStepOf(full), full);
+    assert.deepEqual(findStepOf({ ...full, filter: "all" }), { ...full, filter: "all" });
+    for (const args of [
+      { tabId: 1 },
+      { tabId: "1", find: "a" },
+      { tabId: 1, find: 1 },
+      { tabId: 1, find: "a", filter: "links" },
+      { tabId: 1, find: "a", depth: "2" },
+      { tabId: 1, find: "a", ref: 1 },
+      { tabId: 1, find: "a", role: 1 },
+    ]) {
+      assert.equal(findStepOf(args), undefined, JSON.stringify(args));
+    }
+  });
+});
+
 /** A fake bridge that answers each method with its own result. */
 function answers(results: Partial<Record<MethodName, unknown>>): Answer {
   return (method) => results[method];
@@ -4228,7 +4534,7 @@ async function start(
   const bridge: ToolBridge = {
     async call<M extends MethodName>(method: M, params: Params<M>): Promise<unknown> {
       calls.push({ method, params });
-      return answer(method);
+      return answer(method, params);
     },
   };
   const server = createMcpServer(

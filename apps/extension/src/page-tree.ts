@@ -1,5 +1,12 @@
-import { type FoundLines, READ_PAGE_MAX_CHARS, READ_PAGE_MAX_MATCHES } from "@foxleash/protocol";
-import { capText, ownField } from "./page-messages.ts";
+import {
+  type FoundLines,
+  type FoundTree,
+  onlySpaces,
+  READ_PAGE_MAX_CHARS,
+  READ_PAGE_MAX_FINDS,
+  READ_PAGE_MAX_MATCHES,
+} from "@foxleash/protocol";
+import { capText, isRecord, ownField } from "./page-messages.ts";
 import { siteOf } from "./site.ts";
 
 export { READ_PAGE_MAX_CHARS };
@@ -13,6 +20,8 @@ export type ReadPageOptions = {
   ref?: string;
   find?: string;
   role?: string;
+  /** Further finds the same walk answers; only together with `find`. */
+  finds?: { find: string; role?: string }[];
 };
 
 /** The states a line can carry; only `value` and `href` hold page text. */
@@ -61,7 +70,12 @@ export interface TreeLines {
   markCut(): void;
   /** True once the walk may stop. */
   readonly full: boolean;
-  result(): { tree: string; truncated: boolean; found?: FoundLines };
+  result(): { tree: string; truncated: boolean; found?: FoundLines; finds?: FoundTree[] };
+}
+
+/** The lines of a read with find. */
+export interface LineFinder extends TreeLines {
+  result(): FoundTree;
 }
 
 export interface TextBuffer {
@@ -248,20 +262,50 @@ export function readPageOptions(params: Record<string, unknown>): ReadPageOption
   }
   const find = ownField(params, "find");
   if (find !== undefined) {
-    if (typeof find !== "string" || clean(find) === "") {
+    if (typeof find !== "string" || onlySpaces(find)) {
       return "read_page needs find to be text that is not only spaces.";
     }
     options.find = find;
   }
   const role = ownField(params, "role");
   if (role !== undefined) {
-    if (typeof role !== "string" || clean(role) === "") {
+    if (typeof role !== "string" || onlySpaces(role)) {
       return "read_page needs role to be a role name, such as link or heading.";
     }
     if (options.find === undefined) return "read_page takes role only together with find.";
     options.role = role;
   }
+  const finds = ownField(params, "finds");
+  if (finds !== undefined) {
+    if (options.find === undefined) return "read_page takes finds only together with find.";
+    const queries = findQueries(finds);
+    if (typeof queries === "string") return queries;
+    options.finds = queries;
+  }
   return options;
+}
+
+/** The entries of read_page's finds as fresh objects, or the sentence that refuses them. */
+function findQueries(finds: unknown): { find: string; role?: string }[] | string {
+  if (!Array.isArray(finds) || finds.length < 1 || finds.length > READ_PAGE_MAX_FINDS) {
+    return `read_page needs finds to be a list of 1 to ${READ_PAGE_MAX_FINDS} entries.`;
+  }
+  const queries: { find: string; role?: string }[] = [];
+  for (const entry of Array.from(finds)) {
+    const find = isRecord(entry) ? ownField(entry, "find") : undefined;
+    if (!isRecord(entry) || typeof find !== "string" || onlySpaces(find)) {
+      return "read_page needs each entry of finds to have a find that is text that is not only spaces.";
+    }
+    const role = ownField(entry, "role");
+    if (role === undefined) {
+      queries.push({ find });
+    } else if (typeof role !== "string" || onlySpaces(role)) {
+      return "read_page needs each entry of finds to have a role name as its role, such as link or heading.";
+    } else {
+      queries.push({ find, role });
+    }
+  }
+  return queries;
 }
 
 /** One line of the tree: `<indent><role> <name> [<ref>] <states>`, one space per level. */
@@ -356,15 +400,55 @@ export function createTreeLines(max: number = READ_PAGE_MAX_CHARS): TreeLines {
 }
 
 /**
+ * The lines of a read with find and finds: each find's lines as its own createLineFinder gives
+ * them, from one walk. The first find's answer is the result, the others' its `finds`, in order.
+ */
+export function createLineFinders(
+  find: string,
+  role: string | undefined,
+  finds: readonly { find: string; role?: string }[],
+  max: number = READ_PAGE_MAX_CHARS,
+): TreeLines {
+  // Every finder gets each line in turn, so the texts of the last line serve them all.
+  let textsLine: Line | undefined;
+  let texts: readonly string[] = [];
+  const textsOf = (line: Line): readonly string[] => {
+    if (line !== textsLine) {
+      textsLine = line;
+      texts = matchTexts(line);
+    }
+    return texts;
+  };
+  const first = createLineFinder(find, role, max, textsOf);
+  const others = finds.map((each) => createLineFinder(each.find, each.role, max, textsOf));
+  const finders = [first, ...others];
+  return {
+    add(line) {
+      for (const finder of finders) finder.add(line);
+      return true;
+    },
+    markCut() {
+      for (const finder of finders) finder.markCut();
+    },
+    get full() {
+      return finders.every((finder) => finder.full);
+    },
+    result: () => ({ ...first.result(), finds: others.map((finder) => finder.result()) }),
+  };
+}
+
+/**
  * The lines of a read with find: each of the first READ_PAGE_MAX_MATCHES matching lines after its
  * ancestor lines, each line written once. Takes every line, so the walk reaches the end of the
- * page and the counts cover all of it.
+ * page and the counts cover all of it. `textsOf` gives the texts a line that has the role is
+ * searched in.
  */
 export function createLineFinder(
   find: string,
   role: string | undefined,
   max: number = READ_PAGE_MAX_CHARS,
-): TreeLines {
+  textsOf: (line: Line) => readonly string[] = matchTexts,
+): LineFinder {
   const query = caseless(clean(find));
   const wanted = role === undefined ? undefined : clean(role).toLowerCase();
   const text = createTreeText(max);
@@ -386,7 +470,8 @@ export function createLineFinder(
     const entry = { line, written: false, cut: false };
     chain.push(entry);
     searched += 1;
-    if (!lineMatches(line, query, wanted)) return true;
+    if (wanted !== undefined && line.role !== wanted) return true;
+    if (!textsOf(line).some((text) => text.includes(query))) return true;
     matches += 1;
     if (matches > READ_PAGE_MAX_MATCHES || text.full) return true;
     for (const each of chain) {
@@ -407,16 +492,17 @@ export function createLineFinder(
 }
 
 /**
- * Whether the text the line shows as its name, unprotected field value or link address contains
- * `query`, and the line has `role` when one is given. Role words, states and refs never match.
+ * The texts a find searches in a line, in lower case: what it shows as its name, unprotected field
+ * value and link address. Role words, states and refs never match.
  */
-function lineMatches(line: Line, query: string, role: string | undefined): boolean {
-  if (role !== undefined && line.role !== role) return false;
+function matchTexts(line: Line): string[] {
   const field = line.states?.field;
   const value = field === undefined || "protected" in field ? undefined : field.value;
-  return [line.name, value, line.states?.href].some(
-    (text) => text !== undefined && caseless(shownText(text)).includes(query),
-  );
+  const texts: string[] = [];
+  for (const text of [line.name, value, line.states?.href]) {
+    if (text !== undefined) texts.push(caseless(shownText(text)));
+  }
+  return texts;
 }
 
 /** Text in lower case, with a final sigma as any other, since lowering it depends on what follows. */

@@ -72,6 +72,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - After `navigate` goes back or forward to a page Firefox loads again, Foxleash now also loads the
   page's address again when the page sends a form with POST after it arrived or does not finish
   loading within 30 seconds (except for an address with a #fragment).
+- `read_page` is faster on large pages: on a page such as a long Wikipedia article, a
+  `read_page` with `find` takes about half the time it did.
+- Several `read_page` finds on one tab in a `batch` read the page once, so such a batch answers
+  about as fast as one find.
 
 ### Fixed
 

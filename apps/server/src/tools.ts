@@ -36,10 +36,12 @@ import {
   type MethodName,
   MIN_WAIT_FOR_MS,
   MIN_WINDOW_SIZE,
+  onlySpaces,
   PAGE_VIEW_MAX_CHARS,
   type Params,
   pageViewOf,
   READ_PAGE_MAX_CHARS,
+  READ_PAGE_MAX_FINDS,
   READ_PAGE_MAX_MATCHES,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_MAX_BYTES,
@@ -477,18 +479,13 @@ export function registerTools(
           ),
       },
     },
-    async ({ tabId, filter, depth, ref, find, role }) => {
-      const params: Params<"read_page"> = { tabId };
-      if (filter !== undefined) params.filter = filter;
-      if (depth !== undefined) params.depth = depth;
-      if (ref !== undefined) params.ref = ref;
-      if (find !== undefined) params.find = find;
-      if (role !== undefined) params.role = role;
-      const called = await callBridge(bridge, "read_page", params);
+    async (args) => {
+      const called = await callBridge(bridge, "read_page", readPageParams(args));
       return called.ok
-        ? treeResult(called.result, find !== undefined, role !== undefined)
+        ? treeResult(called.result, args.find !== undefined, args.role !== undefined)
         : called.error;
     },
+    { joins: findsJoin, callMany: (argsList) => readPageFinds(bridge, argsList) },
   );
   register(
     "get_page_text",
@@ -1122,7 +1119,113 @@ export function registerTools(
 }
 
 /** The batch hooks a tool has besides its shape and callback. */
-type Hooks = Pick<BatchTool<unknown>, "failed" | "loaded">;
+type Hooks = Pick<BatchTool<unknown>, "failed" | "loaded" | "joins" | "callMany">;
+
+// The longest find, role or ref a joined read_page step takes: a request of joined steps
+// then stays far under Firefox's 1 MB per message even when every character is escaped.
+const JOINED_TEXT_MAX = 1_000;
+
+interface ReadPageArgs {
+  tabId: number;
+  filter?: "all" | "interactive" | undefined;
+  depth?: number | undefined;
+  ref?: string | undefined;
+  find?: string | undefined;
+  role?: string | undefined;
+}
+
+/** read_page's bridge params for the args of a direct call or a batch step. */
+function readPageParams({
+  tabId,
+  filter,
+  depth,
+  ref,
+  find,
+  role,
+}: ReadPageArgs): Params<"read_page"> {
+  const params: Params<"read_page"> = { tabId };
+  if (filter !== undefined) params.filter = filter;
+  if (depth !== undefined) params.depth = depth;
+  if (ref !== undefined) params.ref = ref;
+  if (find !== undefined) params.find = find;
+  if (role !== undefined) params.role = role;
+  return params;
+}
+
+/**
+ * Whether two read_page steps can run as one request that walks the page once: both find, in one
+ * tab, with the same filter, depth and ref. A step whose find or role is only spaces runs alone, so
+ * it fails with its own message, and so does one whose find, role or ref is very long.
+ */
+function findsJoin(first: Record<string, unknown>, next: Record<string, unknown>): boolean {
+  const one = findStepOf(first);
+  const two = findStepOf(next);
+  return (
+    one !== undefined &&
+    two !== undefined &&
+    one.tabId === two.tabId &&
+    one.filter === two.filter &&
+    one.depth === two.depth &&
+    one.ref === two.ref &&
+    joinable(one) &&
+    joinable(two)
+  );
+}
+
+/** A read_page step's parsed args, or undefined when they have no find. */
+export function findStepOf(args: Record<string, unknown>): FindStep | undefined {
+  const { tabId, filter, depth, ref, find, role } = args;
+  if (
+    typeof tabId !== "number" ||
+    typeof find !== "string" ||
+    (filter !== undefined && filter !== "all" && filter !== "interactive") ||
+    (depth !== undefined && typeof depth !== "number") ||
+    (ref !== undefined && typeof ref !== "string") ||
+    (role !== undefined && typeof role !== "string")
+  ) {
+    return undefined;
+  }
+  return { tabId, filter, depth, ref, find, role };
+}
+
+interface FindStep extends ReadPageArgs {
+  find: string;
+}
+
+function joinable({ find, role, ref }: FindStep): boolean {
+  return (
+    !onlySpaces(find) &&
+    (role === undefined || !onlySpaces(role)) &&
+    [find, role, ref].every((text) => text === undefined || text.length <= JOINED_TEXT_MAX)
+  );
+}
+
+/**
+ * The results of joined read_page steps from one request: the first step's, and each other step's
+ * from the reply's finds, for as many steps as one request takes. Only the first step's when the
+ * reply has no finds for them, as from an extension that does not know finds. The batch runs the
+ * steps without a result again.
+ */
+async function readPageFinds(
+  bridge: ToolBridge,
+  argsList: Record<string, unknown>[],
+): Promise<[CallToolResult, ...CallToolResult[]]> {
+  const [first, ...others] = argsList.slice(0, READ_PAGE_MAX_FINDS + 1).map(findStepOf);
+  if (first === undefined || !others.every((step) => step !== undefined)) {
+    throw new Error("read_page joined a step without find.");
+  }
+  const params = readPageParams(first);
+  params.finds = others.map(({ find, role }) => (role === undefined ? { find } : { find, role }));
+  const called = await callBridge(bridge, "read_page", params);
+  if (!called.ok) return [called.error];
+  const result = treeResult(called.result, true, first.role !== undefined);
+  const finds = ownOf(called.result, "finds");
+  if (!Array.isArray(finds) || finds.length !== others.length) return [result];
+  return [
+    result,
+    ...others.map((step, index) => treeResult(finds[index], true, step.role !== undefined)),
+  ];
+}
 
 /**
  * Whether fill_form's result has a field that was not filled; also when the result cannot be

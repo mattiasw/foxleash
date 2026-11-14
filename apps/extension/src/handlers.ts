@@ -2,6 +2,7 @@ import {
   type ActAfter,
   DEFAULT_NETWORK_LIMIT,
   DEFAULT_WAIT_FOR_MS,
+  type FoundTree,
   foundLinesOf,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
@@ -914,7 +915,8 @@ export function createHandlers<Handle>({
       truncated,
     );
     if (found === undefined) throw pageError(tabId);
-    return { tree, truncated, found };
+    if (options.finds === undefined) return { tree, truncated, found };
+    return { tree, truncated, found, finds: foundTreesOf(reply, options.finds.length, tabId) };
   }
 
   /** Reads a page's text through the content script, which runs only after the site gate. */
@@ -1817,6 +1819,23 @@ function treeReadOf(reply: unknown, tabId: number): TreeRead {
     throw pageError(tabId);
   }
   return { tree, truncated };
+}
+
+/** The answers in a read_page reply's finds, `count` of them, each checked as a find's reply is. */
+function foundTreesOf(reply: unknown, count: number, tabId: number): FoundTree[] {
+  const finds = isRecord(reply) ? ownField(reply, "finds") : undefined;
+  // The length first: a sparse array can claim billions of entries.
+  if (!Array.isArray(finds) || finds.length !== count) throw pageError(tabId);
+  return Array.from(finds, (part: unknown) => {
+    const { tree, truncated } = treeReadOf(part, tabId);
+    const found = foundLinesOf(
+      isRecord(part) ? ownField(part, "found") : undefined,
+      tree,
+      truncated,
+    );
+    if (found === undefined) throw pageError(tabId);
+    return { tree, truncated, found };
+  });
 }
 
 function pageError(tabId: number): ToolError {

@@ -17,6 +17,20 @@ export interface BatchTool<Extra> {
   failed?(result: CallToolResult): boolean;
   /** Whether the step's result says its tab loaded, or is loading, another page. */
   loaded?(result: CallToolResult): boolean;
+  /**
+   * Whether a step with args `next` can run in one call with the run of steps that starts with a
+   * step with args `first`; both passed the shape. Only for a tool whose steps neither act nor
+   * load a page.
+   */
+  joins?(first: Record<string, unknown>, next: Record<string, unknown>): boolean;
+  /**
+   * Runs two or more joined steps as one call: the results of the first steps, in order, at least
+   * the first one's. The batch runs the steps it got no result for as usual.
+   */
+  callMany?(
+    argsList: Record<string, unknown>[],
+    extra: Extra,
+  ): Promise<[CallToolResult, ...CallToolResult[]]>;
 }
 
 interface BatchStep {
@@ -44,6 +58,8 @@ export async function runBatch<Extra extends { signal: AbortSignal }>(
   let budget = maxBytes - (steps.length * 2 + 1) * NOTE_ALLOWANCE;
   // The tabs an earlier step loaded another page in, with that step's index.
   const loadedIn = new Map<number, number>();
+  // The results a joined call already gave for the steps ahead, in order.
+  const ready: CallToolResult[] = [];
   for (const [index, step] of steps.entries()) {
     if (extra.signal.aborted) {
       content.push(notRunNote(steps, index, "the call was cancelled"));
@@ -57,8 +73,12 @@ export async function runBatch<Extra extends { signal: AbortSignal }>(
       return { content, isError: true };
     }
     const tool = tools.get(step.tool);
-    const viewed = index === steps.length - 1 && view !== false;
-    const result = await runStep(step, tool, extra, viewed);
+    let result = ready.shift();
+    if (result === undefined) {
+      const [first, ...rest] = await runFrom(steps, index, step, tool, extra, view);
+      result = first;
+      ready.push(...rest);
+    }
     const failed = result.isError === true;
     if (!failed && tabId !== undefined && tool?.loaded?.(result) === true) {
       loadedIn.set(tabId, index);
@@ -92,31 +112,91 @@ function tabOf(step: BatchStep): number | undefined {
 }
 
 /**
- * The step's result, with isError set when it failed in any way. Unless `viewed`, a tool whose
- * result ends with a view of the page runs with it left out; a step never gets one it left out.
+ * The results of the step at `index` and, when its tool joins them with it, of the steps right
+ * after it, each with isError set when it failed in any way.
  */
-async function runStep<Extra>(
+async function runFrom<Extra>(
+  steps: readonly BatchStep[],
+  index: number,
   step: BatchStep,
   tool: BatchTool<Extra> | undefined,
   extra: Extra,
+  view: boolean | undefined,
+): Promise<[CallToolResult, ...CallToolResult[]]> {
+  if (tool === undefined) return [errorResult(`${step.tool} is not a tool batch can run.`)];
+  const args = await stepArgs(step, tool, viewedAt(steps, index, view));
+  if (!args.ok) return [args.error];
+  if (tool.joins === undefined || tool.callMany === undefined) {
+    return [await callStep(tool, args.args, extra)];
+  }
+  const argsList = [args.args];
+  for (const [offset, next] of steps.slice(index + 1).entries()) {
+    if (next.tool !== step.tool) break;
+    const nextArgs = await stepArgs(next, tool, viewedAt(steps, index + 1 + offset, view));
+    if (!nextArgs.ok || !tool.joins(args.args, nextArgs.args)) break;
+    argsList.push(nextArgs.args);
+  }
+  if (argsList.length === 1) return [await callStep(tool, args.args, extra)];
+  let results: [CallToolResult, ...CallToolResult[]];
+  try {
+    results = await tool.callMany(argsList, extra);
+  } catch (error: unknown) {
+    return [thrownResult(error)];
+  }
+  const [first, ...rest] = results;
+  return [
+    checked(tool, first),
+    ...rest.slice(0, argsList.length - 1).map((each) => checked(tool, each)),
+  ];
+}
+
+/** Whether the step at `index` is the last one and its result ends with a view of the page. */
+function viewedAt(steps: readonly BatchStep[], index: number, view: boolean | undefined): boolean {
+  return index === steps.length - 1 && view !== false;
+}
+
+/**
+ * The step's args as its shape parses them, or the error result for args it refuses. Unless
+ * `viewed`, a tool whose result ends with a view of the page runs with it left out; a step never
+ * gets one it left out.
+ */
+async function stepArgs<Extra>(
+  step: BatchStep,
+  tool: BatchTool<Extra>,
   viewed: boolean,
-): Promise<CallToolResult> {
-  if (tool === undefined) return errorResult(`${step.tool} is not a tool batch can run.`);
+): Promise<{ ok: true; args: Record<string, unknown> } | { ok: false; error: CallToolResult }> {
   const parsed = await z.object(tool.shape).safeParseAsync(step.args ?? {});
   if (!parsed.success) {
-    return errorResult(`Invalid arguments for ${step.tool}: ${issuesText(parsed.error.issues)}`);
+    const text = `Invalid arguments for ${step.tool}: ${issuesText(parsed.error.issues)}`;
+    return { ok: false, error: errorResult(text) };
   }
   if (!viewed && Object.hasOwn(tool.shape, "view")) parsed.data.view = false;
-  let result: CallToolResult;
+  return { ok: true, args: parsed.data };
+}
+
+/** The result of one call of the tool's callback. */
+async function callStep<Extra>(
+  tool: BatchTool<Extra>,
+  args: Record<string, unknown>,
+  extra: Extra,
+): Promise<CallToolResult> {
   try {
-    result = await tool.callback(parsed.data, extra);
+    return checked(tool, await tool.callback(args, extra));
   } catch (error: unknown) {
-    return errorResult(error instanceof Error ? error.message : String(error));
+    return thrownResult(error);
   }
+}
+
+/** The result, with isError set when the tool says it failed without it. */
+function checked<Extra>(tool: BatchTool<Extra>, result: CallToolResult): CallToolResult {
   if (result.isError !== true && tool.failed?.(result) === true) {
     return { ...result, isError: true };
   }
   return result;
+}
+
+function thrownResult(error: unknown): CallToolResult {
+  return errorResult(error instanceof Error ? error.message : String(error));
 }
 
 /**

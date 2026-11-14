@@ -5,6 +5,7 @@ import {
   type FoundLines,
   fillChars,
   foundLinesOf,
+  onlySpaces,
   PAGE_VIEW_MAX_CHARS,
   pageViewOf,
   READ_PAGE_MAX_CHARS,
@@ -35,6 +36,20 @@ describe("fillChars", () => {
 
   it("counts a string by its UTF-16 units", () => {
     assert.equal(fillChars([{ value: "\u{1F600}" }]), 2);
+  });
+});
+
+describe("onlySpaces", () => {
+  it("is true for empty text and text of only whitespace, NEL included", () => {
+    for (const text of ["", " ", "\n\t", "\u0085", "\u00a0", "\u2028", " \u0085 "]) {
+      assert.equal(onlySpaces(text), true, JSON.stringify(text));
+    }
+  });
+
+  it("is false for text with anything else in it", () => {
+    for (const text of ["a", " a ", "\u0085a", "a\n"]) {
+      assert.equal(onlySpaces(text), false, JSON.stringify(text));
+    }
   });
 });
 

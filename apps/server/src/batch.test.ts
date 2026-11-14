@@ -768,19 +768,311 @@ describe("runBatch with tools whose results end with a view of the page", () => 
   });
 });
 
+describe("runBatch with a tool that joins steps", () => {
+  const SHAPE = { tab: z.number(), q: z.string(), view: z.boolean().optional() };
+  const answer = (args: Record<string, unknown>): CallToolResult => ({
+    content: [textItem(`${String(args.tab)}:${String(args.q)}`)],
+  });
+  const fake = (many: NonNullable<FakeTool["many"]>): FakeTool => ({
+    shape: SHAPE,
+    result: answer,
+    joins: (first, next) => first.tab === next.tab,
+    many,
+  });
+  const all = (argsList: Record<string, unknown>[]): [CallToolResult, ...CallToolResult[]] => {
+    const [first, ...rest] = argsList.map(answer);
+    assert.ok(first !== undefined);
+    return [first, ...rest];
+  };
+
+  it("runs consecutive steps it joins as one call, with the same content as alone", async () => {
+    const { tools, calls } = registry({ find: fake(all), other: { shape: {}, result: answer } });
+    const steps = [
+      { tool: "find", args: { tab: 1, q: "a", dropped: true } },
+      { tool: "find", args: { tab: 1, q: "b" } },
+      { tool: "find", args: { tab: 1, q: "c" } },
+      { tool: "find", args: { tab: 2, q: "d" } },
+      { tool: "find", args: { tab: 2, q: "e" } },
+    ];
+    const joined = await runBatch(steps, tools, extra(), MAX_BYTES);
+    assert.deepEqual(calls, [
+      {
+        tool: "find",
+        many: [
+          { tab: 1, q: "a", view: false },
+          { tab: 1, q: "b", view: false },
+          { tab: 1, q: "c", view: false },
+        ],
+      },
+      {
+        tool: "find",
+        many: [
+          { tab: 2, q: "d", view: false },
+          { tab: 2, q: "e" },
+        ],
+      },
+    ]);
+    const alone = registry({ find: { shape: SHAPE, result: answer } });
+    assert.deepEqual(joined, await runBatch(steps, alone.tools, extra(), MAX_BYTES));
+    assert.equal(alone.calls.length, 5);
+  });
+
+  it("runs a step alone when the next step is another tool, another run or the last", async () => {
+    const { tools, calls } = registry({ find: fake(all), other: { shape: {}, result: answer } });
+    const result = await runBatch(
+      [
+        { tool: "find", args: { tab: 1, q: "a" } },
+        { tool: "other" },
+        { tool: "find", args: { tab: 1, q: "b" } },
+        { tool: "find", args: { tab: 2, q: "c" } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.equal(result.isError, undefined);
+    assert.deepEqual(calls, [
+      { tool: "find", args: { tab: 1, q: "a", view: false } },
+      { tool: "other", args: {} },
+      { tool: "find", args: { tab: 1, q: "b", view: false } },
+      { tool: "find", args: { tab: 2, q: "c" } },
+    ]);
+  });
+
+  it("ends a run before a step with invalid args, which fails with its own message", async () => {
+    const { tools, calls } = registry({ find: fake(all) });
+    const result = await runBatch(
+      [
+        { tool: "find", args: { tab: 1, q: "a" } },
+        { tool: "find", args: { tab: 1, q: "b" } },
+        { tool: "find", args: { tab: 1 } },
+        { tool: "find", args: { tab: 1, q: "c" } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.deepEqual(result.content.slice(4), [
+      textItem("Step 3 of 4, find: failed"),
+      textItem(
+        "Invalid arguments for find: Invalid input: expected string, received undefined at q",
+      ),
+      textItem("Step 4 (find) was not run because step 3 failed."),
+    ]);
+    assert.deepEqual(calls, [
+      {
+        tool: "find",
+        many: [
+          { tab: 1, q: "a", view: false },
+          { tab: 1, q: "b", view: false },
+        ],
+      },
+    ]);
+  });
+
+  it("runs the steps a joined call gave no result for again, which may join again", async () => {
+    const { tools, calls } = registry({
+      find: fake((argsList) => [answer(argsList[0] ?? {})]),
+    });
+    const steps = ["a", "b", "c"].map((q) => ({ tool: "find", args: { tab: 1, q } }));
+    const result = await runBatch(steps, tools, extra(), MAX_BYTES, false);
+    assert.deepEqual(result, {
+      content: [
+        textItem("Step 1 of 3, find: ok"),
+        textItem("1:a"),
+        textItem("Step 2 of 3, find: ok"),
+        textItem("1:b"),
+        textItem("Step 3 of 3, find: ok"),
+        textItem("1:c"),
+      ],
+    });
+    assert.deepEqual(
+      calls.map((call) => ("many" in call ? call.many.map((args) => args.q) : call.args.q)),
+      [["a", "b", "c"], ["b", "c"], "c"],
+    );
+  });
+
+  it("ignores results past the steps it joined", async () => {
+    const { tools, calls } = registry({
+      find: fake((argsList) => [...all(argsList), { content: [textItem("extra")] }]),
+      other: { shape: {}, result: { content: [textItem("other")] } },
+    });
+    const result = await runBatch(
+      [
+        { tool: "find", args: { tab: 1, q: "a" } },
+        { tool: "find", args: { tab: 1, q: "b" } },
+        { tool: "other" },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.deepEqual(result.content.slice(4), [
+      textItem("Step 3 of 3, other: ok"),
+      textItem("other"),
+    ]);
+    assert.equal(calls.length, 2);
+  });
+
+  it("fails the first step when the joined call throws or fails, and runs no other", async () => {
+    for (const many of [
+      (): never => {
+        throw new Error("The host is gone.");
+      },
+      (): [CallToolResult] => [{ content: [textItem("The host is gone.")], isError: true }],
+    ]) {
+      const { tools } = registry({ find: fake(many) });
+      const result = await runBatch(
+        ["a", "b", "c"].map((q) => ({ tool: "find", args: { tab: 1, q } })),
+        tools,
+        extra(),
+        MAX_BYTES,
+      );
+      assert.deepEqual(result, {
+        content: [
+          textItem("Step 1 of 3, find: failed"),
+          textItem("The host is gone."),
+          textItem("Steps 2 to 3 (find, find) were not run because step 1 failed."),
+        ],
+        isError: true,
+      });
+    }
+  });
+
+  it("asks the tool's own check about each joined result", async () => {
+    const { tools } = registry({
+      find: {
+        ...fake(all),
+        failed: (result) =>
+          result.content.some((item) => item.type === "text" && item.text === "1:bad"),
+      },
+    });
+    const result = await runBatch(
+      ["a", "bad", "c"].map((q) => ({ tool: "find", args: { tab: 1, q } })),
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    assert.deepEqual(result, {
+      content: [
+        textItem("Step 1 of 3, find: ok"),
+        textItem("1:a"),
+        textItem("Step 2 of 3, find: failed"),
+        textItem("1:bad"),
+        textItem("Step 3 (find) was not run because step 2 failed."),
+      ],
+      isError: true,
+    });
+  });
+
+  it("reports the joined steps after a cancel during the joined call not run", async () => {
+    const controller = new AbortController();
+    const { tools } = registry({
+      find: fake((argsList) => {
+        controller.abort();
+        return all(argsList);
+      }),
+    });
+    const result = await runBatch(
+      ["a", "b", "c"].map((q) => ({ tool: "find", args: { tab: 1, q } })),
+      tools,
+      { signal: controller.signal },
+      MAX_BYTES,
+    );
+    assert.deepEqual(result, {
+      content: [
+        textItem("Step 1 of 3, find: ok"),
+        textItem("1:a"),
+        textItem("Steps 2 to 3 (find, find) were not run because the call was cancelled."),
+      ],
+      isError: true,
+    });
+  });
+
+  it("leaves out each joined step's items that do not fit, step by step", async () => {
+    const large = "a".repeat(20_000);
+    const { tools } = registry({
+      find: fake((argsList) => {
+        const [first, ...rest] = argsList.map(() => ({ content: [textItem(large)] }));
+        assert.ok(first !== undefined);
+        return [first, ...rest];
+      }),
+    });
+    const steps = ["a", "b"].map((q) => ({ tool: "find", args: { tab: 1, q } }));
+    const maxBytes = (steps.length * 2 + 1) * NOTE_ALLOWANCE + 20_100;
+    const result = await runBatch(steps, tools, extra(), maxBytes);
+    assert.deepEqual(result, {
+      content: [
+        textItem("Step 1 of 2, find: ok"),
+        textItem(large),
+        textItem("Step 2 of 2, find: ok"),
+        textItem(
+          "Part of the result of step 2 is left out: it is too large to return in a batch. The step ran; read_page reads the page.",
+        ),
+      ],
+    });
+  });
+
+  it("runs each step alone for a tool with only one of the two hooks", async () => {
+    const joins = (first: Record<string, unknown>, next: Record<string, unknown>): boolean =>
+      first.tab === next.tab;
+    for (const hooks of [{ joins }, { many: all }]) {
+      const { tools, calls } = registry({ find: { shape: SHAPE, result: answer, ...hooks } });
+      const result = await runBatch(
+        ["a", "b"].map((q) => ({ tool: "find", args: { tab: 1, q } })),
+        tools,
+        extra(),
+        MAX_BYTES,
+      );
+      assert.equal(result.isError, undefined);
+      assert.deepEqual(calls, [
+        { tool: "find", args: { tab: 1, q: "a", view: false } },
+        { tool: "find", args: { tab: 1, q: "b" } },
+      ]);
+    }
+  });
+
+  it("joins the steps' args as each step would run alone, the view left out but on the last", async () => {
+    const seen: [Record<string, unknown>, Record<string, unknown>][] = [];
+    const { tools, calls } = registry({
+      find: {
+        ...fake(all),
+        joins: (first, next) => {
+          seen.push([first, next]);
+          return true;
+        },
+      },
+    });
+    await runBatch(
+      [
+        { tool: "find", args: { tab: 1, q: "a", view: true } },
+        { tool: "find", args: { tab: 2, q: "b" } },
+      ],
+      tools,
+      extra(),
+      MAX_BYTES,
+    );
+    const first = { tab: 1, q: "a", view: false };
+    assert.deepEqual(seen, [[first, { tab: 2, q: "b" }]]);
+    assert.deepEqual(calls, [{ tool: "find", many: [first, { tab: 2, q: "b" }] }]);
+  });
+});
+
 interface FakeTool {
   shape: z.ZodRawShape;
   result: CallToolResult | ((args: Record<string, unknown>) => CallToolResult);
   failed?: (result: CallToolResult) => boolean;
   loaded?: (result: CallToolResult) => boolean;
+  joins?: (first: Record<string, unknown>, next: Record<string, unknown>) => boolean;
+  many?: (argsList: Record<string, unknown>[]) => [CallToolResult, ...CallToolResult[]];
 }
 
 /** Tools that record each call and return their fixed or computed result. */
 function registry(fakes: Record<string, FakeTool>): {
   tools: Map<string, BatchTool<Extra>>;
-  calls: { tool: string; args: Record<string, unknown> }[];
+  calls: Call[];
 } {
-  const calls: { tool: string; args: Record<string, unknown> }[] = [];
+  const calls: Call[] = [];
   const tools = new Map<string, BatchTool<Extra>>();
   for (const [name, fake] of Object.entries(fakes)) {
     const tool: BatchTool<Extra> = {
@@ -792,10 +1084,22 @@ function registry(fakes: Record<string, FakeTool>): {
     };
     if (fake.failed !== undefined) tool.failed = fake.failed;
     if (fake.loaded !== undefined) tool.loaded = fake.loaded;
+    if (fake.joins !== undefined) tool.joins = fake.joins;
+    const many = fake.many;
+    if (many !== undefined) {
+      tool.callMany = async (argsList) => {
+        calls.push({ tool: name, many: argsList });
+        return many(argsList);
+      };
+    }
     tools.set(name, tool);
   }
   return { tools, calls };
 }
+
+type Call =
+  | { tool: string; args: Record<string, unknown> }
+  | { tool: string; many: Record<string, unknown>[] };
 
 function extra(): Extra {
   return { signal: new AbortController().signal };
