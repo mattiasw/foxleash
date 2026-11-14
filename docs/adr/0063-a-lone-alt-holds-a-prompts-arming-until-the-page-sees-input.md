@@ -1,7 +1,8 @@
 # 0063: A lone Alt holds a prompt's arming until the page sees input again
 
 **Status:** Accepted, 2026-11-14. Extends
-[0061](0061-the-key-presses-that-can-answer-a-prompt.md).
+[0061](0061-the-key-presses-that-can-answer-a-prompt.md). Extended by
+[0064](0064-the-keys-firefox-menus-take-from-a-prompt.md), 2026-11-14.
 
 ## Context
 

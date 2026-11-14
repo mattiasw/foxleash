@@ -37,7 +37,13 @@ const CLOSE_TIMEOUT_MS = 5_000;
 /** How long a page may take to load, or to show what a test waits for. */
 export const PAGE_TIMEOUT_MS = 15_000;
 /** WebDriver key values for the keys tests press with `keys`. */
-export const KEY = { tab: "\uE004", enter: "\uE007", shift: "\uE008", alt: "\uE00A" } as const;
+export const KEY = {
+  tab: "\uE004",
+  enter: "\uE007",
+  shift: "\uE008",
+  alt: "\uE00A",
+  f10: "\uE03A",
+} as const;
 // Below the 60 s per-test timeout, so a helper whose commands stall fails with its own message.
 const HELPER_TIMEOUT_MS = 20_000;
 // How long discardTab waits for the session store to hold the tab's page, below HELPER_TIMEOUT_MS.

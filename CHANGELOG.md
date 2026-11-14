@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keys taken by Firefox's menu bar after you press Alt alone no longer count toward a Foxleash
   prompt's one-second pause: after a lone Alt, the prompt's buttons respond again a second after
   the prompt next sees a key or a click.
+- Keys typed into a Firefox menu opened with F10, Shift+F10, the Menu key, a right-click or Alt
+  with a letter no longer count toward a Foxleash prompt's one-second pause either: the prompt's
+  buttons respond a second after the prompt next sees a key or a click.
 - While Foxleash asks you something in a tab of an agent's group, the agent can no longer switch
   that window to another of its tabs, and tabs Foxleash opens for it meanwhile stay in the
   background, so the question stays in view.

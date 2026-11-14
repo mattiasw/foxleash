@@ -3,7 +3,9 @@
 **Status:** Accepted, 2026-11-14. Extends
 [0058](0058-prompt-keys-answer-only-on-a-button-focused-after-arming.md). Its residual for
 Firefox's menus after a lone Alt is closed by
-[0063](0063-a-lone-alt-holds-a-prompts-arming-until-the-page-sees-input.md), 2026-11-14.
+[0063](0063-a-lone-alt-holds-a-prompts-arming-until-the-page-sees-input.md), 2026-11-14. Its
+residual for Firefox's other menus is bounded by
+[0064](0064-the-keys-firefox-menus-take-from-a-prompt.md), 2026-11-14.
 
 ## Context
 
