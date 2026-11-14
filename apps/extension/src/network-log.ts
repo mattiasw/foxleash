@@ -45,7 +45,7 @@ export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
 export interface NetworkLogDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage" | "webRequest">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
 }
 
 export interface NetworkReadOptions {
@@ -61,8 +61,6 @@ export interface NetworkLog {
     site: string,
     options: NetworkReadOptions,
   ): Result<"read_network">;
-  /** The session's approval of the site ended: no request of its tabs there is read again. */
-  withdraw(session: string, site: string): void;
   /**
    * The requests of the tab's live document that began at or after `since` (ms since the epoch,
    * as webRequest's timeStamp): how many began, how many of those have not ended, and when the
@@ -156,7 +154,7 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
     committedAt.delete(tabId);
   });
 
-  return { read, withdraw: documents.withdraw, requestsSince };
+  return { read, requestsSince };
 
   function onCommit(tabId: number, url: string, timeStamp: number): void {
     logs.delete(tabId);

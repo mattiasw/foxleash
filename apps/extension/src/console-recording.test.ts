@@ -4,7 +4,6 @@ import type { InjectionResult } from "./browser-api.ts";
 import { RECORDER_OPTIONS } from "./console-messages.ts";
 import { recordConsole } from "./console-recorder.ts";
 import {
-  type ConsoleRecording,
   createConsoleRecording,
   RECORDER_ATTEMPTS,
   RECORDER_RETRY_MS,
@@ -407,7 +406,13 @@ describe("console recording", { timeout: 10000 }, () => {
         fake.emitCommitted({ tabId: tab.id, frameId: 0, url: "https://c.example/" }),
     ],
     ["the tab leaving the group", ({ fake }, tab) => fake.ungroup(tab.id)],
-    ["a withdrawal", ({ recordings }) => recordings.withdraw("s1", SITE)],
+    [
+      "a withdrawal",
+      ({ sessions, access }) => {
+        sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
+        access.forget("s1", SITE);
+      },
+    ],
     ["the tab closing", ({ fake }, tab) => fake.removeTab(tab.id)],
   ];
   for (const [name, end] of ENDS) {
@@ -441,12 +446,13 @@ describe("console recording", { timeout: 10000 }, () => {
 
   it("does not inject again when the document ends while the recorder is injected", async (t) => {
     const warned = quiet(t);
-    const { fake, recordings, clock, tabIn } = setup();
+    const { fake, recordings, clock, tabIn, sessions, access } = setup();
     const tab = await tabIn("s1");
+    sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
     fake.injectionResults = [{ frameId: 0, result: "elsewhere" }];
     const inject = fake.browser.scripting.executeScript;
     t.mock.method(fake.browser.scripting, "executeScript", async (...args: unknown[]) => {
-      recordings.withdraw("s1", SITE);
+      access.forget("s1", SITE);
       return Reflect.apply(inject, fake.browser.scripting, args);
     });
     fake.navigateByUser(tab.id, URL_A);
@@ -575,7 +581,11 @@ describe("console recording", { timeout: 10000 }, () => {
       refused: new Set(),
       closed: 0,
     });
-    sessions.set("s2", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
+    sessions.set("s2", {
+      allowed: new Set(["https://b.example", "https://c.example"]),
+      refused: new Set(),
+      closed: 0,
+    });
     const withdrawn = await tabIn("s1", "https://b.example/");
     const otherSite = await tabIn("s1", "https://c.example/");
     const otherSession = await tabIn("s2", "https://b.example/");
@@ -583,7 +593,7 @@ describe("console recording", { timeout: 10000 }, () => {
     assert.equal(recordings.liveRecording("s1", withdrawn.id), undefined);
     assert.ok(recordings.liveRecording("s1", otherSite.id) !== undefined);
     assert.ok(recordings.liveRecording("s2", otherSession.id) !== undefined);
-    recordings.withdraw("s2", "https://c.example");
+    access.forget("s2", "https://c.example");
     assert.ok(recordings.liveRecording("s2", otherSession.id) !== undefined);
   });
 
@@ -722,15 +732,7 @@ function setup() {
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
-  const withdrawn: ConsoleRecording["withdraw"] = (session, site) =>
-    recordings.withdraw(session, site);
-  const access = createSiteAccess({
-    browser: fake.browser,
-    groups,
-    sessions,
-    timers,
-    onWithdraw: withdrawn,
-  });
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   fake.injectionResults = [{ frameId: 0, result: "started" }];
   // Its own clock: advancing it runs no site-access timer.
   const clock = createFakeTimers();

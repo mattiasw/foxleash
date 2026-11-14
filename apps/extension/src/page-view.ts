@@ -35,7 +35,7 @@ export interface TreeRead {
 export interface PageViewsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
 }
 
 export interface PageViews {
@@ -57,8 +57,6 @@ export interface PageViews {
   /** Records a whole read_page as the last view given, under the same rule as `view`. */
   record(session: string, tabId: number, before: LiveDocument | undefined, read: TreeRead): void;
   forget(session: string, tabId: number): void;
-  /** The session's approval of the site ended: what it was shown on that site is dropped. */
-  withdraw(session: string, site: string): void;
   endSession(session: string): void;
 }
 
@@ -78,8 +76,9 @@ export function createPageViews({ browser, groups, access }: PageViewsDeps): Pag
   browser.tabs.onRemoved.addListener((tabId) => {
     memory.delete(tabId);
   });
+  access.onWithdraw(withdraw);
 
-  return { document, view, record, forget, withdraw, endSession };
+  return { document, view, record, forget, endSession };
 
   function document(tabId: number): LiveDocument | undefined {
     return documents.live(tabId);
@@ -130,8 +129,8 @@ export function createPageViews({ browser, groups, access }: PageViewsDeps): Pag
     if (sessions?.size === 0) memory.delete(tabId);
   }
 
+  /** The session's approval of the site ended: what it was shown on that site is dropped. */
   function withdraw(session: string, site: string): void {
-    documents.withdraw(session, site);
     for (const [tabId, sessions] of [...memory]) {
       if (sessions.get(session)?.document.site === site) forget(session, tabId);
     }

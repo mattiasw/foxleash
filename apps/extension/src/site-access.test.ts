@@ -1398,6 +1398,50 @@ describe("endSession", () => {
     ]);
   });
 
+  it("tells onWithdraw only once the session and its prompt are gone", async () => {
+    const seen: { site: string; prompt: boolean; session: boolean }[] = [];
+    const { access, sessions, ask } = setup((session, site) =>
+      seen.push({
+        site,
+        prompt: access.openPrompt(session) !== undefined,
+        session: sessions.has(session),
+      }),
+    );
+    sessions.set("s1", {
+      allowed: new Set(["https://b.example"]),
+      refused: new Set(["https://c.example"]),
+      closed: 1,
+    });
+    await ask();
+    access.endSession("s1");
+    sessions.set("s2", state(["https://b.example"]));
+    access.forget("s2", "https://b.example");
+    assert.deepEqual(seen, [
+      { site: "https://b.example", prompt: false, session: false },
+      { site: "https://b.example", prompt: false, session: false },
+    ]);
+  });
+
+  it("shows no prompt for an ask that was checking when its session ended", async () => {
+    const { fake, access, sessions, tab, ask } = setup();
+    const shown = fake.tabs.get(tab.id)?.url;
+    sessions.set("s1", state(["https://b.example"]));
+    const asked = ask();
+    access.endSession("s1");
+    await assert.rejects(asked, {
+      code: "approval_closed",
+      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+    });
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(fake.tabs.get(tab.id)?.url, shown);
+    assert.equal(sessions.has("s1"), false);
+    // A session that reconnects with the id is asked; another session's end refuses nothing.
+    const again = ask();
+    access.endSession("s2");
+    await again;
+    assert.equal(access.openPrompt("s1")?.site, "https://a.example");
+  });
+
   it("ends a session without a prompt", () => {
     const { access, sessions } = setup();
     sessions.set("s1", state([]));
@@ -1505,6 +1549,32 @@ describe("forget", () => {
     access.forget("s1", "https://a.example");
     access.forget("s1", "https://a.example");
     assert.deepEqual(withdrawn, [["s1", "https://a.example"]]);
+  });
+
+  it("tells every listener, in the order added, of each allowed site that ends", () => {
+    const told: string[] = [];
+    const { access, sessions } = setup((session, site) => told.push(`first ${session} ${site}`));
+    access.onWithdraw((session, site) => told.push(`second ${session} ${site}`));
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example", "https://b.example"]),
+      refused: new Set(["https://c.example"]),
+      closed: 1,
+    });
+    access.forget("s1", "https://c.example");
+    access.forget("s1", "closed");
+    access.forget("s1", "https://a.example");
+    sessions.set("s1", {
+      allowed: new Set(["https://b.example"]),
+      refused: new Set(["https://d.example"]),
+      closed: 2,
+    });
+    access.endSession("s1");
+    assert.deepEqual(told, [
+      "first s1 https://a.example",
+      "second s1 https://a.example",
+      "first s1 https://b.example",
+      "second s1 https://b.example",
+    ]);
   });
 
   it("forgets an allowed site, so the session is asked again and its tabs are redacted", async () => {
@@ -1857,11 +1927,8 @@ function setup(onWithdraw?: (session: string, site: string) => void) {
   const sessions: SessionMemory = new Map();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
-  const access = createSiteAccess(
-    onWithdraw === undefined
-      ? { browser: fake.browser, groups, sessions, timers }
-      : { browser: fake.browser, groups, sessions, timers, onWithdraw },
-  );
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+  if (onWithdraw !== undefined) access.onWithdraw(onWithdraw);
   const tab = fake.openTab({ active: true });
 
   /** Asks in `tabId` and returns the approval with the prompt page's URL. */

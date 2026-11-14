@@ -208,7 +208,7 @@ describe("live documents", { timeout: 10000 }, () => {
 
   it("logs no drop at a new commit, a close or a withdrawal", async (t) => {
     const warned = quiet(t);
-    const { fake, documents, liveTab } = setup({});
+    const { fake, documents, sessions, access, liveTab } = setup({});
     const replaced = await liveTab();
     fake.emitCommitted({ tabId: replaced.id, frameId: 0, url: "https://c.example/" });
     await flush();
@@ -216,10 +216,30 @@ describe("live documents", { timeout: 10000 }, () => {
     const closed = await liveTab();
     fake.removeTab(closed.id);
     const withdrawn = await liveTab();
-    documents.withdraw("s1", SITE);
+    sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
+    access.forget("s1", SITE);
     assert.equal(documents.live(withdrawn.id), undefined);
     await flush();
     assert.deepEqual(warned(), []);
+  });
+
+  it("stops at once the documents of a site the session's approval of ends, and only those", async () => {
+    const { documents, sessions, access, liveTab } = setup({});
+    sessions.set("s1", {
+      allowed: new Set([SITE, "https://c.example"]),
+      refused: new Set(),
+      closed: 0,
+    });
+    const withdrawn = await liveTab();
+    const otherSite = await liveTab("s1", "https://c.example/");
+    const otherSession = await liveTab("s2");
+    access.forget("s1", SITE);
+    // A's stored approval still passes the gate: only the drop at the withdrawal ends it.
+    assert.equal(documents.live(withdrawn.id), undefined);
+    await flush();
+    assert.equal(documents.live(withdrawn.id), undefined);
+    assert.ok(documents.live(otherSite.id) !== undefined);
+    assert.ok(documents.live(otherSession.id) !== undefined);
   });
 
   it("does not call onDecided for a commit that is no longer the tab's latest", async (t) => {
@@ -327,24 +347,24 @@ function setup(hooks: Pick<LiveDocumentsDeps, "onCommit" | "onDecided">) {
     ...hooks,
   });
 
-  /** A blank tab in s1's group, with A's site stored as approved. */
-  async function tabIn(): Promise<FakeTab> {
+  /** A blank tab in the session's group, with A's site stored as approved. */
+  async function tabIn(session = "s1"): Promise<FakeTab> {
     await grantSite(fake.browser, SITE);
     const tab = fake.openTab();
-    await groups.ensureGroup("s1", tab);
+    await groups.ensureGroup(session, tab);
     return tab;
   }
 
-  /** A tab in s1's group with a live document on A's site. */
-  async function liveTab(): Promise<FakeTab> {
-    const tab = await tabIn();
-    fake.navigateByUser(tab.id, URL_A);
+  /** A tab in the session's group with a live document on `url`, A's page by default. */
+  async function liveTab(session = "s1", url = URL_A): Promise<FakeTab> {
+    const tab = await tabIn(session);
+    fake.navigateByUser(tab.id, url);
     await flush();
     assert.ok(documents.live(tab.id) !== undefined);
     return tab;
   }
 
-  return { fake, documents, tabIn, liveTab };
+  return { fake, documents, sessions, access, tabIn, liveTab };
 }
 
 /** Keeps the log lines out of the test output; returns a reader for them. */

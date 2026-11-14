@@ -34,11 +34,6 @@ const access = createSiteAccess({
   groups,
   sessions: new Map(),
   timers,
-  onWithdraw: (session, site) => {
-    recordings.withdraw(session, site);
-    network.withdraw(session, site);
-    views.withdraw(session, site);
-  },
   otherPrompt: (session) => recipes.openPrompt(session),
 });
 const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });

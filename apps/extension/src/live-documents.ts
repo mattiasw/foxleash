@@ -16,7 +16,7 @@ export interface LiveDocument {
 export interface LiveDocumentsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
   /**
    * The `event` of the warning logged when a check fails for another reason than the gate, and
    * when a live document stops being live for a reason other than a commit, its tab closing, a
@@ -40,8 +40,6 @@ export interface LiveDocumentsDeps {
 export interface LiveDocuments {
   /** The tab's live document; a new object at each commit, so identity means "uninterrupted". */
   live(tabId: number): LiveDocument | undefined;
-  /** The session's approval of the site ended: its documents on that site stop being live. */
-  withdraw(session: string, site: string): void;
 }
 
 /**
@@ -105,8 +103,9 @@ export function createLiveDocuments({
     // Stored approvals and the blocklist live there: only a change that narrows access drops.
     for (const [tabId, entry] of [...entries]) void recheck(tabId, entry);
   });
+  access.onWithdraw(withdraw);
 
-  return { live, withdraw };
+  return { live };
 
   async function start(
     tabId: number,
@@ -170,6 +169,7 @@ export function createLiveDocuments({
     return entries.get(tabId);
   }
 
+  /** The session's approval of the site ended: its documents on that site stop being live. */
   function withdraw(session: string, site: string): void {
     for (const [tabId, entry] of [...entries]) {
       if (entry.session === session && entry.site === site) entries.delete(tabId);

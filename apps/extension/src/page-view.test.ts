@@ -98,13 +98,23 @@ describe("page views", { timeout: 10000 }, () => {
   });
 
   it("stops taking the document as the same once the session's approval of its site ends", async () => {
-    const { views, see, tab } = await setup();
+    const { views, see, tab, sessions, access } = await setup();
+    sessions.set("s1", {
+      allowed: new Set([SITE, "https://b.example"]),
+      refused: new Set(),
+      closed: 0,
+    });
+    sessions.set("s2", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
     const before = views.document(tab.id);
     see("s1", tab.id, TREE);
-    views.withdraw("s2", SITE);
-    views.withdraw("s1", "https://b.example");
+    // A tab of s1's group, viewed by s2 too.
+    see("s2", tab.id, TREE);
+    access.forget("s2", SITE);
+    access.forget("s1", "https://b.example");
     assert.equal(see("s1", tab.id, TREE).kind, "unchanged");
-    views.withdraw("s1", SITE);
+    assert.equal(see("s2", tab.id, TREE).kind, "tree");
+    access.forget("s1", SITE);
+    // SITE's stored approval still passes the gate: only the drop at the withdrawal ends it.
     assert.equal(views.document(tab.id), undefined);
     assert.equal(
       views.view("s1", tab.id, before, { tree: TREE, truncated: false }, []).kind,
@@ -479,5 +489,5 @@ async function setup() {
     return views.view(session, tabId, before, { tree, truncated }, []);
   }
 
-  return { fake, views, tab, other, see };
+  return { fake, sessions, access, views, tab, other, see };
 }

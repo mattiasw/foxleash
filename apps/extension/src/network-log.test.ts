@@ -13,7 +13,6 @@ import { createFakeBrowser, createFakeTimers, type FakeTab, flush } from "./fake
 import {
   createNetworkLog,
   MAX_LOG_CHARS,
-  type NetworkLog,
   type NetworkReadOptions,
   REDACTED,
   redactHeaders,
@@ -1306,14 +1305,7 @@ function setup() {
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
-  const withdrawn: NetworkLog["withdraw"] = (session, site) => network.withdraw(session, site);
-  const access = createSiteAccess({
-    browser: fake.browser,
-    groups,
-    sessions,
-    timers,
-    onWithdraw: withdrawn,
-  });
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const network = createNetworkLog({ browser: fake.browser, groups, access });
   let requests = 0;
 

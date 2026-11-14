@@ -9,7 +9,7 @@ import type { SiteAccess } from "./site-access.ts";
 export interface ConsoleRecordingDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
   timers: Timers<Handle>;
 }
 
@@ -20,8 +20,6 @@ export const RECORDER_RETRY_MS = 50;
 export interface ConsoleRecording {
   /** The tab's live recording for the session, an opaque value; undefined when there is none. */
   liveRecording(session: string, tabId: number): object | undefined;
-  /** The session's approval of the site ended: no record of its tabs is read again. */
-  withdraw(session: string, site: string): void;
 }
 
 /** What one injection of the recorder came to. */
@@ -53,7 +51,7 @@ export function createConsoleRecording<Handle>({
     onDecided,
   });
 
-  return { liveRecording, withdraw: documents.withdraw };
+  return { liveRecording };
 
   async function onDecided(
     tabId: number,

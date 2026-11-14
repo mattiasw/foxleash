@@ -61,8 +61,6 @@ export interface SiteAccessDeps<Handle> {
   groups: Pick<SessionGroups, "groupOf" | "showPromptWindow">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
-  /** The session's approval of the site ended: the user withdrew it, or the session ended. */
-  onWithdraw?: (session: string, site: string) => void;
   /**
    * The session's open recipe page, which no site prompt may open beside; `question` says what it
    * asks, such as "whether to save a recipe".
@@ -117,6 +115,11 @@ export interface SiteAccess {
    * closed prompts. Only removes; never allows anything.
    */
   forget(session: string, site: string): void;
+  /**
+   * Calls `listener` each time the session's approval of a site ends: the user withdrew it, or
+   * the session ended. Synchronously, at the end of `forget` or `endSession`, in the order added.
+   */
+  onWithdraw(listener: (session: string, site: string) => void): void;
 }
 
 /** What the settings page lists for one session. */
@@ -175,13 +178,15 @@ export function createSiteAccess<Handle>({
   groups,
   sessions,
   timers,
-  onWithdraw,
   otherPrompt,
 }: SiteAccessDeps<Handle>): SiteAccess {
   // The open prompt of each session; at most one.
   const prompts = new Map<string, Prompt<Handle>>();
   // By tab: the answered prompt each tab shows, so a reload there loads what it asked about.
   const answered = new Map<number, Answered>();
+  // By session: how often it ended, so an ask that awaited across an end shows no prompt.
+  const generations = new Map<string, number>();
+  const withdrawals = new Set<(session: string, site: string) => void>();
 
   browser.runtime.onConnect.addListener(connect);
   browser.runtime.onMessage.addListener(receiveFromSettings);
@@ -219,6 +224,7 @@ export function createSiteAccess<Handle>({
     allowForSession,
     refuseIfStoppedAsking,
     forget,
+    onWithdraw,
   };
 
   async function view(session: string): Promise<SiteView> {
@@ -271,7 +277,15 @@ export function createSiteAccess<Handle>({
     promptUrl?: string,
   ): Promise<Approval> {
     const site = webSite(url);
+    const generation = generationOf(session);
     const current = await view(session);
+    // An answer would give the ended session an approval that a reconnect with its id finds.
+    if (generationOf(session) !== generation) {
+      throw new ToolError(
+        "approval_closed",
+        `The session ended before Foxleash could ask whether to allow ${site}.`,
+      );
+    }
     // No await from here until the prompt is recorded, so parallel requests see one prompt.
     if (current.blocked(url)) throw siteBlocked(site);
     const open = prompts.get(session);
@@ -298,12 +312,17 @@ export function createSiteAccess<Handle>({
   }
 
   function endSession(session: string): void {
+    generations.set(session, generationOf(session) + 1);
     const state = sessions.get(session);
     sessions.delete(session);
-    // A session that reconnects with the same id asks again, so nothing from the gap is read.
-    for (const site of state?.allowed ?? []) onWithdraw?.(session, site);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false);
+    // A session that reconnects with the same id asks again, so nothing from the gap is read.
+    for (const site of state?.allowed ?? []) withdrawn(session, site);
+  }
+
+  function generationOf(session: string): number {
+    return generations.get(session) ?? 0;
   }
 
   async function sessionAnswers(): Promise<SessionAnswers[]> {
@@ -360,14 +379,24 @@ export function createSiteAccess<Handle>({
   function forget(session: string, site: string): void {
     const state = sessions.get(session);
     if (state === undefined) return;
+    let ended = false;
     if (site === "closed") state.closed = 0;
     else {
-      if (state.allowed.delete(site)) onWithdraw?.(session, site);
+      ended = state.allowed.delete(site);
       state.refused.delete(site);
     }
     if (state.allowed.size === 0 && state.refused.size === 0 && state.closed === 0) {
       sessions.delete(session);
     }
+    if (ended) withdrawn(session, site);
+  }
+
+  function onWithdraw(listener: (session: string, site: string) => void): void {
+    withdrawals.add(listener);
+  }
+
+  function withdrawn(session: string, site: string): void {
+    for (const listener of withdrawals) listener(session, site);
   }
 
   async function labelOf(session: string): Promise<string> {
