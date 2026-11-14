@@ -41,7 +41,8 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 
 Always run tests through the npm scripts, in CI too: the coverage floors live in the
 scripts, and calling `node --test` directly runs the suite with them switched off. The
-scripts print each failure in full and, for a green run, only counts and coverage totals;
+scripts print each failure in full and, for a green run, only counts, coverage totals and
+the diagnostics tests report (`t.diagnostic`, which the end-to-end tests use for timings);
 `FOXLEASH_TEST_REPORTER=spec` restores Node's per-test output.
 
 ## Conventions

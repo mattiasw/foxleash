@@ -58,6 +58,18 @@ describe("test reporter", () => {
         "",
       ].join("\n"),
     );
+    writeFileSync(
+      join(dir, "noted.test.ts"),
+      [
+        'import { describe, test } from "node:test";',
+        'describe("suite", () => {',
+        '  test("timed", (t) => {',
+        '    t.diagnostic("took 123 ms");',
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
     writeFileSync(join(dir, "crash.test.ts"), 'throw new Error("broken at load");\n');
     writeFileSync(
       join(dir, "late.test.ts"),
@@ -101,6 +113,16 @@ describe("test reporter", () => {
     assert.doesNotMatch(result.stdout, /chatter|a passing test/);
   });
 
+  test("a green run prints a test's diagnostic under its file name", () => {
+    const result = run("noted.test.ts");
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    assert.match(
+      result.stdout,
+      /^ℹ noted\.test\.ts: took 123 ms\nℹ tests 1, suites 1, pass 1, fail 0, /,
+    );
+    assert.doesNotMatch(result.stdout, /coverage|captured test output/);
+  });
+
   test("a run without coverage prints no coverage line", () => {
     const result = run("green.test.ts");
     assert.equal(result.status, 0, result.stdout + result.stderr);
@@ -123,6 +145,13 @@ describe("test reporter", () => {
     );
     assert.match(result.stdout, /chatter from a passing test/);
     assert.match(result.stdout, /\n\nℹ tests 3, suites 2, pass 2, fail 1,/);
+  });
+
+  test("a red run prints a test's diagnostic too", () => {
+    const result = run("red.test.ts", "noted.test.ts");
+    assert.equal(result.status, 1);
+    assert.match(result.stdout, /✖ outer > inner > compares /);
+    assert.match(result.stdout, /\nℹ noted\.test\.ts: took 123 ms\nℹ tests 3, /);
   });
 
   test("a test file that crashes while loading shows the crash from its stderr", () => {

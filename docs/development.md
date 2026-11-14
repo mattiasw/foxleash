@@ -39,8 +39,11 @@ The repository is an npm workspaces monorepo run by Turborepo:
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
 printed in full with the output the tests wrote, and a missed coverage floor prints the
-per-file coverage table. Set `FOXLEASH_TEST_REPORTER=spec` (or any other `--test-reporter`
-value) for Node's per-test output, for example `FOXLEASH_TEST_REPORTER=spec npm test`.
+per-file coverage table. Every run also prints the diagnostics tests report with
+`t.diagnostic` (the end-to-end tests use them for timings); one from a test inside a
+`describe` or another test starts with its test file's name. Set `FOXLEASH_TEST_REPORTER=spec`
+(or any other `--test-reporter` value) for Node's per-test output, for example
+`FOXLEASH_TEST_REPORTER=spec npm test`.
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node

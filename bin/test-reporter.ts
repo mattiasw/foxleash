@@ -1,9 +1,11 @@
 // A `node --test` reporter that prints failures in full and passing tests not at all. A green
-// run ends in one line of counts and one of coverage totals. Set FOXLEASH_TEST_REPORTER=spec
-// for the stock per-test output.
+// run prints the diagnostics its tests report (`t.diagnostic`, which the end-to-end tests use
+// for timings), then one line of counts and one of coverage totals. Set
+// FOXLEASH_TEST_REPORTER=spec for the stock per-test output.
 //
 // Test stdout and stderr are replayed only when something failed: a test file that crashes
 // while loading reaches the reporter as a bare "test failed", with the real error on stderr.
+import { relative } from "node:path";
 import { Readable } from "node:stream";
 import { spec, type TestEvent } from "node:test/reporters";
 import { inspect } from "node:util";
@@ -41,17 +43,26 @@ export default async function* report(source: AsyncIterable<TestEvent>): AsyncGe
           failures.push({ path: [...parents, event.data.name].join(" > "), failure: event.data });
         }
         break;
-      case "test:diagnostic":
+      case "test:diagnostic": {
+        const { file, level, message, nesting } = event.data;
+        const mark = level === "error" ? "✖" : "ℹ";
+        if (nesting > 0) {
+          // A diagnostic from a test inside a suite or another test: the file name says where it
+          // came from.
+          const from = file === undefined ? "" : `${relative(process.cwd(), file)}: `;
+          notes.push(`${mark} ${from}${message}\n`);
+          break;
+        }
         // Top-level diagnostics: the counts, coverage floor errors, and warnings such as a
         // test's asynchronous activity after it ended.
-        if (event.data.nesting !== 0) break;
-        if (event.data.level === "info" && COUNT.test(event.data.message)) {
-          counts.push(event.data.message);
+        if (level === "info" && COUNT.test(message)) {
+          counts.push(message);
         } else {
-          notes.push(`${event.data.level === "error" ? "✖" : "ℹ"} ${event.data.message}\n`);
-          if (event.data.level === "error") rootError = true;
+          notes.push(`${mark} ${message}\n`);
+          if (level === "error") rootError = true;
         }
         break;
+      }
       case "test:coverage":
         coverage = event;
         break;
