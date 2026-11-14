@@ -269,6 +269,7 @@ describe("tools", () => {
       "(unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and ~/Downloads",
       "FOXLEASH_UPLOAD_DIRS in the MCP client's configuration; no tool can change them",
       "Files and folders whose names start with a dot, and files named like keys",
+      "and so is a file that holds a PEM, OpenSSH, PuTTY, PGP or age private key, whatever its name",
       "At most 100 files and 10 MB in total per call.",
       "upload_file never asks",
     ]) {

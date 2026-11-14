@@ -33,7 +33,27 @@ export interface ReadContext {
   open?: (file: string, flags: number) => Promise<ReadHandle>;
 }
 
-const KEY_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "ppk", "jks", "keystore"]);
+const KEY_EXTENSIONS = new Set([
+  "pem",
+  "key",
+  "p12",
+  "pfx",
+  "ppk",
+  "jks",
+  "keystore",
+  "kdbx",
+  "keytab",
+]);
+// Text only a private key's own file format holds, matched raw and as base64 (a kubeconfig's
+// client-key-data is a base64 PEM key).
+const PRIVATE_KEY_MARKERS = [
+  "PRIVATE KEY-----", // PEM: PKCS#1, PKCS#8 (also encrypted), SEC1, OpenSSH
+  "PRIVATE KEY BLOCK-----", // an armored OpenPGP secret key
+  "PRIVATE KEY ----", // an SSH2 key as ssh.com and PuTTYgen write it
+  "PuTTY-User-Key-File-", // a PuTTY .ppk key
+  "AGE-SECRET-KEY-", // an age identity
+  "openssh-key-v1\u0000", // an OpenSSH key's own bytes, also without its PEM lines
+].flatMap((marker) => [marker, ...base64Forms(marker)]);
 // O_NONBLOCK: opening a FIFO swapped in after the pre-check would otherwise hang the server.
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
 const TYPES = new Map([
@@ -64,6 +84,7 @@ const RELATIVE_WITHOUT_CWD =
 const DOT_NAME =
   "has a folder or file name starting with a dot below its upload folder; Foxleash never uploads those.";
 const KEY_NAME = "is named like a key file; Foxleash never uploads those.";
+const PRIVATE_KEY = "holds a private key; Foxleash never uploads those.";
 const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
@@ -90,9 +111,10 @@ export function uploadFolders(ctx: {
 
 /**
  * Reads `requested` when it is a regular file inside one of `folders` with no name below the
- * folder starting with a dot and no key-shaped name, and fits in `ctx.remaining`. The deciding
- * check runs on the real path of the descriptor that is read. Never throws for a file-system
- * error: a refusal is one sentence that follows the quoted path.
+ * folder starting with a dot and no key-shaped name, fits in `ctx.remaining`, and whose bytes
+ * hold no private key. The deciding checks run on the real path and the bytes of the descriptor
+ * that is read. Never throws for a file-system error: a refusal is one sentence that follows the
+ * quoted path.
  */
 export async function readAllowedFile(
   requested: string,
@@ -192,11 +214,15 @@ function expandHome(given: string, home: string): string {
   return given.startsWith("~/") ? path.join(home, given.slice(2)) : given;
 }
 
-/** `id_*`, or a key extension anywhere after the first part: `server.pem.bak`, `tls.key~`. */
+/**
+ * `id_*`, `krb5cc*` (Kerberos credential caches), or a key extension anywhere after the first
+ * part: `server.pem.bak`, `tls.key~`.
+ */
 function keyShaped(name: string): boolean {
   const lower = name.toLowerCase();
   return (
     lower.startsWith("id_") ||
+    lower.startsWith("krb5cc") ||
     lower
       .split(".")
       .slice(1)
@@ -303,7 +329,23 @@ async function readOpened(
   }
   const { bytesRead: beyond } = await handle.read(Buffer.alloc(1), 0, 1, info.size);
   if (beyond > 0) return { reason: CHANGED };
+  if (holdsPrivateKey(bytes)) return { reason: PRIVATE_KEY };
   return { path: real, bytes };
+}
+
+function holdsPrivateKey(bytes: Buffer): boolean {
+  return PRIVATE_KEY_MARKERS.some((marker) => bytes.includes(marker));
+}
+
+/**
+ * `marker` (ASCII) as it shows inside base64 wherever it starts in a 3-byte group: the
+ * encoding of the whole groups it fills after skipping 0, 1 or 2 of its bytes.
+ */
+function base64Forms(marker: string): string[] {
+  return [0, 1, 2].map((skip) => {
+    const whole = marker.length - ((marker.length - skip) % 3);
+    return Buffer.from(marker.slice(skip, whole)).toString("base64");
+  });
 }
 
 function openForRead(file: string, flags: number): Promise<ReadHandle> {

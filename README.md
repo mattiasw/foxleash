@@ -321,8 +321,9 @@ The agent uploads files from your computer with `upload_file`, naming the files 
 from `read_page`. A file field gets the files as if you had picked them; any other element gets
 them dropped on it, which works only where the page takes dropped files. Foxleash reads files
 only from the upload folders (see Security below), never files or folders whose names start
-with a dot or files named like keys, and at most 100 files and 10 MB per upload. `upload_file`
-works only on a tab showing a site you approved, and never asks.
+with a dot, files named like keys or files that hold a PEM, OpenSSH, PuTTY, PGP or age private
+key, and at most 100 files and 10 MB per upload. `upload_file` works only on a tab showing a
+site you approved, and never asks.
 
 The agent saves a file from the web with `download`, giving its whole URL (with the page's site
 in front of a link address that `read_page` shows as a path) and a plain file name such as
@@ -450,9 +451,11 @@ and no defense is complete. Foxleash limits what a fooled agent can do:
   folders separated by `:` (a leading `~` stands for your home folder) in the environment your
   MCP client starts `foxleash mcp` with: for Claude Code, `claude mcp add -e
   FOXLEASH_UPLOAD_DIRS=~/uploads ...` or the `env` of the server's entry. It replaces the
-  defaults. Files and folders whose names start with a dot below an upload folder, and files
-  named like keys (`id_*`, `*.pem`, `*.key` and similar), are refused in any folder, and an
-  upload takes at most 10 MB.
+  defaults. Files and folders whose names start with a dot below an upload folder, files
+  named like keys (`id_*`, `*.pem`, `*.key`, `*.kdbx` and similar) and files that hold a PEM,
+  OpenSSH, PuTTY, PGP or age private key, such as an SSH key named `deploy` or a service
+  account key `.json`, are refused in any folder, and an upload takes at most 10 MB. Keys in
+  other forms, such as a WireGuard configuration or a binary DER key, are not recognised.
 - A recipe is saved only by your click on Foxleash's page in Firefox, after you read it:
   nothing the agent sends can save one. Later agent sessions read a saved recipe as your
   instructions, so read it before you save it.

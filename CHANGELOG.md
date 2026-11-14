@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - While Foxleash asks you something in a tab of an agent's group, the agent can no longer switch
   that window to another of its tabs, and tabs Foxleash opens for it meanwhile stay in the
   background, so the question stays in view.
+- `upload_file` refuses a file that holds a PEM, OpenSSH, PuTTY, PGP or age private key,
+  whatever its name, such as an SSH key named `deploy`, a service account key `.json` or a
+  kubeconfig, and refuses KeePass databases (`*.kdbx`), Kerberos credential caches (`krb5cc*`)
+  and keytabs (`*.keytab`) by name.
 
 ## [0.4.0] - 2026-11-14
 

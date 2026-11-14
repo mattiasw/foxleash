@@ -58,6 +58,7 @@
       "evidence": [
         { "file": "apps/server/src/upload-policy.ts", "contains": "/proc/self/fd/" },
         { "file": "apps/server/src/upload-policy.ts", "contains": "hasDotPart(" },
+        { "file": "apps/server/src/upload-policy.ts", "contains": "holdsPrivateKey(bytes)" },
         { "file": "apps/server/src/tools.ts", "contains": "readAllowedFile(" }
       ]
     },

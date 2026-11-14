@@ -18,6 +18,7 @@ const BUDGET = 10 * 1024 * 1024;
 const DOT =
   "has a folder or file name starting with a dot below its upload folder; Foxleash never uploads those.";
 const KEY = "is named like a key file; Foxleash never uploads those.";
+const PRIVATE_KEY = "holds a private key; Foxleash never uploads those.";
 const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
@@ -25,6 +26,13 @@ const CHANGED = "changed while Foxleash read it; try again.";
 const HOME_NOTE = "is your home folder or contains it, so it would cover your whole home folder";
 const DOT_NOTE = "is inside a folder whose name starts with a dot";
 const FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
+// The body is the base64 of "openssh-key-v1" without its NUL, so only the PEM lines mark it.
+const OPENSSH_KEY =
+  "-----BEGIN OPENSSH PRIVATE KEY-----\nb3BlbnNzaC1rZXktdjE=\n-----END OPENSSH PRIVATE KEY-----\n";
+const RSA_KEY = "-----BEGIN RSA PRIVATE KEY-----\nMIIBOgIBAAJBAK\n-----END RSA PRIVATE KEY-----\n";
+const CERTIFICATE = "-----BEGIN CERTIFICATE-----\nMIIBszCCAV\n-----END CERTIFICATE-----\n";
+// An OpenSSH key's base64 body with its BEGIN and END lines removed.
+const BARE_BODY = "b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZWQyNTUxOQ";
 
 let root = "";
 let home = "";
@@ -44,6 +52,7 @@ before(async () => {
   await mkdir(join(work, "dir"));
   await writeFile(join(work, "ok.txt"), "ok bytes");
   await writeFile(join(work, "server.pem"), "-----BEGIN PRIVATE KEY-----");
+  await writeFile(join(work, "plain-key.txt"), OPENSSH_KEY);
   await writeFile(join(work, ".hidden", "x.txt"), "hidden");
   await writeFile(join(work, ".env.local"), "TOKEN=1");
   await writeFile(join(outside, "x.txt"), "outside");
@@ -190,6 +199,27 @@ describe("readAllowedFile accepts", () => {
     }
   });
 
+  it("files close to a private key that hold none", LIMIT, async () => {
+    await expectOutcomes("accepted", [
+      ["cert.crt", CERTIFICATE],
+      ["public.txt", "-----BEGIN PUBLIC KEY-----\nMFkwEwYHKo\n-----END PUBLIC KEY-----\n"],
+      ["rsa-public.txt", "-----BEGIN RSA PUBLIC KEY-----\nMEgCQQC\n-----END RSA PUBLIC KEY-----\n"],
+      ["deploy.pub", "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI user@host\n"],
+      [
+        "ssh2.pub",
+        '---- BEGIN SSH2 PUBLIC KEY ----\nComment: "rsa-key"\nAAAAB3NzaC1yc2E\n---- END SSH2 PUBLIC KEY ----\n',
+      ],
+      [
+        "pubkey.asc",
+        "-----BEGIN PGP PUBLIC KEY BLOCK-----\n\nmQINBF\n-----END PGP PUBLIC KEY BLOCK-----\n",
+      ],
+      ["file.sig.asc", "-----BEGIN PGP SIGNATURE-----\n\niQIzBAAB\n-----END PGP SIGNATURE-----\n"],
+      ["recipients.txt", "age1qyqszqgpqyqszqgpqyqszqgpqyqszqgp\n"],
+      ["cert-data.yaml", `client-certificate-data: ${base64(CERTIFICATE)}\n`],
+      ["notes.md", "Keep the private key out of the repository. Never paste a PRIVATE KEY here.\n"],
+    ]);
+  });
+
   it("a file that fills the budget exactly", LIMIT, async () => {
     const result = await read(join(work, "ok.txt"), [work], { remaining: 8 });
     assert.equal(result.ok, true);
@@ -291,10 +321,81 @@ describe("readAllowedFile refuses", () => {
       "tls.key~",
       "tls.KEY~~.1",
       "backup.p12.zip",
+      "vault.kdbx",
+      "Passwords.KDBX",
+      "backup.kdbx~",
+      "krb5.keytab",
+      "HTTP.KEYTAB",
+      "krb5cc_1000",
+      "KRB5CC_1000",
+      "krb5cc_1000_AbC123",
+      "krb5cc",
     ]) {
       await writeFile(join(work, name), "key");
       assert.equal(reasonOf(await read(join(work, name))), KEY, name);
     }
+  });
+
+  it("files that hold a private key, whatever their name", LIMIT, async () => {
+    const serviceAccount = `{
+  "type": "service_account",
+  "project_id": "demo-project",
+  "private_key_id": "0123456789abcdef",
+  "private_key": "-----BEGIN PRIVATE KEY-----\\nMIIEvQIBADANBg\\n-----END PRIVATE KEY-----\\n",
+  "client_email": "demo@demo-project.iam.gserviceaccount.com"
+}
+`;
+    await expectOutcomes(PRIVATE_KEY, [
+      ["deploy", OPENSSH_KEY],
+      ["key.txt", RSA_KEY],
+      ["serviceAccountKey.json", serviceAccount],
+      [
+        "enc.txt",
+        "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIFHDBOBgkq\n-----END ENCRYPTED PRIVATE KEY-----\n",
+      ],
+      [
+        "secret.asc",
+        "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nlQOYBF\n-----END PGP PRIVATE KEY BLOCK-----\n",
+      ],
+      [
+        "ssh2-key",
+        '---- BEGIN SSH2 ENCRYPTED PRIVATE KEY ----\nComment: "rsa-key"\nP2/56wAAAi\n---- END SSH2 ENCRYPTED PRIVATE KEY ----\n',
+      ],
+      ["putty.txt", "PuTTY-User-Key-File-3: ssh-ed25519\nEncryption: none\nComment: x\n"],
+      [
+        "age.txt",
+        "# created: 2026-01-01T00:00:00Z\n# public key: age1qyqszqgpqyqszqgpqyqszqgpqyqszqgp\nAGE-SECRET-KEY-1QYQSZQGPQYQSZQGPQYQSZQGPQYQSZQGP\n",
+      ],
+      ["bare-body.txt", `${BARE_BODY}\n`],
+      ["key.bin", Buffer.from(BARE_BODY, "base64")],
+      [
+        "late.log",
+        `${"a".repeat(1024 * 1024 + 1)}-----BEGIN EC PRIVATE KEY-----\nMHcCAQEE\n-----END EC PRIVATE KEY-----\n`,
+      ],
+    ]);
+  });
+
+  it("a private key in base64, wherever it starts in a 3-byte group", LIMIT, async () => {
+    const kubeconfig = `apiVersion: v1
+kind: Config
+clusters:
+- cluster:
+    certificate-authority-data: ${base64(CERTIFICATE)}
+    server: https://127.0.0.1:6443
+  name: local
+users:
+- name: admin
+  user:
+    client-certificate-data: ${base64(CERTIFICATE)}
+    client-key-data: ${base64(RSA_KEY)}
+`;
+    await expectOutcomes(PRIVATE_KEY, [
+      // The marker at byte 15, 19 and 11: offset 0, 1 and 2 in its group.
+      ["aligned.txt", base64("-----BEGIN RSA PRIVATE KEY-----\n")],
+      ["skip-two.txt", base64("-----BEGIN OPENSSH PRIVATE KEY-----\n")],
+      ["skip-one.txt", base64("-----BEGIN PRIVATE KEY-----\n")],
+      ["kubeconfig.yaml", kubeconfig],
+    ]);
   });
 
   it("links named like a key or a dotfile, and a plain link to a key", LIMIT, async () => {
@@ -404,7 +505,7 @@ describe("readAllowedFile before it opens", () => {
 
 describe("readAllowedFile on the open descriptor", () => {
   it(
-    "refuses a link swapped after the check to outside, a key or a dot folder",
+    "refuses a link swapped after the check to outside, a key, a dot folder or a file holding a key",
     LIMIT,
     async () => {
       const link = join(work, "swap.txt");
@@ -412,6 +513,7 @@ describe("readAllowedFile on the open descriptor", () => {
         [join(outside, "x.txt"), /^is outside the upload folders/],
         [join(work, "server.pem"), new RegExp(`^${literal(KEY)}$`)],
         [join(work, ".hidden", "x.txt"), new RegExp(`^${literal(DOT)}$`)],
+        [join(work, "plain-key.txt"), new RegExp(`^${literal(PRIVATE_KEY)}$`)],
       ] as const) {
         await rm(link, { force: true });
         await symlink(join(work, "ok.txt"), link);
@@ -467,9 +569,25 @@ describe("readAllowedFile on the open descriptor", () => {
     assert.equal(reasonOf(result), CHANGED);
   });
 
-  it("refuses a file that grew or shrank while it was read", LIMIT, async () => {
-    for (const change of [1, -1]) {
+  it(
+    "refuses a file holding a key by the bytes of the descriptor, not the path",
+    LIMIT,
+    async () => {
       const result = await read(join(work, "ok.txt"), [work], {
+        open: (_file, flags) => open(join(work, "plain-key.txt"), flags),
+      });
+      assert.equal(reasonOf(result), PRIVATE_KEY);
+    },
+  );
+
+  it("refuses a file that grew or shrank while it was read", LIMIT, async () => {
+    for (const [file, change] of [
+      ["ok.txt", 1],
+      ["ok.txt", -1],
+      ["plain-key.txt", 1],
+      ["plain-key.txt", -1],
+    ] as const) {
+      const result = await read(join(work, file), [work], {
         open: async (file, flags) => {
           const handle = await open(file, flags);
           return {
@@ -484,7 +602,7 @@ describe("readAllowedFile on the open descriptor", () => {
           };
         },
       });
-      assert.equal(reasonOf(result), CHANGED, String(change));
+      assert.equal(reasonOf(result), CHANGED, `${file} ${change}`);
     }
   });
 
@@ -562,6 +680,23 @@ function read(
   return readAllowedFile(requested, folders, { cwd: work, home, remaining: BUDGET, ...ctx });
 }
 
+/** Writes each file into `work` and compares every outcome at once, so the diff names each miss. */
+async function expectOutcomes(
+  expected: string,
+  files: readonly (readonly [string, string | Buffer])[],
+): Promise<void> {
+  const outcomes: string[] = [];
+  for (const [name, content] of files) {
+    await writeFile(join(work, name), content);
+    const result = await read(join(work, name));
+    outcomes.push(`${name}: ${result.ok ? "accepted" : result.reason}`);
+  }
+  assert.deepEqual(
+    outcomes,
+    files.map(([name]) => `${name}: ${expected}`),
+  );
+}
+
 function reasonOf(result: ReadResult): string {
   assert.ok(!result.ok, `accepted ${result.ok ? result.path : ""}`);
   return result.reason;
@@ -580,4 +715,8 @@ function shortReads(handle: ReadHandle): ReadHandle {
 
 function literal(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function base64(text: string): string {
+  return Buffer.from(text).toString("base64");
 }
