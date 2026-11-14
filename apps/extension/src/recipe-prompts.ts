@@ -30,7 +30,7 @@ const READ_FAILED = "Firefox could not read the stored recipes. Reload the page 
 
 export interface RecipePromptsDeps<Handle> {
   browser: Pick<BrowserApi, "runtime" | "tabs" | "windows" | "storage">;
-  groups: Pick<SessionGroups, "createTab" | "ensureGroup" | "closeTab">;
+  groups: Pick<SessionGroups, "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow">;
   access: Pick<
     SiteAccess,
     "openPrompt" | "siteStates" | "allowForSession" | "refuseIfStoppedAsking"
@@ -205,9 +205,7 @@ export function createRecipePrompts<Handle>({
       }
       throw error;
     }
-    try {
-      await browser.windows.update(shown.windowId, { drawAttention: true });
-    } catch {}
+    await groups.showPromptWindow(session, shown.windowId);
     return { tabId: tab.id };
   }
 
@@ -293,9 +291,7 @@ export function createRecipePrompts<Handle>({
       await closeNewTab(tab.id);
       throw error;
     }
-    try {
-      await browser.windows.update(shown.windowId, { drawAttention: true });
-    } catch {}
+    await groups.showPromptWindow(session, shown.windowId);
     return answer;
   }
 

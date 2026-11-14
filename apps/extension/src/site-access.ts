@@ -58,7 +58,7 @@ export interface OpenPrompt {
 
 export interface SiteAccessDeps<Handle> {
   browser: Pick<BrowserApi, "storage" | "runtime" | "tabs" | "windows">;
-  groups: Pick<SessionGroups, "groupOf">;
+  groups: Pick<SessionGroups, "groupOf" | "showPromptWindow">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
   /** The session's approval of the site ended: the user withdrew it, or the session ended. */
@@ -472,9 +472,7 @@ export function createSiteAccess<Handle>({
       }
       throw error;
     }
-    try {
-      await browser.windows.update(tab.windowId, { drawAttention: true });
-    } catch {}
+    await groups.showPromptWindow(session, tab.windowId);
     return { answer, promptInTab: true };
   }
 

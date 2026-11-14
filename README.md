@@ -98,10 +98,13 @@ group holds only blank tabs, so pages you may still be reading stay open.
 
 With "Open each agent session in its own window" on, a session's first tab opens in a new window
 beside yours that holds the session's group, and its later tabs open there too, so the tab
-selected in your window stays as it is. The blank tab Firefox opens the window with closes once
-another tab in it is selected, and the window closes at once if the session's first tab cannot
-be opened. When the session ends, Foxleash closes that window if it holds only blank tabs and is
-not your last window. If you close the window, the agent's next tab opens a new one.
+selected in your window stays as it is. Firefox may bring that window to the front when it opens
+it. A page in it that asks you something (whether to allow a site, to save or run a recipe, or to
+allow the sites a task needs) brings that window to the front if your desktop allows it, so the
+question does not wait unseen behind your window. The blank tab Firefox opens the window with
+closes once another tab in it is selected, and the window closes at once if the session's first
+tab cannot be opened. When the session ends, Foxleash closes that window if it holds only blank
+tabs and is not your last window. If you close the window, the agent's next tab opens a new one.
 
 Subagents or parallel agents started from one agent session (for example Claude Code
 subagents) share that session's MCP connection, so Foxleash sees them as one session. They

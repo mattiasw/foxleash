@@ -37,6 +37,11 @@ export interface SessionGroups {
   isSessionGroup(groupId: number | undefined): boolean;
   /** The session whose group this is; undefined for undefined, -1 and any other group. */
   sessionOf(groupId: number | undefined): string | undefined;
+  /**
+   * Brings the session's own window to the front when `windowId` is that window, restoring it when
+   * minimized; otherwise draws attention to `windowId`. Never rejects.
+   */
+  showPromptWindow(session: string, windowId: number): Promise<void>;
 }
 
 /**
@@ -72,7 +77,16 @@ export function createSessionGroups(
     }
   });
 
-  return { groupOf, ensureGroup, createTab, endSession, closeTab, isSessionGroup, sessionOf };
+  return {
+    groupOf,
+    ensureGroup,
+    createTab,
+    endSession,
+    closeTab,
+    isSessionGroup,
+    sessionOf,
+    showPromptWindow,
+  };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
     const id = groups.get(session);
@@ -153,6 +167,24 @@ export function createSessionGroups(
 
   function sessionOf(groupId: number | undefined): string | undefined {
     return [...groups].find(([, id]) => id === groupId)?.[0];
+  }
+
+  async function showPromptWindow(session: string, windowId: number): Promise<void> {
+    try {
+      if (ownWindows.get(session)?.id !== windowId) {
+        await browser.windows.update(windowId, { drawAttention: true });
+        return;
+      }
+      const state = await browser.windows.get(windowId).then(
+        (window) => window.state,
+        () => undefined,
+      );
+      // Only for a minimized window: "normal" would also un-maximize one or leave full screen.
+      await browser.windows.update(
+        windowId,
+        state === "minimized" ? { focused: true, state: "normal" } : { focused: true },
+      );
+    } catch {}
   }
 
   /** Runs the task after every task already queued for the session has settled. */

@@ -1277,6 +1277,103 @@ describe("endSession with the session's window", { timeout: 10000 }, () => {
   });
 });
 
+describe("showPromptWindow", { timeout: 10000 }, () => {
+  it("brings the session's own window to the front", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: page.windowId, focused: true }]);
+    assert.equal(fake.currentWindowId, page.windowId);
+  });
+
+  it("restores the session's own window when Firefox reports it minimized", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    const get = fake.browser.windows.get;
+    fake.browser.windows.get = async (windowId) => ({
+      ...(await get(windowId)),
+      state: "minimized",
+    });
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [
+      { windowId: page.windowId, focused: true, state: "normal" },
+    ]);
+  });
+
+  it("only draws attention with the setting off", async () => {
+    const { fake, groups } = await windowSetup({ on: false });
+    const page = await openPage(groups, fake, "s1", PAGE);
+    const user = fake.currentWindowId;
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: user, drawAttention: true }]);
+    assert.equal(fake.currentWindowId, user);
+  });
+
+  it("only draws attention to a window that is not the session's own", async () => {
+    const { fake, groups } = await windowSetup();
+    const user = fake.currentWindowId;
+    const page = await openPage(groups, fake, "s1", PAGE);
+    assert.notEqual(page.windowId, user);
+    await groups.showPromptWindow("s1", user);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: user, drawAttention: true }]);
+    assert.equal(fake.currentWindowId, user);
+  });
+
+  it("only draws attention to another session's own window", async () => {
+    const { fake, groups } = await windowSetup();
+    const user = fake.currentWindowId;
+    const first = await openPage(groups, fake, "s1", PAGE);
+    const second = await openPage(groups, fake, "s2", PAGE);
+    assert.notEqual(first.windowId, second.windowId);
+    await groups.showPromptWindow("s1", second.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: second.windowId, drawAttention: true }]);
+    assert.equal(fake.currentWindowId, user);
+  });
+
+  it("still brings the session's own window to the front after the setting is turned off", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    await fake.browser.storage.local.remove("sessionWindow");
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: page.windowId, focused: true }]);
+  });
+
+  it("only draws attention once the session ended", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    await groups.endSession("s1");
+    assert.equal(fake.tabs.has(page.id), true);
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: page.windowId, drawAttention: true }]);
+  });
+
+  it("resolves when Firefox cannot update the window", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    const asked: unknown[] = [];
+    fake.browser.windows.update = async (windowId, updateInfo) => {
+      asked.push({ windowId, ...updateInfo });
+      throw new Error("No window with id");
+    };
+    await groups.showPromptWindow("s1", page.windowId);
+    await groups.showPromptWindow("s1", fake.currentWindowId);
+    assert.deepEqual(asked, [
+      { windowId: page.windowId, focused: true },
+      { windowId: fake.currentWindowId, drawAttention: true },
+    ]);
+  });
+
+  it("brings the session's own window to the front when Firefox cannot read it", async () => {
+    const { fake, groups } = await windowSetup();
+    const page = await openPage(groups, fake, "s1", PAGE);
+    fake.browser.windows.get = async () => {
+      throw new Error("No window with id");
+    };
+    await groups.showPromptWindow("s1", page.windowId);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: page.windowId, focused: true }]);
+  });
+});
+
 describe("the fake's windows", { timeout: 10000 }, () => {
   it("opens a window on one selected tab, and lists every window with its tabs", async () => {
     const fake = createFakeBrowser();

@@ -226,6 +226,18 @@ describe("each agent session in its own window, in real Firefox", () => {
     await closeOtherWindows();
   });
 
+  test("a prompt in the session's window behind the user's brings that window to the front", {
+    timeout: 120_000,
+  }, async () => {
+    await promptBringsWindowToFront("/a?front", false);
+  });
+
+  test("a prompt in the session's minimized window brings that window to the front", {
+    timeout: 120_000,
+  }, async () => {
+    await promptBringsWindowToFront("/a?front-minimized", true);
+  });
+
   test("the session's window stays when the session ends with a page in it", async () => {
     const reading = await connected();
     let kept = -1;
@@ -256,6 +268,60 @@ describe("each agent session in its own window, in real Firefox", () => {
     const connection = await harness.connect();
     await harness.waitUntilReady(connection);
     return connection;
+  }
+
+  /**
+   * Opens an allowed page in a new session's window, focuses the user's window (and minimizes the
+   * session's), then has the session ask for a site not yet approved.
+   */
+  async function promptBringsWindowToFront(query: string, minimized: boolean): Promise<void> {
+    await run("browser.storage.local.set({ sessionWindow: true })");
+    const asking = await connected();
+    try {
+      const page = tabOf(await harness.ok(asking, "tab_open", { url: fixtures.url(query) }));
+      const own = (await windowOf(page.id)).id;
+      assert.notEqual(own, userWindow);
+      await run(`browser.windows.update(${userWindow}, { focused: true })`);
+      await pollUntil(
+        async () => ((await focusedWindow()) === userWindow ? true : undefined),
+        PAGE_TIMEOUT_MS,
+        "the user's window to be focused",
+      );
+      if (minimized) {
+        await run(`browser.windows.update(${own}, { state: "minimized" })`);
+        await pollUntil(
+          async () => ((await windowState(own)) === "minimized" ? true : undefined),
+          PAGE_TIMEOUT_MS,
+          "the session's window to be minimized",
+        );
+      }
+      const opening = harness.ok(asking, "tab_open", { url: other.url("/a") });
+      opening.catch(() => {});
+      const prompt = await harness.promptContext();
+      // Before anything that selects the prompt's tab over WebDriver, which focuses its window.
+      await pollUntil(
+        async () => ((await focusedWindow()) === own ? true : undefined),
+        PAGE_TIMEOUT_MS,
+        "the session's window to be focused",
+      );
+      if (minimized) {
+        await pollUntil(
+          async () => ((await windowState(own)) === "normal" ? true : undefined),
+          PAGE_TIMEOUT_MS,
+          "the session's window to be restored",
+        );
+      }
+      const promptTab = Number(
+        await firefox.evaluate(prompt, "browser.tabs.getCurrent().then((tab) => tab.id)"),
+      );
+      assert.equal((await windowOf(promptTab)).id, own);
+      await harness.waitForArmed(prompt);
+      await firefox.click(prompt, 'button[data-answer="once"]');
+      assert.equal(tabOf(await opening).id, promptTab);
+    } finally {
+      await asking.close();
+    }
+    await closeOtherWindows();
   }
 
   async function useTools(tabId: number): Promise<void> {
@@ -309,6 +375,24 @@ describe("each agent session in its own window, in real Firefox", () => {
         }))))`,
     );
     return JSON.parse(String(text)) as WindowState[];
+  }
+
+  async function focusedWindow(): Promise<number> {
+    return Number(
+      await firefox.evaluate(
+        settings,
+        "browser.windows.getLastFocused().then((window) => window.id)",
+      ),
+    );
+  }
+
+  async function windowState(windowId: number): Promise<string> {
+    return String(
+      await firefox.evaluate(
+        settings,
+        `browser.windows.get(${windowId}).then((window) => window.state)`,
+      ),
+    );
   }
 
   function windowOf(tabId: number): Promise<WindowState> {

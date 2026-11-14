@@ -69,7 +69,13 @@ export interface BrowserApi {
   windows: {
     update(
       windowId: number,
-      updateInfo: { drawAttention?: boolean; state?: "normal"; width?: number; height?: number },
+      updateInfo: {
+        drawAttention?: boolean;
+        focused?: boolean;
+        state?: "normal";
+        width?: number;
+        height?: number;
+      },
     ): Promise<unknown>;
     get(windowId: number): Promise<BrowserWindow>;
     create(createData: { url: string; focused: boolean }): Promise<BrowserWindow>;

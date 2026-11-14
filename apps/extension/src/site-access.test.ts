@@ -10,7 +10,7 @@ import {
   flush,
 } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
-import { createSessionGroups } from "./session-groups.ts";
+import { createSessionGroups, type SessionGroups } from "./session-groups.ts";
 import { grantSite, readSettings } from "./settings.ts";
 import {
   APPROVAL_WAIT_MS,
@@ -19,6 +19,7 @@ import {
   portShowsPage,
   type SessionMemory,
   type SessionState,
+  type SiteAccess,
 } from "./site-access.ts";
 
 describe("view", () => {
@@ -578,6 +579,56 @@ describe("ask", () => {
     await ask();
     assert.equal(access.openPrompt("s1")?.waiting, true);
   });
+
+  it("brings the session's own window to the front for a prompt shown there", async () => {
+    const { fake, access, groups } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    const user = fake.currentWindowId;
+    assert.notEqual(tab.windowId, user);
+    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, focused: true }]);
+    assert.equal(fake.currentWindowId, tab.windowId);
+  });
+
+  it("only draws attention to the session's own window for a request joining its prompt", async () => {
+    const { fake, access, groups, timers } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    connect(fake, tab.id);
+    timers.advance(APPROVAL_WAIT_MS);
+    const other = await groups.createTab("s1", { url: "about:blank", active: false });
+    const updates = fake.tabUpdates.length;
+    const joined = await access.ask("s1", "https://a.example/other", other.id);
+    assert.equal(joined.promptInTab, false);
+    assert.deepEqual(fake.windowUpdates, [
+      { windowId: tab.windowId, focused: true },
+      { windowId: tab.windowId, drawAttention: true },
+    ]);
+    assert.equal(fake.tabUpdates.length, updates);
+  });
+
+  it("still asks when Firefox cannot bring the session's own window to the front", async () => {
+    const { fake, access, groups } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    fake.browser.windows.update = async () => {
+      throw new Error("No window");
+    };
+    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    assert.equal(access.openPrompt("s1")?.waiting, true);
+  });
+
+  /** A prompt tab made as tab_open makes it, with the session's window on. */
+  async function ownWindowPrompt(
+    fake: FakeBrowser,
+    access: SiteAccess,
+    groups: SessionGroups,
+  ): Promise<{ tab: Tab; promptUrl: string }> {
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const promptUrl = access.newPromptUrl();
+    const tab = await groups.createTab("s1", { url: promptUrl, active: false, discarded: true });
+    await groups.ensureGroup("s1", tab);
+    return { tab, promptUrl };
+  }
 
   it("rejects and keeps no prompt when the prompt page cannot be loaded", async () => {
     const { fake, access, timers, tab } = setup();

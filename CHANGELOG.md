@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- With "Open each agent session in its own window" on, a page asking you something (whether to
+  allow a site, to save or run a recipe, or to allow the sites a task needs) brings the
+  session's window to the front if your desktop allows it, instead of waiting unnoticed behind
+  yours.
+
 ## [0.4.0] - 2026-11-14
 
 ### Added

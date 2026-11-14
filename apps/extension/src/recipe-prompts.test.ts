@@ -1307,26 +1307,97 @@ describe("each session in its own window", { timeout: 10000 }, () => {
   it("opens a session's first propose page in a new window", async () => {
     const { fake, groups, recipes } = setup();
     await fake.browser.storage.local.set({ sessionWindow: true });
+    const userWindow = fake.currentWindowId;
     const { tabId } = await recipes.propose("s1", RECIPE);
     await flush();
     const windowId = fake.tabs.get(tabId)?.windowId;
     assert.deepEqual(fake.windowCreations, [{ url: "about:blank", focused: false }]);
-    assert.notEqual(windowId, fake.currentWindowId);
+    assert.notEqual(windowId, userWindow);
     assert.equal((await groups.groupOf("s1"))?.windowId, windowId);
     assert.deepEqual(tabsIn(fake, windowId), [tabId]);
+    assert.deepEqual(fake.windowUpdates, [{ windowId, focused: true }]);
   });
 
   it("opens a session's first run page in a new window", async () => {
     const { fake, groups, recipes } = setup();
     await seed(fake, TRIP);
     await fake.browser.storage.local.set({ sessionWindow: true });
+    const userWindow = fake.currentWindowId;
     const { tabId } = await openRun(fake, recipes);
     await flush();
     const windowId = fake.tabs.get(tabId)?.windowId;
     assert.equal(fake.windowCreations.length, 1);
-    assert.notEqual(windowId, fake.currentWindowId);
+    assert.notEqual(windowId, userWindow);
     assert.equal((await groups.groupOf("s1"))?.windowId, windowId);
     assert.deepEqual(tabsIn(fake, windowId), [tabId]);
+    assert.deepEqual(fake.windowUpdates, [{ windowId, focused: true }]);
+  });
+
+  it("brings the session's window to the front for a page asking for sites", async () => {
+    const { fake, recipes } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const userWindow = fake.currentWindowId;
+    const { tabId } = await openRequest(fake, recipes);
+    await flush();
+    const windowId = fake.tabs.get(tabId)?.windowId;
+    assert.notEqual(windowId, userWindow);
+    assert.deepEqual(fake.windowUpdates, [{ windowId, focused: true }]);
+    assert.equal(fake.currentWindowId, windowId);
+  });
+
+  it("returns a propose call once it asked Firefox to bring the session's window to the front", async () => {
+    const { fake, recipes } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const asked = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => {
+      asked.resolve();
+      return held.promise;
+    };
+    const proposing = track(recipes.propose("s1", RECIPE));
+    await asked.promise;
+    await flush();
+    assert.equal(proposing.state, "pending");
+    held.resolve();
+    await flush();
+    assert.equal(proposing.state, "resolved");
+  });
+
+  it("returns a run's answer once it asked Firefox to bring the session's window to the front", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const asked = Promise.withResolvers<void>();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => {
+      asked.resolve();
+      return held.promise;
+    };
+    const { answer, tabId } = await openRun(fake, recipes);
+    await asked.promise;
+    connect(fake, tabId).deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.equal(answer.state, "pending");
+    held.resolve();
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("only draws attention to the session's window for a run joining its open page", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, TRIP);
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const { tabId } = await openRun(fake, recipes);
+    await flush();
+    const windowId = fake.tabs.get(tabId)?.windowId;
+    const updates = fake.tabUpdates.length;
+    track(recipes.run("s1", "Trip"));
+    await flush();
+    assert.deepEqual(fake.windowUpdates, [
+      { windowId, focused: true },
+      { windowId, drawAttention: true },
+    ]);
+    assert.equal(fake.tabUpdates.length, updates);
   });
 
   it("closes the new window when the session's first page cannot be loaded", async () => {

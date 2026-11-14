@@ -285,6 +285,7 @@ export type ContentScript = (message: unknown) => Promise<unknown> | undefined;
 export interface WindowUpdate {
   windowId: number;
   drawAttention?: boolean;
+  focused?: boolean;
   state?: "normal";
   width?: number;
   height?: number;
@@ -518,6 +519,8 @@ export function createFakeBrowser(): FakeBrowser {
     windows: {
       update: async (windowId, updateInfo) => {
         fake.windowUpdates.push({ windowId, ...updateInfo });
+        // As in Firefox, the focused window becomes the current one.
+        if (updateInfo.focused === true) fake.currentWindowId = windowId;
         const size = sizeOf(windowId);
         fake.windowSizes.set(windowId, {
           width: updateInfo.width ?? size.width,
