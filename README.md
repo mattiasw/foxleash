@@ -116,11 +116,16 @@ the active tab of its window, which changes whenever any tab in that window is o
 selected.
 
 The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
-never closes the last tab of a window. When a tab's page asks you to confirm leaving it,
-`tab_close` tells the agent so, and Firefox closes the tab once you choose to leave the page.
-`resize_window` resizes the whole window that holds the agent's group, your own tabs in it
-included, and first returns a maximized, minimized or full-screen window to its normal state.
-With each session in its own window, that is the session's window, not yours.
+never closes the last tab of a window. While Foxleash is asking you something in a tab of the
+agent's group (whether to allow a site, to save or run a recipe, or to allow the sites a task
+needs), the agent cannot switch to another tab, and a tab it opens with `tab_open` meanwhile is
+not selected, though Firefox may still select a tab a page opens, also after the agent's click.
+When a tab's page asks you to confirm leaving it, Firefox selects that tab to ask you, even while
+Foxleash is asking you something; `tab_close` tells the agent so, and Firefox closes the tab once
+you choose to leave the page. `resize_window` resizes the whole window that holds the agent's
+group, your own tabs in it included, and first returns a maximized, minimized or full-screen
+window to its normal state. With each session in its own window, that is the session's window,
+not yours.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use; clicking it
 opens Foxleash's settings.

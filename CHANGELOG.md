@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   answers only on a button you moved to after the buttons respond, and typing into a prompt
   keeps its buttons from responding until you stop for a second. A prompt that refuses such a
   key press says how to answer with the keyboard.
+- While Foxleash asks you something in a tab of an agent's group, the agent can no longer switch
+  that window to another of its tabs, and tabs Foxleash opens for it meanwhile stay in the
+  background, so the question stays in view.
 
 ## [0.4.0] - 2026-11-14
 

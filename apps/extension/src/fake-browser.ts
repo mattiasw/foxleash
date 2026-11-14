@@ -446,7 +446,8 @@ export function createFakeBrowser(): FakeBrowser {
           activate(tab);
           if (!already) emitActivated(tab);
         }
-        const { url } = properties;
+        // Firefox's schema check copies only the object's own properties.
+        const url = Object.hasOwn(properties, "url") ? properties.url : undefined;
         if (url === undefined) {
           // Firefox loads a tab it has not loaded yet once it is selected, without a new entry.
           if (properties.active === true && tab.discarded === true) {

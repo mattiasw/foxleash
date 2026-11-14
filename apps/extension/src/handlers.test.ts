@@ -4008,6 +4008,90 @@ describe("approval", { timeout: 10000 }, () => {
     }
   });
 
+  it("leaves a tab it opens unselected while the session's site prompt is open", async () => {
+    for (const url of ["https://a.example/x", undefined]) {
+      const { fake, call, open, grant, promptOf } = setup();
+      await grant("https://a.example");
+      const other = await open("s1");
+      const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+      void asking.catch(() => {});
+      await promptOf("s1");
+      const label = `url: ${url}`;
+      const result = await call("s1", "tab_open", url === undefined ? {} : { url });
+      assert.ok("tab" in result, label);
+      assert.equal(result.tab.url, url ?? "about:blank", label);
+      assert.equal(result.tab.active, false, label);
+      assert.equal(fake.tabs.get(result.tab.id)?.active, false, label);
+      assert.equal(fake.tabs.get(other.id)?.active, true, label);
+      assert.equal(fake.tabs.get(result.tab.id)?.groupId, groupIdOf(fake, other.id), label);
+    }
+  });
+
+  it("leaves a blank tab unselected when a prompt was shown while the tab was being created", async () => {
+    const { fake, call, access, open, promptOf } = setup();
+    const other = await open("s1");
+    let asking: ReturnType<typeof call> | undefined;
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async (properties) => {
+      if (properties.url === "about:blank" && asking === undefined) {
+        asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+        void asking.catch(() => {});
+        await promptOf("s1");
+      }
+      return create(properties);
+    };
+    const result = await call("s1", "tab_open", {});
+    assert.ok("tab" in result);
+    assert.equal(result.tab.active, false);
+    assert.equal(fake.tabs.get(result.tab.id)?.active, false);
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.equal(access.openPrompt("s1")?.tabId, other.id);
+  });
+
+  it("leaves a tab it opens unselected while the session's recipe page is open", async () => {
+    const { fake, call } = setup();
+    const proposed = await call("s1", "recipe_propose", {
+      name: "Receipt",
+      description: "Download the latest receipt.",
+      sites: ["https://shop.example"],
+      steps: "Open https://shop.example/orders.",
+    });
+    assert.ok("tabId" in proposed);
+    const result = await call("s1", "tab_open", {});
+    assert.ok("tab" in result);
+    assert.equal(result.tab.active, false);
+    assert.equal(fake.tabs.get(result.tab.id)?.active, false);
+    assert.equal(fake.tabs.get(proposed.tabId)?.active, true);
+  });
+
+  it("leaves a tab of a site allowed meanwhile unselected when a prompt opened in another tab", async () => {
+    const { fake, call, access, open, grant, promptOf } = setup();
+    const other = await open("s1");
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async (properties) => {
+      await grant("https://a.example");
+      return create(properties);
+    };
+    let asking: ReturnType<typeof call> | undefined;
+    const ask = access.ask;
+    access.ask = async (session, url, tabId, promptUrl) => {
+      const approval = await ask(session, url, tabId, promptUrl);
+      if (url === "https://a.example/x") {
+        asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+        void asking.catch(() => {});
+        await promptOf("s1");
+      }
+      return approval;
+    };
+    const result = await call("s1", "tab_open", { url: "https://a.example/x" });
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.equal(result.tab.active, false);
+    assert.equal(fake.tabs.get(result.tab.id)?.active, false);
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.equal(access.openPrompt("s1")?.tabId, other.id);
+  });
+
   it("loads nothing in a tab that left the session's group while the answer's load read the settings", async () => {
     const { fake, call, page, promptOf } = setup();
     const opened = call("s1", "tab_open", { url: "https://a.example/x" });
@@ -4815,6 +4899,92 @@ describe("tab_select", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.get(user.id)?.active, false);
     assert.equal(fake.tabs.get(other.id)?.active, true);
     assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("refuses another tab while the session's site prompt is open, but selects the prompt's", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    const approved = await open("s1", "https://a.example/");
+    const other = await open("s1");
+    const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+    void asking.catch(() => {});
+    const prompt = await promptOf("s1");
+    assert.equal(prompt.tabId, other.id);
+    await assert.rejects(call("s1", "tab_select", { tabId: approved.id }), {
+      code: "approval_pending",
+      message: `Foxleash is waiting for the user to answer in tab ${other.id} whether to allow https://b.example. Try again after the user has answered.`,
+    });
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.equal(fake.tabs.get(approved.id)?.active, false);
+    const selected = await call("s1", "tab_select", { tabId: other.id });
+    assert.ok("tab" in selected);
+    assert.equal(selected.tab.active, true);
+  });
+
+  it("refuses a tab when the prompt was shown while the tab's group was being read", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    const approved = await open("s1", "https://a.example/");
+    const other = await open("s1");
+    const get = fake.browser.tabGroups.get;
+    let armed = true;
+    fake.browser.tabGroups.get = async (groupId) => {
+      if (armed) {
+        armed = false;
+        const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+        void asking.catch(() => {});
+        await promptOf("s1");
+      }
+      return get(groupId);
+    };
+    await assert.rejects(call("s1", "tab_select", { tabId: approved.id }), {
+      code: "approval_pending",
+    });
+    assert.equal(armed, false);
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.equal(fake.tabs.get(approved.id)?.active, false);
+  });
+
+  it("refuses another tab while the session's recipe page is open, but selects the page's", async () => {
+    const { fake, call, open } = setup();
+    const tab = await open("s1");
+    const proposed = await call("s1", "recipe_propose", {
+      name: "Receipt",
+      description: "Download the latest receipt.",
+      sites: ["https://shop.example"],
+      steps: "Open https://shop.example/orders.",
+    });
+    assert.ok("tabId" in proposed);
+    const pageTab = proposed.tabId;
+    assert.equal(fake.tabs.get(pageTab)?.active, true);
+    await assert.rejects(call("s1", "tab_select", { tabId: tab.id }), {
+      code: "recipe_prompt_open",
+      message: `Foxleash is still asking the user in tab ${pageTab} whether to save a recipe. Try again after the user has answered there.`,
+    });
+    assert.equal(fake.tabs.get(pageTab)?.active, true);
+    assert.equal(fake.tabs.get(tab.id)?.active, false);
+    const selected = await call("s1", "tab_select", { tabId: pageTab });
+    assert.ok("tab" in selected);
+    assert.equal(fake.tabs.get(pageTab)?.active, true);
+  });
+
+  it("selects another tab again once the prompt is answered or its tab closed", async () => {
+    for (const ending of ["answered", "closed"]) {
+      const { fake, call, open, grant, page, promptOf } = setup();
+      await grant("https://a.example");
+      const approved = await open("s1", "https://a.example/");
+      const other = await open("s1");
+      const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+      void asking.catch(() => {});
+      await promptOf("s1");
+      if (ending === "answered") (await page("s1")).deliver({ type: "answer", answer: "once" });
+      else fake.removeTab(other.id);
+      await asking.catch(() => {});
+      const selected = await call("s1", "tab_select", { tabId: approved.id });
+      assert.ok("tab" in selected, ending);
+      assert.equal(selected.tab.active, true, ending);
+      assert.equal(fake.tabs.get(approved.id)?.active, true, ending);
+    }
   });
 });
 

@@ -1684,6 +1684,11 @@ describe("tab_close, tab_select and resize_window", () => {
       named("tab_select")?.description?.includes("The window is not brought to the front."),
     );
     assert.ok(
+      named("tab_select")?.description?.includes(
+        "While Foxleash is asking the user something in a tab of this group, it refuses to select another tab.",
+      ),
+    );
+    assert.ok(
       named("resize_window")?.description?.includes(
         "This resizes the user's whole window, the user's own tabs in it included.",
       ),

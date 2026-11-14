@@ -344,11 +344,9 @@ export function createHandlers<Handle>({
       return { tab: await openOnPage(session, url) };
     }
     if (url !== undefined) return { tab: await openOnPrompt(session, url) };
-    const tab = await groups.createTab(session, { url: "about:blank", active: true });
+    const tab = await groups.createTab(session, { url: "about:blank", active: false });
     await groups.ensureGroup(session, tab);
-    const current = await browser.tabs.get(tab.id);
-    const view = await access.view(session);
-    return { tab: view.tabInfo(current) };
+    return { tab: await selectNewTab(session, tab.id) };
   }
 
   /**
@@ -356,7 +354,8 @@ export function createHandlers<Handle>({
    * history entry after its page when it unloads and restores it. Grouped before its page loads,
    * so the page never loads outside the session's group. Loaded before it is selected: selecting
    * a tab Firefox has not loaded restores its page as a history load, which shows the cached copy
-   * without asking the server unless the response was `no-store`.
+   * without asking the server unless the response was `no-store`. Not selected while the session
+   * is asking the user something.
    */
   async function openOnPage(session: string, url: string): Promise<TabInfo> {
     const tab = await groups.createTab(session, { url, active: false, discarded: true });
@@ -383,16 +382,14 @@ export function createHandlers<Handle>({
       await removeNewTab(session, tab.id);
       throw error;
     }
-    const selected = await browser.tabs.update(tab.id, { active: true });
-    const view = await access.view(session);
-    return view.tabInfo(selected);
+    return selectNewTab(session, tab.id);
   }
 
   /**
    * Created unloaded on its prompt page, as `openOnPage`'s tab is on its page, so Firefox's unload
    * and restore add no about:blank entry; grouped before the prompt loads. A tab the prompt was
    * not shown in (its site allowed meanwhile) loads the page and is then selected, as
-   * `openOnPage`'s is.
+   * `openOnPage`'s is, unless the session is asking the user something.
    */
   async function openOnPrompt(session: string, url: string): Promise<TabInfo> {
     const promptUrl = access.newPromptUrl();
@@ -420,9 +417,23 @@ export function createHandlers<Handle>({
       throw error;
     }
     if (approval.promptInTab) return loaded;
-    const selected = await browser.tabs.update(tab.id, { active: true });
-    const view = await access.view(session);
-    return view.tabInfo(selected);
+    return selectNewTab(session, tab.id);
+  }
+
+  /**
+   * Selects a tab tab_open opened, unless the session's question is open in a tab, which would
+   * then be hidden. The check and the select start in the same turn, with no await in between.
+   */
+  async function selectNewTab(session: string, tabId: number): Promise<TabInfo> {
+    const tab = asking(session)
+      ? await browser.tabs.get(tabId)
+      : await browser.tabs.update(tabId, { active: true });
+    return (await access.view(session)).tabInfo(tab);
+  }
+
+  /** Whether the session's site prompt or recipe page is open. */
+  function asking(session: string): boolean {
+    return access.openPrompt(session) !== undefined || recipes.openPrompt(session) !== undefined;
   }
 
   /**
@@ -805,6 +816,7 @@ export function createHandlers<Handle>({
   async function tabSelect(session: string, params: Params): Promise<Result<"tab_select">> {
     const tabId = tabIdParam(params, "tab_select");
     await groupTab(session, tabId);
+    keepPromptInView(session, tabId);
     const updated = await browser.tabs.update(tabId, { active: true });
     const view = await access.view(session);
     return { tab: view.tabInfo(updated) };
@@ -1662,6 +1674,24 @@ export function createHandlers<Handle>({
       throw new ToolError(
         "recipe_prompt_open",
         `Foxleash is asking the user in tab ${tabId} ${page.question}; leave that tab open.`,
+      );
+    }
+  }
+
+  /**
+   * Refuses selecting any tab but the one showing the session's open prompt or recipe page, which
+   * would hide the user's question behind a page the agent chose. Called right before the select
+   * starts, with no await in between.
+   */
+  function keepPromptInView(session: string, tabId: number): void {
+    const shown = access.openPrompt(session);
+    if (shown !== undefined && shown.tabId !== tabId)
+      throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);
+    const page = recipes.openPrompt(session);
+    if (page !== undefined && page.tabId !== tabId) {
+      throw new ToolError(
+        "recipe_prompt_open",
+        `Foxleash is still asking the user in tab ${page.tabId} ${page.question}. Try again after the user has answered there.`,
       );
     }
   }

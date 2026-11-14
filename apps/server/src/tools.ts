@@ -408,7 +408,7 @@ export function registerTools(
   register(
     "tab_select",
     {
-      description: `Make a tab of this session's Foxleash tab group the active tab of its window, and return it. The window is not brought to the front. ${REDACTED_TABS}`,
+      description: `Make a tab of this session's Foxleash tab group the active tab of its window, and return it. The window is not brought to the front. While Foxleash is asking the user something in a tab of this group, it refuses to select another tab. ${REDACTED_TABS}`,
       inputSchema: { tabId: tabIdSchema() },
     },
     ({ tabId }) => run(bridge, "tab_select", { tabId }),

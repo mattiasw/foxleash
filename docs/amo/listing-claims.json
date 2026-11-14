@@ -269,6 +269,21 @@
           "contains": "\"cross_site_navigation\""
         }
       ]
+    },
+    {
+      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and tabs Foxleash opens for it meanwhile are not selected",
+      "evidence": [
+        { "file": "apps/extension/src/handlers.ts", "contains": "function keepPromptInView(" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "keepPromptInView(session, tabId);"
+        },
+        { "file": "apps/extension/src/handlers.ts", "contains": "function selectNewTab(" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "url: \"about:blank\", active: false"
+        }
+      ]
     }
   ]
 }
