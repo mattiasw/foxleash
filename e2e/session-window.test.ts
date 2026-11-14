@@ -311,11 +311,12 @@ describe("each agent session in its own window, in real Firefox", () => {
           "the session's window to be restored",
         );
       }
+      // The tab shows the prompt's URL for a moment before its page has `browser`.
+      await harness.waitForArmed(prompt);
       const promptTab = Number(
         await firefox.evaluate(prompt, "browser.tabs.getCurrent().then((tab) => tab.id)"),
       );
       assert.equal((await windowOf(promptTab)).id, own);
-      await harness.waitForArmed(prompt);
       await firefox.click(prompt, 'button[data-answer="once"]');
       assert.equal(tabOf(await opening).id, promptTab);
     } finally {
