@@ -131,7 +131,7 @@ export interface HandlerDeps<Handle> {
 type Params = Record<string, unknown>;
 
 type Handlers = {
-  [M in MethodName]: (session: string, params: Params) => Promise<Result<M>>;
+  [M in MethodName]: (session: string, params: Params, generation: number) => Promise<Result<M>>;
 };
 
 type NavigationTarget = { kind: "url"; url: string } | { kind: "action"; action: NavigateAction };
@@ -314,7 +314,9 @@ export function createHandlers<Handle>({
   };
 
   return async function handleRequest(request) {
-    return handlers[request.method](request.session, request.params);
+    // Read on arrival, so a request that was running when its session ended asks nothing.
+    const generation = access.generation(request.session);
+    return handlers[request.method](request.session, request.params, generation);
   };
 
   async function tabsList(session: string): Promise<Result<"tabs_list">> {
@@ -326,24 +328,34 @@ export function createHandlers<Handle>({
     return { tabs: tabs.map(view.tabInfo) };
   }
 
-  async function tabOpen(session: string, params: Params): Promise<Result<"tab_open">> {
+  async function tabOpen(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"tab_open">> {
     const started = now();
     const viewed = viewParam(params, "tab_open");
-    const { tab } = await openTab(session, params);
+    const { tab } = await openTab(session, params, generation);
     return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
   }
 
-  async function openTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
+  async function openTab(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<{ tab: TabInfo }> {
     const url = tabOpenUrl(params);
     const decision = url === undefined ? undefined : await access.check(session, url);
     if (url !== undefined && decision?.decision === "join") {
       // Waits on the session's open prompt for this site, in its tab, instead of a new tab.
-      return { tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }) };
+      return {
+        tab: await approveAndLoad(session, decision.tabId, url, { kind: "url", url }, generation),
+      };
     }
     if (url !== undefined && decision?.decision === "allowed") {
       return { tab: await openOnPage(session, url) };
     }
-    if (url !== undefined) return { tab: await openOnPrompt(session, url) };
+    if (url !== undefined) return { tab: await openOnPrompt(session, url, generation) };
     const tab = await groups.createTab(session, { url: "about:blank", active: false });
     await groups.ensureGroup(session, tab);
     return { tab: await selectNewTab(session, tab.id) };
@@ -391,7 +403,7 @@ export function createHandlers<Handle>({
    * not shown in (its site allowed meanwhile) loads the page and is then selected, as
    * `openOnPage`'s is, unless the session is asking the user something.
    */
-  async function openOnPrompt(session: string, url: string): Promise<TabInfo> {
+  async function openOnPrompt(session: string, url: string, generation: number): Promise<TabInfo> {
     const promptUrl = access.newPromptUrl();
     const tab = await groups.createTab(session, {
       url: promptUrl,
@@ -401,7 +413,7 @@ export function createHandlers<Handle>({
     let approval: Approval;
     try {
       await groups.ensureGroup(session, tab);
-      approval = await access.ask(session, url, tab.id, promptUrl);
+      approval = await access.ask(session, url, tab.id, { generation, promptUrl });
     } catch (error) {
       // Nothing was shown in it; selected outside the group, it would load there.
       await removeNewTab(session, tab.id);
@@ -448,14 +460,22 @@ export function createHandlers<Handle>({
     if (closed) await closed.removed.catch(() => {});
   }
 
-  async function navigate(session: string, params: Params): Promise<Result<"navigate">> {
+  async function navigate(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"navigate">> {
     const started = now();
     const viewed = viewParam(params, "navigate");
-    const { tab } = await navigateTab(session, params);
+    const { tab } = await navigateTab(session, params, generation);
     return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
   }
 
-  async function navigateTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
+  async function navigateTab(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<{ tab: TabInfo }> {
     const tabId = tabIdParam(params, "navigate");
     const request = navigationTarget(params);
     const tab = await existingTab(tabId);
@@ -471,17 +491,17 @@ export function createHandlers<Handle>({
       // A request on the prompt's own tab goes through the prompt, so Foxleash never leaves it.
       if (prompt?.tabId === tabId) {
         const url = retryUrl(prompt, target);
-        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
+        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }, generation) };
       }
       // On a prompt the user has answered, a reload loads the page it asked about, and a URL loads
       // in the prompt's place in the tab's history.
       const url = target.kind === "url" ? target.url : isReload(target) ? asked : undefined;
       if (asked !== undefined && url !== undefined) {
-        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }) };
+        return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }, generation) };
       }
       const gated = await gate(session, tab, target);
       if (gated !== undefined && gated.decision.decision !== "allowed") {
-        return { tab: await approveAndLoad(session, tabId, gated.url, target) };
+        return { tab: await approveAndLoad(session, tabId, gated.url, target, generation) };
       }
       keepPrompt(session, tabId);
       const history =
@@ -1559,8 +1579,9 @@ export function createHandlers<Handle>({
     tabId: number,
     url: string,
     target: NavigationTarget,
+    generation: number,
   ): Promise<TabInfo> {
-    const { answer } = await access.ask(session, url, tabId);
+    const { answer } = await access.ask(session, url, tabId, { generation });
     await answer;
     return loadAfterAnswer(session, tabId, url, target);
   }

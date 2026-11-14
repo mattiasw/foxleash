@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whatever its name, such as an SSH key named `deploy`, a service account key `.json` or a
   kubeconfig, and refuses KeePass databases (`*.kdbx`), Kerberos credential caches (`krb5cc*`)
   and keytabs (`*.keytab`) by name.
+- A tool call that was still running when its agent session ended no longer opens a prompt
+  asking whether to allow a site. Before, allowing such a prompt once also allowed the site,
+  without asking, for the agent's next session from the same MCP server.
 
 ## [0.4.0] - 2026-11-14
 

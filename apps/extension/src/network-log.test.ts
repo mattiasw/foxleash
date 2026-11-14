@@ -339,7 +339,9 @@ describe("network log", { timeout: 10000 }, () => {
       }
     }
     const prompted = await tabIn("s1");
-    await access.ask("s1", "https://c.example/", prompted.id);
+    await access.ask("s1", "https://c.example/", prompted.id, {
+      generation: access.generation("s1"),
+    });
     assert.equal(access.openPrompt("s1")?.tabId, prompted.id);
     fake.emitCommitted({ tabId: prompted.id, frameId: 0, url: URL_A });
     await flush();

@@ -137,7 +137,7 @@ describe("propose", { timeout: 10000 }, () => {
   it("refuses while the session's site prompt is open, and the site prompt while the page is", async () => {
     const { fake, access, recipes } = setup();
     const tab = fake.openTab({ active: true });
-    await access.ask("s1", "https://a.example/", tab.id);
+    await access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") });
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "approval_pending",
@@ -151,10 +151,13 @@ describe("propose", { timeout: 10000 }, () => {
       message: pending,
     });
     const other = fake.openTab();
-    await assert.rejects(access.ask("s2", "https://b.example/", other.id), {
-      code: "approval_pending",
-      message: pending,
-    });
+    await assert.rejects(
+      access.ask("s2", "https://b.example/", other.id, { generation: access.generation("s2") }),
+      {
+        code: "approval_pending",
+        message: pending,
+      },
+    );
     assert.equal(access.openPrompt("s2"), undefined);
   });
 
@@ -172,7 +175,7 @@ describe("propose", { timeout: 10000 }, () => {
     proposing.catch(() => {
       settled = true;
     });
-    await access.ask("s1", "https://a.example/", tab.id);
+    await access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") });
     // The refusal waits until Firefox has removed the page's tab.
     const removal = Promise.withResolvers<void>();
     const remove = fake.browser.tabs.remove;
@@ -894,7 +897,7 @@ describe("run", { timeout: 10000 }, () => {
     });
     // Neither an open site prompt nor an open recipe page is in the way.
     const tab = fake.openTab({ active: true });
-    await access.ask("s1", "https://e.example/", tab.id);
+    await access.ask("s1", "https://e.example/", tab.id, { generation: access.generation("s1") });
     await recipes.propose("s2", RECIPE);
     const created = recordCreates(fake);
     assert.deepEqual(await recipes.run("s1", "Trip"), {
@@ -1109,7 +1112,7 @@ describe("run", { timeout: 10000 }, () => {
     const { fake, access, recipes } = setup();
     await seed(fake, TRIP);
     const tab = fake.openTab({ active: true });
-    await access.ask("s1", "https://e.example/", tab.id);
+    await access.ask("s1", "https://e.example/", tab.id, { generation: access.generation("s1") });
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Trip"), {
       code: "approval_pending",
@@ -1122,10 +1125,15 @@ describe("run", { timeout: 10000 }, () => {
       code: "approval_pending",
       message: pending,
     });
-    await assert.rejects(access.ask("s2", "https://e.example/", fake.openTab().id), {
-      code: "approval_pending",
-      message: pending,
-    });
+    await assert.rejects(
+      access.ask("s2", "https://e.example/", fake.openTab().id, {
+        generation: access.generation("s2"),
+      }),
+      {
+        code: "approval_pending",
+        message: pending,
+      },
+    );
   });
 
   it("refuses when a site prompt opened while the page's tab was created, closing that tab", async () => {
@@ -1135,7 +1143,7 @@ describe("run", { timeout: 10000 }, () => {
     const release = holdCreates(fake);
     const running = track(recipes.run("s1", "Trip"));
     await flush();
-    await access.ask("s1", "https://e.example/", tab.id);
+    await access.ask("s1", "https://e.example/", tab.id, { generation: access.generation("s1") });
     // The refusal waits until Firefox has removed the page's tab.
     const removal = holdRemoves(fake);
     release();
@@ -1830,7 +1838,7 @@ describe("request", { timeout: 10000 }, () => {
     await grantSite(fake.browser, "https://a.example");
     // Neither an open site prompt, a session that stopped asking nor an open page is in the way.
     const tab = fake.openTab({ active: true });
-    await access.ask("s1", "https://e.example/", tab.id);
+    await access.ask("s1", "https://e.example/", tab.id, { generation: access.generation("s1") });
     const state = {
       allowed: new Set(["https://c.example"]),
       refused: new Set(["https://d.example"]),
@@ -2078,7 +2086,7 @@ describe("request", { timeout: 10000 }, () => {
   it("refuses while the session's site prompt is open, and a site prompt while its page is", async () => {
     const { fake, access, recipes } = setup();
     const tab = fake.openTab({ active: true });
-    await access.ask("s1", "https://e.example/", tab.id);
+    await access.ask("s1", "https://e.example/", tab.id, { generation: access.generation("s1") });
     const created = recordCreates(fake);
     await assert.rejects(recipes.request("s1", SITES), {
       code: "approval_pending",

@@ -80,10 +80,19 @@ export interface SiteAccess {
   /**
    * Asks the user in `tabId` whether the session may load `url`'s site, or joins the session's
    * open prompt for that site. Rejects when it shows nothing; resolves once the prompt is shown.
-   * With `promptUrl` (from `newPromptUrl`), the tab was created unloaded on that URL, and the
-   * prompt is loaded in place of the tab's one history entry.
+   * `options.generation` is `generation(session)` as read when the request was dispatched; when
+   * the session ended since, it rejects with `approval_closed`, showing and recording nothing.
+   * With `options.promptUrl` (from `newPromptUrl`), the tab was created unloaded on that URL, and
+   * the prompt is loaded in place of the tab's one history entry.
    */
-  ask(session: string, url: string, tabId: number, promptUrl?: string): Promise<Approval>;
+  ask(
+    session: string,
+    url: string,
+    tabId: number,
+    options: { generation: number; promptUrl?: string },
+  ): Promise<Approval>;
+  /** How often the session has ended; a request reads it on arrival and passes it to `ask`. */
+  generation(session: string): number;
   /** A new, unique URL for a prompt page, for a tab created on it before `ask` shows it there. */
   newPromptUrl(): string;
   openPrompt(session: string): OpenPrompt | undefined;
@@ -184,7 +193,7 @@ export function createSiteAccess<Handle>({
   const prompts = new Map<string, Prompt<Handle>>();
   // By tab: the answered prompt each tab shows, so a reload there loads what it asked about.
   const answered = new Map<number, Answered>();
-  // By session: how often it ended, so an ask that awaited across an end shows no prompt.
+  // By session: how often it ended, so a request that was running when it ended shows no prompt.
   const generations = new Map<string, number>();
   const withdrawals = new Set<(session: string, site: string) => void>();
 
@@ -215,6 +224,7 @@ export function createSiteAccess<Handle>({
     view,
     check,
     ask,
+    generation: generationOf,
     newPromptUrl,
     openPrompt,
     askedUrl,
@@ -274,13 +284,13 @@ export function createSiteAccess<Handle>({
     session: string,
     url: string,
     tabId: number,
-    promptUrl?: string,
+    options: { generation: number; promptUrl?: string },
   ): Promise<Approval> {
     const site = webSite(url);
-    const generation = generationOf(session);
     const current = await view(session);
-    // An answer would give the ended session an approval that a reconnect with its id finds.
-    if (generationOf(session) !== generation) {
+    // The session ended since the request was dispatched: an answer would give the ended session
+    // an approval that a reconnect with its id finds.
+    if (generationOf(session) !== options.generation) {
       throw new ToolError(
         "approval_closed",
         `The session ended before Foxleash could ask whether to allow ${site}.`,
@@ -295,7 +305,7 @@ export function createSiteAccess<Handle>({
     refuseIfAnswered(session, site);
     refuseBesideOtherPrompt(session);
     if (open !== undefined) return join(joinable(open, site), tabId);
-    return show(session, site, url, tabId, promptUrl);
+    return show(session, site, url, tabId, options.promptUrl);
   }
 
   function openPrompt(session: string): OpenPrompt | undefined {

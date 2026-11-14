@@ -112,7 +112,7 @@ describe("console recording", { timeout: 10000 }, () => {
   it("records nothing in the session's open prompt tab", async () => {
     const { fake, recordings, tabIn, access } = setup();
     const tab = await tabIn("s1");
-    await access.ask("s1", "https://c.example/", tab.id);
+    await access.ask("s1", "https://c.example/", tab.id, { generation: access.generation("s1") });
     assert.equal(access.openPrompt("s1")?.tabId, tab.id);
     fake.injections.length = 0;
     fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A });

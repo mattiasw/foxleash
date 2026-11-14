@@ -345,10 +345,13 @@ describe("beside a recipe page", () => {
       code: "approval_pending",
       message: RECIPE_PENDING,
     });
-    await assert.rejects(access.ask("s1", "https://b.example/", tab.id), {
-      code: "approval_pending",
-      message: RECIPE_PENDING,
-    });
+    await assert.rejects(
+      access.ask("s1", "https://b.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "approval_pending",
+        message: RECIPE_PENDING,
+      },
+    );
     assert.equal(access.openPrompt("s1"), undefined);
     assert.deepEqual(fake.tabUpdates, []);
     assert.deepEqual(await access.check("s2", "https://b.example/"), { decision: "ask" });
@@ -385,7 +388,14 @@ describe("beside a recipe page", () => {
     const tab = fake.openTab({ active: true });
     await grantSite(fake.browser, "https://b.example");
     assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "allowed" });
-    assert.equal((await access.ask("s1", "https://b.example/", tab.id)).promptInTab, false);
+    assert.equal(
+      (
+        await access.ask("s1", "https://b.example/", tab.id, {
+          generation: access.generation("s1"),
+        })
+      ).promptInTab,
+      false,
+    );
     await fake.browser.storage.local.set({ blocklist: ["c.example"] });
     await assert.rejects(access.check("s1", "https://c.example/"), { code: "site_blocked" });
     sessions.set("s1", { allowed: new Set(), refused: new Set(["https://a.example"]), closed: 0 });
@@ -393,10 +403,13 @@ describe("beside a recipe page", () => {
       code: "site_refused",
       message: REFUSED,
     });
-    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), {
-      code: "site_refused",
-      message: REFUSED,
-    });
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "site_refused",
+        message: REFUSED,
+      },
+    );
     assert.deepEqual(fake.tabUpdates, []);
   });
 });
@@ -487,7 +500,10 @@ describe("ask", () => {
       active: false,
       discarded: true,
     });
-    const approval = await access.ask("s1", "https://a.example/page", created.id, promptUrl);
+    const approval = await access.ask("s1", "https://a.example/page", created.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
     assert.equal(approval.promptInTab, true);
     assert.deepEqual(fake.tabUpdates, [
       { tabId: created.id, url: promptUrl, active: true, loadReplace: true },
@@ -525,7 +541,10 @@ describe("ask", () => {
     const early = connect(fake, created.id, promptUrl);
     assert.deepEqual(early.posted, [{ type: "ended" }]);
     assert.equal(early.disconnected, true);
-    await access.ask("s1", "https://a.example/page", created.id, promptUrl);
+    await access.ask("s1", "https://a.example/page", created.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
     const reloaded = connect(fake, created.id, promptUrl);
     reloaded.deliver({ type: "ready" });
     assert.deepEqual(reloaded.posted, [
@@ -536,21 +555,25 @@ describe("ask", () => {
 
   it("shows one prompt of two parallel requests on tabs created unloaded on their prompts", async () => {
     const { fake, access } = setup();
-    const urls = [access.newPromptUrl(), access.newPromptUrl()];
+    const firstUrl = access.newPromptUrl();
+    const secondUrl = access.newPromptUrl();
     const [first, second] = await Promise.all(
-      urls.map((url) => fake.browser.tabs.create({ url, active: false, discarded: true })),
+      [firstUrl, secondUrl].map((url) =>
+        fake.browser.tabs.create({ url, active: false, discarded: true }),
+      ),
     );
     assert.ok(first && second);
+    const generation = access.generation("s1");
     const results = await Promise.allSettled([
-      access.ask("s1", "https://a.example/", first.id, urls[0]),
-      access.ask("s1", "https://b.example/", second.id, urls[1]),
+      access.ask("s1", "https://a.example/", first.id, { generation, promptUrl: firstUrl }),
+      access.ask("s1", "https://b.example/", second.id, { generation, promptUrl: secondUrl }),
     ]);
     assert.equal(results[0].status, "fulfilled");
     assert.ok(results[1].status === "rejected");
     assert.ok(results[1].reason instanceof ToolError);
     assert.equal(results[1].reason.code, "approval_pending");
     assert.deepEqual(fake.tabUpdates, [
-      { tabId: first.id, url: urls[0], active: true, loadReplace: true },
+      { tabId: first.id, url: firstUrl, active: true, loadReplace: true },
     ]);
     assert.equal(fake.tabs.get(second.id)?.discarded, true);
     assert.equal(access.openPrompt("s1")?.tabId, first.id);
@@ -561,9 +584,11 @@ describe("ask", () => {
     const held = Promise.withResolvers<void>();
     fake.browser.windows.update = () => held.promise;
     let shown = false;
-    const asking = access.ask("s1", "https://a.example/", tab.id).then(() => {
-      shown = true;
-    });
+    const asking = access
+      .ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") })
+      .then(() => {
+        shown = true;
+      });
     await flush();
     assert.equal(shown, false);
     held.resolve();
@@ -585,7 +610,10 @@ describe("ask", () => {
     const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
     const user = fake.currentWindowId;
     assert.notEqual(tab.windowId, user);
-    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
     assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, focused: true }]);
     assert.equal(fake.currentWindowId, tab.windowId);
   });
@@ -593,12 +621,17 @@ describe("ask", () => {
   it("only draws attention to the session's own window for a request joining its prompt", async () => {
     const { fake, access, groups, timers } = setup();
     const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
-    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
     connect(fake, tab.id);
     timers.advance(APPROVAL_WAIT_MS);
     const other = await groups.createTab("s1", { url: "about:blank", active: false });
     const updates = fake.tabUpdates.length;
-    const joined = await access.ask("s1", "https://a.example/other", other.id);
+    const joined = await access.ask("s1", "https://a.example/other", other.id, {
+      generation: access.generation("s1"),
+    });
     assert.equal(joined.promptInTab, false);
     assert.deepEqual(fake.windowUpdates, [
       { windowId: tab.windowId, focused: true },
@@ -613,7 +646,10 @@ describe("ask", () => {
     fake.browser.windows.update = async () => {
       throw new Error("No window");
     };
-    await access.ask("s1", "https://a.example/page", tab.id, promptUrl);
+    await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
     assert.equal(access.openPrompt("s1")?.waiting, true);
   });
 
@@ -635,7 +671,10 @@ describe("ask", () => {
     fake.browser.tabs.update = async () => {
       throw new Error("Invalid tab ID");
     };
-    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), /Invalid tab ID/);
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      /Invalid tab ID/,
+    );
     assert.equal(access.openPrompt("s1"), undefined);
     assert.equal(timers.pending(), 0);
     assert.deepEqual(await access.check("s1", "https://b.example/"), { decision: "ask" });
@@ -646,7 +685,9 @@ describe("ask", () => {
     const failing = Promise.withResolvers<never>();
     const update = fake.browser.tabs.update;
     fake.browser.tabs.update = () => failing.promise;
-    const first = access.ask("s1", "https://a.example/", tab.id);
+    const first = access.ask("s1", "https://a.example/", tab.id, {
+      generation: access.generation("s1"),
+    });
     await flush();
     fake.removeTab(tab.id);
     fake.browser.tabs.update = update;
@@ -661,8 +702,8 @@ describe("ask", () => {
     const { fake, access, tab } = setup();
     const other = fake.openTab();
     const results = await Promise.allSettled([
-      access.ask("s1", "https://a.example/", tab.id),
-      access.ask("s1", "https://b.example/", other.id),
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      access.ask("s1", "https://b.example/", other.id, { generation: access.generation("s1") }),
     ]);
     assert.equal(results[0].status, "fulfilled");
     assert.ok(results[1].status === "rejected");
@@ -675,7 +716,9 @@ describe("ask", () => {
   it("shows nothing for a site approved meanwhile", async () => {
     const { fake, access, tab } = setup();
     await grantSite(fake.browser, "https://a.example");
-    const approval = await access.ask("s1", "https://a.example/", tab.id);
+    const approval = await access.ask("s1", "https://a.example/", tab.id, {
+      generation: access.generation("s1"),
+    });
     await approval.answer;
     assert.equal(approval.promptInTab, false);
     assert.deepEqual(fake.tabUpdates, []);
@@ -686,9 +729,12 @@ describe("ask", () => {
     const { fake, access, tab } = setup();
     assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "ask" });
     await fake.browser.storage.local.set({ blocklist: ["a.example"] });
-    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), {
-      code: "site_blocked",
-    });
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "site_blocked",
+      },
+    );
     assert.deepEqual(fake.tabUpdates, []);
     assert.equal(access.openPrompt("s1"), undefined);
   });
@@ -696,21 +742,30 @@ describe("ask", () => {
   it("refuses a refused site and a spent budget without showing anything", async () => {
     const { fake, access, sessions, tab } = setup();
     sessions.set("s1", { allowed: new Set(), refused: new Set(["https://a.example"]), closed: 0 });
-    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), {
-      code: "site_refused",
-      message: REFUSED,
-    });
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "site_refused",
+        message: REFUSED,
+      },
+    );
     sessions.set("s1", { allowed: new Set(), refused: new Set(), closed: 3 });
-    await assert.rejects(access.ask("s1", "https://b.example/", tab.id), {
-      code: "site_refused",
-      message: BUDGET,
-    });
+    await assert.rejects(
+      access.ask("s1", "https://b.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "site_refused",
+        message: BUDGET,
+      },
+    );
     assert.deepEqual(fake.tabUpdates, []);
   });
 
   it("refuses a URL with no site", async () => {
     const { access, tab } = setup();
-    await assert.rejects(access.ask("s1", "about:blank", tab.id), { code: "invalid_url" });
+    await assert.rejects(
+      access.ask("s1", "about:blank", tab.id, { generation: access.generation("s1") }),
+      { code: "invalid_url" },
+    );
   });
 });
 
@@ -1084,9 +1139,12 @@ describe("waiting for the answer", () => {
     assert.equal(fake.tabs.get(tab.id)?.active, true);
     assert.deepEqual(fake.windowUpdates, [{ windowId: 1, drawAttention: true }]);
     assert.equal(access.openPrompt("s1")?.waiting, true);
-    await assert.rejects(access.ask("s1", "https://a.example/", other.id), {
-      code: "approval_pending",
-    });
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", other.id, { generation: access.generation("s1") }),
+      {
+        code: "approval_pending",
+      },
+    );
     page.deliver({ type: "answer", answer: "once" });
     await flush();
     assert.equal(joined.answer.state, "resolved");
@@ -1139,16 +1197,22 @@ describe("waiting for the answer", () => {
   it("refuses another site, or a second waiting request, on the prompt's tab", async () => {
     const { fake, access, timers, tab, ask } = setup();
     await ask();
-    await assert.rejects(access.ask("s1", "https://a.example/", tab.id), {
-      code: "approval_pending",
-      message: PENDING,
-    });
+    await assert.rejects(
+      access.ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "approval_pending",
+        message: PENDING,
+      },
+    );
     connect(fake, tab.id);
     timers.advance(APPROVAL_WAIT_MS);
     await grantSite(fake.browser, "https://b.example");
-    await assert.rejects(access.ask("s1", "https://b.example/", tab.id), {
-      code: "approval_pending",
-    });
+    await assert.rejects(
+      access.ask("s1", "https://b.example/", tab.id, { generation: access.generation("s1") }),
+      {
+        code: "approval_pending",
+      },
+    );
   });
 
   it("reports a join once it asked Firefox to draw attention", async () => {
@@ -1159,9 +1223,11 @@ describe("waiting for the answer", () => {
     const held = Promise.withResolvers<void>();
     fake.browser.windows.update = () => held.promise;
     let joined = false;
-    const joining = access.ask("s1", "https://a.example/", tab.id).then(() => {
-      joined = true;
-    });
+    const joining = access
+      .ask("s1", "https://a.example/", tab.id, { generation: access.generation("s1") })
+      .then(() => {
+        joined = true;
+      });
     await flush();
     assert.equal(joined, false);
     held.resolve();
@@ -1292,7 +1358,9 @@ describe("closing a prompt", () => {
         promptUrl = properties.url ?? "";
         return fake.browser.tabs.get(tabId);
       };
-      const approval = await access.ask("s1", "https://a.example/", tab.id);
+      const approval = await access.ask("s1", "https://a.example/", tab.id, {
+        generation: access.generation("s1"),
+      });
       const answer = track(approval.answer);
       fake.emitStatus(tab.id, "complete");
       commit(fake, tab.id, promptUrl);
@@ -1440,6 +1508,74 @@ describe("endSession", () => {
     access.endSession("s2");
     await again;
     assert.equal(access.openPrompt("s1")?.site, "https://a.example");
+  });
+
+  it("refuses an ask whose request was dispatched before its session ended", async () => {
+    const { fake, access, sessions, tab } = setup();
+    const shown = fake.tabs.get(tab.id)?.url;
+    const url = "https://a.example/page";
+    sessions.set("s1", state(["https://b.example"]));
+    const generation = access.generation("s1");
+    assert.deepEqual(await access.check("s1", url), { decision: "ask" });
+    access.endSession("s1");
+    await assert.rejects(access.ask("s1", url, tab.id, { generation }), {
+      code: "approval_closed",
+      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+    });
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(fake.tabs.get(tab.id)?.url, shown);
+    assert.equal(sessions.has("s1"), false);
+    await access.ask("s1", url, tab.id, { generation: access.generation("s1") });
+    assert.equal(access.openPrompt("s1")?.site, "https://a.example");
+  });
+
+  it("does not join a prompt the reconnected session opened from a request dispatched before the end", async () => {
+    const { fake, access, groups, timers, tab, ask } = setup();
+    const old = access.generation("s1");
+    access.endSession("s1");
+    await ask("s1", "https://a.example/page");
+    connect(fake, tab.id);
+    timers.advance(APPROVAL_WAIT_MS);
+    const reconnected = access.openPrompt("s1");
+    assert.deepEqual(reconnected, {
+      tabId: tab.id,
+      site: "https://a.example",
+      url: "https://a.example/page",
+      waiting: false,
+    });
+    const other = await groups.createTab("s1", { url: "about:blank", active: false });
+    const updates = fake.tabUpdates.length;
+    fake.windowUpdates.length = 0;
+    const closed = {
+      code: "approval_closed",
+      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+    };
+    await assert.rejects(
+      access.ask("s1", "https://a.example/other", other.id, { generation: old }),
+      closed,
+    );
+    await assert.rejects(
+      access.ask("s1", "https://a.example/page", tab.id, { generation: old }),
+      closed,
+    );
+    assert.deepEqual(access.openPrompt("s1"), reconnected);
+    assert.equal(fake.tabs.get(other.id)?.url, "about:blank");
+    assert.equal(fake.tabUpdates.length, updates);
+    assert.deepEqual(fake.windowUpdates, []);
+    const joined = await access.ask("s1", "https://a.example/other", other.id, {
+      generation: access.generation("s1"),
+    });
+    assert.equal(joined.promptInTab, false);
+    assert.equal(access.openPrompt("s1")?.waiting, true);
+  });
+
+  it("counts each end of a session", () => {
+    const { access } = setup();
+    assert.equal(access.generation("unknown"), 0);
+    access.endSession("s1");
+    access.endSession("s1");
+    assert.equal(access.generation("s1"), 2);
+    assert.equal(access.generation("s2"), 0);
   });
 
   it("ends a session without a prompt", () => {
@@ -1937,7 +2073,8 @@ function setup(onWithdraw?: (session: string, site: string) => void) {
     url = "https://a.example/page",
     tabId = tab.id,
   ): Promise<{ approval: Approval; answer: Tracked; promptUrl: string }> {
-    const approval = await access.ask(session, url, tabId);
+    const generation = access.generation(session);
+    const approval = await access.ask(session, url, tabId, { generation });
     return { approval, answer: track(approval.answer), promptUrl: fake.tabs.get(tabId)?.url ?? "" };
   }
 

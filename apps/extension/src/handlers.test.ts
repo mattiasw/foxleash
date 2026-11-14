@@ -3943,8 +3943,8 @@ describe("approval", { timeout: 10000 }, () => {
       return create(properties);
     };
     const ask = access.ask;
-    access.ask = async (session, url, tabId, promptUrl) => {
-      const approval = await ask(session, url, tabId, promptUrl);
+    access.ask = async (session, url, tabId, options) => {
+      const approval = await ask(session, url, tabId, options);
       fake.ungroup(tabId);
       return approval;
     };
@@ -3978,10 +3978,10 @@ describe("approval", { timeout: 10000 }, () => {
         await promptOf("s1");
       };
       const ask = access.ask;
-      access.ask = async (session, url, tabId, promptUrl) => {
-        if (url !== "https://a.example/x") return ask(session, url, tabId, promptUrl);
+      access.ask = async (session, url, tabId, options) => {
+        if (url !== "https://a.example/x") return ask(session, url, tabId, options);
         if (!allowedMeanwhile) await showOther(tabId);
-        const approval = await ask(session, url, tabId, promptUrl);
+        const approval = await ask(session, url, tabId, options);
         if (allowedMeanwhile) await showOther(tabId);
         return approval;
       };
@@ -4074,8 +4074,8 @@ describe("approval", { timeout: 10000 }, () => {
     };
     let asking: ReturnType<typeof call> | undefined;
     const ask = access.ask;
-    access.ask = async (session, url, tabId, promptUrl) => {
-      const approval = await ask(session, url, tabId, promptUrl);
+    access.ask = async (session, url, tabId, options) => {
+      const approval = await ask(session, url, tabId, options);
       if (url === "https://a.example/x") {
         asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
         void asking.catch(() => {});
@@ -4135,6 +4135,179 @@ describe("approval", { timeout: 10000 }, () => {
       code: "site_refused",
     });
     assert.equal(fake.tabs.size, 1);
+  });
+
+  it("refuses the prompt of a tab_open that was running when its session ended", async () => {
+    const { fake, call, access, sessions, promptOf } = setup();
+    const user = fake.openTab({ url: "https://user.example/" });
+    sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
+    const opening = assert.rejects(call("s1", "tab_open", { url: "https://a.example/page" }), {
+      code: "approval_closed",
+      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+    });
+    access.endSession("s1");
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(promptLoads(fake, 0), 0);
+    await opening;
+    assert.equal(sessions.get("s1"), undefined);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+    assert.deepEqual(await access.check("s1", "https://a.example/other"), { decision: "ask" });
+    // The session reconnecting with the id is asked.
+    const again = call("s1", "tab_open", { url: "https://a.example/page" });
+    assert.equal((await promptOf("s1")).site, "https://a.example");
+    access.endSession("s1");
+    await assert.rejects(again, { code: "approval_closed" });
+  });
+
+  it("refuses the prompt of a navigate that was running when its session ended", async () => {
+    const { fake, call, access, sessions, open, promptOf } = setup();
+    sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
+    const tab = await open("s1", "https://b.example/");
+    const updates = fake.tabUpdates.length;
+    const navigating = assert.rejects(
+      call("s1", "navigate", { tabId: tab.id, url: "https://a.example/" }),
+      {
+        code: "approval_closed",
+        message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+      },
+    );
+    access.endSession("s1");
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(promptLoads(fake, updates), 0);
+    await navigating;
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://b.example/");
+    assert.equal(fake.tabUpdates.length, updates);
+    // The session reconnecting with the id is asked.
+    const again = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/" });
+    assert.equal((await promptOf("s1")).site, "https://a.example");
+    access.endSession("s1");
+    await assert.rejects(again, { code: "approval_closed" });
+  });
+
+  it("refuses the prompt of a navigate on an answered prompt that was running when its session ended", async () => {
+    const { fake, call, access, page } = setup();
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    (await page("s1")).deliver({ type: "answer", answer: "no" });
+    await assert.rejects(opened, { code: "site_refused" });
+    const [tab] = fake.tabs.values();
+    assert.ok(tab);
+    const shown = tab.url;
+    assert.match(shown, PROMPT_URL);
+    const updates = fake.tabUpdates.length;
+    const navigating = assert.rejects(
+      call("s1", "navigate", { tabId: tab.id, url: "https://b.example/" }),
+      {
+        code: "approval_closed",
+        message: "The session ended before Foxleash could ask whether to allow https://b.example.",
+      },
+    );
+    access.endSession("s1");
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(promptLoads(fake, updates), 0);
+    await navigating;
+    assert.equal(fake.tabs.get(tab.id)?.url, shown);
+    assert.equal(fake.tabUpdates.length, updates);
+  });
+
+  it("refuses to join, from a tab_open running when its session ended, the reconnected session's prompt", async () => {
+    const { fake, call, access, timeOut } = setup();
+    fake.openTab({ url: "https://user.example/" });
+    const check = access.check;
+    // What the reconnected session left once its prompt timed out.
+    let reconnected:
+      | Promise<{ prompt: OpenPrompt | undefined; tabs: number; updates: number }>
+      | undefined;
+    let first = true;
+    access.check = async (session, url) => {
+      if (first) {
+        first = false;
+        access.endSession("s1");
+        reconnected = (async () => {
+          const timedOut = assert.rejects(call("s1", "tab_open", { url: "https://a.example/x" }), {
+            code: "approval_timeout",
+          });
+          await timeOut("s1");
+          await timedOut;
+          return {
+            prompt: access.openPrompt("s1"),
+            tabs: fake.tabs.size,
+            updates: fake.tabUpdates.length,
+          };
+        })();
+        await reconnected;
+      }
+      return check(session, url);
+    };
+    const opening = assert.rejects(call("s1", "tab_open", { url: "https://a.example/page" }), {
+      code: "approval_closed",
+      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+    });
+    await flush();
+    const before = await reconnected;
+    assert.ok(before);
+    assert.equal(before.prompt?.waiting, false);
+    await flush();
+    assert.deepEqual(access.openPrompt("s1"), before.prompt);
+    await opening;
+    assert.deepEqual(access.openPrompt("s1"), before.prompt);
+    assert.equal(fake.tabs.size, before.tabs);
+    assert.equal(fake.tabUpdates.length, before.updates);
+  });
+
+  it("refuses to join, from a navigate running when its session ended, the reconnected session's prompt in its tab", async () => {
+    const { fake, call, access, sessions, open, timeOut } = setup();
+    sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
+    const tab = await open("s1", "https://b.example/");
+    const get = fake.browser.tabs.get;
+    // What the reconnected session left once its prompt timed out.
+    let reconnected:
+      | Promise<{ prompt: OpenPrompt | undefined; tabs: number; updates: number }>
+      | undefined;
+    let first = true;
+    fake.browser.tabs.get = async (tabId) => {
+      if (first) {
+        first = false;
+        access.endSession("s1");
+        reconnected = (async () => {
+          const timedOut = assert.rejects(
+            call("s1", "navigate", { tabId: tab.id, url: "https://a.example/x" }),
+            { code: "approval_timeout" },
+          );
+          await timeOut("s1");
+          await timedOut;
+          return {
+            prompt: access.openPrompt("s1"),
+            tabs: fake.tabs.size,
+            updates: fake.tabUpdates.length,
+          };
+        })();
+        await reconnected;
+      }
+      return get(tabId);
+    };
+    const navigating = assert.rejects(
+      call("s1", "navigate", { tabId: tab.id, url: "https://a.example/page" }),
+      {
+        code: "approval_closed",
+        message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+      },
+    );
+    await flush();
+    const before = await reconnected;
+    assert.ok(before);
+    assert.equal(before.prompt?.tabId, tab.id);
+    assert.equal(before.prompt?.waiting, false);
+    const shown = fake.tabs.get(tab.id)?.url;
+    assert.match(shown ?? "", PROMPT_URL);
+    await flush();
+    assert.deepEqual(access.openPrompt("s1"), before.prompt);
+    await navigating;
+    assert.deepEqual(access.openPrompt("s1"), before.prompt);
+    assert.equal(fake.tabs.get(tab.id)?.url, shown);
+    assert.equal(fake.tabUpdates.length, before.updates);
   });
 
   it("opens one prompt and removes the other tab of two parallel tab_open calls", async () => {
@@ -9844,6 +10017,11 @@ function reloadToBlank(fake: FakeBrowser, landed: () => void = () => {}): unknow
 
 function loadsOf(fake: { tabUpdates: { url?: string }[] }, url: string): number {
   return fake.tabUpdates.filter((update) => update.url === url).length;
+}
+
+/** How many tab updates since the `from`th loaded a prompt page. */
+function promptLoads(fake: { tabUpdates: { url?: string }[] }, from: number): number {
+  return fake.tabUpdates.slice(from).filter(({ url }) => PROMPT_URL.test(url ?? "")).length;
 }
 
 function groupIdOf(fake: { tabs: Map<number, Tab> }, tabId: number): number {
