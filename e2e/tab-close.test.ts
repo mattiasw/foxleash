@@ -144,9 +144,10 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     assert.ok(ids[0] === c.id || ids[0] === d.id, `tabs_list lists ${JSON.stringify(ids)}`);
   });
 
-  // Last: Foxleash counts a tab the user kept as still being removed, so it refuses to close the
-  // other tabs of its window from then on.
-  test("refuses a close when the user chooses to stay on the page", async () => {
+  // Last: it leaves a tab with a beforeunload handler open.
+  test("refuses a close when the user chooses to stay on the page, and closes the window's other tab", async () => {
+    const left = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.equal(left.length, 1, `tabs_list lists ${JSON.stringify(left)}`);
     const kept = tabOf(
       await harness.ok(session, "tab_open", { url: fixtures.url("/before-unload") }),
     );
@@ -165,8 +166,9 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     await prompt.answer(false);
 
     assert.match(await closing.call, /the user chose to stay/);
+    await harness.ok(session, "tab_close", { tabId: left[0]?.id });
     const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
-    assert.ok(ids.includes(kept.id), `tabs_list lists ${JSON.stringify(ids)}`);
+    assert.deepEqual(ids, [kept.id]);
   });
 });
 

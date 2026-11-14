@@ -14,6 +14,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's window to the front if your desktop allows it, instead of waiting unnoticed behind
   yours.
 
+### Fixed
+
+- After you choose to stay on a page that asked whether to leave it, the agent can close the last
+  other tab in that window again. Before, Foxleash refused that close as closing the window's last
+  tab until the page you kept was closed.
+
 ### Security
 
 - A key press meant for another window no longer answers a Foxleash prompt: Enter or Space

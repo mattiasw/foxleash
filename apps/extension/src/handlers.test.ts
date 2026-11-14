@@ -5142,6 +5142,28 @@ describe("tab_close", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.has(kept.id), true);
   });
 
+  it("closes the window's other tab after the user chose to stay on a page", async () => {
+    const { fake, call, open } = setup();
+    const kept = await open("s1");
+    const other = await open("s1");
+    const windowId = fake.tabs.get(kept.id)?.windowId;
+    assert.deepEqual(
+      [...fake.tabs.values()].filter((tab) => tab.windowId === windowId).map((tab) => tab.id),
+      [kept.id, other.id],
+    );
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async () => {};
+    await rejectsWith(call("s1", "tab_close", { tabId: kept.id }), "close_declined");
+    fake.browser.tabs.remove = remove;
+    const closed = await call("s1", "tab_close", { tabId: other.id });
+    assert.ok("tabs" in closed);
+    assert.deepEqual(
+      closed.tabs.map((tab) => tab.id),
+      [kept.id],
+    );
+    assert.equal(fake.tabs.has(other.id), false);
+  });
+
   it("leaves no rejection unhandled, and closes the sibling, when Firefox refuses the removal after the bound", async () => {
     const { fake, timers, call, open } = setup();
     const first = await open("s1");
