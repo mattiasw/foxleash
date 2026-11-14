@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   respond, from the question or a field above the buttons, and typing into a prompt keeps its
   buttons from responding until you stop for a second. A refused key press moves focus back to
   the question and says how to answer with the keyboard.
+- Keys taken by Firefox's menu bar after you press Alt alone no longer count toward a Foxleash
+  prompt's one-second pause: after a lone Alt, the prompt's buttons respond again a second after
+  the prompt next sees a key or a click.
 - While Foxleash asks you something in a tab of an agent's group, the agent can no longer switch
   that window to another of its tabs, and tabs Foxleash opens for it meanwhile stay in the
   background, so the question stays in view.

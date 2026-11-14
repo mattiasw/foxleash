@@ -1,7 +1,9 @@
 # 0061: A prompt key press answers only at the end of an armed Tab path from before the buttons
 
 **Status:** Accepted, 2026-11-14. Extends
-[0058](0058-prompt-keys-answer-only-on-a-button-focused-after-arming.md).
+[0058](0058-prompt-keys-answer-only-on-a-button-focused-after-arming.md). Its residual for
+Firefox's menus after a lone Alt is closed by
+[0063](0063-a-lone-alt-holds-a-prompts-arming-until-the-page-sees-input.md), 2026-11-14.
 
 ## Context
 

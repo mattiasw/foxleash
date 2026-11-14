@@ -1,5 +1,5 @@
 import type { Timers } from "./browser-api.ts";
-import { createArming } from "./prompt-arming.ts";
+import { createArming, createKeyWatch, type KeyEffect } from "./prompt-arming.ts";
 
 export type TextField = HTMLInputElement | HTMLTextAreaElement;
 
@@ -89,7 +89,10 @@ export function fieldsOf(value: unknown): Record<string, unknown> | undefined {
  * starts again, focus goes back to `rest()` and `onUnarmed("refocus")` is called. A refused click
  * calls `onUnarmed("arming")`. An answer starts the arming second again. Any keydown in the page while unarmed, and while armed any key but
  * a modifier, Tab while no counted Space is down, or a counted Enter or Space and that Space's
- * repeats, starts the arming second again.
+ * repeats, starts the arming second again. So does every keyup but that of a Tab, Space or
+ * modifier other than Alt whose keydown the page saw since the window last lost focus, and a lone
+ * Alt disarms the page with no second running until the page next sees a key, a pointer press or
+ * a click, from which the second starts (ADR 0063).
  * `aria-disabled`, not `disabled`, keeps the buttons focusable.
  */
 export function armButtons<Handle>(options: {
@@ -115,6 +118,7 @@ export function armButtons<Handle>(options: {
     }
     renderButtons();
   });
+  const keys = createKeyWatch();
 
   for (const button of buttons) {
     // Firefox fires focus again on the focused button when its window or tab comes back, unarmed,
@@ -182,14 +186,33 @@ export function armButtons<Handle>(options: {
     document.addEventListener("visibilitychange", () => {
       arming.visible(document.visibilityState === "visible");
     });
-    window.addEventListener("focus", () => arming.focused(true));
-    window.addEventListener("blur", () => arming.focused(false));
+    window.addEventListener("focus", () => arming.focused(!keys.held()));
+    window.addEventListener("blur", () => {
+      keys.blur();
+      arming.focused(false);
+    });
     // Capture, so every keydown in the page is seen before it reaches its target. Typing keeps the
     // page unarmed until it stops for a second, also once armed.
     window.addEventListener("keydown", onKeydown, { capture: true });
+    // On Linux a lone Alt opens Firefox's menu bar, which takes the keys after it without a blur;
+    // the page sees only keyups once it lets go (ADR 0063). Capture, so these run before the
+    // buttons' own listeners.
+    window.addEventListener("keyup", onKeyup, { capture: true });
+    window.addEventListener("pointerdown", () => track(keys.press()), { capture: true });
+    window.addEventListener("click", () => track(keys.press()), { capture: true });
+  }
+
+  function onKeyup(event: KeyboardEvent): void {
+    const keeps = event.key === "Tab" || isSpace(event) || MODIFIER_KEYS.has(event.key);
+    track(keys.keyup(event.key, event.code, keeps));
+  }
+
+  function track(effect: KeyEffect): void {
+    if (effect !== "none") restartDelay();
   }
 
   function onKeydown(event: KeyboardEvent): void {
+    track(keys.keydown(event.key, event.code));
     if (isSpace(event) && !event.repeat) spacePress = undefined;
     const button = isPress(event)
       ? buttons.find((candidate) => candidate === event.target)
@@ -232,7 +255,7 @@ export function armButtons<Handle>(options: {
 
   function restartDelay(): void {
     arming.focused(false);
-    arming.focused(document.hasFocus());
+    arming.focused(!keys.held() && document.hasFocus());
   }
 }
 

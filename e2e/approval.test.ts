@@ -26,6 +26,9 @@ const PENDING_MS = 1500;
 const REFOCUS = "Not answered. Wait a second, then use Tab to move to the button and press it.";
 const FOCUSED_ANSWER = "document.activeElement?.dataset?.answer ?? null";
 const FOCUSED_ID = "document.activeElement?.id ?? null";
+// A keyup with no keydown, as the page sees the key that makes Firefox's menu bar let go.
+const UNSEEN_ESCAPE =
+  'document.activeElement.dispatchEvent(new KeyboardEvent("keyup", { key: "Escape", code: "Escape", bubbles: true }))';
 // Well under the one-second arming delay.
 const TYPING_GAP_MS = 300;
 
@@ -608,6 +611,95 @@ describe("the approval prompt, in real Firefox", () => {
     }
   });
 
+  test("a lone Alt keeps a prompt from answering until the page sees a key or a click again", async () => {
+    const session = await connected();
+    try {
+      const hits = site.hits("/a");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+      const prompt = await harness.promptContext(existing);
+      await waitForQuestion(prompt, site.site);
+      const elsewhere = await firefox.openContext("about:blank");
+
+      // On Linux a lone Alt opens Firefox's menu bar, which takes the keys after it; the Tab path
+      // right after one does not answer.
+      await harness.waitForArmed(prompt);
+      await pressRefused(prompt, [KEY.alt, KEY.tab, KEY.tab, KEY.enter]);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // The buttons stay unarmed after a lone Alt, also well past the second.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.alt]);
+      await sleep(1500);
+      assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+
+      // Focusing the window again does not end the hold; a key does, and starts the second there.
+      await firefox.activate(elsewhere);
+      await firefox.activate(prompt);
+      await sleep(1500);
+      assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+      await pressRefused(prompt, [KEY.tab, KEY.tab, KEY.enter]);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // A click ends the hold, and the buttons arm a second later.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.alt]);
+      await firefox.click(prompt, "#heading");
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.tab, KEY.tab, KEY.enter]);
+      const tab = tabOf(await opening);
+      assert.equal(tab.url, site.url("/a"));
+      assert.equal(site.hits("/a"), hits + 1);
+      await firefox.closeContext(elsewhere);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a key the prompt did not see go down starts its second again when it comes up", async () => {
+    const session = await connected();
+    try {
+      const hits = site.hits("/a");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+      const prompt = await harness.promptContext(existing);
+      await waitForQuestion(prompt, site.site);
+
+      // The keyup that ends Firefox's menu bar reaches the page with no keydown. In one call, so
+      // the page cannot arm again before the count is read.
+      await harness.waitForArmed(prompt);
+      assert.equal(
+        await firefox.evaluate(prompt, `(() => { ${UNSEEN_ESCAPE}; return ${UNARMED_COUNT}; })()`),
+        3,
+      );
+
+      // It also ends a lone Alt's hold.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.alt]);
+      await firefox.evaluate(prompt, UNSEEN_ESCAPE);
+      await harness.waitForArmed(prompt);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ID), "heading");
+      await firefox.keys(prompt, [KEY.tab, KEY.tab, KEY.enter]);
+      const tab = tabOf(await opening);
+      assert.equal(tab.url, site.url("/a"));
+      assert.equal(site.hits("/a"), hits + 1);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("a pointer press alone ends a lone Alt's hold", async () => {
+    await answeredAfterLoneAlt(
+      `document.getElementById("heading").dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }))`,
+    );
+  });
+
+  test("a click with no pointer press ends a lone Alt's hold, as a screen reader's does", async () => {
+    await answeredAfterLoneAlt(`document.getElementById("heading").click()`);
+  });
+
   async function connected(): Promise<Session> {
     const session = await harness.connect();
     await harness.waitUntilReady(session);
@@ -646,6 +738,32 @@ describe("the approval prompt, in real Firefox", () => {
     await firefox.click(prompt, ANSWER.once);
     await waitForStatus(prompt, "Allowed for this session. Ask the agent to try again.");
     return { session, prompt, tabId, hits };
+  }
+
+  /**
+   * Holds an armed prompt with a lone Alt, ends the hold with the input `release` dispatches, and
+   * answers Allow this session with a click once the buttons arm again.
+   */
+  async function answeredAfterLoneAlt(release: string): Promise<void> {
+    const session = await connected();
+    try {
+      const hits = site.hits("/a");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+      const prompt = await harness.promptContext(existing);
+      await waitForQuestion(prompt, site.site);
+
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.alt]);
+      await firefox.evaluate(prompt, release);
+      await harness.waitForArmed(prompt);
+      await firefox.click(prompt, ANSWER.once);
+      const tab = tabOf(await opening);
+      assert.equal(tab.url, site.url("/a"));
+      assert.equal(site.hits("/a"), hits + 1);
+    } finally {
+      await session.close();
+    }
   }
 
   async function promptContexts(): Promise<string[]> {

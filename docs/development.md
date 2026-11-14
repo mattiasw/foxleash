@@ -114,6 +114,8 @@ focused, so `harness.waitForArmed` first brings the prompt's tab to the front wi
 `firefox.click` sends before it clicks, so a click right after it changes neither focus nor
 visibility. Tests answer the prompt only with real (trusted) input, `firefox.click` or the
 keys `firefox.keys` presses: a click from script is not trusted, and the prompt ignores it.
+After a lone Alt the buttons stay unarmed until the page sees a key or a click, so a test that
+presses Alt alone presses a key or clicks before it waits for them.
 
 ## Extension
 
