@@ -1,6 +1,9 @@
 # 0059: Agents cannot change the selected tab while a question is open
 
-**Status:** Accepted, 2026-11-14.
+**Status:** Accepted, 2026-11-14. Amended by
+[0062](0062-an-open-question-guards-only-the-tab-selects-foxleash-makes.md), 2026-11-14: its
+accepted gaps are bounded to the selects Foxleash does not make, and the leave dialog on a load is
+measured.
 
 ## Context
 

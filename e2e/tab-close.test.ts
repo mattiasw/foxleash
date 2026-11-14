@@ -6,7 +6,9 @@ import {
   createHarness,
   EXTENSION_DIST,
   type Harness,
+  parseResult,
   type Session,
+  type ToolResult,
   tabOf,
   tabsOf,
 } from "./harness.ts";
@@ -170,6 +172,249 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
     const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
     assert.deepEqual(ids, [kept.id]);
   });
+});
+
+describe("leave prompts beside an open question in real Firefox", () => {
+  let harness: Harness;
+  let firefox: Firefox;
+  let allowed: FixtureServer;
+  let asked: FixtureServer;
+  let session: Session;
+  let question: number | undefined;
+  let asking: { call: Promise<ToolResult>; state(): string } | undefined;
+
+  before(
+    async () => {
+      harness = createHarness();
+      harness.install();
+      allowed = await startFixtureServer();
+      asked = await startFixtureServer();
+      firefox = await harness.startFirefox(EXTENSION_DIST, { holdBeforeUnloadPrompts: true });
+      await harness.seedSettings({
+        [`site:${allowed.site}`]: { grantedAt: new Date().toISOString() },
+      });
+      session = await harness.connect();
+      await harness.waitUntilReady(session);
+      // The site prompt stays open after this call stops waiting for its answer.
+      asking = watch(harness.call(session, "tab_open", { url: asked.url("/a"), view: false }));
+      question = await pollUntil(
+        async () => {
+          const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+          const shown = tabs.find((tab) => tab.active);
+          if (shown !== undefined) return shown.id;
+          throw new Error(`tabs_list lists ${JSON.stringify(tabs)}`);
+        },
+        PAGE_TIMEOUT_MS,
+        "the question's tab to be selected",
+      );
+    },
+    { timeout: 120_000 },
+  );
+
+  after(
+    async () => {
+      try {
+        if (question !== undefined) await firefox.closeContext(await harness.promptContext());
+        await asking?.call;
+      } finally {
+        try {
+          await harness?.close();
+        } finally {
+          await Promise.all([allowed?.close(), asked?.close()]);
+        }
+      }
+    },
+    { timeout: 60_000 },
+  );
+
+  // The control for the tests after it: without a leave prompt, the same calls select no tab.
+  test("tab_close and navigate of a page that does not ask leave the open question's tab selected", async () => {
+    const page = await openBeside("/a?case=control");
+    const calls: [string, Record<string, unknown>][] = [
+      ["navigate", { tabId: page.tabId, url: allowed.url("/b?case=control"), view: false }],
+      ["navigate", { tabId: page.tabId, action: "reload", view: false }],
+      ["navigate", { tabId: page.tabId, action: "back", view: false }],
+      ["navigate", { tabId: page.tabId, action: "forward", view: false }],
+      ["tab_close", { tabId: page.tabId }],
+    ];
+    for (const [name, args] of calls) {
+      await harness.ok(session, name, args);
+      assert.deepEqual(
+        await selected(),
+        [question],
+        `selected after ${name} ${JSON.stringify(args)}`,
+      );
+    }
+  });
+
+  test("Firefox selects a tab to ask whether to leave its page on tab_close, also beside an open question", async () => {
+    const page = await openBeside("/before-unload?case=close");
+    // The close may answer either way: it stops waiting for the user after a few seconds.
+    const { whileAsked } = await leaveWhileSelected(page, () =>
+      harness.call(session, "tab_close", { tabId: page.tabId }),
+    );
+    assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
+    await pollUntil(
+      async () => {
+        const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+        if (!ids.includes(page.tabId)) return true;
+        throw new Error(`tabs_list lists ${JSON.stringify(ids)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${page.tabId} to close`,
+    );
+  });
+
+  test("Firefox selects a tab to ask whether to leave its page on navigate to a URL, also beside an open question, and keeps it selected after", async () => {
+    const page = await openBeside("/before-unload?case=url");
+    const url = allowed.url("/a?case=url");
+    const { whileAsked, result } = await leaveWhileSelected(page, () =>
+      harness.call(session, "navigate", { tabId: page.tabId, url, view: false }),
+    );
+    assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
+    assert.equal(result.isError, false, result.text);
+    assert.equal(tabOf(parseResult(result.text)).url, url);
+    assert.deepEqual(await selected(), [page.tabId], "selected after the user left the page");
+  });
+
+  test("Firefox selects a tab to ask whether to leave its page on a reload, also beside an open question, and keeps it selected after", async () => {
+    const page = await openBeside("/before-unload?case=reload");
+    const loads = allowed.hits("/before-unload");
+    const { whileAsked, result } = await leaveWhileSelected(page, () =>
+      harness.call(session, "navigate", { tabId: page.tabId, action: "reload", view: false }),
+    );
+    assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
+    assert.equal(result.isError, false, result.text);
+    // The reload's request, which Firefox sends only once the user has left the page.
+    await pollUntil(
+      async () => (allowed.hits("/before-unload") > loads ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      "the reload to reach the server",
+    );
+    assert.deepEqual(await selected(), [page.tabId], "selected after the user left the page");
+  });
+
+  test("Firefox selects a tab to ask whether to leave its page on going back, also beside an open question, and keeps it selected after", async () => {
+    const page = await openBeside("/a?case=back");
+    await harness.ok(session, "navigate", {
+      tabId: page.tabId,
+      url: allowed.url("/before-unload?case=back"),
+      view: false,
+    });
+    await showQuestion();
+    const { whileAsked, result } = await leaveWhileSelected(page, () =>
+      harness.call(session, "navigate", { tabId: page.tabId, action: "back", view: false }),
+    );
+    assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
+    assert.equal(result.isError, false, result.text);
+    await waitForUrl(page.tabId, allowed.url("/a?case=back"));
+    assert.deepEqual(await selected(), [page.tabId], "selected after the user left the page");
+  });
+
+  test("Firefox selects a tab to ask whether to leave its page on going forward, also beside an open question, and keeps it selected after", async () => {
+    const page = await openBeside("/before-unload?case=forward");
+    const left = await leaveWhileSelected(page, () =>
+      harness.call(session, "navigate", {
+        tabId: page.tabId,
+        url: allowed.url("/a?case=forward"),
+        view: false,
+      }),
+    );
+    assert.equal(left.result.isError, false, left.result.text);
+    // After the step Foxleash loads the page's address again, and this Firefox lets the page
+    // ask to confirm leaving that load without a click on the page.
+    const again = await firefox.watchPrompt(page.context);
+    const back = watch(
+      harness.call(session, "navigate", { tabId: page.tabId, action: "back", view: false }),
+    );
+    const asks = await Promise.race([
+      again.opened().then(
+        () => true,
+        () => false,
+      ),
+      back.call.then(() => false),
+    ]);
+    if (asks) await again.answer(true);
+    const backed = await back.call;
+    assert.equal(backed.isError, false, backed.text);
+    await waitForUrl(page.tabId, allowed.url("/before-unload?case=forward"));
+    await showQuestion();
+    const { whileAsked } = await leaveWhileSelected(page, () =>
+      harness.call(session, "navigate", { tabId: page.tabId, action: "forward", view: false }),
+    );
+    assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
+    await waitForUrl(page.tabId, allowed.url("/a?case=forward"));
+    assert.deepEqual(await selected(), [page.tabId], "selected after the user left the page");
+  });
+
+  /** The ids of the session's selected tabs; all of them are in its group's window. */
+  async function selected(): Promise<number[]> {
+    return tabsOf(await harness.ok(session, "tabs_list"))
+      .filter((tab) => tab.active)
+      .map((tab) => tab.id);
+  }
+
+  async function showQuestion(): Promise<void> {
+    await harness.ok(session, "tab_select", { tabId: question });
+    assert.deepEqual(await selected(), [question], "the question's tab is selected");
+  }
+
+  /** A tab opened on the allowed site beside the selected question, with its BiDi context. */
+  async function openBeside(path: string): Promise<{ tabId: number; context: string }> {
+    await showQuestion();
+    const url = allowed.url(path);
+    const tab = tabOf(await harness.ok(session, "tab_open", { url, view: false }));
+    // Only while a question is open does Foxleash leave the tab it opens unselected.
+    assert.equal(tab.active, false, "the tab opened beside the question is not selected");
+    const context = await firefox.waitForContext(
+      (candidate) => candidate.url === url,
+      PAGE_TIMEOUT_MS,
+    );
+    return { tabId: tab.id, context };
+  }
+
+  /**
+   * Makes the call, reads which tabs are selected while the page's leave prompt is open, then
+   * leaves the page: staying after a tab_close would leave the tab counted as still being
+   * removed, which refuses later closes in its window.
+   */
+  async function leaveWhileSelected(
+    page: { tabId: number; context: string },
+    call: () => Promise<ToolResult>,
+  ): Promise<{ whileAsked: number[]; result: ToolResult }> {
+    // Selecting the question's own tab is never refused, so this proves the question is open.
+    assert.match(
+      await harness.refused(session, "tab_select", { tabId: page.tabId }),
+      new RegExp(`waiting for the user to answer in tab ${question} `),
+    );
+    assert.deepEqual(
+      await selected(),
+      [question],
+      "the question's tab is selected before the call",
+    );
+    const prompt = await firefox.watchPrompt(page.context);
+    const running = watch(call());
+    try {
+      assert.equal(await prompt.opened(), "beforeunload");
+    } catch (error: unknown) {
+      throw new Error(`${String(error)}; the call is ${running.state()}`, { cause: error });
+    }
+    const whileAsked = await selected();
+    await prompt.answer(true);
+    return { whileAsked, result: await running.call };
+  }
+
+  async function waitForUrl(tabId: number, url: string): Promise<void> {
+    await pollUntil(
+      async () => {
+        const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+        if (tabs.some((tab) => tab.id === tabId && tab.url === url)) return true;
+        throw new Error(`tabs_list lists ${JSON.stringify(tabs)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${tabId} to show ${url}`,
+    );
+  }
 });
 
 /** The call, and how it has settled so far, for a failure message. */
