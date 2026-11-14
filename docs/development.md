@@ -67,7 +67,9 @@ access, so the test Firefox starts with `--marionette` and `--remote-allow-syste
 The harness opens the session over Marionette (`WebDriver:NewSession` with
 `webSocketUrl: true`) and connects BiDi to the WebSocket URL it returns. BiDi installs the
 extension, opens, navigates and closes tabs and evaluates script in them; Marionette only
-clicks (`WebDriver:FindElement` and `WebDriver:ElementClick`) and brings a tab to the front
+clicks (`WebDriver:FindElement` and `WebDriver:ElementClick`), sends input actions
+(`WebDriver:PerformActions`: the mouse press and release of `firefox.press` and
+`firefox.release`, and the keys `firefox.keys` presses) and brings a tab to the front
 (`WebDriver:SwitchToWindow`), because BiDi has no input in extension pages, refuses
 `browsingContext.activate` there, and a click from script is not trusted. The profile pins
 the extension's internal UUID (`EXTENSION_UUID` in `e2e/firefox.ts`) with the
@@ -110,8 +112,8 @@ The approval prompt's buttons answer only a second after its page is both visibl
 focused, so `harness.waitForArmed` first brings the prompt's tab to the front with
 `firefox.activate`, which sends the same Marionette `WebDriver:SwitchToWindow` that
 `firefox.click` sends before it clicks, so a click right after it changes neither focus nor
-visibility. Tests answer the prompt only with `firefox.click`: a click from script is not
-trusted, and the prompt ignores it.
+visibility. Tests answer the prompt only with real (trusted) input, `firefox.click` or the
+keys `firefox.keys` presses: a click from script is not trusted, and the prompt ignores it.
 
 ## Extension
 

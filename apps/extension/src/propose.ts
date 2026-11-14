@@ -8,6 +8,7 @@ import {
   element,
   type FieldProblem,
   fieldsOf,
+  REFOCUS,
   showProblems,
   type TextField,
 } from "./page-ui.ts";
@@ -100,7 +101,7 @@ const { renderButtons, watch, rearm } = armButtons({
   timers,
   asking: () => state === "asking",
   onAnswer,
-  onUnarmed: () => announce(status, unarmedText),
+  onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : unarmedText),
 });
 
 for (const name of LINES) {

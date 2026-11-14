@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type Firefox, KEY, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -22,6 +22,11 @@ const UNARMED = "The buttons respond a moment after this window is focused.";
 const UNARMED_COUNT =
   "document.querySelectorAll('button[data-answer][aria-disabled=\"true\"]').length";
 const PENDING_MS = 1500;
+// The page's REFOCUS text.
+const REFOCUS = "Move to the button beside it and back with Shift+Tab and Tab, then press it.";
+const FOCUSED_ANSWER = "document.activeElement?.dataset?.answer ?? null";
+// Well under the one-second arming delay.
+const TYPING_GAP_MS = 300;
 
 // One Firefox for the file. Neither fixture site is seeded, so every session is asked for both.
 // The second site is the only one allowed always, and that test revokes it again.
@@ -321,6 +326,133 @@ describe("the approval prompt, in real Firefox", () => {
       // Read again as late as the stray about:blank entry was seen: 1.5 s after the select.
       await sleep(1500);
       assert.deepEqual(await firefox.sessionHistory(url), { index: 1, entries: [url] });
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("Enter or Space answers only on an answer button reached after the buttons armed", async () => {
+    const session = await connected();
+    try {
+      const hits = site.hits("/a");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+      const prompt = await harness.promptContext(existing);
+      await waitForQuestion(prompt, site.site);
+      const elsewhere = await firefox.openContext("about:blank");
+
+      // Focus reaches Allow this session before the buttons arm.
+      await firefox.activate(elsewhere);
+      await firefox.activate(prompt);
+      await firefox.keys(prompt, [KEY.tab, KEY.tab]);
+      assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
+
+      // Once armed, Enter on it does not answer, and the page says what to do.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [KEY.enter]);
+      await waitForStatus(prompt, REFOCUS);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // Nor does Space held while Enter is pressed: Firefox clicks on Enter and again on the Space
+      // keyup, after the first click was refused.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [[" ", KEY.enter]]);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // Focus moved there while armed no longer counts after the page loses focus.
+      await firefox.keys(prompt, [[KEY.shift, KEY.tab], KEY.tab]);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
+      await firefox.activate(elsewhere);
+      await firefox.activate(prompt);
+      await firefox.keys(prompt, [KEY.enter]);
+      await waitForStatus(prompt, UNARMED);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [" "]);
+      await waitForStatus(prompt, REFOCUS);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // A letter typed after the buttons armed starts their second again, so moving to the button
+      // right after it and pressing Enter does not answer.
+      await firefox.keys(prompt, ["x", [KEY.shift, KEY.tab], KEY.tab, KEY.enter]);
+      await waitForStatus(prompt, UNARMED);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // Focus moved there while armed no longer counts after a letter, also once the buttons
+      // arm again with focus still on it.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [[KEY.shift, KEY.tab], KEY.tab, "x"]);
+      await harness.waitForArmed(prompt);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
+      await firefox.keys(prompt, [KEY.enter]);
+      await waitForStatus(prompt, REFOCUS);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+
+      // Enter typed outside the answer buttons starts their second again, so moving to a button
+      // right after it and pressing Enter does not answer.
+      await harness.waitForArmed(prompt);
+      await firefox.click(prompt, "#heading");
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), null);
+      await firefox.keys(prompt, [KEY.enter, KEY.tab, KEY.tab, KEY.enter]);
+      await waitForStatus(prompt, UNARMED);
+      await stillPending(opening, PENDING_MS);
+      assert.equal(site.hits("/a"), hits);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
+
+      // Moved to after the buttons armed, Enter answers.
+      await harness.waitForArmed(prompt);
+      await firefox.keys(prompt, [[KEY.shift, KEY.tab], KEY.tab, KEY.enter]);
+      const tab = tabOf(await opening);
+      assert.equal(tab.url, site.url("/a"));
+      assert.equal(site.hits("/a"), hits + 1);
+      await firefox.closeContext(elsewhere);
+    } finally {
+      await session.close();
+    }
+  });
+
+  test("typing into the prompt keeps its buttons unarmed until the typing stops", async () => {
+    const session = await connected();
+    try {
+      const hits = site.hits("/a");
+      const existing = await promptContexts();
+      const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+      const prompt = await harness.promptContext(existing);
+      await waitForQuestion(prompt, site.site);
+      const elsewhere = await firefox.openContext("about:blank");
+
+      await firefox.activate(elsewhere);
+      await firefox.activate(prompt);
+      const started = Date.now();
+      let previous = started;
+      // A letter, not Tab: Tab past the last button leaves the page, which disarms it anyway.
+      while (Date.now() - started < 2000) {
+        // Also before the key: a letter typed while armed disarms again, so a page that armed
+        // during the pause would read unarmed after it.
+        assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+        await firefox.keys(prompt, ["a"]);
+        const gap = Date.now() - previous;
+        previous = Date.now();
+        assert.ok(gap < 900, `the runner left ${gap} ms between keys`);
+        assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+        await sleep(TYPING_GAP_MS);
+      }
+      assert.ok(Date.now() - started >= 2000);
+      assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+
+      // Once the typing stops, the buttons arm and a click answers.
+      await harness.waitForArmed(prompt);
+      await firefox.click(prompt, ANSWER.once);
+      const tab = tabOf(await opening);
+      assert.equal(tab.url, site.url("/a"));
+      assert.equal(site.hits("/a"), hits + 1);
+      await firefox.closeContext(elsewhere);
     } finally {
       await session.close();
     }

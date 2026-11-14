@@ -1,5 +1,5 @@
 import type { Port, Timers } from "./browser-api.ts";
-import { announce, armButtons, element, fieldsOf } from "./page-ui.ts";
+import { announce, armButtons, element, fieldsOf, REFOCUS } from "./page-ui.ts";
 
 declare const browser: { runtime: { connect(connectInfo: { name: string }): Port } };
 
@@ -32,7 +32,7 @@ const { renderButtons, watch } = armButtons({
   timers,
   asking: () => state === "prompt",
   onAnswer,
-  onUnarmed: () => announce(status, UNARMED),
+  onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : UNARMED),
 });
 
 back.addEventListener("click", () => history.back());

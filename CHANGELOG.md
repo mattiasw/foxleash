@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   session's window to the front if your desktop allows it, instead of waiting unnoticed behind
   yours.
 
+### Security
+
+- A key press meant for another window no longer answers a Foxleash prompt: Enter or Space
+  answers only on a button you moved to after the buttons respond, and typing into a prompt
+  keeps its buttons from responding until you stop for a second. A prompt that refuses such a
+  key press says how to answer with the keyboard.
+
 ## [0.4.0] - 2026-11-14
 
 ### Added

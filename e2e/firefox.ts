@@ -36,6 +36,8 @@ const COMMAND_TIMEOUT_MS = 30_000;
 const CLOSE_TIMEOUT_MS = 5_000;
 /** How long a page may take to load, or to show what a test waits for. */
 export const PAGE_TIMEOUT_MS = 15_000;
+/** WebDriver key values for the keys tests press with `keys`. */
+export const KEY = { tab: "\uE004", enter: "\uE007", shift: "\uE008" } as const;
 // Below the 60 s per-test timeout, so a helper whose commands stall fails with its own message.
 const HELPER_TIMEOUT_MS = 20_000;
 // How long discardTab waits for the session store to hold the tab's page, below HELPER_TIMEOUT_MS.
@@ -235,6 +237,11 @@ export interface Firefox {
   /** Releases the mouse button that `press` holds down. */
   release(context: string): Promise<void>;
   /**
+   * Presses each key, or each chord of keys held together, with real (trusted) input in the tab,
+   * after the switch `click` sends. A key is a character or a `KEY` value.
+   */
+  keys(context: string, keys: readonly (string | readonly string[])[]): Promise<void>;
+  /**
    * Shows and focuses the tab with the Marionette switch that `click` sends before it clicks.
    * BiDi's `browsingContext.activate` refuses extension pages.
    */
@@ -333,8 +340,8 @@ export interface LaunchOptions {
  * Starts Firefox headless in its own process group under a hard lifetime, opens the WebDriver
  * session over Marionette as soon as it listens, so this run holds Firefox's single session from
  * the start, and connects BiDi to that session. BiDi does everything it can; Marionette only
- * clicks and brings a tab to the front, because BiDi has no input in extension pages and does
- * not activate them (ADR 0008). Any failure kills the group before it rejects.
+ * sends input (clicks, mouse presses, keys) and brings a tab to the front, because BiDi has no
+ * input in extension pages and does not activate them (ADR 0008). Any failure kills the group before it rejects.
  */
 export async function launchFirefox({
   binary,
@@ -518,6 +525,24 @@ export async function launchFirefox({
     });
   }
 
+  // A chord's keys go down in order and come up in reverse, so every key ends released.
+  async function pressKeys(
+    context: string,
+    keys: readonly (string | readonly string[])[],
+  ): Promise<void> {
+    await switchTo(context);
+    const actions = keys.flatMap((entry) => {
+      const chord = typeof entry === "string" ? [entry] : entry;
+      return [
+        ...chord.map((value) => ({ type: "keyDown", value })),
+        ...chord.toReversed().map((value) => ({ type: "keyUp", value })),
+      ];
+    });
+    await input.send("WebDriver:PerformActions", {
+      actions: [{ type: "key", id: "keyboard", actions }],
+    });
+  }
+
   // Runs `script` with Firefox's privileges, awaiting a promise it returns.
   async function chrome(script: string, args: unknown[]): Promise<void> {
     await chromeResponse(script, args);
@@ -672,6 +697,9 @@ export async function launchFirefox({
     },
     release(context) {
       return withDeadline(releasePointer(context), HELPER_TIMEOUT_MS, `release ${context}`);
+    },
+    keys(context, keys) {
+      return withDeadline(pressKeys(context, keys), HELPER_TIMEOUT_MS, `keys ${context}`);
     },
     activate(context) {
       // The same switch as click's, so a click right after this changes neither focus nor
