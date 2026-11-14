@@ -23,11 +23,11 @@ export interface ArmedButtons {
   rearm(): void;
 }
 
-/** What a key press on an answer button says when its focus came before the buttons armed. */
+/** What a refused key press on an answer button says; focus has gone back before the buttons. */
 export const REFOCUS =
-  "Move to the button beside it and back with Shift+Tab and Tab, then press it.";
+  "Not answered. Wait a second, then use Tab to move to the button and press it.";
 
-// The UI Events modifier key values; pressing one between a focus and a press keeps the focus.
+// The UI Events modifier key values; pressing one while armed keeps the page armed.
 const MODIFIER_KEYS: ReadonlySet<string> = new Set([
   "Alt",
   "AltGraph",
@@ -78,13 +78,19 @@ export function fieldsOf(value: unknown): Record<string, unknown> | undefined {
 
 /**
  * Wires answer buttons that respond only to the user's own single click, while `asking()` and
- * armed. A press counts only when it started armed, and an Enter or Space press only on a button
- * that got focus in the current arming with no other key pressed since. The click Firefox makes
- * on a Space keyup counts only as the press of a Space that went down on that button in the
- * current arming. Any other click while asking calls `onUnarmed`, with `"refocus"` when only the
- * button's focus refused it and `"arming"` otherwise. Any keydown in the page while unarmed, and
- * while armed any key but Tab, a modifier, or Enter or Space on an answer button, starts the
- * arming second again. `aria-disabled`, not `disabled`, keeps the buttons focusable.
+ * armed. A pointer press counts only when it started armed.
+ *
+ * An Enter or Space answers only at the end of an armed Tab path from before the buttons: once
+ * armed, with only Tab, Shift+Tab and modifier keydowns since, focus moved from an element before
+ * the buttons onto the first button and on from button to neighbouring button. A button's focus
+ * counts only when it arrives that way while armed; a focus from no element, from after the
+ * buttons, or from a button whose focus did not count never counts (ADR 0061). Every other
+ * Enter or Space keydown on an answer button while asking is refused: no click, the arming second
+ * starts again, focus goes back to `rest()` and `onUnarmed("refocus")` is called. A refused click
+ * calls `onUnarmed("arming")`. An answer starts the arming second again. Any keydown in the page while unarmed, and while armed any key but
+ * a modifier, Tab while no counted Space is down, or a counted Enter or Space and that Space's
+ * repeats, starts the arming second again.
+ * `aria-disabled`, not `disabled`, keeps the buttons focusable.
  */
 export function armButtons<Handle>(options: {
   buttons: readonly HTMLButtonElement[];
@@ -92,17 +98,16 @@ export function armButtons<Handle>(options: {
   asking(): boolean;
   onAnswer(button: HTMLButtonElement): void;
   onUnarmed(reason: "arming" | "refocus"): void;
+  /** Where focus goes after a refused key press: before the buttons, not reached by Tab. */
+  rest(): HTMLElement;
 }): ArmedButtons {
-  const { buttons, timers, asking, onAnswer, onUnarmed } = options;
-  // The answer button that got focus while armed, in the current arming.
+  const { buttons, timers, asking, onAnswer, onUnarmed, rest } = options;
+  // The answer button whose focus counts: reached along an armed Tab path, in the current arming.
   let armedFocus: HTMLButtonElement | undefined;
   // Whether the press that starts the coming click happened while armed; undefined without one.
   let pressArmed: boolean | undefined;
-  // Whether that press was a key press refused only because its button's focus did not count.
-  let pressRefocus = false;
-  // What the page's last Space keydown that was not a repeat recorded, when it went down on an
-  // answer button in the current arming.
-  let spacePress: { button: HTMLButtonElement; armed: boolean; refocus: boolean } | undefined;
+  // The answer button a counted Space went down on, until its keyup or a disarm.
+  let spacePress: HTMLButtonElement | undefined;
   const arming = createArming(timers, (armed) => {
     if (!armed) {
       armedFocus = undefined;
@@ -112,43 +117,41 @@ export function armButtons<Handle>(options: {
   });
 
   for (const button of buttons) {
-    // Firefox fires focus again on the focused button when its window or tab comes back, unarmed.
-    button.addEventListener("focus", () => {
-      armedFocus = arming.armed() ? button : undefined;
+    // Firefox fires focus again on the focused button when its window or tab comes back, unarmed,
+    // and from no element.
+    button.addEventListener("focus", (event) => {
+      armedFocus = arming.armed() && countsFrom(event.relatedTarget, button) ? button : undefined;
     });
     // Fires when the press starts, also for touch and pen, whose mousedown comes after the tap.
     button.addEventListener("pointerdown", () => {
       pressArmed = arming.armed();
-      pressRefocus = false;
-    });
-    button.addEventListener("keydown", (event) => {
-      // A held key is one press, started when it went down. A held Enter would also answer
-      // again as soon as the buttons re-arm.
-      if (event.repeat) {
-        if (event.key === "Enter") event.preventDefault();
-        return;
-      }
-      // Only the keys that click a button, and only on a button focused in the current arming:
-      // Tab moving focus on is no press.
-      if (isPress(event)) {
-        pressArmed = arming.armed() && armedFocus === button;
-        pressRefocus = arming.armed() && armedFocus !== button;
-        if (isSpace(event)) spacePress = { button, armed: pressArmed, refocus: pressRefocus };
-      }
     });
     // Firefox clicks the button at the end of a Space keyup when any Space keydown reached it,
     // also a repeat of a Space that went down elsewhere, and also after a click in between.
     button.addEventListener("keyup", (event) => {
       if (!isSpace(event)) return;
-      const press = spacePress?.button === button ? spacePress : undefined;
+      pressArmed = spacePress === button;
       spacePress = undefined;
-      pressArmed = press?.armed ?? false;
-      pressRefocus = press?.refocus ?? false;
     });
     button.addEventListener("click", (event) => onClick(event, button));
   }
 
   return { renderButtons, watch, rearm };
+
+  function countsFrom(from: EventTarget | null, button: HTMLButtonElement): boolean {
+    const index = buttons.indexOf(button);
+    if (armedFocus !== undefined && from === armedFocus) {
+      return Math.abs(buttons.indexOf(armedFocus) - index) === 1;
+    }
+    if (index !== 0 || !(from instanceof Node) || buttons.some((other) => other === from)) {
+      return false;
+    }
+    const position = from.compareDocumentPosition(button);
+    return (
+      (position & Node.DOCUMENT_POSITION_FOLLOWING) !== 0 &&
+      (position & (Node.DOCUMENT_POSITION_CONTAINED_BY | Node.DOCUMENT_POSITION_DISCONNECTED)) === 0
+    );
+  }
 
   function renderButtons(): void {
     const enabled = asking() && arming.armed();
@@ -161,14 +164,15 @@ export function armButtons<Handle>(options: {
   function onClick(event: MouseEvent, button: HTMLButtonElement): void {
     const pressed = pressArmed;
     pressArmed = undefined;
-    const refocus = pressRefocus;
-    pressRefocus = false;
     // Only the user's own click answers, and not the second click of a double click.
     if (!event.isTrusted || event.detail > 1 || !asking()) return;
     if (!arming.armed() || pressed === false) {
-      onUnarmed(arming.armed() && refocus ? "refocus" : "arming");
+      onUnarmed("arming");
       return;
     }
+    // An answer ends the Tab path and starts the second again: if the page asks again, a key
+    // answers only along a new path after a pause.
+    restartDelay();
     onAnswer(button);
   }
 
@@ -180,25 +184,49 @@ export function armButtons<Handle>(options: {
     });
     window.addEventListener("focus", () => arming.focused(true));
     window.addEventListener("blur", () => arming.focused(false));
-    // Capture runs before the button's own keydown. Typing keeps the page unarmed until it stops
-    // for a second, also once armed; Tab there only voids the focus it moves away from.
-    window.addEventListener(
-      "keydown",
-      (event) => {
-        if (isSpace(event) && !event.repeat) spacePress = undefined;
-        const pressOnButton = isPress(event) && buttons.some((button) => button === event.target);
-        if (!arming.armed()) restartDelay();
-        else if (event.key === "Tab") armedFocus = undefined;
-        else if (!pressOnButton && !MODIFIER_KEYS.has(event.key)) restartDelay();
-      },
-      { capture: true },
-    );
+    // Capture, so every keydown in the page is seen before it reaches its target. Typing keeps the
+    // page unarmed until it stops for a second, also once armed.
+    window.addEventListener("keydown", onKeydown, { capture: true });
+  }
+
+  function onKeydown(event: KeyboardEvent): void {
+    if (isSpace(event) && !event.repeat) spacePress = undefined;
+    const button = isPress(event)
+      ? buttons.find((candidate) => candidate === event.target)
+      : undefined;
+    if (button !== undefined && event.repeat) {
+      // A held key is one press. Enter clicks at keypress, so a reply that returns the page to
+      // asking before a repeat's keypress must not get a click.
+      if (isSpace(event) && spacePress === button) return;
+      event.preventDefault();
+      restartDelay();
+      return;
+    }
+    if (button !== undefined && asking()) {
+      if (arming.armed() && armedFocus === button) {
+        if (isSpace(event)) spacePress = button;
+        else pressArmed = true;
+      } else {
+        refuse(event);
+      }
+      return;
+    }
+    const keeps = event.key === "Tab" ? spacePress === undefined : MODIFIER_KEYS.has(event.key);
+    if (!arming.armed() || !keeps) restartDelay();
+  }
+
+  function refuse(event: KeyboardEvent): void {
+    // Measured in Firefox: no click follows, also at a Space keyup.
+    event.preventDefault();
+    pressArmed = undefined;
+    restartDelay();
+    rest().focus();
+    onUnarmed("refocus");
   }
 
   function rearm(): void {
     // A press already under way began before what the page shows now.
     if (pressArmed !== undefined) pressArmed = false;
-    pressRefocus = false;
     restartDelay();
   }
 

@@ -22,10 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- A key press meant for another window no longer answers a Foxleash prompt: Enter or Space
-  answers only on a button you moved to after the buttons respond, and typing into a prompt
-  keeps its buttons from responding until you stop for a second. A prompt that refuses such a
-  key press says how to answer with the keyboard.
+- A key press meant for another window no longer answers a Foxleash prompt. A prompt starts
+  with keyboard focus on its question, so Shift+Tab then Enter typed for another window does
+  nothing there. Enter or Space answers only on a button you reached with Tab, after the buttons
+  respond, from the question or a field above the buttons, and typing into a prompt keeps its
+  buttons from responding until you stop for a second. A refused key press moves focus back to
+  the question and says how to answer with the keyboard.
 - While Foxleash asks you something in a tab of an agent's group, the agent can no longer switch
   that window to another of its tabs, and tabs Foxleash opens for it meanwhile stay in the
   background, so the question stays in view.

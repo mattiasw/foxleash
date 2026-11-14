@@ -27,12 +27,13 @@ const close = element("close", PAGE);
 const buttons = [...answers.querySelectorAll<HTMLButtonElement>("button[data-answer]")];
 let state: State = "waiting";
 let port: Port | undefined;
-const { renderButtons, watch } = armButtons({
+const { renderButtons, watch, rearm } = armButtons({
   buttons,
   timers,
   asking: () => state === "prompt",
   onAnswer,
   onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : UNARMED),
+  rest: () => heading,
 });
 
 back.addEventListener("click", () => history.back());
@@ -71,6 +72,8 @@ function receive(received: unknown): void {
     if (state !== "saving") return;
     state = "prompt";
     renderButtons();
+    // Asking again: the second before arming counts from now.
+    rearm();
     announce(status, "Firefox could not save the answer. Try again.");
   } else if (fields.type === "done") {
     const { answer, loadsHere, late } = fields;
@@ -91,6 +94,7 @@ function ask(site: string, url: string): void {
   credentials.hidden = !shown.credentials;
   state = "prompt";
   renderButtons();
+  heading.focus();
   // From now on, so the second before arming counts from when the question can be read.
   watch();
 }

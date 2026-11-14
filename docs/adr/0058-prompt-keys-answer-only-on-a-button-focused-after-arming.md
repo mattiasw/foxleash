@@ -1,7 +1,9 @@
 # 0058: Prompt keys answer only on a button focused after arming
 
 **Status:** Accepted, 2026-11-14. Extends the arming of
-[0007](0007-per-site-approval-and-tab-redaction.md).
+[0007](0007-per-site-approval-and-tab-redaction.md). Its rule for which focus counts and its
+exemption of Enter and Space on an answer button from restarting the arming second are extended
+by [0061](0061-the-key-presses-that-can-answer-a-prompt.md), 2026-11-14.
 
 ## Context
 

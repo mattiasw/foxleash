@@ -24,6 +24,7 @@ const timers: Timers<ReturnType<typeof setTimeout>> = {
   clearTimeout: (handle) => clearTimeout(handle),
 };
 
+const heading = element("heading", PAGE);
 const recipe = element("recipe", PAGE);
 const sites = element("sites", PAGE);
 const answers = element("answers", PAGE);
@@ -38,6 +39,7 @@ const { renderButtons, watch } = armButtons({
   asking: () => state === "asking",
   onAnswer,
   onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : UNARMED),
+  rest: () => heading,
 });
 
 const id = new URLSearchParams(location.search).get("id");
@@ -115,6 +117,7 @@ function ask(intro: string, shown: { site: string; state: SiteState }[]): void {
   );
   state = "asking";
   renderButtons();
+  heading.focus();
   // From now on, so the second before arming counts from when the sites can be read.
   watch();
 }

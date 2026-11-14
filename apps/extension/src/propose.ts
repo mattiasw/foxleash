@@ -102,6 +102,7 @@ const { renderButtons, watch, rearm } = armButtons({
   asking: () => state === "asking",
   onAnswer,
   onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : unarmedText),
+  rest: restingElement,
 });
 
 for (const name of LINES) {
@@ -266,6 +267,7 @@ function propose(given: RecipeFields, stored: Recipe | undefined): void {
   showCurrent();
   state = "asking";
   renderButtons();
+  heading.focus();
   // From now on, so the second before arming counts from when the recipe can be read.
   watch();
   if (draft === undefined) return;
@@ -408,6 +410,8 @@ function showReplyProblems(problems: Problem[]): void {
   state = "asking";
   setEditable(true);
   renderButtons();
+  // Asking again: the second before arming counts from now.
+  rearm();
   const onFields = problems.flatMap(({ field, text, line, column }): FieldProblem<Field>[] => {
     if (field === undefined) return [];
     const problem: FieldProblem<Field> = { field, text };
@@ -436,11 +440,16 @@ function changed(stored: Recipe | undefined): void {
   token = { name: token.name, savedAt: stored?.savedAt ?? null };
   showCurrent();
   keepDraft();
-  // Re-armed and off Save, so a second click or Enter cannot store over a version the user has
-  // not read yet.
+  // Re-armed and with focus back before the buttons, so a second click or Enter cannot store over
+  // a version the user has not read yet.
   rearm();
-  (current === undefined ? status : currentHeading).focus();
+  restingElement().focus();
   announceChanged();
+}
+
+/** Where focus rests while the page asks: before the buttons, and not reached by Tab. */
+function restingElement(): HTMLElement {
+  return current === undefined ? heading : currentHeading;
 }
 
 function done(answer: "saved" | "discarded"): void {
