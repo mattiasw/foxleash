@@ -46,6 +46,14 @@
       ]
     },
     {
+      "listing": "after your click Foxleash refuses every tool call of that session",
+      "evidence": [
+        { "file": "apps/extension/src/site-access.ts", "contains": "session_stopped" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "access.admit(" },
+        { "file": "apps/extension/src/options.ts", "contains": "type: \"stop\"" }
+      ]
+    },
+    {
       "listing": "A built-in list of common financial and health sites is blocked by default",
       "evidence": [
         { "file": "apps/extension/src/default-blocklist.ts", "contains": "DEFAULT_BLOCKLIST" },

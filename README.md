@@ -106,9 +106,10 @@ The extension's settings page, in the Firefox add-ons manager, has:
 - the state of the Foxleash program on this computer: connected, or not found, with the command
   that installs it,
 - the sites you allowed always, each with a Revoke button,
-- the sites you allowed or refused for each running agent session, and the prompts you closed
-  without an answer, each with a Forget button, which makes Foxleash ask again (Foxleash keeps
-  these answers only in memory until the session ends),
+- each running agent session, numbered in the order it started, with a Stop this session
+  button, and the sites you allowed or refused for it and the prompts you closed without an
+  answer, each with a Forget button, which makes Foxleash ask again (Foxleash keeps these answers
+  only in memory until the session ends),
 - the blocklist, one domain per line,
 - your recipes, which you write, edit and delete there,
 - the setting "Open each agent session in its own window", off by default. When it is on, a
@@ -162,6 +163,8 @@ defense is complete. Foxleash limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser. The approval can only
   come from your click, not from the agent.
+- The settings list each running agent session with a Stop this session button: after your
+  click Foxleash refuses every tool call of that session, also on sites you allowed always.
 - It refuses clicks on links and form buttons that lead to another site or out of the browser.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title.

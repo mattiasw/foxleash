@@ -21,6 +21,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When you install the extension, Firefox opens a Foxleash page that shows the command that
   installs the Foxleash program and whether the program is connected, and updates by itself once
   it is. The settings page shows the same in a new first section.
+- The settings page lists each running agent session, numbered in the order it started, with a
+  Stop this session button. After your click Foxleash refuses every tool call of that session,
+  also on sites you allowed always, asks you nothing more for it and closes the question it had
+  open. Its tabs stay open.
 
 ### Changed
 

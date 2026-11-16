@@ -42,7 +42,9 @@ const RECIPE_FIELDS = ["name", "description", "sites", "steps"] as const;
 interface AnswerRow {
   key: string;
   text: string;
-  forget(): void;
+  /** Follows each button's label in its accessible name. */
+  name: string;
+  actions: RowAction[];
 }
 
 /** One button of a row; its accessible name is `label` followed by the row's name. */
@@ -92,6 +94,8 @@ let renders = 0;
 let answerReads = 0;
 // The answer rows shown, so a refresh that finds the same rows leaves them (and focus) alone.
 let shownAnswers = "";
+// Each listed session's label as last read: a kept Stop button announces the current one.
+let sessionLabels = new Map<string, string>();
 // Whether the textarea holds a whole list. Until then it is read-only and Save stores nothing,
 // so a failed or unfinished read cannot save an empty list.
 let filled = false;
@@ -380,7 +384,8 @@ function isSessionAnswers(value: unknown): value is SessionAnswers {
     typeof value.label === "string" &&
     isStrings(value.allowed) &&
     isStrings(value.refused) &&
-    typeof value.closed === "number"
+    typeof value.closed === "number" &&
+    typeof value.stopped === "boolean"
   );
 }
 
@@ -392,6 +397,7 @@ function isStrings(value: unknown): value is string[] {
 
 function showAnswers(held: SessionAnswers[]): void {
   if (announced(answersStatus) === ANSWERS_FAILED) announce(answersStatus, "");
+  sessionLabels = new Map(held.map(({ session, label }) => [session, label]));
   const rows = held.flatMap(answerRows);
   const shown = JSON.stringify(rows.map(({ key, text }) => [key, text]));
   // Unchanged rows need no update, nor a focus move.
@@ -401,36 +407,80 @@ function showAnswers(held: SessionAnswers[]): void {
   updateAnswerRows(rows);
   answers.hidden = rows.length === 0;
   answersEmpty.hidden = rows.length > 0;
-  if (focused !== undefined) {
-    restoreFocus(
-      answers,
-      answersHeading,
-      focused,
-      rows.map(({ key }) => key),
-    );
-  }
+  if (focused === undefined) return;
+  const keys = rows.map(({ key }) => key);
+  // Another session's Stop button, at the same place, must not take focus: Enter would stop it.
+  if (focused.action === "stop" && !keys.includes(focused.key)) answersHeading.focus();
+  else restoreFocus(answers, answersHeading, focused, keys);
 }
 
-function answerRows({ session, label, allowed, refused, closed }: SessionAnswers): AnswerRow[] {
-  const siteAnswer = (site: string, answer: string): AnswerRow => ({
-    key: JSON.stringify([session, site]),
-    text: `${site}: ${answer} this session (${label})`,
-    forget: () => forget(session, site, `${site} for this session`),
+function answerRows({
+  session,
+  label,
+  allowed,
+  refused,
+  closed,
+  stopped,
+}: SessionAnswers): AnswerRow[] {
+  if (stopped) {
+    // No site is "stopped", as none is "closed": the key differs from the running session's row.
+    return [
+      {
+        key: JSON.stringify([session, "stopped"]),
+        text: `Agent ${label}, stopped`,
+        name: "",
+        actions: [],
+      },
+    ];
+  }
+  const sessionRow: AnswerRow = {
+    key: JSON.stringify([session]),
+    text: `Agent ${label}`,
+    name: `(${label})`,
+    actions: [{ label: "Stop this session", action: "stop", run: () => stop(session, label) }],
+  };
+  const answerRow = (key: string, text: string, forgetting: () => void): AnswerRow => ({
+    key,
+    text,
+    name: text,
+    actions: [{ label: "Forget", action: "forget", run: forgetting }],
   });
+  const siteAnswer = (site: string, answer: string): AnswerRow =>
+    answerRow(JSON.stringify([session, site]), `${site}: ${answer} this session (${label})`, () =>
+      forget(session, site, `${site} for this session`),
+    );
   const rows = [
+    sessionRow,
     ...allowed.map((site) => siteAnswer(site, "allowed")),
     ...refused.map((site) => siteAnswer(site, "refused")),
   ];
   if (closed > 0) {
     const prompts = closed === 1 ? "1 prompt" : `${closed} prompts`;
-    rows.push({
+    rows.push(
       // No site is "closed": a site is a scheme and a host.
-      key: JSON.stringify([session, "closed"]),
-      text: `${prompts} closed without an answer (${label})`,
-      forget: () => forget(session, "closed", "the closed prompts"),
-    });
+      answerRow(
+        JSON.stringify([session, "closed"]),
+        `${prompts} closed without an answer (${label})`,
+        () => forget(session, "closed", "the closed prompts"),
+      ),
+    );
   }
   return rows;
+}
+
+function stop(session: string, created: string): void {
+  const label = sessionLabels.get(session) ?? created;
+  browser.runtime
+    .sendMessage({ type: "stop", session })
+    .then(
+      (reply) =>
+        reply === true ? `Stopped the agent ${label}` : `Could not stop the agent ${label}.`,
+      () => `Could not stop the agent ${label}.`,
+    )
+    .then((text) => {
+      announce(answersStatus, text);
+      refreshAnswers();
+    });
 }
 
 function forget(session: string, site: string, what: string): void {
@@ -455,24 +505,27 @@ function updateAnswerRows(rows: AnswerRow[]): void {
   const kept = new Map<string, Element>();
   // Stale rows go before the survivors are placed, or a survivor after one would be moved.
   for (const item of [...answers.children]) {
-    const key = item.querySelector("button")?.dataset.key;
+    const key = item instanceof HTMLElement ? item.dataset.key : undefined;
     if (key !== undefined && wanted.has(key) && !kept.has(key)) kept.set(key, item);
     else item.remove();
   }
   let next = answers.firstElementChild;
-  for (const { key, text, forget } of rows) {
+  for (const { key, text, name, actions } of rows) {
     let item = kept.get(key);
     if (item === undefined) {
-      item = row(text, text, key, [{ label: "Forget", action: "forget", run: forget }]);
+      const created = row(text, name, key, actions);
+      created.dataset.key = key;
+      item = created;
     } else {
       kept.delete(key);
-      // The kept button's handler acts on the session and site its key names, not on the text.
+      // A kept button's handler acts on the session and site its key names, not on the text.
       const span = item.querySelector("span");
       if (span !== null && span.textContent !== text) span.textContent = text;
-      const button = item.querySelector("button");
-      const name = `Forget ${text}`;
-      if (button !== null && button.getAttribute("aria-label") !== name) {
-        button.setAttribute("aria-label", name);
+      for (const button of item.querySelectorAll("button")) {
+        const accessible = `${button.textContent} ${name}`;
+        if (button.getAttribute("aria-label") !== accessible) {
+          button.setAttribute("aria-label", accessible);
+        }
       }
     }
     if (item === next) next = next.nextElementSibling;

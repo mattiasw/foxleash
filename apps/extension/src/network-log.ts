@@ -47,7 +47,7 @@ export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
 export interface NetworkLogDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage" | "webRequest">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
   now: () => number;
 }
 

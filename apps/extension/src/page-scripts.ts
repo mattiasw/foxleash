@@ -156,8 +156,9 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         }
         return parsePageReply(reply, site, tabId);
       } catch (error: unknown) {
-        // An act is never sent twice, and a tab that is not the session's is refused as it is.
-        if ((acting && sent) || isTabRefusal(error)) throw error;
+        // An act is never sent twice, and a tab that is not the session's, or a stopped session,
+        // is refused as it is.
+        if ((acting && sent) || isFinalRefusal(error)) throw error;
         // The about:blank of a document swap is the next page loading, not another kind of page.
         if (!moved() && !(isPageNotWeb(error) && navigations.underWay(tabId))) throw error;
         if (second || late()) throw navigations.underWay(tabId) ? pageLoading(tabId) : error;
@@ -345,11 +346,16 @@ function isPageNotWeb(error: unknown): boolean {
   return error instanceof ToolError && error.code === "page_not_web";
 }
 
-/** The gate's refusal of a tab that does not exist or is not in the session's group. */
-function isTabRefusal(error: unknown): boolean {
+/**
+ * The gate's refusal of a tab that does not exist or is not in the session's group, or of a
+ * stopped session: never retried.
+ */
+function isFinalRefusal(error: unknown): boolean {
   return (
     error instanceof ToolError &&
-    (error.code === "tab_not_found" || error.code === "tab_not_in_group")
+    (error.code === "tab_not_found" ||
+      error.code === "tab_not_in_group" ||
+      error.code === "session_stopped")
   );
 }
 

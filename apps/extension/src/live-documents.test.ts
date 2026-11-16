@@ -258,6 +258,43 @@ describe("live documents", { timeout: 10000 }, () => {
     assert.equal(documents.live(otherSite.id)?.startedBy, "commit");
   });
 
+  it("stops at once every document of a session the user stops, whatever the site, and only those", async () => {
+    const { documents, sessions, access, liveTab } = setup({});
+    sessions.set("s1", { allowed: new Set(["https://c.example"]), refused: new Set(), closed: 0 });
+    // A's site is stored as approved: allowed always.
+    const always = await liveTab();
+    const forSession = await liveTab("s1", "https://c.example/");
+    const otherSession = await liveTab("s2");
+    const other = documents.live(otherSession.id);
+    access.stop("s1");
+    assert.equal(documents.live(always.id), undefined);
+    assert.equal(documents.live(forSession.id), undefined);
+    await flush();
+    assert.equal(documents.live(always.id), undefined);
+    assert.equal(documents.live(forSession.id), undefined);
+    assert.equal(documents.live(otherSession.id), other);
+    assert.equal(other?.startedBy, "commit");
+  });
+
+  it("makes nothing live from a commit's check a stop came during", async (t) => {
+    const decided: (string | undefined)[] = [];
+    const { fake, documents, access, tabIn } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live?.startedBy);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    const release = holdView(t, access);
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    access.stop("s1");
+    release();
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(decided, [undefined]);
+  });
+
   it("does not call onDecided for a commit that is no longer the tab's latest", async (t) => {
     quiet(t);
     const decided: [number, string | undefined][] = [];

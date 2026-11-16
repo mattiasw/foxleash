@@ -35,7 +35,7 @@ export interface TreeRead {
 export interface PageViewsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
 }
 
 export interface PageViews {
@@ -77,6 +77,7 @@ export function createPageViews({ browser, groups, access }: PageViewsDeps): Pag
     memory.delete(tabId);
   });
   access.onWithdraw(withdraw);
+  access.onStop(endSession);
 
   return { document, view, record, forget, endSession };
 

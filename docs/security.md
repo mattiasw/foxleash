@@ -85,6 +85,39 @@ An upload takes at most 100 files and 10 MB.
   sites, at most 20, grants them for the session only, never always, and sites on your blocklist
   or that you refused in the session stay so.
 
+## Stopping an agent session
+
+The settings page lists each running agent session, numbered in the order it started, with a
+**Stop this session** button. After your click, Foxleash refuses every tool call of that session,
+also on sites you allowed always, and asks you nothing more for it: it opens no site question, no
+recipe page and no site-request page. Only your click on the settings page stops a session;
+nothing the agent sends can stop one or undo a stop. Other sessions work as before.
+
+What the stop does at once:
+
+- The session's open site question closes, and the call waiting on it fails. A recipe run or site
+  request page it had open ends. A page where it proposed a recipe stays, so you can still save
+  what you read; one that was still opening at your click does not show the recipe.
+- The session's answers are forgotten, and what Foxleash recorded of its tabs (console messages,
+  network requests, the views of pages it read) is dropped.
+- Its tabs stay open in their group, and the toolbar button shows no ON on them; its title says
+  the session was stopped.
+
+Exceptions:
+
+- A call already under way when you click may still finish what it was doing, such as a click or
+  typing already sent to the page, a page load, a file being saved, closing or selecting a tab or
+  resizing the window, but it returns only the refusal. A `batch` under way returns what its
+  earlier steps read before your click, with the refusal for the rest.
+- The stop is kept in memory. A Firefox restart, or an update or reload of the extension, forgets
+  it, as it forgets the session answers; a session that connects again afterwards has what a new
+  session has, such as the sites you allowed always.
+- A new agent session is not stopped.
+- Closing the session's tab group does not stop the session: the next tab it opens makes a new
+  group.
+- A session whose program went away without telling Firefox stays listed as running until Firefox
+  restarts.
+
 ## Untrusted page content
 
 Tool results mark page content as untrusted, and the agent is told not to follow instructions

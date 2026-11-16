@@ -21,7 +21,7 @@ export interface LiveDocument {
 export interface LiveDocumentsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
   /**
    * The `event` of the warning logged when a check fails for another reason than the gate, and
    * when a live document stops being live for a reason other than a commit, its tab closing, a
@@ -149,6 +149,7 @@ export function createLiveDocuments({
     void catchUpTabs(() => true);
   });
   access.onWithdraw(withdraw);
+  access.onStop(stop);
   access.onGrant((session) => {
     accessChanged();
     void catchUpTabs((other) => other === session);
@@ -319,5 +320,13 @@ export function createLiveDocuments({
       }
     }
     for (const tabId of new Set([...dropped, ...catchUps.keys()])) void catchUp(tabId);
+  }
+
+  /** The user stopped the session: none of its documents is live, whatever the site. */
+  function stop(session: string): void {
+    accessChanged();
+    for (const [tabId, entry] of [...entries]) {
+      if (entry.session === session) entries.delete(tabId);
+    }
   }
 }

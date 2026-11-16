@@ -1618,14 +1618,23 @@ describe("sessionAnswers", () => {
         allowed: ["https://a.example", "https://c.example"],
         refused: ["https://b.example", "https://d.example"],
         closed: 2,
+        stopped: false,
       },
-      { session: "s1", label: "session with 1 tab", allowed: [], refused: [], closed: 1 },
+      {
+        session: "s1",
+        label: "session with 1 tab",
+        allowed: [],
+        refused: [],
+        closed: 1,
+        stopped: false,
+      },
       {
         session: "s3",
         label: "session with no tabs",
         allowed: [],
         refused: ["https://e.example"],
         closed: 0,
+        stopped: false,
       },
     ]);
   });
@@ -1663,7 +1672,14 @@ describe("sessionAnswers", () => {
     held.closed = 3;
     held.allowed.add("https://a.example");
     assert.deepEqual(await listed, [
-      { session: "s1", label: "session with no tabs", allowed: [], refused: [], closed: 1 },
+      {
+        session: "s1",
+        label: "session with no tabs",
+        allowed: [],
+        refused: [],
+        closed: 1,
+        stopped: false,
+      },
     ]);
   });
 });
@@ -1965,6 +1981,7 @@ describe("messages from the settings page", () => {
         allowed: ["https://a.example"],
         refused: ["https://b.example"],
         closed: 0,
+        stopped: false,
       },
     ]);
     const forgot = fake.sendMessage(
@@ -2238,5 +2255,308 @@ describe("onGrant", () => {
     sessions.set("s2", state(["https://a.example"]));
     access.endSession("s2");
     assert.deepEqual(heard, []);
+  });
+});
+
+const STOPPED =
+  "The user stopped this agent session in Firefox. Foxleash refuses every tool call of this session from now on: stop the browser task and tell the user.";
+
+describe("stop", () => {
+  it("refuses every gate of the session, on sites allowed always and for the session", async () => {
+    const { fake, access, sessions, tab } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    sessions.set("s1", state(["https://b.example"]));
+    access.stop("s1");
+    assert.equal(access.stopped("s1"), true);
+    await assert.rejects(access.view("s1"), { code: "session_stopped", message: STOPPED });
+    for (const site of ["https://a.example", "https://b.example"]) {
+      const url = `${site}/page`;
+      await rejectsWith(access.check("s1", url), "session_stopped");
+      await rejectsWith(
+        access.ask("s1", url, tab.id, { generation: access.generation("s1") }),
+        "session_stopped",
+      );
+      await rejectsWith(access.siteStates("s1", [site]), "session_stopped");
+      await rejectsWith(
+        access.allowForSession("s1", [site], () => true),
+        "session_stopped",
+      );
+    }
+    await rejectsWith(access.check("s1", "https://c.example/"), "session_stopped");
+    assert.throws(() => access.refuseIfStoppedAsking("s1"), {
+      code: "session_stopped",
+      message: STOPPED,
+    });
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(fake.tabs.get(tab.id)?.url, tab.url);
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("rejects the request on its open prompt with session_stopped and ends the page, uncounted", async () => {
+    const { fake, access, sessions, tab, ask } = setup();
+    const { answer } = await ask();
+    const page = connect(fake, tab.id);
+    access.stop("s1");
+    await flush();
+    assertRejected(answer, "session_stopped", STOPPED);
+    assert.deepEqual(page.posted, [{ type: "ended" }]);
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(sessions.has("s1"), false);
+    // A page connecting later finds no prompt.
+    assert.deepEqual(connect(fake, tab.id).posted, [{ type: "ended" }]);
+    page.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("forgets the session's answers, tells onWithdraw of each site it allowed, then onStop", async () => {
+    const heard: string[] = [];
+    const { access, sessions, ask } = setup((session, site) => {
+      const open = access.openPrompt(session) !== undefined;
+      heard.push(`withdraw ${session} ${site} prompt:${open} answers:${sessions.has(session)}`);
+    });
+    access.onStop((session) => heard.push(`stop ${session}`));
+    await ask("s1", "https://d.example/");
+    sessions.set("s1", {
+      allowed: new Set(["https://a.example", "https://b.example"]),
+      refused: new Set(["https://c.example"]),
+      closed: 1,
+    });
+    sessions.set("s2", state(["https://e.example"]));
+    access.stop("s1");
+    assert.deepEqual(heard, [
+      "withdraw s1 https://a.example prompt:false answers:false",
+      "withdraw s1 https://b.example prompt:false answers:false",
+      "stop s1",
+    ]);
+    assert.equal(sessions.has("s1"), false);
+    assert.deepEqual(sessions.get("s2"), state(["https://e.example"]));
+  });
+
+  it("tells each onStop listener once, in the order added, and a second stop tells nothing", async () => {
+    const { fake, access, sessions } = setup();
+    const heard: string[] = [];
+    access.onStop((session) => heard.push(`first ${session}`));
+    access.onStop((session) => heard.push(`second ${session}`));
+    access.stop("s1");
+    assert.deepEqual(heard, ["first s1", "second s1"]);
+    sessions.set("s1", state(["https://a.example"]));
+    assert.equal(await fake.sendMessage({ type: "stop", session: "s1" }, settingsPage(fake)), true);
+    assert.deepEqual(heard, ["first s1", "second s1"]);
+    assert.deepEqual(sessions.get("s1"), state(["https://a.example"]));
+    access.stop("s2");
+    assert.deepEqual(heard, ["first s1", "second s1", "first s2", "second s2"]);
+  });
+
+  it("leaves another session's access and open prompt alone", async () => {
+    const { fake, access, sessions, tab, ask } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    sessions.set("s2", state(["https://b.example"]));
+    const { answer } = await ask("s2", "https://c.example/");
+    const page = connect(fake, tab.id);
+    access.stop("s1");
+    await flush();
+    assert.equal(access.stopped("s2"), false);
+    const view = await access.view("s2");
+    assert.equal(view.allowed("https://a.example/"), true);
+    assert.equal(view.allowed("https://b.example/"), true);
+    assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "allowed" });
+    assert.equal(access.openPrompt("s2")?.site, "https://c.example");
+    assert.equal(answer.state, "pending");
+    assert.deepEqual(page.posted, []);
+    access.admit("s2");
+    access.refuseIfStoppedAsking("s2");
+    page.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("keeps a session stopped after it ends, so the same id is refused again", async () => {
+    const { access, sessions } = setup();
+    access.admit("s1");
+    access.stop("s1");
+    access.endSession("s1");
+    assert.equal(access.stopped("s1"), true);
+    assert.throws(() => access.admit("s1"), { code: "session_stopped", message: STOPPED });
+    await rejectsWith(access.view("s1"), "session_stopped");
+    assert.equal(sessions.has("s1"), false);
+  });
+
+  it("brings no window to the front for its prompt page loading when the stop came", async () => {
+    const { fake, access, tab } = setup();
+    const held = Promise.withResolvers<void>();
+    const update = fake.browser.tabs.update;
+    let loading = false;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const updated = await update(tabId, properties);
+      loading = true;
+      await held.promise;
+      return updated;
+    };
+    const asking = access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+    });
+    while (!loading) await flush();
+    access.stop("s1");
+    held.resolve();
+    const approval = await asking;
+    const answer = track(approval.answer);
+    await flush();
+    assert.equal(approval.promptInTab, true);
+    assertRejected(answer, "session_stopped", STOPPED);
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("refuses a view whose settings read was under way when the stop came", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const held = Promise.withResolvers<void>();
+    const get = fake.browser.storage.local.get;
+    fake.browser.storage.local.get = async (keys) => {
+      await held.promise;
+      return get(keys);
+    };
+    const viewing = access.view("s1");
+    const checking = access.check("s1", "https://a.example/");
+    const other = access.view("s2");
+    await flush();
+    access.stop("s1");
+    held.resolve();
+    await rejectsWith(viewing, "session_stopped");
+    await rejectsWith(checking, "session_stopped");
+    assert.equal((await other).allowed("https://a.example/"), true);
+  });
+});
+
+describe("admit", () => {
+  it("lists running sessions in the order they started, numbered, before other sessions", async () => {
+    const { access, sessions, groups, tab } = setup();
+    sessions.set("s3", state(["https://a.example"]));
+    access.admit("s1");
+    access.admit("s2");
+    access.admit("s1");
+    sessions.set("s2", state(["https://b.example"]));
+    await groups.ensureGroup("s2", tab);
+    assert.deepEqual(await access.sessionAnswers(), [
+      {
+        session: "s1",
+        label: "session 1 with no tabs",
+        allowed: [],
+        refused: [],
+        closed: 0,
+        stopped: false,
+      },
+      {
+        session: "s2",
+        label: "session 2 with 1 tab",
+        allowed: ["https://b.example"],
+        refused: [],
+        closed: 0,
+        stopped: false,
+      },
+      {
+        session: "s3",
+        label: "session with no tabs",
+        allowed: ["https://a.example"],
+        refused: [],
+        closed: 0,
+        stopped: false,
+      },
+    ]);
+  });
+
+  it("lists a stopped session with no answers until it ends, and a reconnect with the next number", async () => {
+    const { access, sessions } = setup();
+    access.admit("s1");
+    access.admit("s2");
+    sessions.set("s1", state(["https://a.example"]));
+    access.stop("s1");
+    const listed = await access.sessionAnswers();
+    assert.deepEqual(listed[0], {
+      session: "s1",
+      label: "session 1 with no tabs",
+      allowed: [],
+      refused: [],
+      closed: 0,
+      stopped: true,
+    });
+    access.endSession("s1");
+    access.endSession("s2");
+    assert.deepEqual(await access.sessionAnswers(), []);
+    assert.throws(() => access.admit("s1"), { code: "session_stopped" });
+    access.admit("s2");
+    assert.deepEqual(
+      (await access.sessionAnswers()).map(({ label, stopped }) => [label, stopped]),
+      [
+        ["session 3 with no tabs", true],
+        ["session 4 with no tabs", false],
+      ],
+    );
+  });
+
+  it("refuses a session the user stopped before it ever sent a request", async () => {
+    const { access } = setup();
+    access.stop("__proto__");
+    assert.throws(() => access.admit("__proto__"), { code: "session_stopped" });
+    assert.deepEqual(
+      (await access.sessionAnswers()).map(({ session, label, stopped }) => [
+        session,
+        label,
+        stopped,
+      ]),
+      [["__proto__", "session 1 with no tabs", true]],
+    );
+  });
+});
+
+describe("stop messages from the settings page", () => {
+  it("stops a session on the settings page's request", async () => {
+    const { fake, access } = setup();
+    assert.equal(await fake.sendMessage({ type: "stop", session: "s1" }, settingsPage(fake)), true);
+    assert.equal(access.stopped("s1"), true);
+    assert.equal(await fake.browser.runtime.sendMessage({ type: "stop", session: "s2" }), true);
+    assert.equal(access.stopped("s2"), true);
+    assert.equal(access.stopped("s3"), false);
+  });
+
+  it("does not stop a session for any other sender", () => {
+    const { fake, access } = setup();
+    const options = fake.browser.runtime.getURL("options.html");
+    const senders: MessageSender[] = [
+      { id: "other@example.org", url: options },
+      { url: options },
+      { id: FAKE_EXTENSION_ID },
+      { id: FAKE_EXTENSION_ID, url: `${fake.browser.runtime.getURL("approve.html")}?id=x` },
+      { id: FAKE_EXTENSION_ID, url: "https://a.example/options.html" },
+      { id: FAKE_EXTENSION_ID, url: `${options}?x` },
+      { id: FAKE_EXTENSION_ID, url: `${options}#x` },
+      { id: FAKE_EXTENSION_ID, url: "https://a.example/", tab: { id: 1 } },
+    ];
+    for (const sender of senders) {
+      assert.equal(fake.sendMessage({ type: "stop", session: "s1" }, sender), undefined);
+      assert.equal(access.stopped("s1"), false, JSON.stringify(sender));
+    }
+  });
+
+  it("ignores a malformed stop", () => {
+    const { fake, access } = setup();
+    const messages: unknown[] = [
+      { type: "stop" },
+      { type: "stop", session: 1 },
+      { type: "stop", session: ["s1"] },
+      { type: "Stop", session: "s1" },
+      { type: "stopped", session: "s1" },
+      { session: "s1" },
+      "stop",
+    ];
+    for (const message of messages) {
+      assert.equal(
+        fake.sendMessage(message, settingsPage(fake)),
+        undefined,
+        JSON.stringify(message),
+      );
+    }
+    assert.equal(access.stopped("s1"), false);
+    assert.equal(access.stopped("undefined"), false);
   });
 });

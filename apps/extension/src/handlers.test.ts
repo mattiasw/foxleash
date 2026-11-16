@@ -10484,3 +10484,78 @@ async function click(
   replyWith(async () => ({ ref: "b4", x: 1, y: 2 }));
   await call(session, "click", { tabId, ref: "b4" });
 }
+
+describe("a stopped session", { timeout: 10000 }, () => {
+  const STOPPED = {
+    code: "session_stopped",
+    message:
+      "The user stopped this agent session in Firefox. Foxleash refuses every tool call of this session from now on: stop the browser task and tell the user.",
+  };
+
+  it("is refused on arrival, also by tools that reach no site gate, and another session is not", async () => {
+    const { fake, access, call, open, grant, pageCalls } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const other = await open("s2", "https://a.example/");
+    access.stop("s1");
+    await assert.rejects(call("s1", "tab_close", { tabId: tab.id }), STOPPED);
+    assert.equal(fake.tabs.has(tab.id), true);
+    await assert.rejects(call("s1", "recipe_list"), STOPPED);
+    await assert.rejects(call("s1", "tabs_list"), STOPPED);
+    await assert.rejects(call("s1", "read_page", { tabId: tab.id }), STOPPED);
+    await assert.rejects(call("s1", "tab_open", { url: "https://a.example/b" }), STOPPED);
+    assert.deepEqual(pageCalls, []);
+    assert.deepEqual(await call("s2", "read_page", { tabId: other.id }), {
+      tree: "",
+      truncated: false,
+    });
+    assert.deepEqual(await call("s2", "recipe_list"), { recipes: [] });
+    assert.equal(pageCalls.length, 1);
+  });
+
+  it("returns nothing a page tool got when the stop came while it was under way", async () => {
+    const { access, call, open, grant, replyWith, pageCalls } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const held = Promise.withResolvers<unknown>();
+    replyWith(() => held.promise);
+    const reading = call("s1", "read_page", { tabId: tab.id });
+    while (pageCalls.length === 0) await flush();
+    access.stop("s1");
+    held.resolve({ tree: "secret", truncated: false });
+    await assert.rejects(reading, STOPPED);
+  });
+
+  it("reports the stop for a call that failed for another reason after it", async () => {
+    const { access, call, open, grant, replyWith, pageCalls } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const held = Promise.withResolvers<unknown>();
+    replyWith(() => held.promise);
+    const reading = call("s1", "read_page", { tabId: tab.id });
+    while (pageCalls.length === 0) await flush();
+    access.stop("s1");
+    held.reject(new ToolError("page_changed", "The page changed."));
+    await assert.rejects(reading, STOPPED);
+  });
+
+  it("keeps another failure of a session that is not stopped", async () => {
+    const { call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    replyWith(async () => {
+      throw new ToolError("page_changed", "The page changed.");
+    });
+    await assert.rejects(call("s1", "read_page", { tabId: tab.id }), { code: "page_changed" });
+  });
+
+  it("rejects a tab_open waiting on its site prompt at once", async () => {
+    const { fake, access, call, promptOf } = setup();
+    const opening = call("s1", "tab_open", { url: "https://a.example/" });
+    const { tabId } = await promptOf("s1");
+    access.stop("s1");
+    await assert.rejects(opening, STOPPED);
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(fake.tabs.has(tabId), true);
+  });
+});

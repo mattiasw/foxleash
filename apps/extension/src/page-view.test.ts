@@ -122,6 +122,22 @@ describe("page views", { timeout: 10000 }, () => {
     );
   });
 
+  it("forgets every view of a session the user stops, and keeps another session's", async () => {
+    const { fake, groups, views, access, see, tab } = await setup();
+    const shared = fake.openTab();
+    await groups.ensureGroup("s2", shared);
+    fake.navigateByUser(shared.id, `${SITE}/`);
+    await flush();
+    // A tab of s2's group, viewed by s1 too.
+    see("s1", shared.id, TREE);
+    see("s2", shared.id, TREE);
+    see("s1", tab.id, TREE);
+    access.stop("s1");
+    assert.equal(views.document(tab.id), undefined);
+    assert.equal(see("s1", shared.id, TREE).kind, "tree");
+    assert.equal(see("s2", shared.id, TREE).kind, "unchanged");
+  });
+
   it("makes the next view say what changed since a recorded read_page", async () => {
     const { views, see, tab } = await setup();
     views.record("s1", tab.id, views.document(tab.id), { tree: TREE, truncated: false });
@@ -489,5 +505,5 @@ async function setup() {
     return views.view(session, tabId, before, { tree, truncated }, []);
   }
 
-  return { fake, sessions, access, views, tab, other, see };
+  return { fake, groups, sessions, access, views, tab, other, see };
 }

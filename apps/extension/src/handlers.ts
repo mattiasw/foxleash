@@ -83,6 +83,7 @@ import {
   type OpenPrompt,
   PROMPT_PAGE,
   type SiteAccess,
+  sessionStopped,
   siteBlocked,
 } from "./site-access.ts";
 import type { TabNavigations } from "./tab-navigations.ts";
@@ -321,9 +322,21 @@ export function createHandlers<Handle>({
   };
 
   return async function handleRequest(request) {
+    const { session } = request;
+    // A stopped session is refused on arrival, also by tools that never reach a site gate.
+    access.admit(session);
     // Read on arrival, so a request that was running when its session ended asks nothing.
-    const generation = access.generation(request.session);
-    return handlers[request.method](request.session, request.params, generation);
+    const generation = access.generation(session);
+    let result: Result<MethodName>;
+    try {
+      result = await handlers[request.method](session, request.params, generation);
+    } catch (error: unknown) {
+      if (access.stopped(session)) throw sessionStopped();
+      throw error;
+    }
+    // A call under way when the user stopped its session returns nothing it got.
+    if (access.stopped(session)) throw sessionStopped();
+    return result;
   };
 
   async function tabsList(session: string): Promise<Result<"tabs_list">> {

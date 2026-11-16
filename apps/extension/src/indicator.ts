@@ -4,24 +4,30 @@ import type { SessionGroups } from "./session-groups.ts";
 
 const BADGE_ON = "ON";
 const TITLE_ON = "Foxleash: an agent session can use this tab";
+const TITLE_STOPPED = "Foxleash: the agent session of this tab was stopped";
 // The manifest's default_title.
 const TITLE_OFF = "Foxleash";
 
 export interface Indicator {
   /** Sets the tab's badge and title from its current group; never rejects. */
   refresh(tabId: number): Promise<void>;
+  /** Sets the badge and title of every tab in the session's group; never rejects. */
+  refreshSession(session: string): Promise<void>;
 }
 
 /**
- * Shows ON on the toolbar button for tabs in a session's group, and opens the settings on a
- * click. Registers its listeners at once, so the event page can be started for them.
+ * Shows ON on the toolbar button for tabs in a session's group, unless the user stopped that
+ * session, and opens the settings on a click. Registers its listeners at once, so the event page
+ * can be started for them.
  */
 export function createIndicator({
   browser,
   groups,
+  stopped,
 }: {
   browser: BrowserApi;
-  groups: Pick<SessionGroups, "isSessionGroup">;
+  groups: Pick<SessionGroups, "sessionOf" | "groupOf">;
+  stopped: (session: string) => boolean;
 }): Indicator {
   // Every update: Firefox clears a tab's badge and title when it navigates to another document.
   browser.tabs.onUpdated.addListener((tabId, _changeInfo, tab) => {
@@ -34,14 +40,17 @@ export function createIndicator({
     void openSettings();
   });
 
-  return { refresh };
+  return { refresh, refreshSession };
 
   async function show(tabId: number, groupId: number | undefined): Promise<void> {
-    const on = groups.isSessionGroup(groupId);
+    const session = groups.sessionOf(groupId);
+    const halted = session !== undefined && stopped(session);
+    const on = session !== undefined && !halted;
+    const title = on ? TITLE_ON : halted ? TITLE_STOPPED : TITLE_OFF;
     try {
       await Promise.all([
         browser.action.setBadgeText({ tabId, text: on ? BADGE_ON : "" }),
-        browser.action.setTitle({ tabId, title: on ? TITLE_ON : TITLE_OFF }),
+        browser.action.setTitle({ tabId, title }),
       ]);
     } catch (error) {
       warn({ event: "indicator_failed", tabId, error: String(error) });
@@ -62,6 +71,17 @@ export function createIndicator({
       await show(tabId, tab.groupId);
     } catch (error) {
       warn({ event: "indicator_failed", tabId, error: String(error) });
+    }
+  }
+
+  async function refreshSession(session: string): Promise<void> {
+    try {
+      const group = await groups.groupOf(session);
+      if (group === undefined) return;
+      const tabs = await browser.tabs.query({ groupId: group.id });
+      await Promise.all(tabs.map((tab) => show(tab.id, tab.groupId)));
+    } catch (error) {
+      warn({ event: "indicator_failed", session, error: String(error) });
     }
   }
 }

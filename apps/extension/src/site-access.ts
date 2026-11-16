@@ -98,9 +98,25 @@ export interface SiteAccess {
   openPrompt(session: string): OpenPrompt | undefined;
   /** The URL the session's answered prompt asked about, while `tab` still shows that prompt. */
   askedUrl(session: string, tab: Tab): string | undefined;
-  /** Forgets the session's answers and closes its open prompt. */
+  /**
+   * Forgets the session's answers, closes its open prompt and lists it as running no more. A
+   * stopped session stays stopped.
+   */
   endSession(session: string): void;
-  /** The answers each session holds, sites sorted. */
+  /**
+   * Records the session as running, until `endSession`, numbered in the order sessions started.
+   * Throws `session_stopped` when the user stopped it. Called on each request's arrival.
+   */
+  admit(session: string): void;
+  /**
+   * The user's click on the settings page: from now on every gate refuses the session with
+   * `session_stopped`, also on sites allowed always. Drops its open prompt uncounted, forgets its
+   * answers and calls the `onStop` listeners. Nothing undoes it; a second stop does nothing.
+   */
+  stop(session: string): void;
+  /** Whether the user stopped the session. */
+  stopped(session: string): boolean;
+  /** Each running session, and any other that holds answers, with its answers, sites sorted. */
   sessionAnswers(): Promise<SessionAnswers[]>;
   /** For a recipe's sites: what the session may do with each, as stored and granted now. Changes nothing. */
   siteStates(session: string, sites: readonly string[]): Promise<Map<string, SiteState>>;
@@ -126,9 +142,15 @@ export interface SiteAccess {
   forget(session: string, site: string): void;
   /**
    * Calls `listener` each time the session's approval of a site ends: the user withdrew it, or
-   * the session ended. Synchronously, at the end of `forget` or `endSession`, in the order added.
+   * the session ended or was stopped. Synchronously, at the end of `forget`, `endSession` or
+   * `stop`, in the order added.
    */
   onWithdraw(listener: (session: string, site: string) => void): void;
+  /**
+   * Calls `listener` once per session the user stops, synchronously at the end of `stop`, in the
+   * order added. Covers sites allowed always, which `onWithdraw` never reports.
+   */
+  onStop(listener: (session: string) => void): void;
   /**
    * Calls `listener` each time the session gains a site by the user's click: a prompt answered
    * once, or always once the answer is saved, and each site `allowForSession` grants.
@@ -146,6 +168,8 @@ export interface SessionAnswers {
   allowed: string[];
   refused: string[];
   closed: number;
+  /** The user stopped this session; it holds no answers. */
+  stopped: boolean;
 }
 
 export interface SiteView {
@@ -204,6 +228,12 @@ export function createSiteAccess<Handle>({
   const generations = new Map<string, number>();
   const withdrawals = new Set<(session: string, site: string) => void>();
   const grants = new Set<(session: string, site: string) => void>();
+  const stops = new Set<(session: string) => void>();
+  // Sessions the user stopped, for the background page's life: `endSession` keeps them.
+  const stoppedSessions = new Set<string>();
+  // Each running session's number, given at its first `admit`.
+  const runningSessions = new Map<string, number>();
+  let admitted = 0;
 
   browser.runtime.onConnect.addListener(connect);
   browser.runtime.onMessage.addListener(receiveFromSettings);
@@ -237,17 +267,23 @@ export function createSiteAccess<Handle>({
     openPrompt,
     askedUrl,
     endSession,
+    admit,
+    stop,
+    stopped: isStopped,
     sessionAnswers,
     siteStates,
     allowForSession,
     refuseIfStoppedAsking,
     forget,
     onWithdraw,
+    onStop,
     onGrant,
   };
 
   async function view(session: string): Promise<SiteView> {
     const settings = await readSettings(browser);
+    // After the only await, so a stop before or during the read is seen.
+    if (stoppedSessions.has(session)) throw sessionStopped();
     const stored = new Set(settings.sites);
     const blocklist = effectiveBlocklist(settings);
     const granted = sessions.get(session);
@@ -334,10 +370,34 @@ export function createSiteAccess<Handle>({
     generations.set(session, generationOf(session) + 1);
     const state = sessions.get(session);
     sessions.delete(session);
+    runningSessions.delete(session);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false);
     // A session that reconnects with the same id asks again, so nothing from the gap is read.
     for (const site of state?.allowed ?? []) withdrawn(session, site);
+  }
+
+  function admit(session: string): void {
+    if (!runningSessions.has(session)) {
+      admitted += 1;
+      runningSessions.set(session, admitted);
+    }
+    if (stoppedSessions.has(session)) throw sessionStopped();
+  }
+
+  function stop(session: string): void {
+    if (stoppedSessions.has(session)) return;
+    stoppedSessions.add(session);
+    const state = sessions.get(session);
+    sessions.delete(session);
+    const prompt = prompts.get(session);
+    if (prompt !== undefined) drop(prompt, false, sessionStopped());
+    for (const site of state?.allowed ?? []) withdrawn(session, site);
+    for (const listener of stops) listener(session);
+  }
+
+  function isStopped(session: string): boolean {
+    return stoppedSessions.has(session);
   }
 
   function generationOf(session: string): number {
@@ -346,14 +406,25 @@ export function createSiteAccess<Handle>({
 
   async function sessionAnswers(): Promise<SessionAnswers[]> {
     // Copied before any await, so the reply shows one moment.
-    const held = [...sessions]
-      .map(([session, state]) => ({
-        session,
-        allowed: [...state.allowed].sort(),
-        refused: [...state.refused].sort(),
-        closed: state.closed,
-      }))
-      .filter((entry) => entry.allowed.length > 0 || entry.refused.length > 0 || entry.closed > 0);
+    const ids = new Set([...runningSessions.keys(), ...sessions.keys()]);
+    const held = [...ids]
+      .map((session) => {
+        const state = sessions.get(session);
+        return {
+          session,
+          allowed: [...(state?.allowed ?? [])].sort(),
+          refused: [...(state?.refused ?? [])].sort(),
+          closed: state?.closed ?? 0,
+          stopped: stoppedSessions.has(session),
+        };
+      })
+      .filter(
+        (entry) =>
+          runningSessions.has(entry.session) ||
+          entry.allowed.length > 0 ||
+          entry.refused.length > 0 ||
+          entry.closed > 0,
+      );
     return Promise.all(
       held.map(async (entry) => ({ ...entry, label: await labelOf(entry.session) })),
     );
@@ -419,6 +490,10 @@ export function createSiteAccess<Handle>({
     for (const listener of withdrawals) listener(session, site);
   }
 
+  function onStop(listener: (session: string) => void): void {
+    stops.add(listener);
+  }
+
   function onGrant(listener: (session: string, site: string) => void): void {
     grants.add(listener);
   }
@@ -428,13 +503,16 @@ export function createSiteAccess<Handle>({
   }
 
   async function labelOf(session: string): Promise<string> {
+    // Read before the awaits: the session may end while its tabs are counted.
+    const number = runningSessions.get(session);
+    const name = number === undefined ? "session" : `session ${number}`;
     const group = await groups.groupOf(session);
     const tabs =
       group === undefined
         ? 0
         : (await browser.tabs.query({ groupId: group.id }).catch(() => [])).length;
-    if (tabs === 0) return "session with no tabs";
-    return tabs === 1 ? "session with 1 tab" : `session with ${tabs} tabs`;
+    if (tabs === 0) return `${name} with no tabs`;
+    return tabs === 1 ? `${name} with 1 tab` : `${name} with ${tabs} tabs`;
   }
 
   function webSite(url: string): string {
@@ -458,6 +536,7 @@ export function createSiteAccess<Handle>({
   }
 
   function refuseIfStoppedAsking(session: string): void {
+    if (stoppedSessions.has(session)) throw sessionStopped();
     const state = sessions.get(session);
     if (state !== undefined && state.refused.size + state.closed >= PROMPT_BUDGET) {
       throw new ToolError(
@@ -529,7 +608,8 @@ export function createSiteAccess<Handle>({
       }
       throw error;
     }
-    await groups.showPromptWindow(session, tab.windowId);
+    // Stopped while the page loaded: no window comes to the front for it.
+    if (!stoppedSessions.has(session)) await groups.showPromptWindow(session, tab.windowId);
     return { answer, promptInTab: true };
   }
 
@@ -619,6 +699,10 @@ export function createSiteAccess<Handle>({
       forget(fields.session, fields.site);
       return Promise.resolve(true);
     }
+    if (fields?.type === "stop" && typeof fields.session === "string") {
+      stop(fields.session);
+      return Promise.resolve(true);
+    }
     return undefined;
   }
 
@@ -694,16 +778,20 @@ export function createSiteAccess<Handle>({
     }
   }
 
-  /** Closes an open prompt without an answer; `counted` charges the session's budget. */
-  function drop(prompt: Prompt<Handle>, counted: boolean): void {
+  /**
+   * Closes an open prompt without an answer; `counted` charges the session's budget. The waiting
+   * request gets `error`, by default `approval_closed`.
+   */
+  function drop(prompt: Prompt<Handle>, counted: boolean, error?: ToolError): void {
     if (prompts.get(prompt.session) !== prompt) return;
     prompts.delete(prompt.session);
     if (counted && prompt.seen && !prompt.answering) stateOf(prompt.session).closed += 1;
     stopWaiting(prompt)?.reject(
-      new ToolError(
-        "approval_closed",
-        `The question whether to allow ${prompt.site} in tab ${prompt.tabId} was closed without an answer.`,
-      ),
+      error ??
+        new ToolError(
+          "approval_closed",
+          `The question whether to allow ${prompt.site} in tab ${prompt.tabId} was closed without an answer.`,
+        ),
     );
     if (prompt.port !== undefined) post(prompt.port, { type: "ended" });
   }
@@ -754,6 +842,13 @@ export function siteBlocked(site: string): ToolError {
   return new ToolError(
     "site_blocked",
     `Foxleash does not act on ${site}: it is on Foxleash's blocklist, which by default lists common financial and health sites.`,
+  );
+}
+
+export function sessionStopped(): ToolError {
+  return new ToolError(
+    "session_stopped",
+    "The user stopped this agent session in Firefox. Foxleash refuses every tool call of this session from now on: stop the browser task and tell the user.",
   );
 }
 

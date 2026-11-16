@@ -29,7 +29,11 @@ const groups = createSessionGroups(
   (tabId) => indicator.refresh(tabId),
   (url) => recipes.isBlankPage(url),
 );
-const indicator = createIndicator({ browser, groups });
+const indicator = createIndicator({
+  browser,
+  groups,
+  stopped: (session) => access.stopped(session),
+});
 const access = createSiteAccess({
   browser,
   groups,
@@ -38,6 +42,10 @@ const access = createSiteAccess({
   otherPrompt: (session) => recipes.openPrompt(session),
 });
 const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });
+access.onStop((session) => {
+  recipes.endSession(session);
+  void indicator.refreshSession(session);
+});
 const recordings = createConsoleRecording({
   browser,
   groups,

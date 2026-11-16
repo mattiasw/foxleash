@@ -974,6 +974,21 @@ describe("page script requests", { timeout: 10000 }, () => {
       assert.equal(timers.pending(), timersBefore);
     });
 
+    it("refuses a stopped session at once, never running a read again after a navigation began", async () => {
+      const { fake, pages, access, tab } = await grantedTab();
+      fake.setContentScript(tab.id, async () => {
+        begin(fake, tab.id, NEXT);
+        access.stop("s1");
+        return { ok: true, site: SITE, result: "old page" };
+      });
+      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}));
+      await flush();
+      assert.equal(settled(), true);
+      await rejectsWith(request, "session_stopped");
+      assert.equal(fake.tabMessages.length, 1);
+      assert.equal(fake.injections.length, 1);
+    });
+
     it("runs a read at most twice", async () => {
       const { fake, pages, tab } = await grantedTab();
       // Each answer comes from a page that has already moved on, and landed.

@@ -307,6 +307,47 @@ describe("propose", { timeout: 10000 }, () => {
     const { tabId } = await recipes.propose("s1", RECIPE);
     assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
   });
+
+  it("opens nothing and closes the unloaded tab when the user stops the session while its group is made", async () => {
+    const { fake, access, recipes } = setup();
+    // As the background script wires it.
+    access.onStop((session) => recipes.endSession(session));
+    const release = holdGroups(fake);
+    const proposing = recipes.propose("s1", RECIPE);
+    const tabId = await pageTab(fake);
+    const url = fake.tabs.get(tabId)?.url ?? "";
+    await flush();
+    access.stop("s1");
+    release();
+    await assert.rejects(proposing, { code: "session_stopped" });
+    await flush();
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.equal(fake.tabs.has(tabId), false);
+    // No page, detached or not, is kept for it.
+    assert.equal(recipes.isBlankPage(url), true);
+  });
+
+  it("ends a page that started loading when the user stopped the session", async () => {
+    const { fake, access, recipes } = setup();
+    access.onStop((session) => recipes.endSession(session));
+    const held = Promise.withResolvers<void>();
+    const update = fake.browser.tabs.update;
+    let loading = false;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const tab = await update(tabId, properties);
+      loading = true;
+      await held.promise;
+      return tab;
+    };
+    const proposing = recipes.propose("s1", RECIPE);
+    while (!loading) await flush();
+    access.stop("s1");
+    held.resolve();
+    await assert.rejects(proposing, { code: "session_stopped" });
+    const tabId = await pageTab(fake);
+    assert.deepEqual(connect(fake, tabId).posted, [{ type: "ended" }]);
+    assert.equal(fake.tabs.has(tabId), true);
+  });
 });
 
 describe("the propose page", { timeout: 10000 }, () => {
@@ -1308,6 +1349,27 @@ describe("run", { timeout: 10000 }, () => {
     for (let turn = 0; turn < 10; turn += 1) await flush();
     assertRejected(running, "recipe_refused", REFUSED);
     assert.deepEqual(fake.tabUpdates, []);
+  });
+
+  it("draws no attention to a page that the user stopped the session for while it loaded", async () => {
+    const { fake, access, recipes } = setup();
+    // As the background script wires it.
+    access.onStop((session) => recipes.endSession(session));
+    const held = Promise.withResolvers<void>();
+    const update = fake.browser.tabs.update;
+    let loading = false;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const tab = await update(tabId, properties);
+      loading = true;
+      await held.promise;
+      return tab;
+    };
+    const requesting = recipes.request("s1", SITES);
+    while (!loading) await flush();
+    access.stop("s1");
+    held.resolve();
+    await assert.rejects(requesting, { code: "recipe_prompt_closed" });
+    assert.deepEqual(fake.windowUpdates, []);
   });
 });
 

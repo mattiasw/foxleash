@@ -12,6 +12,7 @@ import {
   post,
   type SiteAccess,
   type SiteState,
+  sessionStopped,
 } from "./site-access.ts";
 
 /** The extension page that shows a proposed recipe, which only the user's click saves. */
@@ -33,7 +34,7 @@ export interface RecipePromptsDeps<Handle> {
   groups: Pick<SessionGroups, "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow">;
   access: Pick<
     SiteAccess,
-    "openPrompt" | "siteStates" | "allowForSession" | "refuseIfStoppedAsking"
+    "openPrompt" | "siteStates" | "allowForSession" | "refuseIfStoppedAsking" | "stopped"
   >;
   timers: Timers<Handle>;
 }
@@ -195,6 +196,8 @@ export function createRecipePrompts<Handle>({
       // A page the user selected early may have been answered or left meanwhile; what the
       // tab shows now is the user's.
       if (!isLive(prompt)) return { tabId: tab.id };
+      // The user stopped the session meanwhile: a page they never saw does not open.
+      if (access.stopped(session)) throw sessionStopped();
       // Loaded rather than only selected: a page the user selected before the prompt was
       // recorded loads again and connects.
       shown = await browser.tabs.update(tab.id, { url: pageUrl, active: true, loadReplace: true });
@@ -204,6 +207,11 @@ export function createRecipePrompts<Handle>({
         await closeNewTab(tab.id);
       }
       throw error;
+    }
+    // Stopped while the page started loading: it shows that the request ended.
+    if (access.stopped(session)) {
+      if (isLive(prompt)) abandon(prompt);
+      throw sessionStopped();
     }
     await groups.showPromptWindow(session, shown.windowId);
     return { tabId: tab.id };
@@ -291,6 +299,8 @@ export function createRecipePrompts<Handle>({
       await closeNewTab(tab.id);
       throw error;
     }
+    // Stopped while the page loaded: no window comes to the front for it.
+    if (access.stopped(session)) return answer;
     await groups.showPromptWindow(session, shown.windowId);
     return answer;
   }

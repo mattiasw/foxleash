@@ -140,10 +140,12 @@ describe("editing the settings, in real Firefox", () => {
 
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
-    const allowedRow = `${third.site}: allowed this session (session with 2 tabs)`;
-    const refusedRow = `${unseeded.site}: refused this session (session with 2 tabs)`;
+    // The readiness check in `before` was session 1.
+    const sessionRow = "Agent session 2 with 2 tabs";
+    const allowedRow = `${third.site}: allowed this session (session 2 with 2 tabs)`;
+    const refusedRow = `${unseeded.site}: refused this session (session 2 with 2 tabs)`;
     await waitForAnswers(page, {
-      rows: [allowedRow, refusedRow],
+      rows: [sessionRow, allowedRow, refusedRow],
       list: true,
       empty: false,
       status: "",
@@ -152,17 +154,18 @@ describe("editing the settings, in real Firefox", () => {
 
     await forgetRow(page, refusedRow);
     await waitForAnswers(page, {
-      rows: [allowedRow],
+      rows: [sessionRow, allowedRow],
       list: true,
       empty: false,
       status: `Forgot ${unseeded.site} for this session`,
       focus: `Forget ${allowedRow}`,
     });
     await forgetRow(page, allowedRow);
+    // The running session stays listed, and focus never moves to its Stop button.
     await waitForAnswers(page, {
-      rows: [],
-      list: false,
-      empty: true,
+      rows: [sessionRow],
+      list: true,
+      empty: false,
       status: `Forgot ${third.site} for this session`,
       focus: "heading",
     });
@@ -194,9 +197,9 @@ describe("editing the settings, in real Firefox", () => {
 
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
-    const two = `${third.site}: allowed this session (session with 2 tabs)`;
+    const two = `${third.site}: allowed this session (session 3 with 2 tabs)`;
     await waitForAnswers(page, {
-      rows: [two],
+      rows: ["Agent session 3 with 2 tabs", two],
       list: true,
       empty: false,
       status: "",
@@ -211,9 +214,9 @@ describe("editing the settings, in real Firefox", () => {
       // Closing a background tab changes the label and leaves the settings page selected.
       await harness.ok(session, "tab_close", { tabId: second.id });
       await firefox.evaluate(page, 'dispatchEvent(new Event("focus"))');
-      const one = `${third.site}: allowed this session (session with 1 tab)`;
+      const one = `${third.site}: allowed this session (session 3 with 1 tab)`;
       await waitForAnswers(page, {
-        rows: [one],
+        rows: ["Agent session 3 with 1 tab", one],
         list: true,
         empty: false,
         status: "",
@@ -223,9 +226,9 @@ describe("editing the settings, in real Firefox", () => {
       await firefox.release(page);
     }
     await waitForAnswers(page, {
-      rows: [],
-      list: false,
-      empty: true,
+      rows: ["Agent session 3 with 1 tab"],
+      list: true,
+      empty: false,
       status: `Forgot ${third.site} for this session`,
       focus: "heading",
     });
@@ -243,19 +246,31 @@ describe("editing the settings, in real Firefox", () => {
 
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
-    const one = `${third.site}: allowed this session (session with 1 tab)`;
-    await waitForAnswers(page, { rows: [one], list: true, empty: false, status: "", focus: null });
+    const oneTab = [
+      "Agent session 4 with 1 tab",
+      `${third.site}: allowed this session (session 4 with 1 tab)`,
+    ];
+    await waitForAnswers(page, { rows: oneTab, list: true, empty: false, status: "", focus: null });
 
     // The agent's new tab is selected, which hides the settings page.
     const second = tabOf(await harness.ok(session, "tab_open", { url: third.url("/a") }));
     await firefox.activate(page);
-    const two = `${third.site}: allowed this session (session with 2 tabs)`;
-    await waitForAnswers(page, { rows: [two], list: true, empty: false, status: "", focus: null });
+    const twoTabs = [
+      "Agent session 4 with 2 tabs",
+      `${third.site}: allowed this session (session 4 with 2 tabs)`,
+    ];
+    await waitForAnswers(page, {
+      rows: twoTabs,
+      list: true,
+      empty: false,
+      status: "",
+      focus: null,
+    });
 
     // Closing a background tab leaves the settings page selected, so only the event refreshes it.
     await harness.ok(session, "tab_close", { tabId: second.id });
     await firefox.evaluate(page, 'document.dispatchEvent(new Event("visibilitychange"))');
-    await waitForAnswers(page, { rows: [one], list: true, empty: false, status: "", focus: null });
+    await waitForAnswers(page, { rows: oneTab, list: true, empty: false, status: "", focus: null });
   });
 
   test("Forget on closed prompts lets a session that stopped asking ask again", async (t) => {
@@ -278,13 +293,20 @@ describe("editing the settings, in real Firefox", () => {
 
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
-    const row = "3 prompts closed without an answer (session with no tabs)";
-    await waitForAnswers(page, { rows: [row], list: true, empty: false, status: "", focus: null });
+    const sessionRow = "Agent session 5 with no tabs";
+    const row = "3 prompts closed without an answer (session 5 with no tabs)";
+    await waitForAnswers(page, {
+      rows: [sessionRow, row],
+      list: true,
+      empty: false,
+      status: "",
+      focus: null,
+    });
     await forgetRow(page, row);
     await waitForAnswers(page, {
-      rows: [],
-      list: false,
-      empty: true,
+      rows: [sessionRow],
+      list: true,
+      empty: false,
       status: "Forgot the closed prompts",
       focus: "heading",
     });
