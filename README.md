@@ -160,7 +160,9 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - It refuses clicks on links and form buttons that lead to another site or out of the browser.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title.
-- Financial and health sites are blocked by default. You can edit the list in the settings.
+- A built-in list of common financial and health sites is blocked by default. A site that is
+  not on it, such as a regional care provider, is not blocked until you add it to the list in
+  the settings.
 - File uploads only read from [allowed folders](docs/security.md#uploads) (the agent's working
   folder and `~/Downloads` by default) and never dotfiles or key files.
 - Downloads save only a file served by a site you approved, into your Firefox download folder,

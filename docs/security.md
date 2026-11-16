@@ -42,9 +42,14 @@ extension's settings page in the add-ons manager, each with a Revoke button.
 
 ## The blocklist
 
-Financial and health sites are blocked by default. You can edit the list in the extension's
-settings page, one domain per line. Foxleash checks the blocklist before it opens or reloads a
-page, and shows the agent a tab on a blocked site only as the site's address.
+A built-in list of common financial and health sites is blocked by default. The list is short
+and cannot name every such site: a site that is not on it, such as a regional care provider, is
+not blocked until you add it. You can edit the list in the extension's settings page, one domain
+per line; a domain blocks itself and its subdomains. While your saved list differs from the
+built-in one, Foxleash keeps it as it is: sites that a later version adds to the built-in list
+are not added to yours. The settings page's "Fill in the built-in list" button fills in the
+current built-in list for you to save. Foxleash checks the blocklist before it opens or reloads
+a page, and shows the agent a tab on a blocked site only as the site's address.
 
 ## Uploads
 
