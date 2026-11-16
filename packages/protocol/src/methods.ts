@@ -456,12 +456,18 @@ export interface Methods {
     params: { tabId: number; fields: { ref: string; value: FillValue }[]; view?: boolean };
     result: { fields: FillResult[]; after?: ActAfter; view?: PageView };
   };
-  /** `recording` is false when Foxleash has not recorded the page since it loaded. */
+  /**
+   * `recording` is false when Foxleash is not recording the page; `since`, present when it is, is
+   * the time (ms since the epoch) from which it has recorded it.
+   */
   read_console: {
     params: { tabId: number };
-    result: { recording: boolean; messages: ConsoleMessage[]; dropped: number };
+    result: { recording: boolean; since?: number; messages: ConsoleMessage[]; dropped: number };
   };
-  /** `recording` is false when Foxleash has not recorded the page since it loaded. */
+  /**
+   * `recording` is false when Foxleash is not recording the page; `since`, present when it is, is
+   * the time (ms since the epoch) from which it has recorded it.
+   */
   read_network: {
     params: {
       tabId: number;
@@ -471,7 +477,12 @@ export interface Methods {
       headers?: boolean;
       limit?: number;
     };
-    result: { recording: boolean; requests: NetworkRequestRead[]; truncated: boolean };
+    result: {
+      recording: boolean;
+      since?: number;
+      requests: NetworkRequestRead[];
+      truncated: boolean;
+    };
   };
   /** `path` is the absolute path Firefox saved the file at, `bytes` its size. */
   download: { params: { url: string; filename: string }; result: { path: string; bytes: number } };

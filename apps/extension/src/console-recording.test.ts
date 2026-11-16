@@ -21,6 +21,10 @@ import { createSiteAccess, PROMPT_PAGE, type SessionMemory } from "./site-access
 
 const SITE = "https://a.example";
 const URL_A = `${SITE}/page`;
+/** What the recording's clock reads before the fake timers advance. */
+const START = 1_000_000;
+const OTHER = "https://b.example";
+const URL_B = `${OTHER}/page`;
 
 describe("console recording", { timeout: 10000 }, () => {
   it("starts the recorder in the top frame of a committed page on an approved site", async (t) => {
@@ -33,7 +37,7 @@ describe("console recording", { timeout: 10000 }, () => {
       {
         tabId: tab.id,
         func: recordConsole,
-        args: [SITE, RECORDER_OPTIONS],
+        args: [SITE, RECORDER_OPTIONS, false],
         world: "MAIN",
         injectImmediately: true,
         frameIds: [0],
@@ -54,7 +58,7 @@ describe("console recording", { timeout: 10000 }, () => {
     fake.navigateByUser(tab.id, "https://b.example/");
     await flush();
     assert.equal(fake.injections.length, 1);
-    assert.deepEqual(fake.injections[0]?.args, ["https://b.example", RECORDER_OPTIONS]);
+    assert.deepEqual(fake.injections[0]?.args, ["https://b.example", RECORDER_OPTIONS, false]);
     assert.ok(recordings.liveRecording("s1", tab.id) !== undefined);
   });
 
@@ -63,7 +67,7 @@ describe("console recording", { timeout: 10000 }, () => {
     const tab = await tabIn("s1", "https://b.example/");
     fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A });
     await flush();
-    assert.deepEqual(fake.injections[0]?.args, [SITE, RECORDER_OPTIONS]);
+    assert.deepEqual(fake.injections[0]?.args, [SITE, RECORDER_OPTIONS, false]);
     const other = await tabIn("s1", URL_A);
     fake.injections.length = 0;
     fake.emitCommitted({ tabId: other.id, frameId: 0, url: "https://b.example/" });
@@ -176,8 +180,8 @@ describe("console recording", { timeout: 10000 }, () => {
       fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A, documentId: "doc-new" });
       await flush();
       assert.equal(fake.injections.length, 1);
-      const live = recordings.liveRecording("s1", tab.id);
-      assert.ok(live !== undefined);
+      // Not exposed until the recorder landed.
+      assert.equal(recordings.liveRecording("s1", tab.id), undefined);
       clock.advance(RECORDER_RETRY_MS - 1);
       await flush();
       assert.equal(fake.injections.length, 1);
@@ -185,7 +189,9 @@ describe("console recording", { timeout: 10000 }, () => {
       await flush();
       assert.equal(fake.injections.length, 2);
       assert.deepEqual(fake.injections[1], fake.injections[0]);
-      assert.equal(recordings.liveRecording("s1", tab.id), live);
+      assert.deepEqual(recordings.liveRecording("s1", tab.id), {
+        since: START + RECORDER_RETRY_MS,
+      });
       assert.equal(clock.pending(), 0);
       assert.deepEqual(warned(), [
         { event: "console_recording_retry", tabId: tab.id, ...logged, currentDocument: current },
@@ -289,7 +295,7 @@ describe("console recording", { timeout: 10000 }, () => {
     fake.injectionResults = [{ frameId: 0, result: "elsewhere", documentId: "doc-old" }];
     fake.emitCommitted({ tabId: tab.id, frameId: 0, url: URL_A, documentId: "doc-new" });
     await flush();
-    await giveUp(clock, () => assert.ok(recordings.liveRecording("s1", tab.id) !== undefined));
+    await giveUp(clock, () => assert.equal(recordings.liveRecording("s1", tab.id), undefined));
     assert.equal(fake.injections.length, RECORDER_ATTEMPTS);
     assert.equal(recordings.liveRecording("s1", tab.id), undefined);
     const outcome = { status: "elsewhere", sameDocument: false, currentDocument: false };
@@ -331,11 +337,11 @@ describe("console recording", { timeout: 10000 }, () => {
         ...(documentId === undefined ? {} : { documentId }),
       });
       await flush();
-      const live = recordings.liveRecording("s1", tab.id);
-      assert.ok(live !== undefined);
-      await giveUp(clock, () => assert.equal(recordings.liveRecording("s1", tab.id), live));
+      await giveUp(clock, () => assert.equal(recordings.liveRecording("s1", tab.id), undefined));
       assert.equal(fake.injections.length, RECORDER_ATTEMPTS);
-      assert.equal(recordings.liveRecording("s1", tab.id), live);
+      assert.deepEqual(recordings.liveRecording("s1", tab.id), {
+        since: START + RECORDER_RETRY_MS * (RECORDER_ATTEMPTS - 1),
+      });
       assert.equal(clock.pending(), 0);
       assert.deepEqual(warned(), [
         { event: "console_recording_retry", tabId: tab.id, status: "present", ...logged },
@@ -359,7 +365,7 @@ describe("console recording", { timeout: 10000 }, () => {
     });
     fake.navigateByUser(tab.id, URL_A);
     await flush();
-    await giveUp(clock, () => assert.ok(recordings.liveRecording("s1", tab.id) !== undefined));
+    await giveUp(clock, () => assert.equal(recordings.liveRecording("s1", tab.id), undefined));
     assert.equal(inject.mock.callCount(), RECORDER_ATTEMPTS);
     assert.equal(recordings.liveRecording("s1", tab.id), undefined);
     const error = "Error: Missing host permission for the tab";
@@ -385,7 +391,9 @@ describe("console recording", { timeout: 10000 }, () => {
       fake.injectionResults = results;
       fake.navigateByUser(tab.id, URL_A);
       await flush();
-      await giveUp(clock, () => assert.ok(recordings.liveRecording("s1", tab.id) !== undefined));
+      await giveUp(clock, () => assert.equal(recordings.liveRecording("s1", tab.id), undefined));
+      assert.equal(fake.injections.length, RECORDER_ATTEMPTS, JSON.stringify(results));
+      fake.injections.length = 0;
       assert.equal(recordings.liveRecording("s1", tab.id), undefined, JSON.stringify(results));
       assert.deepEqual(warned().slice(before), [
         { event: "console_recording_retry", tabId: tab.id, status },
@@ -448,14 +456,15 @@ describe("console recording", { timeout: 10000 }, () => {
     const warned = quiet(t);
     const { fake, recordings, clock, tabIn, sessions, access } = setup();
     const tab = await tabIn("s1");
-    sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
+    // Allowed by the session only, so no catch-up starts it again after the withdrawal.
+    sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
     fake.injectionResults = [{ frameId: 0, result: "elsewhere" }];
     const inject = fake.browser.scripting.executeScript;
     t.mock.method(fake.browser.scripting, "executeScript", async (...args: unknown[]) => {
-      access.forget("s1", SITE);
+      access.forget("s1", "https://b.example");
       return Reflect.apply(inject, fake.browser.scripting, args);
     });
-    fake.navigateByUser(tab.id, URL_A);
+    fake.navigateByUser(tab.id, "https://b.example/");
     await flush();
     assert.equal(recordings.liveRecording("s1", tab.id), undefined);
     assert.equal(fake.injections.length, 1);
@@ -602,19 +611,29 @@ describe("console recording", { timeout: 10000 }, () => {
     sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
     const tab = await tabIn("s1");
     const inject = fake.browser.scripting.executeScript;
-    t.mock.method(fake.browser.scripting, "executeScript", async (...args: unknown[]) => {
-      access.forget("s1", "https://b.example");
-      // Approved again at once: only dropping it at the withdrawal shows the gap.
-      sessions.set("s1", {
-        allowed: new Set(["https://b.example"]),
-        refused: new Set(),
-        closed: 0,
-      });
-      return Reflect.apply(inject, fake.browser.scripting, args);
-    });
+    const executeScript = t.mock.method(
+      fake.browser.scripting,
+      "executeScript",
+      async (...args: unknown[]) => {
+        executeScript.mock.restore();
+        access.forget("s1", "https://b.example");
+        // Approved again at once: only dropping it at the withdrawal shows the gap.
+        sessions.set("s1", {
+          allowed: new Set(["https://b.example"]),
+          refused: new Set(),
+          closed: 0,
+        });
+        return Reflect.apply(inject, fake.browser.scripting, args);
+      },
+    );
     fake.navigateByUser(tab.id, "https://b.example/");
     await flush();
-    assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+    // The commit's recording holds the gap: what is live is a new one, started after it.
+    assert.deepEqual(
+      fake.injections.map((injection) => injection.args?.[2]),
+      [false, true],
+    );
+    assert.deepEqual(recordings.liveRecording("s1", tab.id), { since: START });
   });
 
   it("drops a recording whose tab left the group while the commit was checked", async (t) => {
@@ -623,12 +642,13 @@ describe("console recording", { timeout: 10000 }, () => {
     const tab = await tabIn("s1");
     const read = fake.browser.storage.local.get;
     let moved = false;
-    // The gate reads storage after it read the tab's group; the tab leaves while it waits.
+    // The gate reads storage after it read the tab's group; the tab leaves, unseen, while it waits.
     t.mock.method(fake.browser.storage.local, "get", async (...args: unknown[]) => {
       const stored = await Reflect.apply(read, fake.browser.storage.local, args);
-      if (!moved) {
+      const shown = fake.tabs.get(tab.id);
+      if (!moved && shown !== undefined) {
         moved = true;
-        fake.ungroup(tab.id);
+        shown.groupId = -1;
       }
       return stored;
     });
@@ -727,6 +747,145 @@ describe("console recording", { timeout: 10000 }, () => {
   });
 });
 
+describe("console recording of a page already open when access begins", { timeout: 10000 }, () => {
+  it("starts or empties the recorder once, and records from when that returned", async (t) => {
+    const warned = quiet(t);
+    for (const status of ["started", "cleared"]) {
+      const { fake, recordings, clock, access, tabIn } = setup();
+      const tab = await tabIn("s1", URL_B);
+      fake.setFrames(tab.id, [{ frameId: 0, url: URL_B, documentId: "doc-b" }]);
+      fake.injectionResults = [{ frameId: 0, result: status, documentId: "doc-b" }];
+      clock.advance(25);
+      await access.allowForSession("s1", [OTHER], () => true);
+      await flush();
+      assert.deepEqual(
+        fake.injections.map(({ args }) => args),
+        [[OTHER, RECORDER_OPTIONS, true]],
+        status,
+      );
+      assert.deepEqual(recordings.liveRecording("s1", tab.id), { since: START + 25 }, status);
+      assert.equal(recordings.liveRecording("s2", tab.id), undefined, status);
+      assert.equal(clock.pending(), 0, status);
+    }
+    assert.deepEqual(warned(), []);
+  });
+
+  it("exposes nothing until the injection returned", async (t) => {
+    const { fake, recordings, access, tabIn } = setup();
+    const tab = await tabIn("s1", URL_B);
+    const inject = fake.browser.scripting.executeScript;
+    const held = Promise.withResolvers<void>();
+    t.mock.method(fake.browser.scripting, "executeScript", async (...args: unknown[]) => {
+      await held.promise;
+      return Reflect.apply(inject, fake.browser.scripting, args);
+    });
+    await access.allowForSession("s1", [OTHER], () => true);
+    await flush();
+    assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+    held.resolve();
+    await flush();
+    assert.ok(recordings.liveRecording("s1", tab.id) !== undefined);
+  });
+
+  const UNCONFIRMED: [string, InjectionResult<unknown>[] | Error, Record<string, unknown>][] = [
+    ["present", [{ frameId: 0, result: "present", documentId: "doc-b" }], { status: "present" }],
+    [
+      "uncleared",
+      [{ frameId: 0, result: "uncleared", documentId: "doc-b" }],
+      { status: "uncleared" },
+    ],
+    [
+      "elsewhere",
+      [{ frameId: 0, result: "elsewhere", documentId: "doc-b" }],
+      { status: "elsewhere" },
+    ],
+    ["refused", [{ frameId: 0, result: "refused", documentId: "doc-b" }], { status: "refused" }],
+    [
+      "another document",
+      [{ frameId: 0, result: "cleared", documentId: "doc-old" }],
+      { status: "cleared", sameDocument: false },
+    ],
+    ["no top frame", [{ frameId: 2, result: "started" }], { status: "missing" }],
+    [
+      "a rejected injection",
+      new Error("Missing host permission for the tab"),
+      { status: "rejected", error: "Error: Missing host permission for the tab" },
+    ],
+  ];
+  for (const [name, answer, logged] of UNCONFIRMED) {
+    it(`records nothing, once, after ${name}`, async (t) => {
+      const warned = quiet(t);
+      const { fake, recordings, clock, access, tabIn } = setup();
+      const tab = await tabIn("s1", URL_B);
+      fake.setFrames(tab.id, [{ frameId: 0, url: URL_B, documentId: "doc-b" }]);
+      if (answer instanceof Error) fake.failNextInjection(answer);
+      else fake.injectionResults = answer;
+      await access.allowForSession("s1", [OTHER], () => true);
+      await flush();
+      assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+      clock.advance(RECORDER_RETRY_MS * RECORDER_ATTEMPTS);
+      await flush();
+      assert.equal(fake.injections.length, 1);
+      assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+      const sameDocument = logged.sameDocument === false ? {} : { sameDocument: true };
+      assert.deepEqual(warned(), [
+        {
+          event: "console_recording_failed",
+          tabId: tab.id,
+          attempts: 1,
+          ...(answer instanceof Error || logged.status === "missing" ? {} : sameDocument),
+          ...logged,
+          currentDocument: true,
+        },
+      ]);
+    });
+  }
+
+  it("tries again at the next approval after a recorder that would not empty", async (t) => {
+    quiet(t);
+    const { fake, recordings, access, tabIn } = setup();
+    const tab = await tabIn("s1", URL_B);
+    fake.injectionResults = [{ frameId: 0, result: "uncleared" }];
+    await access.allowForSession("s1", [OTHER], () => true);
+    await flush();
+    assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+    fake.injectionResults = [{ frameId: 0, result: "cleared" }];
+    await access.allowForSession("s1", ["https://c.example"], () => true);
+    await flush();
+    assert.equal(fake.injections.length, 2);
+    assert.ok(recordings.liveRecording("s1", tab.id) !== undefined);
+  });
+
+  it("records after an empty recorder when Firefox names no document, unless it changed", async (t) => {
+    const warned = quiet(t);
+    const { fake, recordings, access, tabIn } = setup();
+    const tab = await tabIn("s1", URL_B);
+    fake.setFrames(tab.id, [{ frameId: 0, url: URL_B }]);
+    fake.injectionResults = [{ frameId: 0, result: "cleared" }];
+    await access.allowForSession("s1", [OTHER], () => true);
+    await flush();
+    assert.ok(recordings.liveRecording("s1", tab.id) !== undefined);
+
+    const other = await tabIn("s2", URL_B);
+    fake.setFrames(other.id, [{ frameId: 0, url: URL_B }]);
+    const inject = fake.browser.scripting.executeScript;
+    const executeScript = t.mock.method(
+      fake.browser.scripting,
+      "executeScript",
+      async (...args: unknown[]) => {
+        executeScript.mock.restore();
+        // Withdrawn while the recorder is emptied: that live document ended.
+        access.forget("s2", OTHER);
+        return Reflect.apply(inject, fake.browser.scripting, args);
+      },
+    );
+    await access.allowForSession("s2", [OTHER], () => true);
+    await flush();
+    assert.equal(recordings.liveRecording("s2", other.id), undefined);
+    assert.deepEqual(warned(), []);
+  });
+});
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -741,6 +900,7 @@ function setup() {
     groups,
     access,
     timers: clock,
+    now: () => START + clock.now(),
   });
 
   /** A tab in the session's group, on `url` with A's site stored as approved. */

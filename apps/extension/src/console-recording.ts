@@ -9,8 +9,9 @@ import type { SiteAccess } from "./site-access.ts";
 export interface ConsoleRecordingDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
   timers: Timers<Handle>;
+  now: () => number;
 }
 
 /** How many times, how far apart, the recorder is injected until it lands: about two seconds. */
@@ -18,8 +19,19 @@ export const RECORDER_ATTEMPTS = 40;
 export const RECORDER_RETRY_MS = 50;
 
 export interface ConsoleRecording {
-  /** The tab's live recording for the session, an opaque value; undefined when there is none. */
-  liveRecording(session: string, tabId: number): object | undefined;
+  /**
+   * The tab's live recording for the session, one object per live document; undefined when there
+   * is none, or while its recorder is not yet started or emptied.
+   */
+  liveRecording(session: string, tabId: number): LiveRecording | undefined;
+}
+
+export interface LiveRecording {
+  /**
+   * The time (ms since the epoch) from which the recording holds every message: when the injection
+   * that started or emptied the recorder returned.
+   */
+  readonly since: number;
 }
 
 /** What one injection of the recorder came to. */
@@ -33,16 +45,19 @@ interface Outcome {
 }
 
 /**
- * Starts Foxleash's console recorder in each live document (see live-documents.ts) and keeps, per
- * tab, the recording of the one that is still live. Adds its listeners at once (call it at the
- * top level of the background script).
+ * Starts Foxleash's console recorder in each live document (see live-documents.ts), or, in one
+ * that went live when access to it began, starts or empties it, and keeps, per tab, the recording
+ * of the one that is still live, once its recorder is in place. Adds its listeners at once (call
+ * it at the top level of the background script).
  */
 export function createConsoleRecording<Handle>({
   browser,
   groups,
   access,
   timers,
+  now,
 }: ConsoleRecordingDeps<Handle>): ConsoleRecording {
+  const recordings = new WeakMap<LiveDocument, LiveRecording>();
   const documents = createLiveDocuments({
     browser,
     groups,
@@ -59,11 +74,12 @@ export function createConsoleRecording<Handle>({
     documentId: string | undefined,
   ): Promise<boolean> {
     if (live === undefined) return true;
+    if (live.startedBy === "grant") return startOrClear(tabId, live, documentId);
     let retried = false;
     // Right after a commit, an injection can still run in the document before it: the new tab's
     // about:blank, or the previous page on the same site.
     for (let attempts = 1; ; attempts += 1) {
-      const outcome = await inject(tabId, live.site, documentId);
+      const outcome = await inject(tabId, live.site, documentId, false);
       // A recorder still there at the last attempt is in the document the tab shows by then, even
       // when Firefox names no document or names another one.
       const landed =
@@ -74,6 +90,7 @@ export function createConsoleRecording<Handle>({
         if (attempts > 1 || outcome.status !== "started" || outcome.sameDocument === false) {
           void report("console_recording_started", tabId, attempts, outcome, documentId);
         }
+        recordings.set(live, { since: now() });
         return true;
       }
       if (documents.live(tabId) !== live) return false;
@@ -90,16 +107,39 @@ export function createConsoleRecording<Handle>({
     }
   }
 
+  /**
+   * For a document already shown when access to it began: one injection that starts the recorder,
+   * or empties the one there, so nothing from before reaches the agent.
+   */
+  async function startOrClear(
+    tabId: number,
+    live: LiveDocument,
+    documentId: string | undefined,
+  ): Promise<boolean> {
+    const outcome = await inject(tabId, live.site, documentId, true);
+    if (documents.live(tabId) !== live) return false;
+    const confirmed =
+      (outcome.status === "started" || outcome.status === "cleared") &&
+      outcome.sameDocument !== false;
+    if (!confirmed) {
+      void report("console_recording_failed", tabId, 1, outcome, documentId);
+      return false;
+    }
+    recordings.set(live, { since: now() });
+    return true;
+  }
+
   async function inject(
     tabId: number,
     site: string,
     documentId: string | undefined,
+    clear: boolean,
   ): Promise<Outcome> {
     try {
       const frames = await browser.scripting.executeScript({
         target: { tabId, frameIds: [0] },
         func: recordConsole,
-        args: [site, RECORDER_OPTIONS],
+        args: [site, RECORDER_OPTIONS, clear],
         world: "MAIN",
         injectImmediately: true,
       });
@@ -140,9 +180,9 @@ export function createConsoleRecording<Handle>({
     return new Promise((resolve) => timers.setTimeout(() => resolve(), ms));
   }
 
-  function liveRecording(session: string, tabId: number): object | undefined {
+  function liveRecording(session: string, tabId: number): LiveRecording | undefined {
     const live = documents.live(tabId);
-    return live?.session === session ? live : undefined;
+    return live?.session === session ? recordings.get(live) : undefined;
   }
 }
 

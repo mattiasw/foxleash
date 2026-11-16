@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { MAX_CONSOLE_MESSAGES, MAX_CONSOLE_TEXT } from "@foxleash/protocol";
 import {
+  CONSOLE_CLEAR_EVENT,
+  CONSOLE_CLEARED_EVENT,
   CONSOLE_READ_EVENT,
   CONSOLE_RECORDS_EVENT,
   parseConsoleResult,
@@ -21,9 +23,13 @@ describe("RECORDER_OPTIONS", () => {
       maxText: MAX_CONSOLE_TEXT,
       readEvent: CONSOLE_READ_EVENT,
       replyEvent: CONSOLE_RECORDS_EVENT,
+      clearEvent: CONSOLE_CLEAR_EVENT,
+      clearedEvent: CONSOLE_CLEARED_EVENT,
     });
     assert.equal(CONSOLE_READ_EVENT, "foxleash-console-read");
     assert.equal(CONSOLE_RECORDS_EVENT, "foxleash-console-records");
+    assert.equal(CONSOLE_CLEAR_EVENT, "foxleash-console-clear");
+    assert.equal(CONSOLE_CLEARED_EVENT, "foxleash-console-cleared");
   });
 });
 
@@ -274,7 +280,7 @@ function recordedPage(): EventTarget & { console: { error(...args: unknown[]): v
     Error,
   });
   const recorderPage: RecorderPage = page;
-  recordConsole("https://a.example", RECORDER_OPTIONS, recorderPage);
+  recordConsole("https://a.example", RECORDER_OPTIONS, false, recorderPage);
   return page;
 }
 

@@ -11,12 +11,16 @@ import { capText, isRecord, MAX_PAGE_REPLY_CHARS, ownField } from "./page-messag
 
 export const CONSOLE_READ_EVENT = "foxleash-console-read";
 export const CONSOLE_RECORDS_EVENT = "foxleash-console-records";
+export const CONSOLE_CLEAR_EVENT = "foxleash-console-clear";
+export const CONSOLE_CLEARED_EVENT = "foxleash-console-cleared";
 
 export const RECORDER_OPTIONS: RecorderOptions = {
   maxMessages: MAX_CONSOLE_MESSAGES,
   maxText: MAX_CONSOLE_TEXT,
   readEvent: CONSOLE_READ_EVENT,
   replyEvent: CONSOLE_RECORDS_EVENT,
+  clearEvent: CONSOLE_CLEAR_EVENT,
+  clearedEvent: CONSOLE_CLEARED_EVENT,
 };
 
 /**

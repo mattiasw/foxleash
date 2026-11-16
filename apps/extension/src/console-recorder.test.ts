@@ -13,6 +13,8 @@ const OPTIONS: RecorderOptions = {
   maxText: 50,
   readEvent: "test-read",
   replyEvent: "test-reply",
+  clearEvent: "test-clear",
+  clearedEvent: "test-cleared",
 };
 
 interface Call {
@@ -332,7 +334,7 @@ describe("recordConsole", () => {
         }
       },
     });
-    recordConsole(SITE, OPTIONS, asPage(page));
+    recordConsole(SITE, OPTIONS, false, asPage(page));
     page.log("log", "recorded");
     assert.deepEqual(replies(page), []);
   });
@@ -462,7 +464,7 @@ describe("recordConsole", () => {
     it(`installs nothing in a document on ${href}`, () => {
       const page = new FakePage(href);
       const before = { ...page.console };
-      assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "elsewhere");
+      assert.equal(recordConsole(SITE, OPTIONS, false, asPage(page)), "elsewhere");
       assert.deepEqual(page.console, before);
       assert.equal(Object.hasOwn(page, "__foxleashConsole"), false);
       page.dispatchEvent(errorEvent({ message: "boom" }));
@@ -480,7 +482,7 @@ describe("recordConsole", () => {
 
   it("records on a site with a port", () => {
     const page = new FakePage("http://127.0.0.1:4567/");
-    assert.equal(recordConsole("http://127.0.0.1:4567", OPTIONS, asPage(page)), "started");
+    assert.equal(recordConsole("http://127.0.0.1:4567", OPTIONS, false, asPage(page)), "started");
     page.log("log", "here");
     assert.equal(read(page).messages.length, 1);
   });
@@ -488,7 +490,7 @@ describe("recordConsole", () => {
   it("starts only once in a document", () => {
     const page = started();
     const wrapped = page.console.log;
-    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "present");
+    assert.equal(recordConsole(SITE, OPTIONS, false, asPage(page)), "present");
     assert.equal(page.console.log, wrapped);
     page.log("log", "once");
     assert.equal(page.calls.length, 1);
@@ -502,11 +504,110 @@ describe("recordConsole", () => {
     });
   });
 
+  it("empties a recorder already there when asked to clear, and says so", () => {
+    const page = started({ maxMessages: 1 });
+    page.log("log", "before");
+    page.log("log", "pushed out");
+    assert.equal(read(page).dropped, 1);
+    const wrapped = page.console.log;
+    assert.equal(recordConsole(SITE, OPTIONS, true, asPage(page)), "cleared");
+    assert.equal(page.console.log, wrapped);
+    assert.deepEqual(read(page), { messages: [], dropped: 0 });
+    page.log("log", "after");
+    assert.deepEqual(
+      read(page).messages.map((message) => message.text),
+      ["after"],
+    );
+  });
+
+  it("answers the clear event with the cleared event once it emptied its records", () => {
+    const page = started();
+    page.log("log", "before");
+    const heard: number[] = [];
+    page.addEventListener(OPTIONS.clearedEvent, () => {
+      heard.push(read(page).messages.length);
+    });
+    page.dispatchEvent(new CustomEvent(OPTIONS.clearEvent));
+    assert.deepEqual(heard, [0]);
+  });
+
+  it("starts with no records when asked to clear a document without a recorder", () => {
+    const page = new FakePage();
+    assert.equal(recordConsole(SITE, OPTIONS, true, asPage(page)), "started");
+    page.log("log", "here");
+    assert.equal(read(page).messages.length, 1);
+  });
+
+  it("is uncleared when the page swallows the clear event", () => {
+    const page = started();
+    page.log("log", "kept");
+    Object.defineProperty(page, "dispatchEvent", { value: () => true });
+    assert.equal(recordConsole(SITE, OPTIONS, true, asPage(page)), "uncleared");
+    assert.equal(Object.hasOwn(page, "dispatchEvent"), true);
+  });
+
+  it("is uncleared when the page swallows the answer, and stops listening for it", () => {
+    const page = started();
+    // Added first, so it runs before the listener the clear adds.
+    page.addEventListener(OPTIONS.clearedEvent, (event) => {
+      event.stopImmediatePropagation();
+    });
+    const added: string[] = [];
+    const removed: string[] = [];
+    const add = page.addEventListener.bind(page);
+    const remove = page.removeEventListener.bind(page);
+    Object.defineProperty(page, "addEventListener", {
+      value: (type: string, listener: (event: Event) => void) => {
+        added.push(type);
+        add(type, listener);
+      },
+    });
+    Object.defineProperty(page, "removeEventListener", {
+      value: (type: string, listener: (event: Event) => void) => {
+        removed.push(type);
+        remove(type, listener);
+      },
+    });
+    assert.equal(recordConsole(SITE, OPTIONS, true, asPage(page)), "uncleared");
+    assert.deepEqual(added, [OPTIONS.clearedEvent]);
+    assert.deepEqual(removed, [OPTIONS.clearedEvent]);
+  });
+
+  it("is uncleared when the page throws at the clear", () => {
+    for (const key of ["addEventListener", "dispatchEvent", "removeEventListener", "CustomEvent"]) {
+      const page = started();
+      Object.defineProperty(page, key, {
+        value: () => {
+          throw new Error("guarded");
+        },
+      });
+      assert.equal(recordConsole(SITE, OPTIONS, true, asPage(page)), "uncleared", key);
+    }
+  });
+
+  it("does not answer the clear event when it cannot build its answer", () => {
+    const page = new FakePage();
+    Object.defineProperty(page, "CustomEvent", {
+      value: class {
+        constructor() {
+          throw new Error("no events");
+        }
+      },
+    });
+    recordConsole(SITE, OPTIONS, false, asPage(page));
+    let heard = 0;
+    page.addEventListener(OPTIONS.clearedEvent, () => {
+      heard += 1;
+    });
+    page.dispatchEvent(new CustomEvent(OPTIONS.clearEvent));
+    assert.equal(heard, 0);
+  });
+
   it("does nothing in a page that set its marker first", () => {
     const page = new FakePage();
     Object.defineProperty(page, "__foxleashConsole", { value: false });
     const before = { ...page.console };
-    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "present");
+    assert.equal(recordConsole(SITE, OPTIONS, false, asPage(page)), "present");
     assert.deepEqual(page.console, before);
     assert.deepEqual(replies(page), []);
   });
@@ -515,7 +616,7 @@ describe("recordConsole", () => {
     const page = new FakePage();
     const before = { ...page.console };
     Object.preventExtensions(page);
-    assert.equal(recordConsole(SITE, OPTIONS, asPage(page)), "refused");
+    assert.equal(recordConsole(SITE, OPTIONS, false, asPage(page)), "refused");
     assert.deepEqual(page.console, before);
     assert.deepEqual(replies(page), []);
   });
@@ -525,7 +626,7 @@ describe("recordConsole", () => {
     const frozenLog = page.console.log;
     page.console.debug = "not a function";
     Object.defineProperty(page.console, "log", { value: frozenLog, writable: false });
-    recordConsole(SITE, OPTIONS, asPage(page));
+    recordConsole(SITE, OPTIONS, false, asPage(page));
     assert.equal(page.console.debug, "not a function");
     assert.equal(page.console.log, frozenLog);
     page.log("log", "unrecorded");
@@ -549,7 +650,7 @@ describe("recordConsole from its own text", () => {
     const fresh: unknown = vm.runInNewContext(`(${FUNCTION})`);
     assert.equal(typeof fresh, "function");
     const page = new FakePage();
-    assert.equal((fresh as typeof recordConsole)(SITE, OPTIONS, asPage(page)), "started");
+    assert.equal((fresh as typeof recordConsole)(SITE, OPTIONS, false, asPage(page)), "started");
     page.log("warn", "from", { a: [1] }, new Error("boom"));
     page.dispatchEvent(Object.assign(new Event("unhandledrejection"), { reason: "late" }));
     const reply = read(page);
@@ -566,7 +667,7 @@ describe("recordConsole from its own text", () => {
 
 function started(options: Partial<RecorderOptions> = {}, href?: string): FakePage {
   const page = new FakePage(href);
-  assert.equal(recordConsole(SITE, { ...OPTIONS, ...options }, asPage(page)), "started");
+  assert.equal(recordConsole(SITE, { ...OPTIONS, ...options }, false, asPage(page)), "started");
   return page;
 }
 

@@ -1257,8 +1257,10 @@ describe("page script requests", { timeout: 10000 }, () => {
       await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
       const idle = get.mock.callCount();
       begin(fake, outside.id, NEXT);
+      // Counted from here: the update itself may have the page views read the tab.
+      const loading = get.mock.callCount();
       await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
-      assert.equal(get.mock.callCount(), 2 * idle);
+      assert.equal(get.mock.callCount() - loading, idle);
     });
 
     it("runs in a committed page still parsing at the bound, and holds no later request", async () => {

@@ -46,7 +46,8 @@ export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
 export interface NetworkLogDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage" | "webRequest">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
+  now: () => number;
 }
 
 export interface NetworkReadOptions {
@@ -97,7 +98,7 @@ interface Log {
   site: string;
   /** The committed URL without its fragment. */
   url: string;
-  /** The `timeStamp` of the commit. */
+  /** The `timeStamp` of the commit, or the time the log started at a grant. */
   at: number;
   /** The `timeStamp` of the tab's commit before it, or -Infinity. */
   since: number;
@@ -129,7 +130,7 @@ type Change = (request: NetworkRequest) => void;
  * credential headers redacted and every string capped as it arrives. Adds its listeners at once
  * (call it at the top level of the background script); none of them blocks a request.
  */
-export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): NetworkLog {
+export function createNetworkLog({ browser, groups, access, now }: NetworkLogDeps): NetworkLog {
   const logs = new Map<number, Log>();
   const pages = new Map<number, Page>();
   // The `timeStamp` of each tab's latest top-frame commit, on a web URL or not.
@@ -185,6 +186,23 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
   }
 
   function onDecided(tabId: number, live: LiveDocument | undefined): boolean {
+    if (live?.startedBy === "grant") {
+      // Starts empty: with its page set and no URL, no page request is ever attached.
+      const at = now();
+      logs.set(tabId, {
+        site: live.site,
+        url: "",
+        at,
+        since: at,
+        hasPage: true,
+        live,
+        entries: [],
+        open: new Map(),
+        chars: 0,
+        dropped: false,
+      });
+      return true;
+    }
     const log = logs.get(tabId);
     if (log === undefined || log.live !== undefined) return true;
     if (live === undefined || live.site !== log.site) logs.delete(tabId);
@@ -354,6 +372,7 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
     const kept = matches.slice(Math.max(0, matches.length - limit));
     return {
       recording: true,
+      since: log.at,
       requests: kept.map((entry) => copyOf(entry.request, headers)),
       truncated: log.dropped || matches.length > kept.length,
     };

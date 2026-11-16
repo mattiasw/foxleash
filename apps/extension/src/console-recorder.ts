@@ -7,16 +7,27 @@ export interface RecorderOptions {
   readEvent: string;
   /** The event the recorder answers with; its detail is the records as a JSON string. */
   replyEvent: string;
+  /** The event `recordConsole` dispatches on the window to empty a recorder already there. */
+  clearEvent: string;
+  /** The event the recorder answers `clearEvent` with, once it emptied its records. */
+  clearedEvent: string;
 }
 
 /** What `recordConsole` did in the document it ran in. */
-export type RecorderStatus = "started" | "present" | "elsewhere" | "refused";
+export type RecorderStatus =
+  | "started"
+  | "present"
+  | "cleared"
+  | "uncleared"
+  | "elsewhere"
+  | "refused";
 
 /** What the recorder reads from the page's global. */
 export interface RecorderPage {
   location: { protocol: string; hostname: string; port: string };
   console: Record<ConsoleLevel, unknown>;
   addEventListener(type: string, listener: (event: Event) => void): void;
+  removeEventListener(type: string, listener: (event: Event) => void): void;
   dispatchEvent(event: Event): boolean;
   CustomEvent: typeof CustomEvent;
   Error: ErrorConstructor;
@@ -31,13 +42,15 @@ export interface RecorderPage {
  * lives inside it. Everything it calls after it starts is captured first, so a page that later
  * replaces a built-in cannot change what it does beyond its own records.
  *
- * Returns `"started"` when it started the recorder, `"present"` when the document already had
- * one, `"elsewhere"` in a document not on `site`, and `"refused"` when the page would not take
- * the marker.
+ * Returns `"started"` when it started the recorder, `"elsewhere"` in a document not on `site`, and
+ * `"refused"` when the page would not take the marker. When the document already had one: with
+ * `clear` false, `"present"`; with `clear` true, `"cleared"` when the recorder answered that it
+ * emptied its records, else `"uncleared"`. The page can block or forge that answer.
  */
 export function recordConsole(
   site: string,
   options: RecorderOptions,
+  clear: boolean,
   page: RecorderPage = globalThis,
 ): RecorderStatus {
   const where = page.location;
@@ -45,7 +58,25 @@ export function recordConsole(
   const host = where.hostname.endsWith(".") ? where.hostname.slice(0, -1) : where.hostname;
   if (`${where.protocol}//${host}${where.port === "" ? "" : `:${where.port}`}` !== site)
     return "elsewhere";
-  if (Object.hasOwn(page, "__foxleashConsole")) return "present";
+  if (Object.hasOwn(page, "__foxleashConsole")) {
+    if (!clear) return "present";
+    let heard = false;
+    const hear = () => {
+      heard = true;
+    };
+    try {
+      page.addEventListener(options.clearedEvent, hear);
+      try {
+        // Synchronous: the recorder's answer arrives before this returns.
+        page.dispatchEvent(new page.CustomEvent(options.clearEvent));
+      } finally {
+        page.removeEventListener(options.clearedEvent, hear);
+      }
+    } catch {
+      return "uncleared";
+    }
+    return heard ? "cleared" : "uncleared";
+  }
   try {
     // Exactly { value: true }: Firefox's WindowProxy can throw on an explicit configurable: false.
     Object.defineProperty(page, "__foxleashConsole", { value: true });
@@ -69,7 +100,7 @@ export function recordConsole(
   const dispatch = page.dispatchEvent;
   const PageError = page.Error;
   const pageConsole = page.console;
-  const { maxMessages, maxText, readEvent, replyEvent } = options;
+  const { maxMessages, maxText, readEvent, replyEvent, clearEvent, clearedEvent } = options;
 
   const records: Record<string, unknown>[] = [];
   // Without it, JSON.stringify would use a toJSON the page sets on Array.prototype.
@@ -126,6 +157,16 @@ export function recordConsole(
       }
     } catch {
       // Recording never throws into the page.
+    }
+  });
+
+  page.addEventListener(clearEvent, () => {
+    try {
+      records.length = 0;
+      dropped = 0;
+      apply(dispatch, page, [new PageCustomEvent(clearedEvent)]);
+    } catch {
+      // The caller then hears no answer and does not count on an empty recorder.
     }
   });
 

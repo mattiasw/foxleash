@@ -129,6 +129,13 @@ export interface SiteAccess {
    * the session ended. Synchronously, at the end of `forget` or `endSession`, in the order added.
    */
   onWithdraw(listener: (session: string, site: string) => void): void;
+  /**
+   * Calls `listener` each time the session gains a site by the user's click: a prompt answered
+   * once, or always once the answer is saved, and each site `allowForSession` grants.
+   * Synchronously, at the end of `answer` or `allowForSession`, in the order added. A stored grant
+   * reaches every session: storage changes tell the others.
+   */
+  onGrant(listener: (session: string, site: string) => void): void;
 }
 
 /** What the settings page lists for one session. */
@@ -196,6 +203,7 @@ export function createSiteAccess<Handle>({
   // By session: how often it ended, so a request that was running when it ended shows no prompt.
   const generations = new Map<string, number>();
   const withdrawals = new Set<(session: string, site: string) => void>();
+  const grants = new Set<(session: string, site: string) => void>();
 
   browser.runtime.onConnect.addListener(connect);
   browser.runtime.onMessage.addListener(receiveFromSettings);
@@ -235,6 +243,7 @@ export function createSiteAccess<Handle>({
     refuseIfStoppedAsking,
     forget,
     onWithdraw,
+    onGrant,
   };
 
   async function view(session: string): Promise<SiteView> {
@@ -383,6 +392,7 @@ export function createSiteAccess<Handle>({
       stateOf(session).allowed.add(site);
       granted.push(site);
     }
+    for (const site of granted) grantedSite(session, site);
     return granted;
   }
 
@@ -407,6 +417,14 @@ export function createSiteAccess<Handle>({
 
   function withdrawn(session: string, site: string): void {
     for (const listener of withdrawals) listener(session, site);
+  }
+
+  function onGrant(listener: (session: string, site: string) => void): void {
+    grants.add(listener);
+  }
+
+  function grantedSite(session: string, site: string): void {
+    for (const listener of grants) listener(session, site);
   }
 
   async function labelOf(session: string): Promise<string> {
@@ -637,12 +655,18 @@ export function createSiteAccess<Handle>({
       }
       // Dropped while saving: the grant stays, as it was the user's click.
       if (prompts.get(prompt.session) !== prompt) return;
+      settle(prompt, given);
+      grantedSite(prompt.session, prompt.site);
     } else if (given === "once") {
-      stateOf(prompt.session).allowed.add(prompt.site);
+      const { allowed } = stateOf(prompt.session);
+      const fresh = !allowed.has(prompt.site);
+      allowed.add(prompt.site);
+      settle(prompt, given);
+      if (fresh) grantedSite(prompt.session, prompt.site);
     } else {
       stateOf(prompt.session).refused.add(prompt.site);
+      settle(prompt, given);
     }
-    settle(prompt, given);
   }
 
   function settle(prompt: Prompt<Handle>, given: Answer): void {

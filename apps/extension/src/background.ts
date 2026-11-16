@@ -37,8 +37,14 @@ const access = createSiteAccess({
   otherPrompt: (session) => recipes.openPrompt(session),
 });
 const recipes: RecipePrompts = createRecipePrompts({ browser, groups, access, timers });
-const recordings = createConsoleRecording({ browser, groups, access, timers });
-const network = createNetworkLog({ browser, groups, access });
+const recordings = createConsoleRecording({
+  browser,
+  groups,
+  access,
+  timers,
+  now: () => Date.now(),
+});
+const network = createNetworkLog({ browser, groups, access, now: () => Date.now() });
 const views = createPageViews({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });

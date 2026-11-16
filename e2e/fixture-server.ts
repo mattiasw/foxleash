@@ -72,6 +72,7 @@ export const TITLES = {
   settleNext: "Fixture settle next",
   viewShop: "Fixture view shop",
   viewLarge: "Fixture view large",
+  recordingForm: "Fixture recording form",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -108,6 +109,9 @@ export interface NavigationVariant {
 export const WAIT_LATE_TEXT = "The late text has arrived";
 /** How long the wait pages wait after loading before they add their text or navigate. */
 export const WAIT_LATE_MS = 2000;
+
+/** What the recording form page's Log button logs, followed by a dash and the click's number. */
+export const RECORDING_TOKEN = "recording-token-Hq3";
 
 /** What the console pages log, each in one message. */
 export const CONSOLE_TOKENS = {
@@ -715,6 +719,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end();
     } else if (path === "/console") {
       sendHtml(response, CONSOLE_PAGE);
+    } else if (path === "/recording-form") {
+      sendHtml(response, RECORDING_FORM_PAGE);
     } else if (path === "/console-csp") {
       sendHtml(response, CONSOLE_CSP_PAGE, {
         "Content-Security-Policy": `script-src 'nonce-${CONSOLE_CSP_NONCE}'`,
@@ -1035,6 +1041,32 @@ document.getElementById("log").addEventListener("click", () => {
   setTimeout(() => {
     Promise.reject(new Error("${CONSOLE_TOKENS.rejection}"));
   }, 100);
+});
+</script>
+</body></html>
+`;
+
+// Each Log click logs the token with its number; each Fetch click fetches /api/fetch?n= its number.
+const RECORDING_FORM_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.recordingForm}</title></head>
+<body><h1>${TITLES.recordingForm}</h1>
+<form>
+<label>First name <input id="first"></label>
+<label>Last name <input id="last"></label>
+<label>Notes <textarea id="notes"></textarea></label>
+</form>
+<button id="log" type="button">Log</button>
+<button id="fetch" type="button">Fetch</button>
+<script>
+let logged = 0;
+let fetched = 0;
+document.getElementById("log").addEventListener("click", () => {
+  logged += 1;
+  console.log("${RECORDING_TOKEN}-" + logged);
+});
+document.getElementById("fetch").addEventListener("click", () => {
+  fetched += 1;
+  fetch("/api/fetch?n=" + fetched);
 });
 </script>
 </body></html>

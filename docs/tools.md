@@ -189,15 +189,26 @@ with its level, kind, text and time.
   loads quickly, such as a small page served from your own computer, can finish loading first,
   so what it logs while it loads, in its `load` event included, can be missed; what it logs once
   recording has started is recorded.
+- A page that is already open starts being recorded, with no messages, when you approve its site
+  for the agent's session (in a prompt, through a recipe or a request for sites, or in Foxleash's
+  settings) or move its tab into the agent's group, without loading it again, so its form keeps
+  what you typed. What it logged before then is never returned.
+- The result gives `since`, the time from which the page has been recorded, when it is
+  recording: earlier messages may be missing.
 - Frames are not recorded.
 - Loading a new page in the tab starts with no messages.
 - Foxleash keeps the newest 300 messages of a page, each cut to 1,000 characters, and counts the
   older ones it let go.
 - The agent can ask for messages of a minimum level, those whose text matches a regular
   expression, and at most a number of the newest ones (100 unless it asks for up to 300).
-- When the page loaded before you approved the site, or since it loaded you withdrew the
-  approval or the tab left the agent's group, the result says it is not recording, with no
-  messages, until the page is loaded again.
+- When you withdraw the approval or the tab leaves the agent's group, what was recorded is gone,
+  and nothing the page logs meanwhile is ever returned. Approving the site again or moving the
+  tab back starts recording again, with no messages.
+- The result says it is not recording, with no messages, when Foxleash could not start its
+  recorder in the page (some pages prevent it), or when recording stopped and nothing started it
+  again, for example when the tab went to another site without loading a page. A later approval,
+  a change in Foxleash's settings or a move into the agent's group tries again; loading the page
+  again always does.
 
 ### `read_network`
 
@@ -212,7 +223,16 @@ the cache.
   are replaced with `[redacted]`, and request and response bodies are not included.
 - Requests made by the page's frames are included.
 - Foxleash records a page's requests from when it starts loading in a tab of the agent's group
-  on a site you approved, and loading a new page in the tab starts a new list.
+  on a site you approved, and loading a new page in the tab starts a new list, beginning with that
+  page's own request.
+- A page that is already open starts being recorded, with no requests, when you approve its site
+  for the agent's session (in a prompt, through a recipe or a request for sites, or in Foxleash's
+  settings) or move its tab into the agent's group, without loading it again. Requests that
+  started before then are never returned, with one exception: when such a request is redirected
+  after then, the redirect's next request is listed.
+- The result gives `since`, the time from which the page has been recorded, when it is
+  recording: requests that started earlier are missing. After a page load, `since` is the time the
+  page was committed, and the page's own request, which starts just before it, is listed.
 - Foxleash keeps the newest 500 requests of a page, fewer when their headers are long.
 - The agent can ask for the requests whose URL contains a piece of plain text (`pattern`).
 - It can ask for the requests of up to 20 resource types (`types`), such as `main_frame` for the
@@ -226,9 +246,13 @@ the cache.
   newest are returned, 100 unless the agent asks for up to 500. The result says it is truncated
   when matching requests were left out or the page made more requests than Foxleash kept;
   requests a filter leaves out do not count.
-- When the page loaded before you approved the site, or since it loaded you withdrew the
-  approval or the tab left the agent's group, the result says it is not recording, with no
-  requests, until the page is loaded again.
+- When you withdraw the approval or the tab leaves the agent's group, what was recorded is gone,
+  and nothing the page requests meanwhile is ever returned. Approving the site again or moving the
+  tab back starts recording again, with no requests.
+- The result says it is not recording, with no requests, when recording stopped and nothing
+  started it again, for example when the tab went to another site without loading a page. A later
+  approval, a change in Foxleash's settings or a move into the agent's group tries again; loading
+  the page again always does.
 
 ## Acting in a page
 

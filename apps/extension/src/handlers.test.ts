@@ -18,6 +18,7 @@ import type {
   Tab,
   TabChangeInfo,
 } from "./browser-api.ts";
+import type { LiveRecording } from "./console-recording.ts";
 import {
   type CssCall,
   createFakeBrowser,
@@ -6302,6 +6303,8 @@ describe("get_page_text", { timeout: 10000 }, () => {
 describe("read_console", { timeout: 10000 }, () => {
   const message = { level: "warn", kind: "console", text: "careful", time: 1000 };
   const recorded = { recording: true, messages: [message], dropped: 2 };
+  const live = { since: 900 };
+  const since = { ...recorded, since: live.since };
 
   it("refuses a tab id that is not a whole number of 0 or more before asking the page", async () => {
     const { call, pageCalls } = setup();
@@ -6316,15 +6319,14 @@ describe("read_console", { timeout: 10000 }, () => {
 
   it("asks the page with no parameters and returns its records while recording is live", async () => {
     const { call, pageCalls, replyWith, liveWith } = setup();
-    const live = {};
     const asked: [string, number][] = [];
     liveWith((session, tabId) => {
       asked.push([session, tabId]);
       return live;
     });
     replyWith(async () => recorded);
-    assert.deepEqual(await call("s1", "read_console", { tabId: 3, extra: true }), recorded);
-    assert.deepEqual(await call("s2", "read_console", { tabId: 0 }), recorded);
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3, extra: true }), since);
+    assert.deepEqual(await call("s2", "read_console", { tabId: 0 }), since);
     assert.deepEqual(pageCalls, [
       { session: "s1", tabId: 3, type: "read_console", params: {} },
       { session: "s2", tabId: 0, type: "read_console", params: {} },
@@ -6341,10 +6343,9 @@ describe("read_console", { timeout: 10000 }, () => {
     const { call, replyWith, liveWith } = setup();
     const long = { ...message, text: "a".repeat(1001), extra: "page text" };
     replyWith(async () => ({ ...recorded, messages: [long], extra: true }));
-    const live = {};
     liveWith(() => live);
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), {
-      ...recorded,
+      ...since,
       messages: [{ ...message, text: "a".repeat(1000) }],
     });
   });
@@ -6355,20 +6356,30 @@ describe("read_console", { timeout: 10000 }, () => {
     const none = { recording: false, messages: [], dropped: 0 };
     liveWith(() => undefined);
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
-    const answers = [{}, {}];
+    const answers = [{ since: 1 }, { since: 1 }];
     liveWith(() => answers.shift());
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
-    const before = {};
+    const before = { since: 2 };
     const later = [before, undefined];
     liveWith(() => later.shift());
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
-    const after = [undefined, {}];
+    const after = [undefined, { since: 3 }];
     liveWith(() => after.shift());
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
     liveWith((session) => (session === "s2" ? before : undefined));
     assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), none);
-    assert.deepEqual(await call("s2", "read_console", { tabId: 3 }), recorded);
+    assert.deepEqual(await call("s2", "read_console", { tabId: 3 }), { ...recorded, since: 2 });
     assert.equal(pageCalls.length, 6);
+  });
+
+  it("gives since from the live recording, never from the page, and none when not recording", async () => {
+    const { call, replyWith, liveWith } = setup();
+    liveWith(() => live);
+    replyWith(async () => ({ ...recorded, since: 5 }));
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), since);
+    const unrecorded = { recording: false, messages: [], dropped: 0 };
+    replyWith(async () => ({ ...unrecorded, since: 5 }));
+    assert.deepEqual(await call("s1", "read_console", { tabId: 3 }), unrecorded);
   });
 
   it("refuses a reply it cannot read as page_error, recording or not", async () => {
@@ -6382,7 +6393,7 @@ describe("read_console", { timeout: 10000 }, () => {
       { ...recorded, dropped: -1 },
       Object.create(recorded),
     ];
-    for (const answer of [() => ({}), () => undefined]) {
+    for (const answer of [() => live, () => undefined]) {
       liveWith(answer);
       for (const reply of replies) {
         replyWith(async () => reply);
@@ -6410,18 +6421,18 @@ describe("read_console", { timeout: 10000 }, () => {
     const tab = await open("s1", "https://a.example/");
     const timersBefore = timers.pending();
     // As live-documents.ts does, a commit in the top frame replaces the tab's recording.
-    let live = {};
+    let current = { since: 1 };
     fake.browser.webNavigation.onCommitted.addListener(({ frameId }) => {
-      if (frameId === 0) live = {};
+      if (frameId === 0) current = { since: 2 };
     });
-    liveWith(() => live);
+    liveWith(() => current);
     replyWith(async () => recorded);
     beginNavigation(fake, tab.id, "https://a.example/next");
     const read = call("s1", "read_console", { tabId: tab.id });
     await flush();
     assert.deepEqual(pageCalls, []);
     landNavigation(fake, tab.id, "https://a.example/next");
-    assert.deepEqual(await read, recorded);
+    assert.deepEqual(await read, { ...recorded, since: 2 });
     assert.equal(timers.pending(), timersBefore);
   });
 
@@ -6429,11 +6440,11 @@ describe("read_console", { timeout: 10000 }, () => {
     const { fake, call, open, grant, replyWith, liveWith } = setup();
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
-    let live = {};
+    let current = { since: 1 };
     fake.browser.webNavigation.onCommitted.addListener(({ frameId }) => {
-      if (frameId === 0) live = {};
+      if (frameId === 0) current = { since: 2 };
     });
-    liveWith(() => live);
+    liveWith(() => current);
     replyWith(async () => {
       // The next page lands while the read runs, and answers.
       beginNavigation(fake, tab.id, "https://a.example/next");
@@ -6452,7 +6463,7 @@ describe("read_console", { timeout: 10000 }, () => {
     await grant("https://a.example");
     const tab = await open("s1", "https://a.example/");
     const timersBefore = timers.pending();
-    liveWith(() => ({}));
+    liveWith(() => live);
     // The page never answers.
     replyWith(() => new Promise(() => {}));
     beginNavigation(fake, tab.id, "https://a.example/next");
@@ -8951,13 +8962,13 @@ describe("the view of the page that results end with", { timeout: 10000 }, () =>
   });
 
   it("shows, and does not record, a tree read while the tab has no live document", async () => {
-    const { fake, open, grant, callWithView, replyWith, views } = setup({ pageViews: true });
+    const { fake, open, callWithView, replyWith, views, sessions } = setup({ pageViews: true });
     replyWith(async (type) => (type === "read_page" ? { tree: TREE, truncated: false } : CLICKED));
     const tab = await open("s1");
-    // Committed before its site was approved, and not loaded since.
+    // Committed before its site was approved, and approved without any change that catches up.
     fake.navigateByUser(tab.id, `${SITE}/`);
     await flush();
-    await grant(SITE);
+    sessions.set("s1", state([SITE]));
     await flush();
     assert.equal(views.document(tab.id), undefined);
     for (let call = 0; call < 2; call += 1) {
@@ -9752,7 +9763,7 @@ function summaryOf(name: string) {
   return { name, description, sites, savedAt };
 }
 
-type Live = (session: string, tabId: number) => object | undefined;
+type Live = (session: string, tabId: number) => LiveRecording | undefined;
 
 interface NetworkRead {
   session: string;

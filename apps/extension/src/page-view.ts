@@ -35,7 +35,7 @@ export interface TreeRead {
 export interface PageViewsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onGrant">;
 }
 
 export interface PageViews {

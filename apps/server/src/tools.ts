@@ -204,13 +204,14 @@ const MAX_SITE_ENTRY = 2048;
 const DEFAULT_CONSOLE_LIMIT = 100;
 const MAX_MESSAGES = MAX_CONSOLE_MESSAGES.toLocaleString("en-US");
 const MAX_MESSAGE_TEXT = MAX_CONSOLE_TEXT.toLocaleString("en-US");
-const READ_CONSOLE = `Read what the page in a tab of this session's Foxleash tab group wrote to its console: console.log, info, warn, error and debug calls, uncaught errors and unhandled promise rejections, oldest first, each with its level, kind (console, uncaught_error or unhandled_rejection), text and time (ms since the epoch). Only the tab's top page is recorded, not its frames. On a site the user approved, Foxleash starts recording a page shortly after it starts loading, so messages logged before then are missed; a page that loads fast, such as one served locally, can finish loading first, so what it logs while loading, in its load event included, is missed. Loading a new page in the tab starts with no messages; a change of the address within the page (a fragment, history.pushState) does not. recording false means Foxleash has not recorded the page since it loaded: it loaded before the user approved the site, or since then the user withdrew the approval or the tab left the tab group; reload it with navigate to start recording. Foxleash keeps the newest ${MAX_MESSAGES} messages of a page, each cut to ${MAX_MESSAGE_TEXT} characters; dropped counts the older ones it let go. Arguments are shown as text: objects as JSON, errors as their name and message. level returns only messages of that severity or above (debug, then log and info, then warn, then error). pattern is a JavaScript regular expression, case-sensitive, that a message's text must match; one that takes more than a second to match is refused. Of the matching messages the newest limit (${DEFAULT_CONSOLE_LIMIT} unless given, at most ${MAX_MESSAGES}) are returned, and omitted counts the matches left out. The tab must show a site the user approved; read_console never asks.`;
+const READ_CONSOLE = `Read what the page in a tab of this session's Foxleash tab group wrote to its console: console.log, info, warn, error and debug calls, uncaught errors and unhandled promise rejections, oldest first, each with its level, kind (console, uncaught_error or unhandled_rejection), text and time (ms since the epoch). Only the tab's top page is recorded, not its frames. On a site the user approved, Foxleash starts recording a page shortly after it starts loading, so messages logged before then are missed; a page that loads fast, such as one served locally, can finish loading first, so what it logs while loading, in its load event included, is missed. For a page already open, recording starts, with no messages, when the user approves its site or moves its tab into the tab group. since is the time (ms since the epoch) from which the page has been recorded: messages logged before it may be missing. Loading a new page in the tab starts with no messages; a change of the address within the page (a fragment, history.pushState) does not. When the user withdraws the approval or the tab leaves the tab group, what was recorded is gone; a new approval or a move back starts recording again, with no messages. recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again, for example when the tab went to another site without loading a page; a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording. Foxleash keeps the newest ${MAX_MESSAGES} messages of a page, each cut to ${MAX_MESSAGE_TEXT} characters; dropped counts the older ones it let go. Arguments are shown as text: objects as JSON, errors as their name and message. level returns only messages of that severity or above (debug, then log and info, then warn, then error). pattern is a JavaScript regular expression, case-sensitive, that a message's text must match; one that takes more than a second to match is refused. Of the matching messages the newest limit (${DEFAULT_CONSOLE_LIMIT} unless given, at most ${MAX_MESSAGES}) are returned, and omitted counts the matches left out. The tab must show a site the user approved; read_console never asks.`;
 const UNREADABLE_CONSOLE = "Firefox returned console messages Foxleash cannot read.";
 const PATTERN_MS = 1000;
 const SLOW_PATTERN = `pattern took more than ${PATTERN_MS / 1000} second to match the messages; try a simpler pattern.`;
 const LEVEL_RANK: Record<ConsoleLevel, number> = { debug: 0, log: 1, info: 1, warn: 2, error: 3 };
 const CONSOLE_RESULT = z.object({
   recording: z.boolean(),
+  since: z.number().optional(),
   messages: z
     .array(
       z.object({
@@ -225,7 +226,7 @@ const CONSOLE_RESULT = z.object({
 });
 const DEFAULT_REQUESTS = DEFAULT_NETWORK_LIMIT.toLocaleString("en-US");
 const MAX_REQUESTS = MAX_NETWORK_REQUESTS.toLocaleString("en-US");
-const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache. Its request and response headers are included only with headers true. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. Request and response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. recording false means Foxleash has not recorded the page since it loaded: it loaded before the user approved the site, or since then the user withdrew the approval or the tab left the tab group; reload it with navigate to start recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. types keeps only the requests whose type is exactly one of them. failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request; a redirect, or a request with no status or error yet, has not failed. pattern, types and failed all apply before limit: of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
+const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache. Its request and response headers are included only with headers true. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. Request and response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved, or, for a page already open, from when the user approves its site or moves its tab into the tab group, with no requests. since is the time (ms since the epoch) from which the page has been recorded: requests started before it are missing, except that after a load the page's own request, which starts just before since, is included. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. When the user withdraws the approval or the tab leaves the tab group, what was recorded is gone; a new approval or a move back starts recording again, with no requests. recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again, for example when the tab went to another site without loading a page; a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. types keeps only the requests whose type is exactly one of them. failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request; a redirect, or a request with no status or error yet, has not failed. pattern, types and failed all apply before limit: of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
 const UNREADABLE_NETWORK = "Firefox returned network requests Foxleash cannot read.";
 const NETWORK_HEADERS = z
   .array(
@@ -237,6 +238,7 @@ const NETWORK_HEADERS = z
   .max(MAX_NETWORK_HEADERS);
 const NETWORK_RESULT = z.object({
   recording: z.boolean(),
+  since: z.number().optional(),
   requests: z
     .array(
       z.object({
@@ -891,7 +893,7 @@ export function registerTools(
       if (!called.ok) return called.error;
       const parsed = CONSOLE_RESULT.safeParse(called.result);
       if (!parsed.success) return errorResult(UNREADABLE_CONSOLE);
-      const { recording, messages, dropped } = parsed.data;
+      const { recording, since, messages, dropped } = parsed.data;
       const rank = level === undefined ? 0 : LEVEL_RANK[level];
       const ranked = messages.filter((message) => LEVEL_RANK[message.level] >= rank);
       const matched =
@@ -906,6 +908,7 @@ export function registerTools(
       const kept = matches.slice(Math.max(0, matches.length - (limit ?? DEFAULT_CONSOLE_LIMIT)));
       return textResult({
         recording,
+        ...sinceField(since),
         messages: kept,
         dropped,
         omitted: matches.length - kept.length,
@@ -1550,8 +1553,8 @@ function jsonText(result: unknown, wrap: (json: string) => string): ShownText {
  * read_network's result, framed; when it does not fit in one result, the most of its newest
  * requests that do, with truncated set.
  */
-function networkResult({ recording, requests, truncated }: NetworkResult): CallToolResult {
-  const whole = framedText({ recording, requests, truncated });
+function networkResult({ recording, since, requests, truncated }: NetworkResult): CallToolResult {
+  const whole = framedText({ recording, ...sinceField(since), requests, truncated });
   if (whole.ok) return { content: [{ type: "text", text: whole.text }] };
   // The largest count of newest requests that fits; none always does.
   let fits = 0;
@@ -1564,11 +1567,21 @@ function networkResult({ recording, requests, truncated }: NetworkResult): CallT
   return textResult(newest(fits));
 
   function newest(count: number): NetworkResult {
-    return { recording, requests: requests.slice(requests.length - count), truncated: true };
+    return {
+      recording,
+      ...sinceField(since),
+      requests: requests.slice(requests.length - count),
+      truncated: true,
+    };
   }
 }
 
 type NetworkResult = z.infer<typeof NETWORK_RESULT>;
+
+/** `since` as a field, left out when the extension gave none. */
+function sinceField(since: number | undefined): { since?: number } {
+  return since === undefined ? {} : { since };
+}
 
 /**
  * The length of `JSON.stringify(value, null, 2)` given `compact = JSON.stringify(value)`, or

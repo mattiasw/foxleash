@@ -2140,3 +2140,103 @@ function holdWrites(fake: FakeBrowser): { release(): void; calls(): number } {
   };
   return { release: () => held.resolve(), calls: () => calls };
 }
+
+describe("onGrant", () => {
+  /** The grants each listener heard, with whether the prompt was closed and the answer settled then. */
+  function listen(access: SiteAccess, answer?: () => Tracked): string[] {
+    const heard: string[] = [];
+    access.onGrant((session, site) => {
+      const open = access.openPrompt(session) !== undefined;
+      heard.push(`${session} ${site} open:${open} answer:${answer?.().state ?? "-"}`);
+    });
+    return heard;
+  }
+
+  it("tells of a site a prompt answered once allows, after the prompt is settled", async () => {
+    const { fake, access, tab, ask } = setup();
+    const { answer } = await ask();
+    const heard = listen(access, () => answer);
+    connect(fake, tab.id).deliver({ type: "answer", answer: "once" });
+    assert.deepEqual(heard, ["s1 https://a.example open:false answer:pending"]);
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("tells of a site an answer always allows once it is saved, and of nothing before", async () => {
+    const { fake, access, tab, ask } = setup();
+    await ask();
+    const heard = listen(access);
+    const writes = holdWrites(fake);
+    connect(fake, tab.id).deliver({ type: "answer", answer: "always" });
+    await flush();
+    assert.deepEqual(heard, []);
+    writes.release();
+    await flush();
+    assert.deepEqual(heard, ["s1 https://a.example open:false answer:-"]);
+  });
+
+  it("tells of nothing for a refusal, a closed prompt, a failed save or a site already allowed", async () => {
+    const refused = setup();
+    await refused.ask();
+    const heard = listen(refused.access);
+    connect(refused.fake, refused.tab.id).deliver({ type: "answer", answer: "no" });
+    await flush();
+
+    const dropped = setup();
+    await dropped.ask();
+    dropped.access.onGrant((session, site) => heard.push(`${session} ${site}`));
+    const writes = holdWrites(dropped.fake);
+    connect(dropped.fake, dropped.tab.id).deliver({ type: "answer", answer: "always" });
+    dropped.fake.removeTab(dropped.tab.id);
+    writes.release();
+    await flush();
+
+    const failed = setup();
+    await failed.ask();
+    failed.access.onGrant((session, site) => heard.push(`${session} ${site}`));
+    failed.fake.failNextSet();
+    connect(failed.fake, failed.tab.id).deliver({ type: "answer", answer: "always" });
+    await flush();
+
+    const again = setup();
+    await again.ask();
+    again.access.onGrant((session, site) => heard.push(`${session} ${site}`));
+    again.sessions.set("s1", state(["https://a.example"]));
+    connect(again.fake, again.tab.id).deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.deepEqual(heard, []);
+  });
+
+  it("tells of each site allowForSession allows, and of none when it allows nothing", async () => {
+    const { fake, access, sessions } = setup();
+    await grantSite(fake.browser, "https://c.example");
+    sessions.set("s1", state(["https://d.example"]));
+    const heard: string[] = [];
+    access.onGrant((session, site) => heard.push(`first ${session} ${site}`));
+    access.onGrant((session, site) => heard.push(`second ${session} ${site}`));
+    const granted = await access.allowForSession(
+      "s1",
+      ["https://a.example", "https://c.example", "https://d.example", "https://b.example"],
+      () => true,
+    );
+    assert.deepEqual(granted, ["https://a.example", "https://b.example"]);
+    assert.deepEqual(heard, [
+      "first s1 https://a.example",
+      "second s1 https://a.example",
+      "first s1 https://b.example",
+      "second s1 https://b.example",
+    ]);
+    assert.deepEqual(await access.allowForSession("s2", ["https://e.example"], () => false), []);
+    assert.equal(heard.length, 4);
+  });
+
+  it("tells of nothing when a session's answer is forgotten or the session ends", () => {
+    const { access, sessions } = setup();
+    const heard = listen(access);
+    sessions.set("s1", state(["https://a.example"]));
+    access.forget("s1", "https://a.example");
+    sessions.set("s2", state(["https://a.example"]));
+    access.endSession("s2");
+    assert.deepEqual(heard, []);
+  });
+});

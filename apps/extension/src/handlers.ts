@@ -1385,7 +1385,7 @@ export function createHandlers<Handle>({
       if (navigations.begun(tabId) > begun) throw pageChanged(tabId);
       return { recording: false, messages: [], dropped: 0 };
     }
-    return result;
+    return result.recording ? { ...result, since: live.since } : result;
   }
 
   /** Reads the network requests Foxleash recorded for the page in a tab. */

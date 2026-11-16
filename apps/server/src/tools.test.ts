@@ -1777,13 +1777,19 @@ describe("read_console", () => {
       "uncaught errors and unhandled promise rejections, oldest first",
       "Only the tab's top page is recorded, not its frames.",
       "can finish loading first",
-      "recording false means Foxleash has not recorded the page since it loaded",
+      "For a page already open, recording starts, with no messages, when the user approves its site or moves its tab into the tab group.",
+      "since is the time (ms since the epoch) from which the page has been recorded: messages logged before it may be missing.",
+      "a new approval or a move back starts recording again, with no messages.",
+      "recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again",
+      "a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording.",
       "Foxleash keeps the newest 300 messages of a page, each cut to 1,000 characters",
       "the newest limit (100 unless given, at most 300) are returned",
       "read_console never asks",
     ]) {
       assert.ok(tool?.description?.includes(words), words);
     }
+    assert.equal(tool?.description?.includes("has not recorded the page since it loaded"), false);
+    assert.equal(tool?.description?.includes("to start recording."), false);
   });
 
   it("refuses arguments outside the schema without asking Firefox", LIMIT, async () => {
@@ -1833,6 +1839,34 @@ describe("read_console", () => {
       pretty({ recording: false, messages: [], dropped: 0, omitted: 0 }),
     );
   });
+
+  it(
+    "returns since right after recording when Firefox gives it, and leaves it out otherwise",
+    LIMIT,
+    async () => {
+      const { output } = await read(
+        { tabId: 1, limit: 2 },
+        { ...result(), since: 1700000000000.5 },
+      );
+      assert.equal(
+        unframed(output),
+        pretty({
+          recording: true,
+          since: 1700000000000.5,
+          messages: messages().slice(-2),
+          dropped: 0,
+          omitted: 5,
+        }),
+      );
+      const without = await read({ tabId: 1 }, result());
+      assert.equal(Object.hasOwn(JSON.parse(unframed(without.output)), "since"), false);
+      const refused = await read({ tabId: 1 }, { ...result(), since: "1" });
+      assert.deepEqual(refused.output, {
+        content: [{ type: "text", text: UNREADABLE }],
+        isError: true,
+      });
+    },
+  );
 
   it("keeps messages of the level given or above", LIMIT, async () => {
     const expected: Record<string, string[]> = {
@@ -2629,7 +2663,11 @@ describe("read_network", () => {
       "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted].",
       "Request and response bodies are not included.",
       "Requests made by the page's frames are included.",
-      "recording false means Foxleash has not recorded the page since it loaded",
+      "or, for a page already open, from when the user approves its site or moves its tab into the tab group, with no requests.",
+      "since is the time (ms since the epoch) from which the page has been recorded: requests started before it are missing, except that after a load the page's own request, which starts just before since, is included.",
+      "a new approval or a move back starts recording again, with no requests.",
+      "recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again",
+      "a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording.",
       "Foxleash keeps the newest 500 requests of a page (fewer when their headers are long), with URLs cut to 2,000 characters, header names and values to 1,000 and at most 100 headers each way.",
       "pattern is plain text, case-sensitive",
       "the newest limit (100 unless given, at most 500) are returned, fewer when they would not fit in one result",
@@ -2638,6 +2676,8 @@ describe("read_network", () => {
     ]) {
       assert.ok(tool?.description?.includes(words), words);
     }
+    assert.equal(tool?.description?.includes("has not recorded the page since it loaded"), false);
+    assert.equal(tool?.description?.includes("to start recording."), false);
   });
 
   it("refuses arguments outside the schema without asking Firefox", LIMIT, async () => {
@@ -2885,7 +2925,33 @@ describe("read_network", () => {
     }
     const whole = await read({ tabId: 1 }, result(requests.slice(0, count)));
     assert.equal(unframed(whole.output), pretty(result(requests.slice(0, count))));
+    const since = 1700000000000.5;
+    const sinced = await read({ tabId: 1 }, { ...result(requests), since });
+    assert.equal(
+      unframed(sinced.output),
+      pretty({ recording: true, since, requests: requests.slice(-count), truncated: true }),
+    );
   });
+
+  it(
+    "returns since right after recording when Firefox gives it, and leaves it out otherwise",
+    LIMIT,
+    async () => {
+      const since = 1700000000000.5;
+      const { output } = await read({ tabId: 1 }, { ...result(), since });
+      assert.equal(
+        unframed(output),
+        pretty({ recording: true, since, requests: [request("/a")], truncated: false }),
+      );
+      const without = await read({ tabId: 1 }, result());
+      assert.equal(Object.hasOwn(JSON.parse(unframed(without.output)), "since"), false);
+      const refused = await read({ tabId: 1 }, { ...result(), since: "1" });
+      assert.deepEqual(refused.output, {
+        content: [{ type: "text", text: UNREADABLE }],
+        isError: true,
+      });
+    },
+  );
 
   it("returns read_network's bridge and host errors as for the other tools", LIMIT, async () => {
     const sentence = "The Foxleash native host did not answer in time.";

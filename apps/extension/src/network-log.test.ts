@@ -61,6 +61,7 @@ describe("network log", { timeout: 10000 }, () => {
     });
     assert.deepEqual(read(tab.id), {
       recording: true,
+      since: 1,
       requests: [
         {
           url: `${SITE}/api`,
@@ -311,7 +312,12 @@ describe("network log", { timeout: 10000 }, () => {
     assert.equal(read(tab.id).requests.length, 1);
     fake.navigateByUser(tab.id, `${SITE}/next`);
     await flush();
-    assert.deepEqual(read(tab.id), { recording: true, requests: [], truncated: false });
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 1002,
+      requests: [],
+      truncated: false,
+    });
   });
 
   it("records nothing off an approved site, outside a session's group or in its prompt", async (t) => {
@@ -390,7 +396,12 @@ describe("network log", { timeout: 10000 }, () => {
       statusCode: 200,
       fromCache: false,
     });
-    assert.deepEqual(read(tab.id), { recording: true, requests: [], truncated: false });
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 1001,
+      requests: [],
+      truncated: false,
+    });
   });
 
   it("leaves out an earlier page's request that Firefox reports after the next commit", async () => {
@@ -487,6 +498,7 @@ describe("network log", { timeout: 10000 }, () => {
     await flush();
     assert.deepEqual(read(tab.id), {
       recording: true,
+      since: 2003,
       requests: [
         {
           url: `${SITE}/next`,
@@ -611,6 +623,7 @@ describe("network log", { timeout: 10000 }, () => {
     request(tab.id, next, { type: "main_frame", timeStamp: 1550 });
     assert.deepEqual(read(tab.id), {
       recording: true,
+      since: 1600,
       requests: [
         {
           url: next,
@@ -663,6 +676,7 @@ describe("network log", { timeout: 10000 }, () => {
     await flush();
     assert.deepEqual(read(tab.id, ALL, "s1", c), {
       recording: true,
+      since: 1100,
       requests: [],
       truncated: false,
     });
@@ -680,7 +694,12 @@ describe("network log", { timeout: 10000 }, () => {
     commit(tab.id, `${SITE}/next`, 1050);
     commit(tab.id, `${SITE}/file`, 1200);
     await flush();
-    assert.deepEqual(read(tab.id), { recording: true, requests: [], truncated: false });
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 1200,
+      requests: [],
+      truncated: false,
+    });
   });
 
   it("puts a redirect's final hop first when reported after the commit, not its earlier hop", async () => {
@@ -779,53 +798,162 @@ describe("network log", { timeout: 10000 }, () => {
     ]);
   });
 
-  it("stops recording when the user withdraws the site, until the page loads again", async () => {
-    const { fake, read, request, tabIn, sessions, access } = setup();
-    const approved = () =>
-      sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
-    approved();
+  it("stops recording when the user withdraws the site, and records again from a new approval", async () => {
+    const { fake, read, request, tabIn, sessions, access, clock } = setup();
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
     const tab = await tabIn("s1", `${OTHER}/`);
     const other = await tabIn("s1", URL_A);
     const options = { documentUrl: `${OTHER}/` };
     request(tab.id, `${OTHER}/before`, options);
     request(other.id, `${SITE}/kept`);
     access.forget("s1", OTHER);
-    approved();
     assert.deepEqual(read(tab.id, ALL, "s1", OTHER), NONE);
-    request(tab.id, `${OTHER}/gap`, options);
+    const gap = request(tab.id, `${OTHER}/gap`, { ...options, timeStamp: 3000 });
+    await flush();
     assert.deepEqual(read(tab.id, ALL, "s1", OTHER), NONE);
+    assert.deepEqual(urlsOf(read(other.id)), [`${SITE}/kept`]);
+    clock.now = 4000;
+    assert.deepEqual(await access.allowForSession("s1", [OTHER], () => true), [OTHER]);
+    await flush();
+    fake.emitWebRequest("onCompleted", {
+      requestId: gap,
+      tabId: tab.id,
+      timeStamp: 4100,
+      statusCode: 200,
+      fromCache: false,
+    });
+    request(tab.id, `${OTHER}/after`, { ...options, timeStamp: 4000 });
+    assert.deepEqual(read(tab.id, ALL, "s1", OTHER), {
+      recording: true,
+      since: 4000,
+      requests: [
+        {
+          url: `${OTHER}/after`,
+          method: "GET",
+          type: "xmlhttprequest",
+          startTime: 4000,
+          requestHeaders: [],
+          responseHeaders: [],
+        },
+      ],
+      truncated: false,
+    });
     assert.deepEqual(urlsOf(read(other.id)), [`${SITE}/kept`]);
     await reloadAndRead(fake, tab.id, OTHER, request, read);
   });
 
-  it("stops recording when the tab leaves the group, until the page loads again", async (t) => {
+  it("stops recording when the tab leaves the group, and records again from its return", async (t) => {
     quiet(t);
-    const { fake, read, request, tabIn, groups } = setup();
+    const { fake, read, request, tabIn, groups, clock } = setup();
     const tab = await tabIn("s1", URL_A);
+    // Keeps the group open while the tab is out of it.
+    await tabIn("s1");
     request(tab.id, `${SITE}/before`);
     fake.ungroup(tab.id);
     assert.deepEqual(read(tab.id), NONE);
-    request(tab.id, `${SITE}/outside`);
+    request(tab.id, `${SITE}/outside`, { timeStamp: 2000 });
+    assert.deepEqual(read(tab.id), NONE);
+    clock.now = 3000;
     await groups.ensureGroup("s1", tab);
     await flush();
-    request(tab.id, `${SITE}/back`);
-    assert.deepEqual(read(tab.id), NONE);
+    request(tab.id, `${SITE}/early`, { timeStamp: 2999 });
+    request(tab.id, `${SITE}/back`, { timeStamp: 3000 });
+    const back = read(tab.id);
+    assert.equal(back.since, 3000);
+    assert.deepEqual(urlsOf(back), [`${SITE}/back`]);
     await reloadAndRead(fake, tab.id, SITE, request, read);
   });
 
-  it("stops recording when stored access no longer allows the site", async (t) => {
+  it("stops recording when stored access no longer allows the site, until it does again", async (t) => {
     quiet(t);
-    const { fake, read, request, tabIn } = setup();
+    const { fake, read, request, tabIn, clock } = setup();
     const tab = await tabIn("s1", URL_A);
     request(tab.id, `${SITE}/before`);
     await revokeSite(fake.browser, SITE);
     await flush();
+    assert.deepEqual(read(tab.id), NONE);
+    request(tab.id, `${SITE}/gap`, { timeStamp: 2000 });
+    clock.now = 3000;
     await grantSite(fake.browser, SITE);
     await flush();
-    assert.deepEqual(read(tab.id), NONE);
-    request(tab.id, `${SITE}/after`);
-    assert.deepEqual(read(tab.id), NONE);
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 3000,
+      requests: [],
+      truncated: false,
+    });
+    request(tab.id, `${SITE}/after`, { timeStamp: 3001 });
+    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/after`]);
     await reloadAndRead(fake, tab.id, SITE, request, read);
+  });
+
+  it("starts an empty log when the site of a page already open is approved", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn, access, clock, network } = setup();
+    const tab = await tabIn("s1", `${OTHER}/`);
+    const options = { documentUrl: `${OTHER}/` };
+    const early = request(tab.id, `${OTHER}/early`, { ...options, timeStamp: 2000 });
+    assert.deepEqual(read(tab.id, ALL, "s1", OTHER), NONE);
+    clock.now = 3000;
+    await access.allowForSession("s1", [OTHER], () => true);
+    await flush();
+    assert.deepEqual(read(tab.id, ALL, "s1", OTHER), {
+      recording: true,
+      since: 3000,
+      requests: [],
+      truncated: false,
+    });
+    // A request from before the approval: its later events find nothing to change.
+    fake.emitWebRequest("onSendHeaders", {
+      requestId: early,
+      tabId: tab.id,
+      timeStamp: 3010,
+      requestHeaders: [],
+    });
+    fake.emitWebRequest("onCompleted", {
+      requestId: early,
+      tabId: tab.id,
+      timeStamp: 3020,
+      statusCode: 200,
+      fromCache: false,
+    });
+    // Reported late, but started before the approval.
+    request(tab.id, `${OTHER}/late`, { ...options, timeStamp: 2999 });
+    // The page's own request, reported after: the log has no page request to take.
+    request(tab.id, `${OTHER}/`, { type: "main_frame", timeStamp: 1500 });
+    request(tab.id, `${OTHER}/`, { type: "main_frame", timeStamp: 3050 });
+    request(tab.id, `${OTHER}/now`, { ...options, timeStamp: 3000 });
+    assert.deepEqual(urlsOf(read(tab.id, ALL, "s1", OTHER)), [`${OTHER}/now`]);
+    assert.equal(network.requestsSince(tab.id, 0).begun, 1);
+  });
+
+  it("leaves out what a page requested before an approval its commit's check saw", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn, access, clock } = setup();
+    const tab = await tabIn("s1");
+    const held = Promise.withResolvers<void>();
+    const get = fake.browser.storage.local.get;
+    let first = true;
+    t.mock.method(fake.browser.storage.local, "get", async (...args: unknown[]) => {
+      if (first) {
+        first = false;
+        await held.promise;
+      }
+      return Reflect.apply(get, fake.browser.storage.local, args);
+    });
+    const options = { documentUrl: `${OTHER}/` };
+    fake.navigateByUser(tab.id, `${OTHER}/`);
+    request(tab.id, `${OTHER}/before`, { ...options, timeStamp: 1010 });
+    // The commit's gate is reading the settings.
+    await flush();
+    clock.now = 2000;
+    await access.allowForSession("s1", [OTHER], () => true);
+    held.resolve();
+    await flush();
+    request(tab.id, `${OTHER}/after`, { ...options, timeStamp: 2000 });
+    const after = read(tab.id, ALL, "s1", OTHER);
+    assert.equal(after.since, 2000);
+    assert.deepEqual(urlsOf(after), [`${OTHER}/after`]);
   });
 
   it("stops recording when the tab shows another site without a commit", async (t) => {
@@ -1015,6 +1143,7 @@ describe("network log", { timeout: 10000 }, () => {
     assert.equal(read(tab.id, { ...ALL, pattern: "", limit: 10 }).requests.length, 5);
     assert.deepEqual(read(tab.id, { ...ALL, pattern: "/api/", limit: 1 }), {
       recording: true,
+      since: 1,
       requests: [read(tab.id).requests[4]],
       truncated: true,
     });
@@ -1027,6 +1156,7 @@ describe("network log", { timeout: 10000 }, () => {
     assert.equal(read(tab.id, { ...ALL, limit: 4 }).truncated, true);
     assert.deepEqual(read(tab.id, { ...ALL, pattern: "nothing", limit: 1 }), {
       recording: true,
+      since: 1,
       requests: [],
       truncated: false,
     });
@@ -1055,6 +1185,7 @@ describe("network log", { timeout: 10000 }, () => {
     for (const types of [["font"], ["Script"], ["scrip"]]) {
       assert.deepEqual(read(tab.id, { ...ALL, types }), {
         recording: true,
+        since: 1,
         requests: [],
         truncated: false,
       });
@@ -1165,6 +1296,7 @@ describe("network log", { timeout: 10000 }, () => {
     const without = read(tabId, { ...ALL, headers: false });
     assert.deepEqual(without, {
       recording: true,
+      since: 1,
       requests: [
         {
           url: `${SITE}/api`,
@@ -1263,6 +1395,7 @@ describe("network log", { timeout: 10000 }, () => {
     }
     assert.deepEqual(read(tab.id, { ...ALL, types: ["font"] }), {
       recording: true,
+      since: 1,
       requests: [],
       truncated: true,
     });
@@ -1282,7 +1415,9 @@ describe("network log", { timeout: 10000 }, () => {
     await groups.ensureGroup("s1", tab);
     fake.navigateByUser(tab.id, `${SITE}/next`);
     await flush();
-    assert.deepEqual(read(tab.id), { recording: true, requests: [], truncated: false });
+    const reopened = read(tab.id);
+    assert.equal(reopened.recording, true);
+    assert.deepEqual(reopened.requests, []);
   });
 
   it("ignores requests that belong to no tab", async () => {
@@ -1553,7 +1688,14 @@ function setup() {
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
-  const network = createNetworkLog({ browser: fake.browser, groups, access });
+  // What the log's clock reads; a test sets it.
+  const clock = { now: 5000 };
+  const network = createNetworkLog({
+    browser: fake.browser,
+    groups,
+    access,
+    now: () => clock.now,
+  });
   let requests = 0;
 
   /** A tab in the session's group, on `url` with A's site stored as approved. */
@@ -1604,7 +1746,7 @@ function setup() {
     return network.read(session, tabId, site, options);
   }
 
-  return { fake, groups, sessions, access, network, tabIn, commit, request, read };
+  return { fake, groups, sessions, access, network, clock, tabIn, commit, request, read };
 }
 
 type Context = ReturnType<typeof setup>;
@@ -1622,17 +1764,23 @@ async function reloadAndRead(
   request: Context["request"],
   read: Context["read"],
 ): Promise<void> {
+  let since: number | undefined;
+  fake.browser.webNavigation.onCommitted.addListener(({ frameId, timeStamp }) => {
+    if (frameId === 0) since = timeStamp;
+  });
   await fake.browser.tabs.reload(tabId);
   await flush();
-  request(tabId, `${site}/reloaded`, { documentUrl: `${site}/`, timeStamp: 2000 });
+  assert.ok(since !== undefined);
+  request(tabId, `${site}/reloaded`, { documentUrl: `${site}/`, timeStamp: since + 1 });
   assert.deepEqual(read(tabId, ALL, "s1", site), {
     recording: true,
+    since,
     requests: [
       {
         url: `${site}/reloaded`,
         method: "GET",
         type: "xmlhttprequest",
-        startTime: 2000,
+        startTime: since + 1,
         requestHeaders: [],
         responseHeaders: [],
       },

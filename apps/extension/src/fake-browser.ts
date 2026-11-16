@@ -82,7 +82,7 @@ export interface FakeBrowser {
    * What `webNavigation.getAllFrames` answers for the tab, or null when discarded. A frame id `n`
    * lists `{ frameId: n, documentId: "document-<tabId>-<n>", parentFrameId }`, the parent -1 for
    * frame 0 and 0 for any other; an object is listed as given. Without it, the tab lists its top
-   * frame only.
+   * frame only, with the tab's URL.
    */
   setFrames(tabId: number, frames: readonly (number | FrameDetails)[] | null): void;
   /**
@@ -593,12 +593,15 @@ export function createFakeBrowser(): FakeBrowser {
     },
     webNavigation: {
       getAllFrames: async ({ tabId }) => {
-        tabOf(tabId);
+        const { url } = tabOf(tabId);
         const listed = frames.get(tabId);
         if (listed === null) return null;
         const shown = documents.get(tabId)?.shown;
-        const top =
-          shown === undefined ? frameOf(tabId, 0) : { ...frameOf(tabId, 0), documentId: shown };
+        const top = {
+          ...frameOf(tabId, 0),
+          url,
+          ...(shown === undefined ? {} : { documentId: shown }),
+        };
         return (listed ?? [top]).map((frame) => ({ ...frame }));
       },
       onBeforeNavigate,
