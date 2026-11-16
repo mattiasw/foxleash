@@ -11,6 +11,7 @@ import {
   showProblems,
   type TextField,
 } from "./page-ui.ts";
+import { watchProgram } from "./program-status.ts";
 import {
   checkRecipe,
   deleteRecipe,
@@ -109,6 +110,21 @@ let undoable: RecipeFields | undefined;
 onSettingsChanged(browser, render);
 render();
 refreshAnswers();
+watchProgram({
+  elements: {
+    status: element("program-status"),
+    setup: element("program-setup"),
+    command: element("program-command"),
+    requirement: element("program-requirement"),
+  },
+  browser,
+  page: document,
+  // Wrapped: Firefox's setTimeout throws when called on anything but the window.
+  timers: {
+    setTimeout: (callback, delay) => setTimeout(callback, delay),
+    clearTimeout: (handle) => clearTimeout(handle),
+  },
+});
 // The background has no event for changed answers; coming back to the page reads them again.
 window.addEventListener("focus", refreshAnswers);
 // Inline in the add-ons manager, coming back to its tab need not focus this page.

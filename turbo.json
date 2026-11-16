@@ -13,7 +13,12 @@
       "env": ["FOXLEASH_TEST_REPORTER"]
     },
     "//#typecheck:bin": {
-      "inputs": ["bin/**", "packages/tsconfig/base.json", "package-lock.json"]
+      "inputs": [
+        "bin/**",
+        "packages/tsconfig/base.json",
+        "packages/protocol/src/**",
+        "package-lock.json"
+      ]
     },
     "//#typecheck:e2e": {
       "inputs": [
@@ -33,7 +38,10 @@
         "bin/**",
         ".github/workflows/dependabot-automerge.yml",
         "apps/server/src/**",
-        "docs/amo/**"
+        "docs/amo/**",
+        "README.md",
+        "packages/protocol/src/**",
+        "apps/extension/src/*.html"
       ]
     }
   }

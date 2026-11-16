@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_page` can return the lines of one role without a text to find (`role` alone), such as a
   page's frames, headings or images, with how many there are. A `find` that is a role name and
   matches nothing now says that `find` does not search role words and points to `role`.
+- When you install the extension, Firefox opens a Foxleash page that shows the command that
+  installs the Foxleash program and whether the program is connected, and updates by itself once
+  it is. The settings page shows the same in a new first section.
 
 ### Changed
 

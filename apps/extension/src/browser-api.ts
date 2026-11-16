@@ -3,7 +3,7 @@ export interface BrowserApi {
   runtime: {
     connectNative(application: string): Port;
     onStartup: BrowserEvent<() => void>;
-    onInstalled: BrowserEvent<() => void>;
+    onInstalled: BrowserEvent<(details: InstalledDetails) => void>;
     getManifest(): { version: string };
     openOptionsPage(): Promise<void>;
     /** This extension's id. */
@@ -336,6 +336,14 @@ export interface Port {
 export interface RuntimePort extends Port {
   name: string;
   sender?: MessageSender;
+}
+
+/** Firefox's `runtime.onInstalled` details, as far as the extension reads them. */
+export interface InstalledDetails {
+  /** "install", "update", "browser_update" or "shared_module_update". */
+  reason: string;
+  /** Set for an add-on loaded temporarily, as from about:debugging. */
+  temporary?: boolean;
 }
 
 /** Firefox's `runtime.MessageSender`, as far as the extension reads it. */

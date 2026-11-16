@@ -19,6 +19,7 @@ apps/extension/src/default-blocklist.ts
 apps/extension/src/downloads.ts
 apps/extension/src/element-rect.ts
 apps/extension/src/element-refs.ts
+apps/extension/src/first-run.ts
 apps/extension/src/flat-tree.ts
 apps/extension/src/foreign-frames.ts
 apps/extension/src/frame-errors.ts
@@ -47,6 +48,7 @@ apps/extension/src/page-upload.ts
 apps/extension/src/page-view.ts
 apps/extension/src/pages.css
 apps/extension/src/probe-page.ts
+apps/extension/src/program-status.ts
 apps/extension/src/prompt-arming.ts
 apps/extension/src/propose.html
 apps/extension/src/propose.ts
@@ -65,6 +67,8 @@ apps/extension/src/tab-navigations.ts
 apps/extension/src/uploads.ts
 apps/extension/src/wait-for-load.ts
 apps/extension/src/wait-for.ts
+apps/extension/src/welcome.html
+apps/extension/src/welcome.ts
 apps/extension/tsconfig.json
 package-lock.json
 package.json

@@ -3,6 +3,7 @@ import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createConsoleRecording } from "./console-recording.ts";
 import { createDownloads } from "./downloads.ts";
+import { watchInstall } from "./first-run.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
 import { createNetworkLog } from "./network-log.ts";
@@ -104,3 +105,4 @@ connection.start();
 // Firefox starts an event page at browser launch only when it listens for one of these.
 browser.runtime.onStartup.addListener(() => connection.start());
 browser.runtime.onInstalled.addListener(() => connection.start());
+watchInstall({ browser });

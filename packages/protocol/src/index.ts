@@ -4,6 +4,12 @@ export const PROTOCOL_VERSION = 5;
 /** The native messaging host name, as registered with Firefox. */
 export const NATIVE_HOST_NAME = "foxleash";
 
+/** The command that installs the Foxleash program on this computer. */
+export const SETUP_COMMAND = "npx foxleash setup";
+
+/** What the setup command needs on this computer. */
+export const NODE_REQUIREMENT = "Node.js 24 or later";
+
 /** The extension's add-on ID; the native host manifest allows only this one. */
 export const EXTENSION_ID = "foxleash@mattiasw.com";
 

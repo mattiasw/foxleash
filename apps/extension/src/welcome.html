@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Welcome to Foxleash</title>
+    <link rel="stylesheet" href="pages.css">
+  </head>
+  <body>
+    <main>
+      <h1>Welcome to Foxleash</h1>
+      <p>Foxleash lets an AI assistant on your computer, such as Claude Code, use this Firefox for
+        you, on the sites you allow.</p>
+      <p id="program-status" role="status" aria-live="polite">Checking whether the Foxleash
+        program is connected.</p>
+      <div id="program-setup" hidden>
+        <p>To finish, Foxleash needs a small program on this computer. Open a terminal and run
+          this command:</p>
+        <pre><code id="program-command"></code></pre>
+        <p>The command needs <span id="program-requirement"></span>. You can get it from
+          <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>.</p>
+      </div>
+      <p>You can see this again in the settings: click the Foxleash button in the toolbar.</p>
+    </main>
+    <script src="welcome.js"></script>
+  </body>
+</html>

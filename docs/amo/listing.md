@@ -45,7 +45,7 @@ Foxleash has three parts:
 - a native host that Firefox starts and that the extension talks to,
 - an MCP server that your AI agent starts and that talks to the native host.
 
-The native host and the MCP server are one program that runs on your computer and that you install separately. It needs Node.js 24 or later, and the project's README explains how to install it. The extension does nothing without it.
+The native host and the MCP server are one program that runs on your computer and that you install separately. It needs Node.js 24 or later, and the project's README explains how to install it. The extension does nothing without it. When you install the extension, it opens a page that shows the command that installs the program and whether the program is connected, and the extension's settings show the same.
 
 The agent can:
 

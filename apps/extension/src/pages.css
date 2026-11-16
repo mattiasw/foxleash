@@ -67,6 +67,11 @@ input[type="text"] {
   font: inherit;
 }
 
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 textarea {
   display: block;
   box-sizing: border-box;

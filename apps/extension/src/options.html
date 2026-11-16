@@ -9,6 +9,18 @@
   <body>
     <main>
       <h1>Foxleash settings</h1>
+      <section aria-labelledby="program-heading">
+        <h2 id="program-heading" tabindex="-1">The Foxleash program</h2>
+        <p id="program-status" role="status" aria-live="polite">Checking whether the Foxleash
+          program is connected.</p>
+        <div id="program-setup" hidden>
+          <p>Foxleash needs a small program on this computer. To install it, open a terminal and
+            run this command:</p>
+          <pre><code id="program-command"></code></pre>
+          <p>The command needs <span id="program-requirement"></span>. You can get it from
+            <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>.</p>
+        </div>
+      </section>
       <section aria-labelledby="sites-heading">
         <h2 id="sites-heading" tabindex="-1">Sites allowed always</h2>
         <ul id="sites" hidden></ul>

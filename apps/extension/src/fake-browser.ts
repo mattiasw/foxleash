@@ -9,6 +9,7 @@ import type {
   DownloadItem,
   FrameDetails,
   InjectionResult,
+  InstalledDetails,
   MessageSender,
   NavigationDetails,
   Permissions,
@@ -174,6 +175,8 @@ export interface FakeBrowser {
   ungroup(tabId: number): void;
   /** The user clicking the toolbar button while the tab is shown. */
   clickAction(tabId: number): void;
+  /** Fires `runtime.onInstalled`, as Firefox does after installing or updating the add-on or itself. */
+  emitInstalled(details: InstalledDetails): void;
   emitStatus(tabId: number, status: string): void;
   /** Fires `tabs.onDetached` alone, as when the user starts dragging the tab to another window. */
   emitDetached(tabId: number): void;
@@ -327,6 +330,7 @@ export function createFakeBrowser(): FakeBrowser {
     createEvent<(changes: Record<string, StorageChange>, areaName: string) => void>();
   const onCreated = createEvent<(tab: Tab) => void>();
   const onClicked = createEvent<(tab: Tab) => void>();
+  const onInstalled = createEvent<(details: InstalledDetails) => void>();
   const onConnect = createEvent<(port: RuntimePort) => void>();
   const onMessage =
     createEvent<(message: unknown, sender: MessageSender) => Promise<unknown> | undefined>();
@@ -374,7 +378,7 @@ export function createFakeBrowser(): FakeBrowser {
     runtime: {
       connectNative,
       onStartup: createEvent(),
-      onInstalled: createEvent(),
+      onInstalled,
       getManifest: () => ({ version: fake.version }),
       openOptionsPage: async () => {
         fake.optionsPageOpened += 1;
@@ -819,6 +823,9 @@ export function createFakeBrowser(): FakeBrowser {
     clickAction: (tabId) => {
       const tab = snapshot(tabOf(tabId));
       for (const listener of [...onClicked.listeners]) listener(tab);
+    },
+    emitInstalled: (details) => {
+      for (const listener of [...onInstalled.listeners]) listener(details);
     },
     emitStatus: (tabId, status) => {
       const tab = tabOf(tabId);

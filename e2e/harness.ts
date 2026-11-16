@@ -32,6 +32,7 @@ export const CHECKOUT = join(import.meta.dirname, "..");
 export const EXTENSION_DIST = join(CHECKOUT, "apps", "extension", "dist");
 const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
 const SETTINGS_PAGE = "options.html";
+const WELCOME_PAGE = "welcome.html";
 const SETTINGS_TITLE = "Foxleash settings";
 const PROMPT_PAGE = "approve.html";
 // With the focus and visibility the arming reads, so a prompt that never arms says which one
@@ -73,7 +74,10 @@ export interface Session {
   close(): Promise<void>;
 }
 
-type StartOptions = Pick<LaunchOptions, "holdBeforeUnloadPrompts" | "restoreSession">;
+type StartOptions = Pick<LaunchOptions, "holdBeforeUnloadPrompts" | "restoreSession"> & {
+  /** Leaves open the welcome page the extension opens when it is installed. */
+  keepWelcome?: boolean;
+};
 
 export interface Harness {
   root: string;
@@ -83,12 +87,17 @@ export interface Harness {
   env: Record<string, string>;
   /** Installs the native host into the temp home only (`install --no-claude --no-extension`). */
   install(): void;
+  /**
+   * Starts Firefox and installs the extension. The install opens the extension's welcome page,
+   * which this waits for and closes unless `keepWelcome`.
+   */
   startFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
   /**
    * Quits the Firefox started last and starts Firefox again on the same profile, installing the
    * extension again. Seed settings and connect a new session afterwards: sessions end with the
    * Firefox that quit, and whether storage.local carries over is not checked. The quit Firefox's
-   * output stays in the diagnostics.
+   * output stays in the diagnostics. Firefox removes a temporary add-on when it quits, so the
+   * reinstall is an install again: the welcome page opens and is closed as by `startFirefox`.
    */
   restartFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
   /**
@@ -235,6 +244,7 @@ export function createHarness(): Harness {
   }
 
   async function startFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox> {
+    const { keepWelcome = false, ...launch } = options ?? {};
     assertOpen();
     assert.ok(
       existsSync(join(extensionDir, "manifest.json")),
@@ -247,7 +257,7 @@ export function createHarness(): Harness {
       profileDir: profile,
       env,
       downloadDir: downloads,
-      ...options,
+      ...launch,
     });
     if (closed) {
       // close() ran while Firefox started and could not reach it.
@@ -264,6 +274,18 @@ export function createHarness(): Harness {
       });
     }
     assert.equal(id, EXTENSION_ID, `Firefox installed the extension as ${id}${diagnostics()}`);
+    if (!keepWelcome) {
+      let welcome: string;
+      try {
+        welcome = await pageContext(WELCOME_PAGE);
+      } catch (error: unknown) {
+        throw new Error(
+          `the extension opened no welcome page: ${messageOf(error)}${diagnostics()}`,
+          { cause: error },
+        );
+      }
+      await firefox.closeContext(welcome);
+    }
     return firefox;
   }
 

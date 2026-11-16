@@ -2,8 +2,15 @@ import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import { PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
 import { createConnection } from "./connection.ts";
-import { createFakeBrowser, createFakeTimers, type FakePort, flush } from "./fake-browser.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  FAKE_EXTENSION_ID,
+  type FakePort,
+  flush,
+} from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
+import { fieldsOf } from "./site-access.ts";
 
 const request = { type: "request", id: "r1", session: "s1", method: "tabs_list", params: {} };
 
@@ -505,6 +512,134 @@ describe("connection reconnect", { timeout: 10000 }, () => {
   });
 });
 
+describe("connection program state", { timeout: 10000 }, () => {
+  it("is checking until the host welcomes or goes away", async (t) => {
+    const { state, start } = setup(t);
+    assert.equal(state(), "checking");
+    start();
+    await flush();
+    assert.equal(state(), "checking");
+  });
+
+  it("is connected after a welcome", async (t) => {
+    const { state, open } = setup(t);
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    assert.equal(state(), "connected");
+  });
+
+  it("is connected after a welcome with another protocol, and still warns", async (t) => {
+    const { state, open, warnings } = setup(t);
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: PROTOCOL_VERSION + 1, version: "9.0.0" });
+    assert.equal(state(), "connected");
+    assert.deepEqual(
+      warnings().map((warning) => fieldsOf(warning)?.event),
+      ["protocol_mismatch"],
+    );
+  });
+
+  it("is missing when connecting throws", (t) => {
+    const { fake, state, start } = setup(t);
+    fake.browser.runtime.connectNative = () => {
+      throw new Error("No such native application foxleash");
+    };
+    start();
+    assert.equal(state(), "missing");
+  });
+
+  it("is missing when the port closes before a welcome", async (t) => {
+    const { state, open } = setup(t);
+    const host = await open();
+    host.drop("No such native application foxleash");
+    assert.equal(state(), "missing");
+  });
+
+  it("goes from connected to missing and back with the host", async (t) => {
+    const { fake, timers, state, open } = setup(t);
+    const first = await open();
+    first.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    first.drop("Native host has exited.");
+    assert.equal(state(), "missing");
+    timers.advance(500);
+    await flush();
+    const second = port(fake.ports, 1);
+    assert.equal(state(), "missing");
+    second.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    assert.equal(state(), "connected");
+  });
+
+  for (const page of ["options.html", "welcome.html"]) {
+    it(`answers ${page} with the state`, async (t) => {
+      const { fake, state, open } = setup(t);
+      const sender = { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL(page) };
+      const host = await open();
+      assert.deepEqual(await fake.sendMessage({ type: "program_state" }, sender), {
+        state: "checking",
+      });
+      host.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+      assert.deepEqual(await fake.sendMessage({ type: "program_state" }, sender), {
+        state: "connected",
+      });
+      host.drop();
+      assert.deepEqual(await fake.sendMessage({ type: "program_state" }, sender), {
+        state: "missing",
+      });
+      assert.equal(state(), "missing");
+    });
+  }
+
+  it("does not answer other senders or other messages", (t) => {
+    const { fake } = setup(t);
+    const options = fake.browser.runtime.getURL("options.html");
+    const asks: [unknown, { id?: string; url?: string }][] = [
+      [{ type: "program_state" }, { id: "other@example.org", url: options }],
+      [
+        { type: "program_state" },
+        { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL("approve.html") },
+      ],
+      [
+        { type: "program_state" },
+        { id: FAKE_EXTENSION_ID, url: "https://example.org/options.html" },
+      ],
+      [{ type: "program_state" }, { id: FAKE_EXTENSION_ID, url: `${options}#x` }],
+      [{ type: "program_state" }, { id: FAKE_EXTENSION_ID }],
+      [{ type: "session_answers" }, { id: FAKE_EXTENSION_ID, url: options }],
+      ["program_state", { id: FAKE_EXTENSION_ID, url: options }],
+      [null, { id: FAKE_EXTENSION_ID, url: options }],
+    ];
+    for (const [message, sender] of asks) {
+      assert.equal(fake.sendMessage(message, sender), undefined, JSON.stringify([message, sender]));
+    }
+    assert.equal(fake.ports.length, 0);
+  });
+
+  it("starts a connection when a page asks before any was started", (t) => {
+    const { fake } = setup(t);
+    assert.equal(fake.ports.length, 0);
+    fake.sendMessage(
+      { type: "program_state" },
+      { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL("welcome.html") },
+    );
+    assert.equal(fake.ports.length, 1);
+  });
+
+  it("keeps the backoff when a page asks while a reconnect is pending", async (t) => {
+    const { fake, timers, open } = setup(t);
+    const host = await open();
+    host.drop();
+    fake.sendMessage(
+      { type: "program_state" },
+      { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL("options.html") },
+    );
+    assert.equal(fake.ports.length, 1);
+    timers.advance(499);
+    assert.equal(fake.ports.length, 1);
+    timers.advance(1);
+    assert.equal(fake.ports.length, 2);
+  });
+});
+
 function setup(
   t: TestContext,
   handleRequest: (request: RequestMessage) => Promise<unknown> = async () => null,
@@ -520,6 +655,7 @@ function setup(
   };
   const connection = createConnection({ browser: fake.browser, handleRequest, endSession, timers });
   const start = () => connection.start();
+  const state = () => connection.state();
 
   async function open(): Promise<FakePort> {
     start();
@@ -531,7 +667,7 @@ function setup(
     return warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
   }
 
-  return { fake, timers, start, open, warnings, ended };
+  return { fake, timers, start, state, open, warnings, ended };
 }
 
 function port(ports: FakePort[], index: number): FakePort {

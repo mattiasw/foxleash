@@ -58,6 +58,9 @@ When `claude` is not on your PATH, setup prints the command to run yourself; whe
 not, it prints the file to open in Firefox. For another MCP client, register the command
 `node <path to this checkout>/apps/server/src/main.ts mcp` as a stdio server.
 
+Once the extension is installed, Firefox opens a Foxleash page that shows whether the program on
+this computer is connected; the settings page shows the same.
+
 Then check that every part is connected:
 
 ```sh
@@ -100,6 +103,8 @@ opens Foxleash's settings.
 
 The extension's settings page, in the Firefox add-ons manager, has:
 
+- the state of the Foxleash program on this computer: connected, or not found, with the command
+  that installs it,
 - the sites you allowed always, each with a Revoke button,
 - the sites you allowed or refused for each running agent session, and the prompts you closed
   without an answer, each with a Forget button, which makes Foxleash ask again (Foxleash keeps

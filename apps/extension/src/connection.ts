@@ -8,9 +8,11 @@ import {
   type ResponseMessage,
   type WelcomeMessage,
 } from "@foxleash/protocol";
-import type { BrowserApi, Port, Timers } from "./browser-api.ts";
+import type { BrowserApi, MessageSender, Port, Timers } from "./browser-api.ts";
+import { WELCOME_PAGE } from "./first-run.ts";
 import { ToolError } from "./handlers.ts";
 import { warn } from "./log.ts";
+import { fieldsOf, OPTIONS_PAGE } from "./site-access.ts";
 
 export interface ConnectionDeps<Handle> {
   browser: BrowserApi;
@@ -19,9 +21,13 @@ export interface ConnectionDeps<Handle> {
   timers: Timers<Handle>;
 }
 
+export type ProgramState = "checking" | "connected" | "missing";
+
 export interface Connection {
   /** Connects to the native host, unless a port is open or a reconnect is already pending. */
   start(): void;
+  /** Whether the Foxleash program answered: "checking" until the first outcome. */
+  state(): ProgramState;
 }
 
 const FIRST_RECONNECT_DELAY_MS = 500;
@@ -39,15 +45,35 @@ export function createConnection<Handle>({
   let hellos: Promise<void> = Promise.resolve();
   let reconnectTimer: Handle | undefined;
   let delay = FIRST_RECONNECT_DELAY_MS;
+  let programState: ProgramState = "checking";
 
   browser.permissions.onAdded.addListener(permissionsChanged);
   browser.permissions.onRemoved.addListener(permissionsChanged);
+  browser.runtime.onMessage.addListener(receiveFromPage);
 
-  return { start };
+  return { start, state };
 
   function start(): void {
     if (port !== undefined || reconnectTimer !== undefined) return;
     connect().catch(logError);
+  }
+
+  function state(): ProgramState {
+    return programState;
+  }
+
+  /** Not async: a listener that returns a promise replies, and only these pages get one. */
+  function receiveFromPage(message: unknown, sender: MessageSender): Promise<unknown> | undefined {
+    if (
+      sender.id !== browser.runtime.id ||
+      (sender.url !== browser.runtime.getURL(OPTIONS_PAGE) &&
+        sender.url !== browser.runtime.getURL(WELCOME_PAGE)) ||
+      fieldsOf(message)?.type !== "program_state"
+    ) {
+      return undefined;
+    }
+    start();
+    return Promise.resolve({ state: programState });
   }
 
   async function connect(): Promise<void> {
@@ -66,6 +92,7 @@ export function createConnection<Handle>({
       return browser.runtime.connectNative(NATIVE_HOST_NAME);
     } catch (error) {
       warn({ event: "connect_failed", error: String(error) });
+      programState = "missing";
       scheduleReconnect();
       return undefined;
     }
@@ -163,6 +190,7 @@ export function createConnection<Handle>({
 
   function welcomed(welcome: WelcomeMessage): void {
     delay = FIRST_RECONNECT_DELAY_MS;
+    programState = "connected";
     const mismatch = protocolMismatch(
       {
         part: "extension",
@@ -178,6 +206,7 @@ export function createConnection<Handle>({
   function disconnected(current: Port): void {
     warn({ event: "disconnected", error: current.error?.message ?? null });
     port = undefined;
+    programState = "missing";
     scheduleReconnect();
   }
 

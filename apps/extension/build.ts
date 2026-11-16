@@ -13,6 +13,7 @@ export const esbuildOptions: BuildOptions = {
     join(root, "src", "propose.ts"),
     join(root, "src", "run.ts"),
     join(root, "src", "content.ts"),
+    join(root, "src", "welcome.ts"),
   ],
   outdir: dist,
   entryNames: "[name]",

@@ -132,19 +132,20 @@ clicks, or waits that long and presses a key, before it waits for them.
 
 `npm run build` bundles the extension into `apps/extension/dist/`: the manifest with the
 version from `apps/extension/package.json`, unminified `background.js`, `options.js`,
-`approve.js`, `propose.js`, `run.js` and `content.js`, the script Foxleash injects into the
-pages of the agent's tabs, the settings page `options.html`, the approval prompt
+`welcome.js`, `approve.js`, `propose.js`, `run.js` and `content.js`, the script Foxleash injects
+into the pages of the agent's tabs, the settings page `options.html`, the welcome page
+`welcome.html`, which opens when the extension is installed, the approval prompt
 `approve.html`, the recipe page `propose.html` and `run.html`, the page where the user allows a
 recipe's sites, or the sites an agent asks for, for a session, with their shared `pages.css`,
 and the icon. It then lints that
 folder with web-ext, ignoring web-ext's `WEB_EXT` environment variables and config files, and
 fails on any error or warning.
 
-`npm run dev` rebuilds `background.js`, `options.js`, `approve.js`, `propose.js`, `run.js` and
-`content.js` whenever their TypeScript source changes and runs Firefox through `web-ext run`,
-which reloads the extension after each rebuild. It writes the manifest, the icon and the
-pages (`src/*.html` and `src/*.css`) once at start, so restart it after changing them. Firefox
-uses a persistent profile in `$XDG_CACHE_HOME/foxleash/dev-profile` (by default
+`npm run dev` rebuilds `background.js`, `options.js`, `welcome.js`, `approve.js`, `propose.js`,
+`run.js` and `content.js` whenever their TypeScript source changes and runs Firefox through
+`web-ext run`, which reloads the extension after each rebuild. It writes the manifest, the icon
+and the pages (`src/*.html` and `src/*.css`) once at start, so restart it after changing them.
+Firefox uses a persistent profile in `$XDG_CACHE_HOME/foxleash/dev-profile` (by default
 `~/.cache/foxleash/dev-profile`), so what you set up there, such as logins, stays between
 runs. It needs a desktop with Firefox 142 or later.
 
