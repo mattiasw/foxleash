@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The README is shorter. What each tool does in detail moved to `docs/tools.md`, the safeguards
+  in full to `docs/security.md`, and the Claude Code settings that make browser tasks faster to
+  `docs/claude-code.md`.
+
 ## [0.4.1] - 2026-11-16
 
 ### Changed

@@ -21,7 +21,7 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 - `e2e/` - end-to-end tests in a real, headless Firefox
 - `bin/` - build, release-check and test helper scripts
 - `docs/` - `adr/` (architecture decisions), `amo/listing.md` (the add-on listing text),
-  `development.md`
+  `tools.md`, `security.md` and `claude-code.md` (user documentation), `development.md`
 
 ## Commands
 
@@ -106,9 +106,20 @@ Entries describe what a user notices, not how the code changed.
 
 ## Documentation
 
-README.md and `docs/development.md` describe how to install, use and develop Foxleash.
-Update them in the same commit as the behaviour they describe: a new tool, a changed
-command, a new requirement or limit.
+Update the documentation in the same commit as the behaviour it describes: a new tool, a
+changed command, a new requirement or limit.
+
+- `README.md` is for someone deciding whether to use Foxleash, installing it and starting to
+  use it: what it is, the requirements, the install steps, how approval, tabs, settings and
+  recipes work, a table of the tools, and the safeguards and limits in brief. Keep it short: a
+  new tool is added to that table, in the row of its group or in a new row, and its limits,
+  timings and edge cases go in `docs/tools.md` instead.
+- `docs/tools.md` describes what each tool does, with its limits, timings and edge cases.
+- `docs/security.md` describes each safeguard in full, with its exceptions.
+- `docs/claude-code.md` describes Claude Code settings.
+- `docs/development.md` describes building, testing and releasing.
+
+When the README sums up something a `docs/` file describes in full, change both.
 
 ## The add-on listing must match what the extension does
 
