@@ -4,6 +4,7 @@ import {
   ACT_QUIET_MS,
   ACT_RESPONSE_WAIT_MS,
   ACT_SETTLE_CAP_MS,
+  ARIA_ROLES,
   CONSOLE_KINDS,
   CONSOLE_LEVELS,
   type ConsoleLevel,
@@ -114,6 +115,9 @@ const UNREADABLE_TREE = "Firefox returned a page tree Foxleash cannot read.";
 const TREE_MAX = READ_PAGE_MAX_CHARS.toLocaleString("en-US");
 const NARROW_FIND_OR_ROLE = "Narrow find, add role, or read one element with ref.";
 const NARROW_FIND = "Narrow find, or read one element with ref.";
+const ADD_FIND = "Add find, or read one element with ref.";
+const ROLE_WORD_FIND =
+  "find searches names, field values, text and link addresses, never role words. To get the lines of a role, give role without find.";
 const TREE_CUT = `The page tree was cut at ${TREE_MAX} characters. Read a part of it with ref, or use filter interactive or a smaller depth.`;
 const VIEW_TREE = "The page, as read_page shows it:";
 const VIEW_CHANGES =
@@ -130,7 +134,7 @@ const UNREADABLE_VIEW =
   "Firefox returned a view of the page Foxleash cannot read; read_page reads the page.";
 const VIEW_FROM_START = `read_page reads at most ${TREE_MAX} characters of this page's tree, so the view comes from their start; read_page with find searches all of it.`;
 const VIEW_COMPARED_START = `The comparison covers only the first ${TREE_MAX} characters of the page's tree; read_page with find searches all of it.`;
-const READ_PAGE = `Read the page in a tab of this session's Foxleash tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A link to the page's own site shows its address as a path starting with /, on that site; a link to another site shows its whole address. navigate takes such a path, while tab_open and download need the whole address. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxleash tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at ${TREE_MAX} characters; read less with find (only the lines that contain a text), ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most ${READ_PAGE_MAX_MATCHES}, with the number of other lines that match, or the number of lines searched when none does. The text is compared before the tree escapes it: in find, write a quote as " and a backslash as \\, not \\" or \\\\. Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree. A protected field's value is never matched. role, given with find, keeps only matching lines of that role, such as link, button, heading or text. find searches the whole page, past the ${TREE_MAX}-character cut too, within what ref, filter and depth keep. The tab must show a site the user approved; read_page never asks.`;
+const READ_PAGE = `Read the page in a tab of this session's Foxleash tab group as an accessibility tree: one line per element with its role, name, an element reference in brackets and its state (such as checked, expanded, disabled, the value of a field or editable area, or link address), and the page's visible text. A link to the page's own site shows its address as a path starting with /, on that site; a link to another site shows its whole address. navigate takes such a path, while tab_open and download need the whole address. A name, value, link address or text longer than 200 characters is cut and ends with … inside its quotes. Element references identify elements for later tools and are valid only for the page they came from: after a navigation or reload, read the page again. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. Password fields, one-time code and card number fields that the page marks as such for autofill, and text fields Firefox filled in from the user's saved logins, addresses or cards, until the user edits them, show as protected, never their value. A password field the page turns into another kind of field stays protected only if a Foxleash tool read the page, took a screenshot of it or acted in it while it was a password field, and a text field the page puts in its place shows its value. A file field's line is marked file field, also when it has no label; give its reference to upload_file. Frames are noted, not read. The tree is cut at ${TREE_MAX} characters; read less with find (only the lines that contain a text), role (only the lines of one role), ref (one element and what it contains), filter interactive (links, buttons and form fields within their landmarks) or a smaller depth. With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most ${READ_PAGE_MAX_MATCHES}, with the number of other lines that match, or the number of lines searched when none does. The text is compared before the tree escapes it: in find, write a quote as " and a backslash as \\, not \\" or \\\\. Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree. A protected field's value is never matched. find never searches role words, state words or element references. With role and no find, read_page returns the lines of that role, such as iframe, heading, img, link, button or text, the way find returns its lines: at most ${READ_PAGE_MAX_MATCHES}, each after the lines of the elements that contain it, with the number of other lines of that role, or the number of lines searched when none has it. Given with find, role keeps only the matching lines of that role. find and role search the whole page, past the ${TREE_MAX}-character cut too, within what ref, filter and depth keep. The tab must show a site the user approved; read_page never asks.`;
 const DEFAULT_TEXT = DEFAULT_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const MAX_TEXT = MAX_PAGE_TEXT_CHARS.toLocaleString("en-US");
 const GET_PAGE_TEXT = `Read the text of the page in a tab of this session's Foxleash tab group, as the page shows it: first its main content (the page's main element or article, else its largest block of text), then the rest of the page. The result gives the source of the main content (main, role_main, article, largest_block, or body when the whole page is the main content), main, rest, totalChars, truncated and, when truncated is true, nextOffset. Main and rest together are cut to maxChars characters, ${DEFAULT_TEXT} unless given and at most ${MAX_TEXT}. When truncated is true, passing nextOffset as offset returns the text that follows; offsets count characters into main and rest together, and a page that changed between reads may shift them. Text hidden with display, visibility or the hidden attribute is left out, and so are the values of form fields; text made invisible another way (transparent, zero-sized or off screen) is included. Frames are not read. A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it. The tab must show a site the user approved; get_page_text never asks.`;
@@ -499,22 +503,20 @@ export function registerTools(
           .min(1)
           .optional()
           .describe(
-            "Return only the lines whose name, field value, text or link address contains this text, ignoring case, each with the lines of the elements that contain it",
+            "Return only the lines whose name, field value, text or link address contains this text, ignoring case, each with the lines of the elements that contain it; role words are not searched: use role for the lines of a role",
           ),
         role: z
           .string()
           .min(1)
           .optional()
           .describe(
-            "Only with find: keep only matching lines of this role, such as link, button, heading or text",
+            "Return only the lines of this role, such as iframe, heading, img, link, button or text, each with the lines of the elements that contain it; with find, only the matching lines of this role",
           ),
       },
     },
     async (args) => {
       const called = await callBridge(bridge, "read_page", readPageParams(args));
-      return called.ok
-        ? treeResult(called.result, args.find !== undefined, args.role !== undefined)
-        : called.error;
+      return called.ok ? treeResult(called.result, args.find, args.role) : called.error;
     },
     { joins: findsJoin, callMany: (argsList) => readPageFinds(bridge, argsList) },
   );
@@ -1213,9 +1215,11 @@ function readPageParams({
 }
 
 /**
- * Whether two read_page steps can run as one request that walks the page once: both find, in one
- * tab, with the same filter, depth and ref. A step whose find or role is only spaces runs alone, so
- * it fails with its own message, and so does one whose find, role or ref is very long.
+ * Whether two read_page steps can run as one request that walks the page once: both with find or
+ * role, in one tab, with the same filter, depth and ref. A run whose first step has find takes only
+ * steps with find: an extension from before role-only reads refuses a finds entry without find,
+ * which would fail the first step. A step whose find or role is only spaces runs alone, so it fails
+ * with its own message, and so does one whose find, role or ref is very long.
  */
 function findsJoin(first: Record<string, unknown>, next: Record<string, unknown>): boolean {
   const one = findStepOf(first);
@@ -1227,17 +1231,19 @@ function findsJoin(first: Record<string, unknown>, next: Record<string, unknown>
     one.filter === two.filter &&
     one.depth === two.depth &&
     one.ref === two.ref &&
+    (one.find === undefined || two.find !== undefined) &&
     joinable(one) &&
     joinable(two)
   );
 }
 
-/** A read_page step's parsed args, or undefined when they have no find. */
-export function findStepOf(args: Record<string, unknown>): FindStep | undefined {
+/** A read_page step's parsed args, or undefined when they have neither find nor role. */
+export function findStepOf(args: Record<string, unknown>): ReadPageArgs | undefined {
   const { tabId, filter, depth, ref, find, role } = args;
   if (
     typeof tabId !== "number" ||
-    typeof find !== "string" ||
+    (find === undefined && role === undefined) ||
+    (find !== undefined && typeof find !== "string") ||
     (filter !== undefined && filter !== "all" && filter !== "interactive") ||
     (depth !== undefined && typeof depth !== "number") ||
     (ref !== undefined && typeof ref !== "string") ||
@@ -1248,13 +1254,9 @@ export function findStepOf(args: Record<string, unknown>): FindStep | undefined 
   return { tabId, filter, depth, ref, find, role };
 }
 
-interface FindStep extends ReadPageArgs {
-  find: string;
-}
-
-function joinable({ find, role, ref }: FindStep): boolean {
+function joinable({ find, role, ref }: ReadPageArgs): boolean {
   return (
-    !onlySpaces(find) &&
+    (find === undefined || !onlySpaces(find)) &&
     (role === undefined || !onlySpaces(role)) &&
     [find, role, ref].every((text) => text === undefined || text.length <= JOINED_TEXT_MAX)
   );
@@ -1272,19 +1274,21 @@ async function readPageFinds(
 ): Promise<[CallToolResult, ...CallToolResult[]]> {
   const [first, ...others] = argsList.slice(0, READ_PAGE_MAX_FINDS + 1).map(findStepOf);
   if (first === undefined || !others.every((step) => step !== undefined)) {
-    throw new Error("read_page joined a step without find.");
+    throw new Error("read_page joined a step without find or role.");
   }
   const params = readPageParams(first);
-  params.finds = others.map(({ find, role }) => (role === undefined ? { find } : { find, role }));
+  params.finds = others.map(({ find, role }) => {
+    const query: { find?: string; role?: string } = {};
+    if (find !== undefined) query.find = find;
+    if (role !== undefined) query.role = role;
+    return query;
+  });
   const called = await callBridge(bridge, "read_page", params);
   if (!called.ok) return [called.error];
-  const result = treeResult(called.result, true, first.role !== undefined);
+  const result = treeResult(called.result, first.find, first.role);
   const finds = ownOf(called.result, "finds");
   if (!Array.isArray(finds) || finds.length !== others.length) return [result];
-  return [
-    result,
-    ...others.map((step, index) => treeResult(finds[index], true, step.role !== undefined)),
-  ];
+  return [result, ...others.map((step, index) => treeResult(finds[index], step.find, step.role))];
 }
 
 /**
@@ -1660,22 +1664,38 @@ export function prettyJsonLength(compact: string, limit: number): number {
 
 /**
  * read_page's tree as page text in its frame, and Foxleash's own notes when it was cut or, with
- * find, when matches are left out or none was found. The notes hold only numbers.
+ * find or role, when matches are left out or none was found. The notes hold only numbers and
+ * fixed text, never page text or the query.
  */
-function treeResult(result: unknown, finding: boolean, withRole: boolean): CallToolResult {
-  const page = pageTreeOf(result, finding);
+function treeResult(
+  result: unknown,
+  find: string | undefined,
+  role: string | undefined,
+): CallToolResult {
+  const page = pageTreeOf(result, find !== undefined || role !== undefined);
   if (page === undefined) return errorResult(UNREADABLE_TREE);
   const found = page.found;
   if (found?.matches === 0) {
-    const text = `No line matches. Foxleash searched ${lineCount(found.searched)}.`;
-    return { content: [{ type: "text", text }] };
+    const searched = lineCount(found.searched);
+    if (find === undefined) {
+      const text = `No line has that role. Foxleash searched ${searched}.`;
+      return { content: [{ type: "text", text }] };
+    }
+    const content: CallToolResult["content"] = [
+      { type: "text", text: `No line matches. Foxleash searched ${searched}.` },
+    ];
+    if (role === undefined && isRoleWord(find)) {
+      content.push({ type: "text", text: ROLE_WORD_FIND });
+    }
+    return { content };
   }
   const text = untrusted(page.tree);
   if (tooLarge(text)) return errorResult(TOO_LARGE);
   const content: CallToolResult["content"] = [{ type: "text", text }];
   if (page.truncated) content.push({ type: "text", text: TREE_CUT });
   if (found !== undefined && found.matches > found.shown) {
-    const hint = withRole ? NARROW_FIND : NARROW_FIND_OR_ROLE;
+    const hint =
+      find === undefined ? ADD_FIND : role === undefined ? NARROW_FIND_OR_ROLE : NARROW_FIND;
     content.push({ type: "text", text: `${unshownCount(found.matches - found.shown)} ${hint}` });
   }
   return { content };
@@ -1702,6 +1722,16 @@ function pageTreeOf(
 
 function lineCount(count: number): string {
   return count === 1 ? "1 line" : `${count.toLocaleString("en-US")} lines`;
+}
+
+/** Whether find, trimmed and in lower case, is a role a line can show. */
+function isRoleWord(find: string): boolean {
+  // Not an anchored trim regex: `[\s\u0085]+$` backtracks quadratically on a long run of spaces.
+  const word = find
+    .replace(/[\s\u0085]+/g, " ")
+    .trim()
+    .toLowerCase();
+  return word === "text" || word === "iframe" || ARIA_ROLES.has(word);
 }
 
 function unshownCount(count: number): string {

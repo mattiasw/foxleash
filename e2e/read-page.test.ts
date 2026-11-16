@@ -500,6 +500,23 @@ describe("read_page in real Firefox", () => {
     );
   });
 
+  test("role alone returns the lines of that role; find never matches a role word", async () => {
+    const tabId = await open("/read-frame", TITLES.readFrame);
+    const { tree, texts } = await read(tabId, { role: "iframe" });
+    assert.equal(withoutRefs(tree), 'iframe "Chat" [*] frame content not read');
+    assert.equal(texts.length, 1, texts.join("\n"));
+    assertNoSecrets(texts, [READ_HIDDEN.frame, "/read-frame-inner", "Frame link"]);
+
+    const result = await harness.call(session, "read_page", { tabId, find: "iframe" });
+    assert.equal(result.isError, false, result.text);
+    assert.equal(result.texts.length, 2, result.texts.join("\n"));
+    assert.match(result.texts[0] ?? "", /^No line matches\. Foxleash searched [0-9,]+ lines?\.$/);
+    assert.equal(
+      result.texts[1],
+      "find searches names, field values, text and link addresses, never role words. To get the lines of a role, give role without find.",
+    );
+  });
+
   test("a large page is cut at 50,000 characters on a whole line, with a note", async () => {
     const tabId = await open("/read-large", TITLES.readLarge);
     const all = await read(tabId);

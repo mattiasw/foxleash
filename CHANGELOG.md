@@ -15,6 +15,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_network` can show what each request sent as field names, the kind of each value and
   whether each is filled, never the values (`body`), for example to check that a form's field was
   in a POST.
+- `read_page` can return the lines of one role without a text to find (`role` alone), such as a
+  page's frames, headings or images, with how many there are. A `find` that is a role name and
+  matches nothing now says that `find` does not search role words and points to `role`.
 
 ### Changed
 

@@ -5886,7 +5886,7 @@ describe("read_page", { timeout: 10000 }, () => {
       [{ find: 5 }, find],
       [{ find: "a", role: 4 }, role],
       [{ find: "a", role: "" }, role],
-      [{ role: "link" }, "read_page takes role only together with find."],
+      [{ role: " \u0085" }, role],
     ];
     for (const [options, message] of cases) {
       await assert.rejects(call("s1", "read_page", { tabId: 3, ...options }), {
@@ -5914,6 +5914,7 @@ describe("read_page", { timeout: 10000 }, () => {
     }));
     await call("s1", "read_page", { tabId: 3, find: " Link ", role: "LINK" });
     await call("s1", "read_page", { tabId: 3, find: "a" });
+    await call("s1", "read_page", { tabId: 3, role: "link" });
     assert.deepEqual(pageCalls, [
       { session: "s1", tabId: 3, type: "read_page", params: { filter: "all" } },
       {
@@ -5929,9 +5930,11 @@ describe("read_page", { timeout: 10000 }, () => {
         params: { filter: "all", find: " Link ", role: "LINK" },
       },
       { session: "s1", tabId: 3, type: "read_page", params: { filter: "all", find: "a" } },
+      { session: "s1", tabId: 3, type: "read_page", params: { filter: "all", role: "link" } },
     ]);
     assert.deepEqual(Object.keys(pageCalls[0]?.params ?? {}), ["filter"]);
     assert.deepEqual(Object.keys(pageCalls[3]?.params ?? {}), ["filter", "find"]);
+    assert.deepEqual(Object.keys(pageCalls[4]?.params ?? {}), ["filter", "role"]);
   });
 
   it("returns with find the tree, whether it was cut and the counts, as a fresh object", async () => {
@@ -5956,6 +5959,27 @@ describe("read_page", { timeout: 10000 }, () => {
       truncated: false,
       found: { shown: 0, matches: 0, searched: 7 },
     });
+  });
+
+  it("returns with role and no find the tree, whether it was cut and the counts", async () => {
+    const { call, replyWith } = setup();
+    const found = { shown: 1, matches: 3, searched: 40, extra: "page text" };
+    replyWith(async () => ({ tree: "main\n  iframe", truncated: true, found, extra: 1 }));
+    assert.deepEqual(await call("s1", "read_page", { tabId: 3, role: "iframe" }), {
+      tree: "main\n  iframe",
+      truncated: true,
+      found: { shown: 1, matches: 3, searched: 40 },
+    });
+    for (const reply of [
+      { tree: "main", truncated: false },
+      { tree: "main", truncated: false, found: { shown: 0, matches: 0, searched: 3 } },
+    ]) {
+      replyWith(async () => reply);
+      await assert.rejects(call("s1", "read_page", { tabId: 3, role: "iframe" }), {
+        code: "page_error",
+        message: "Foxleash could not complete the request in the page in tab 3.",
+      });
+    }
   });
 
   it("refuses with find a reply whose counts it cannot read as page_error", async () => {
@@ -6041,7 +6065,11 @@ describe("read_page", { timeout: 10000 }, () => {
   it("refuses bad finds with their sentence before asking the page", async () => {
     const { call, pageCalls } = setup();
     const cases: [Record<string, unknown>, string][] = [
-      [{ finds: [{ find: "b" }] }, "read_page takes finds only together with find."],
+      [{ finds: [{ find: "b" }] }, "read_page takes finds only together with find or role."],
+      [
+        { find: "a", finds: [{}] },
+        "read_page needs each entry of finds to have a find, a role or both.",
+      ],
       [{ find: "a", finds: [] }, "read_page needs finds to be a list of 1 to 18 entries."],
       [
         { find: "a", finds: [{ find: " " }] },
@@ -9199,6 +9227,8 @@ describe("the view of the page that results end with", { timeout: 10000 }, () =>
       [{ depth: 2 }, false],
       [{ find: "a" }, false],
       [{ find: "a", finds: [{ find: "b" }] }, false],
+      [{ role: "link" }, false],
+      [{ role: "link", finds: [{ role: "heading" }] }, false],
     ] as const) {
       const { call, click, replyWith, tab } = await viewed();
       const part = { tree: TREE, truncated: false, found };

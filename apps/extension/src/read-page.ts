@@ -15,6 +15,7 @@ import {
   createTreeLines,
   explicitRole,
   INTERACTIVE_ROLES,
+  isFindRead,
   isProtectedField,
   LANDMARK_ROLES,
   type Line,
@@ -163,7 +164,7 @@ export function readPage(
 }
 
 function treeLinesFor(options: ReadPageOptions): TreeLines {
-  if (options.find === undefined) return createTreeLines();
+  if (!isFindRead(options)) return createTreeLines();
   if (options.finds === undefined) return createLineFinder(options.find, options.role);
   return createLineFinders(options.find, options.role, options.finds);
 }

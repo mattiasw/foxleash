@@ -129,6 +129,15 @@ those of one role (`role`), each after the lines of the elements it is in: at mo
 told how many more match, or how many lines were searched when none did. `find` searches the
 whole page, also past the 50,000-character cut, but never the value of a protected field.
 
+`find` searches names, field values, text and link addresses, never role words, state words such
+as `frame content not read`, or element references. A `find` that is a role name and matches
+nothing says so and points to `role`.
+
+With `role` alone, the agent gets the lines of one role, such as a page's frames (`iframe`),
+headings, images (`img`) or links, in the same way: each after the lines of the elements it is in,
+at most 20, told how many more there are, or how many lines were searched when none has that role,
+across the whole page past the cut.
+
 ### `get_page_text`
 
 `get_page_text` returns the text as the page shows it, the main content first (the page's main

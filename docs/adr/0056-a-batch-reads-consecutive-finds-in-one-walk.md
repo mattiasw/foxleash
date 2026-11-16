@@ -1,6 +1,6 @@
 # 0056: A batch reads consecutive read_page finds on one tab in one walk
 
-**Status:** Accepted, 2026-11-14.
+**Status:** Accepted, 2026-11-14. Its rules that only steps with find join and that finds comes only together with find are superseded by [0068](0068-read-page-takes-role-without-find.md), 2026-11-16.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 0043: read_page finds lines by the text it shows
 
-**Status:** Accepted, 2026-11-13.
+**Status:** Accepted, 2026-11-13. Its rule that role comes only together with find is superseded by [0068](0068-read-page-takes-role-without-find.md), 2026-11-16.
 
 ## Context
 

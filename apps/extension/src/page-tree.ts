@@ -1,4 +1,5 @@
 import {
+  ARIA_ROLES,
   type FoundLines,
   type FoundTree,
   onlySpaces,
@@ -9,7 +10,7 @@ import {
 import { capText, isRecord, ownField } from "./page-messages.ts";
 import { siteOf } from "./site.ts";
 
-export { READ_PAGE_MAX_CHARS };
+export { ARIA_ROLES, READ_PAGE_MAX_CHARS };
 
 /** The longest name, value, href or text a line holds, before quoting and the cut mark. */
 export const MAX_FIELD_CHARS = 200;
@@ -20,8 +21,8 @@ export type ReadPageOptions = {
   ref?: string;
   find?: string;
   role?: string;
-  /** Further finds the same walk answers; only together with `find`. */
-  finds?: { find: string; role?: string }[];
+  /** Further finds the same walk answers, each with find, role or both; only with `find` or `role`. */
+  finds?: { find?: string; role?: string }[];
 };
 
 /** The states a line can carry; only `value` and `href` hold page text. */
@@ -73,7 +74,7 @@ export interface TreeLines {
   result(): { tree: string; truncated: boolean; found?: FoundLines; finds?: FoundTree[] };
 }
 
-/** The lines of a read with find. */
+/** The lines of a read with find or role. */
 export interface LineFinder extends TreeLines {
   result(): FoundTree;
 }
@@ -108,92 +109,6 @@ export const CREDENTIAL_TOKENS: readonly string[] = [
   "cc-number",
   "cc-csc",
 ];
-
-/** The roles of ARIA 1.2 that are not abstract. */
-export const ARIA_ROLES: ReadonlySet<string> = new Set([
-  "alert",
-  "alertdialog",
-  "application",
-  "article",
-  "banner",
-  "blockquote",
-  "button",
-  "caption",
-  "cell",
-  "checkbox",
-  "code",
-  "columnheader",
-  "combobox",
-  "complementary",
-  "contentinfo",
-  "definition",
-  "deletion",
-  "dialog",
-  "directory",
-  "document",
-  "emphasis",
-  "feed",
-  "figure",
-  "form",
-  "generic",
-  "grid",
-  "gridcell",
-  "group",
-  "heading",
-  "img",
-  "insertion",
-  "link",
-  "list",
-  "listbox",
-  "listitem",
-  "log",
-  "main",
-  "marquee",
-  "math",
-  "menu",
-  "menubar",
-  "menuitem",
-  "menuitemcheckbox",
-  "menuitemradio",
-  "meter",
-  "navigation",
-  "none",
-  "note",
-  "option",
-  "paragraph",
-  "presentation",
-  "progressbar",
-  "radio",
-  "radiogroup",
-  "region",
-  "row",
-  "rowgroup",
-  "rowheader",
-  "scrollbar",
-  "search",
-  "searchbox",
-  "separator",
-  "slider",
-  "spinbutton",
-  "status",
-  "strong",
-  "subscript",
-  "superscript",
-  "switch",
-  "tab",
-  "table",
-  "tablist",
-  "tabpanel",
-  "term",
-  "textbox",
-  "time",
-  "timer",
-  "toolbar",
-  "tooltip",
-  "tree",
-  "treegrid",
-  "treeitem",
-]);
 
 export const INTERACTIVE_ROLES: ReadonlySet<string> = new Set([
   "link",
@@ -272,12 +187,13 @@ export function readPageOptions(params: Record<string, unknown>): ReadPageOption
     if (typeof role !== "string" || onlySpaces(role)) {
       return "read_page needs role to be a role name, such as link or heading.";
     }
-    if (options.find === undefined) return "read_page takes role only together with find.";
     options.role = role;
   }
   const finds = ownField(params, "finds");
   if (finds !== undefined) {
-    if (options.find === undefined) return "read_page takes finds only together with find.";
+    if (options.find === undefined && options.role === undefined) {
+      return "read_page takes finds only together with find or role.";
+    }
     const queries = findQueries(finds);
     if (typeof queries === "string") return queries;
     options.finds = queries;
@@ -286,26 +202,34 @@ export function readPageOptions(params: Record<string, unknown>): ReadPageOption
 }
 
 /** The entries of read_page's finds as fresh objects, or the sentence that refuses them. */
-function findQueries(finds: unknown): { find: string; role?: string }[] | string {
+function findQueries(finds: unknown): { find?: string; role?: string }[] | string {
   if (!Array.isArray(finds) || finds.length < 1 || finds.length > READ_PAGE_MAX_FINDS) {
     return `read_page needs finds to be a list of 1 to ${READ_PAGE_MAX_FINDS} entries.`;
   }
-  const queries: { find: string; role?: string }[] = [];
+  const queries: { find?: string; role?: string }[] = [];
   for (const entry of Array.from(finds)) {
     const find = isRecord(entry) ? ownField(entry, "find") : undefined;
-    if (!isRecord(entry) || typeof find !== "string" || onlySpaces(find)) {
+    const role = isRecord(entry) ? ownField(entry, "role") : undefined;
+    if (find === undefined && role === undefined) {
+      return "read_page needs each entry of finds to have a find, a role or both.";
+    }
+    if (find !== undefined && (typeof find !== "string" || onlySpaces(find))) {
       return "read_page needs each entry of finds to have a find that is text that is not only spaces.";
     }
-    const role = ownField(entry, "role");
-    if (role === undefined) {
-      queries.push({ find });
-    } else if (typeof role !== "string" || onlySpaces(role)) {
+    if (role !== undefined && (typeof role !== "string" || onlySpaces(role))) {
       return "read_page needs each entry of finds to have a role name as its role, such as link or heading.";
-    } else {
-      queries.push({ find, role });
     }
+    const query: { find?: string; role?: string } = {};
+    if (find !== undefined) query.find = find;
+    if (role !== undefined) query.role = role;
+    queries.push(query);
   }
   return queries;
+}
+
+/** Whether a read_page reads the lines of a find or a role rather than the whole tree. */
+export function isFindRead(options: ReadPageOptions): boolean {
+  return options.find !== undefined || options.role !== undefined;
 }
 
 /** One line of the tree: `<indent><role> <name> [<ref>] <states>`, one space per level. */
@@ -400,13 +324,14 @@ export function createTreeLines(max: number = READ_PAGE_MAX_CHARS): TreeLines {
 }
 
 /**
- * The lines of a read with find and finds: each find's lines as its own createLineFinder gives
- * them, from one walk. The first find's answer is the result, the others' its `finds`, in order.
+ * The lines of a read with find or role and finds: each one's lines as its own createLineFinder
+ * gives them, from one walk. The first one's answer is the result, the others' its `finds`, in
+ * order.
  */
 export function createLineFinders(
-  find: string,
+  find: string | undefined,
   role: string | undefined,
-  finds: readonly { find: string; role?: string }[],
+  finds: readonly { find?: string; role?: string }[],
   max: number = READ_PAGE_MAX_CHARS,
 ): TreeLines {
   // Every finder gets each line in turn, so the texts of the last line serve them all.
@@ -438,18 +363,19 @@ export function createLineFinders(
 }
 
 /**
- * The lines of a read with find: each of the first READ_PAGE_MAX_MATCHES matching lines after its
- * ancestor lines, each line written once. Takes every line, so the walk reaches the end of the
- * page and the counts cover all of it. `textsOf` gives the texts a line that has the role is
- * searched in.
+ * The lines of a read with find or role: each of the first READ_PAGE_MAX_MATCHES matching lines
+ * after its ancestor lines, each line written once. A line matches when it contains `find`, when
+ * given, and has `role`, when given; callers give at least one. Takes every line, so the walk
+ * reaches the end of the page and the counts cover all of it. `textsOf` gives the texts a line
+ * that has the role is searched in.
  */
 export function createLineFinder(
-  find: string,
+  find: string | undefined,
   role: string | undefined,
   max: number = READ_PAGE_MAX_CHARS,
   textsOf: (line: Line) => readonly string[] = matchTexts,
 ): LineFinder {
-  const query = caseless(clean(find));
+  const query = find === undefined ? undefined : caseless(clean(find));
   const wanted = role === undefined ? undefined : clean(role).toLowerCase();
   const text = createTreeText(max);
   // The ancestor chain of the last line given, outermost first, ending with that line.
@@ -471,7 +397,7 @@ export function createLineFinder(
     chain.push(entry);
     searched += 1;
     if (wanted !== undefined && line.role !== wanted) return true;
-    if (!textsOf(line).some((text) => text.includes(query))) return true;
+    if (query !== undefined && !textsOf(line).some((text) => text.includes(query))) return true;
     matches += 1;
     if (matches > READ_PAGE_MAX_MATCHES || text.full) return true;
     for (const each of chain) {

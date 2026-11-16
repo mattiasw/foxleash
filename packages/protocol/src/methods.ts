@@ -54,7 +54,7 @@ export interface ProbeResult {
 
 /** The longest tree read_page returns, in UTF-16 units. */
 export const READ_PAGE_MAX_CHARS = 50_000;
-/** The most matching lines a read_page with find shows. */
+/** The most matching lines a read_page with find or role shows. */
 export const READ_PAGE_MAX_MATCHES = 20;
 /**
  * The most entries read_page's finds takes. A reply holds one tree more, and a tree's JSON is at
@@ -62,6 +62,91 @@ export const READ_PAGE_MAX_MATCHES = 20;
  * it stays under the background's cap of 2,000,000 units on a page's reply.
  */
 export const READ_PAGE_MAX_FINDS = 18;
+/** The roles of ARIA 1.2 that are not abstract. */
+export const ARIA_ROLES: ReadonlySet<string> = new Set([
+  "alert",
+  "alertdialog",
+  "application",
+  "article",
+  "banner",
+  "blockquote",
+  "button",
+  "caption",
+  "cell",
+  "checkbox",
+  "code",
+  "columnheader",
+  "combobox",
+  "complementary",
+  "contentinfo",
+  "definition",
+  "deletion",
+  "dialog",
+  "directory",
+  "document",
+  "emphasis",
+  "feed",
+  "figure",
+  "form",
+  "generic",
+  "grid",
+  "gridcell",
+  "group",
+  "heading",
+  "img",
+  "insertion",
+  "link",
+  "list",
+  "listbox",
+  "listitem",
+  "log",
+  "main",
+  "marquee",
+  "math",
+  "menu",
+  "menubar",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "meter",
+  "navigation",
+  "none",
+  "note",
+  "option",
+  "paragraph",
+  "presentation",
+  "progressbar",
+  "radio",
+  "radiogroup",
+  "region",
+  "row",
+  "rowgroup",
+  "rowheader",
+  "scrollbar",
+  "search",
+  "searchbox",
+  "separator",
+  "slider",
+  "spinbutton",
+  "status",
+  "strong",
+  "subscript",
+  "superscript",
+  "switch",
+  "tab",
+  "table",
+  "tablist",
+  "tabpanel",
+  "term",
+  "textbox",
+  "time",
+  "timer",
+  "toolbar",
+  "tooltip",
+  "tree",
+  "treegrid",
+  "treeitem",
+]);
 /** The longest text a view of the page carries: its tree or changed lines, placeholders included. */
 export const PAGE_VIEW_MAX_CHARS = 8_000;
 
@@ -97,8 +182,8 @@ const PAGE_VIEW_GAPS: readonly unknown[] = [
 ] satisfies PageViewGap[];
 
 /**
- * What a read_page with find counted: the matching lines in the tree, all matching lines, and all
- * lines searched.
+ * What a read_page with find or role counted: the matching lines in the tree, all matching lines,
+ * and all lines searched.
  */
 export interface FoundLines {
   shown: number;
@@ -106,7 +191,7 @@ export interface FoundLines {
   searched: number;
 }
 
-/** A read_page find's answer: the tree of its matching lines and what it counted. */
+/** A read_page find's or role's answer: the tree of its matching lines and what it counted. */
 export interface FoundTree {
   tree: string;
   truncated: boolean;
@@ -418,12 +503,12 @@ export interface Methods {
       ref?: string;
       find?: string;
       role?: string;
-      /** Further finds the same walk answers; only together with `find`. */
-      finds?: { find: string; role?: string }[];
+      /** Further finds the same walk answers, each with find, role or both; only together with find or role. */
+      finds?: { find?: string; role?: string }[];
     };
     /**
-     * `found` is there exactly when `find` was given, and answers it. `finds` is there exactly when
-     * `finds` was given: one answer per entry, in order.
+     * `found` is there exactly when `find` or `role` was given, and answers it. `finds` is there
+     * exactly when `finds` was given: one answer per entry, in order.
      */
     result: { tree: string; truncated: boolean; found?: FoundLines; finds?: FoundTree[] };
   };

@@ -177,6 +177,20 @@ describe("batch in real Firefox", () => {
     assert.equal(joined.at(-1), "No line matches. Foxleash searched 4,001 lines.");
   });
 
+  test("a batch of role-only steps and finds on one tab returns what each returns alone", async () => {
+    const large = await open("/read-large", TITLES.readLarge);
+    const steps = [
+      { role: "link" },
+      { role: "heading" },
+      { find: "Link 2000" },
+      { find: "link 1", role: "link" },
+    ];
+    const joined = await findsInBatch(large.tabId, steps);
+    assert.deepEqual(joined, await findsAlone(large.tabId, steps));
+    const second = joined.indexOf("Step 2 of 4, read_page: ok");
+    assert.equal(joined[second + 1], "No line has that role. Foxleash searched 4,001 lines.");
+  });
+
   test("a batch of finds with other filters and depths gives each find its own result", async () => {
     const large = await open("/read-large", TITLES.readLarge);
     const steps = [

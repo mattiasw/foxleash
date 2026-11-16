@@ -55,7 +55,12 @@ import { pressKeyOptions, pressKeyResultOf, typeOptions, typeResultOf } from "./
 import { ownField } from "./page-messages.ts";
 import type { PageScripts } from "./page-scripts.ts";
 import { pageTextOf, pageTextOptions } from "./page-text.ts";
-import { READ_PAGE_MAX_CHARS, type ReadPageOptions, readPageOptions } from "./page-tree.ts";
+import {
+  isFindRead,
+  READ_PAGE_MAX_CHARS,
+  type ReadPageOptions,
+  readPageOptions,
+} from "./page-tree.ts";
 import { type PageViews, type TreeRead, VIEW_FILTER } from "./page-view.ts";
 import type { RecipePrompts } from "./recipe-prompts.ts";
 import { checkRecipe, findRecipe, readRecipes, recipeName, siteOfEntry } from "./recipes.ts";
@@ -938,7 +943,7 @@ export function createHandlers<Handle>({
     const before = views.document(tabId);
     const reply = await pages.request(session, tabId, "read_page", options);
     const { tree, truncated } = treeReadOf(reply, tabId);
-    if (options.find === undefined) {
+    if (!isFindRead(options)) {
       // What the model now has of the page: the next view says what changed since.
       if (isWholeView(options)) views.record(session, tabId, before, { tree, truncated });
       return { tree, truncated };
@@ -1895,7 +1900,7 @@ function pageError(tabId: number): ToolError {
   );
 }
 
-/** Whether a read_page without find reads what a view reads: the whole document, in its filter. */
+/** Whether a read_page without find or role reads what a view reads: the whole document, in its filter. */
 function isWholeView(options: ReadPageOptions): boolean {
   return options.filter === VIEW_FILTER && options.ref === undefined && options.depth === undefined;
 }

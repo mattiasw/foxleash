@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type FoundTree, onlySpaces, READ_PAGE_MAX_FINDS } from "@foxleash/protocol";
+import { type FoundTree, foundLinesOf, onlySpaces, READ_PAGE_MAX_FINDS } from "@foxleash/protocol";
 import { MAX_PAGE_REPLY_CHARS } from "./page-messages.ts";
 import {
   ARIA_ROLES,
@@ -14,6 +14,7 @@ import {
   formatLine,
   INTERACTIVE_ROLES,
   isCredentialAutocomplete,
+  isFindRead,
   isProtectedField,
   LANDMARK_ROLES,
   type Line,
@@ -91,13 +92,21 @@ describe("readPageOptions", () => {
     assert.deepEqual(readPageOptions(inherited), { filter: "all" });
     const role: Record<string, unknown> = Object.create({ find: "a" });
     role.role = "link";
-    assert.equal(readPageOptions(role), "read_page takes role only together with find.");
+    assert.deepEqual(readPageOptions(role), { filter: "all", role: "link" });
+  });
+
+  it("takes role without find", () => {
+    assert.deepEqual(readPageOptions({ role: "link" }), { filter: "all", role: "link" });
+    assert.deepEqual(readPageOptions({ role: " IFRAME ", ref: "x" }), {
+      filter: "all",
+      ref: "x",
+      role: " IFRAME ",
+    });
   });
 
   it("refuses a bad find or role with its sentence", () => {
     const find = "read_page needs find to be text that is not only spaces.";
     const role = "read_page needs role to be a role name, such as link or heading.";
-    const alone = "read_page takes role only together with find.";
     const cases: [Record<string, unknown>, string][] = [
       [{ find: "" }, find],
       [{ find: "   " }, find],
@@ -112,8 +121,8 @@ describe("readPageOptions", () => {
       [{ find: "a", role: "" }, role],
       [{ find: "a", role: " \u0085 " }, role],
       [{ role: "" }, role],
-      [{ role: "link" }, alone],
-      [{ role: "link", ref: "x" }, alone],
+      [{ role: " \u0085" }, role],
+      [{ role: 4 }, role],
     ];
     for (const [params, sentence] of cases) {
       assert.equal(readPageOptions(params), sentence, JSON.stringify(params));
@@ -136,6 +145,29 @@ describe("readPageOptions", () => {
     assert.deepEqual(Object.keys(two ?? {}), ["find"]);
   });
 
+  it("takes finds with role, and entries with role alone, with only the keys given", () => {
+    const first = { role: " HEADING ", other: true };
+    const second = { find: "b", role: "link" };
+    const options = readPageOptions({ role: "link", finds: [first, second, { find: "c" }] });
+    assert.deepEqual(options, {
+      filter: "all",
+      role: "link",
+      finds: [{ role: " HEADING " }, { find: "b", role: "link" }, { find: "c" }],
+    });
+    assert.ok(typeof options !== "string" && options.finds !== undefined);
+    const [one, two, three] = options.finds;
+    assert.notEqual(one, first);
+    assert.notEqual(two, second);
+    assert.deepEqual(Object.keys(one ?? {}), ["role"]);
+    assert.deepEqual(Object.keys(two ?? {}), ["find", "role"]);
+    assert.deepEqual(Object.keys(three ?? {}), ["find"]);
+    assert.deepEqual(readPageOptions({ find: "a", finds: [{ role: "img" }] }), {
+      filter: "all",
+      find: "a",
+      finds: [{ role: "img" }],
+    });
+  });
+
   it("takes up to READ_PAGE_MAX_FINDS entries", () => {
     const finds = Array.from({ length: READ_PAGE_MAX_FINDS }, (_, index) => ({ find: `${index}` }));
     const options = readPageOptions({ find: "a", finds });
@@ -155,8 +187,15 @@ describe("readPageOptions", () => {
     const entry: Record<string, unknown> = Object.create({ find: "b", role: "link" });
     assert.equal(
       readPageOptions({ find: "a", finds: [entry] }),
-      "read_page needs each entry of finds to have a find that is text that is not only spaces.",
+      "read_page needs each entry of finds to have a find, a role or both.",
     );
+    const roleOnly: Record<string, unknown> = Object.create({ find: "b" });
+    roleOnly.role = "link";
+    assert.deepEqual(readPageOptions({ find: "a", finds: [roleOnly] }), {
+      filter: "all",
+      find: "a",
+      finds: [{ role: "link" }],
+    });
     entry.find = "b";
     assert.deepEqual(readPageOptions({ find: "a", finds: [entry] }), {
       filter: "all",
@@ -166,7 +205,8 @@ describe("readPageOptions", () => {
   });
 
   it("refuses bad finds with their sentences", () => {
-    const alone = "read_page takes finds only together with find.";
+    const alone = "read_page takes finds only together with find or role.";
+    const neither = "read_page needs each entry of finds to have a find, a role or both.";
     const list = `read_page needs finds to be a list of 1 to ${READ_PAGE_MAX_FINDS} entries.`;
     const find =
       "read_page needs each entry of finds to have a find that is text that is not only spaces.";
@@ -175,17 +215,21 @@ describe("readPageOptions", () => {
     const tooMany = Array.from({ length: READ_PAGE_MAX_FINDS + 1 }, () => ({ find: "b" }));
     const cases: [Record<string, unknown>, string][] = [
       [{ finds: [{ find: "b" }] }, alone],
-      [{ role: "link", finds: [{ find: "b" }] }, "read_page takes role only together with find."],
+      [{ ref: "x", finds: [{ role: "link" }] }, alone],
       [{ find: "a", finds: { find: "b" } }, list],
       [{ find: "a", finds: "b" }, list],
       [{ find: "a", finds: null }, list],
       [{ find: "a", finds: [] }, list],
       [{ find: "a", finds: tooMany }, list],
-      [{ find: "a", finds: [null] }, find],
-      [{ find: "a", finds: ["b"] }, find],
-      [{ find: "a", finds: [["b"]] }, find],
-      [{ find: "a", finds: [{}] }, find],
+      [{ find: "a", finds: [null] }, neither],
+      [{ find: "a", finds: ["b"] }, neither],
+      [{ find: "a", finds: [["b"]] }, neither],
+      [{ find: "a", finds: [{}] }, neither],
+      [{ find: "a", finds: [{ other: 1 }] }, neither],
+      [{ role: "link", finds: [{ find: "b" }, {}] }, neither],
       [{ find: "a", finds: [{ find: 3 }] }, find],
+      [{ find: "a", finds: [{ find: null, role: "link" }] }, find],
+      [{ find: "a", finds: [{ find: " ", role: "link" }] }, find],
       [{ find: "a", finds: [{ find: "" }] }, find],
       [{ find: "a", finds: [{ find: " \u0085" }] }, find],
       [{ find: "a", finds: [{ find: "b" }, { find: " " }] }, find],
@@ -193,19 +237,31 @@ describe("readPageOptions", () => {
       [{ find: "a", finds: [{ find: "b", role: "" }] }, role],
       [{ find: "a", finds: [{ find: "b", role: 4 }] }, role],
       [{ find: "a", finds: [{ find: "b", role: null }] }, role],
+      [{ find: "a", finds: [{ role: 4 }] }, role],
+      [{ find: "a", finds: [{ role: " \u0085" }] }, role],
+      [{ find: "a", finds: [{ role: "" }] }, role],
+      [{ role: "link", finds: [{ role: null }] }, role],
     ];
     for (const [params, sentence] of cases) {
       assert.equal(readPageOptions(params), sentence, JSON.stringify(params));
     }
   });
 
-  it("refuses a hole in finds as an entry without find", () => {
+  it("refuses a hole in finds as an entry with neither find nor role", () => {
     // biome-ignore lint/suspicious/noSparseArray: the hole is the case under test
     const finds = [{ find: "b" }, , { find: "c" }];
     assert.equal(
       readPageOptions({ find: "a", finds }),
-      "read_page needs each entry of finds to have a find that is text that is not only spaces.",
+      "read_page needs each entry of finds to have a find, a role or both.",
     );
+  });
+
+  it("calls a read with find or role a find read, and one with neither a whole read", () => {
+    assert.equal(isFindRead({ filter: "all" }), false);
+    assert.equal(isFindRead({ filter: "interactive", ref: "x", depth: 2 }), false);
+    assert.equal(isFindRead({ filter: "all", find: "a" }), true);
+    assert.equal(isFindRead({ filter: "all", role: "link" }), true);
+    assert.equal(isFindRead({ filter: "all", find: "a", role: "link" }), true);
   });
 
   it("calls text only spaces exactly when cleaning leaves nothing of it", () => {
@@ -939,6 +995,81 @@ describe("createLineFinder", () => {
       found: { shown: 1, matches: 1, searched: 4 },
     });
   });
+
+  describe("with role and no find", () => {
+    const page: Line[] = [
+      { level: 0, role: "main", ref: "b1" },
+      { level: 1, role: "heading", name: "Chat", ref: "b2", states: { level: 2 } },
+      { level: 1, role: "region", name: "Widgets", ref: "b3" },
+      { level: 2, role: "iframe", name: "Chat", ref: "b4", states: { frame: true } },
+      { level: 2, role: "text", name: "iframe" },
+      { level: 2, role: "iframe", name: "", ref: "b5", states: { frame: true } },
+      { level: 1, role: "link", name: "Help", ref: "b6" },
+      { level: 0, role: "iframe", ref: "b7", states: { frame: true } },
+    ];
+
+    it("gives every line of the role after its ancestors, each ancestor once", () => {
+      const result = searchRole("iframe", page);
+      assert.deepEqual(result, {
+        tree: [
+          "main [b1]",
+          ' region "Widgets" [b3]',
+          '  iframe "Chat" [b4] frame content not read',
+          "  iframe [b5] frame content not read",
+          "iframe [b7] frame content not read",
+        ].join("\n"),
+        truncated: false,
+        found: { shown: 3, matches: 3, searched: 8 },
+      });
+    });
+
+    it("compares the role cleaned and in lower case, never the line's text", () => {
+      assert.deepEqual(searchRole(" IFRAME\u0085", page), searchRole("iframe", page));
+      assert.deepEqual(searchRole("Heading", page), {
+        tree: 'main [b1]\n heading "Chat" [b2] level=2',
+        truncated: false,
+        found: { shown: 1, matches: 1, searched: 8 },
+      });
+      assert.deepEqual(searchRole("button", page), {
+        tree: "",
+        truncated: false,
+        found: { shown: 0, matches: 0, searched: 8 },
+      });
+    });
+
+    it("shows the first 20 lines of the role and counts the rest", () => {
+      const lines: Line[] = [{ level: 0, role: "list" }];
+      for (let index = 1; index <= 30; index += 1) {
+        lines.push({ level: 1, role: "listitem" });
+        lines.push({ level: 2, role: "img", name: `Photo ${index}` });
+      }
+      const result = searchRole("img", lines);
+      assert.deepEqual(result.found, { shown: 20, matches: 30, searched: 61 });
+      assert.deepEqual(result.tree.split("\n"), lines.slice(0, 41).map(formatLine));
+    });
+
+    it("stops writing when the tree is full, counting on", () => {
+      const result = searchRole("iframe", page, 40);
+      assert.deepEqual(result, {
+        tree: 'main [b1]\n region "Widgets" [b3]',
+        truncated: true,
+        found: { shown: 0, matches: 3, searched: 8 },
+      });
+    });
+
+    it("never asks for a line's texts", () => {
+      const textsOf = (line: Line): readonly string[] => assert.fail(JSON.stringify(line));
+      const finder = createLineFinder(undefined, "iframe", undefined, textsOf);
+      for (const line of page) finder.add(line);
+      assert.equal(finder.result().found.matches, 3);
+    });
+
+    function searchRole(role: string, lines: readonly Line[], max?: number): FoundTree {
+      const result = search(undefined, role, lines, max);
+      assert.deepEqual(foundLinesOf(result.found, result.tree, result.truncated), result.found);
+      return result;
+    }
+  });
 });
 
 describe("createLineFinders", () => {
@@ -958,7 +1089,10 @@ describe("createLineFinders", () => {
     "cut",
     { level: 1, role: "textbox", name: "Email", states: { field: { value: "Me@Example.com" } } },
   ];
-  const queries: { find: string; role?: string }[] = [
+  const queries: { find?: string; role?: string }[] = [
+    { role: "link" },
+    { role: " LISTITEM\n" },
+    { role: "button" },
     { find: "SIGN IN" },
     { find: "sign in", role: " Heading " },
     { find: "item" },
@@ -968,7 +1102,7 @@ describe("createLineFinders", () => {
     { find: "not on the page" },
   ];
 
-  it("gives each find the result it gets alone, from the same lines and cut marks", () => {
+  it("gives each find or role the result it gets alone, from the same lines and cut marks", () => {
     for (const max of [undefined, 60]) {
       for (const [index, first] of queries.entries()) {
         const rest = queries.filter((_, other) => other !== index);
@@ -1011,7 +1145,7 @@ describe("createLineFinders", () => {
     assert.equal(reads, 2);
   });
 
-  function alone(query: { find: string; role?: string }, max: number | undefined): FoundTree {
+  function alone(query: { find?: string; role?: string }, max: number | undefined): FoundTree {
     const finder = createLineFinder(query.find, query.role, max);
     feed(finder, lines);
     return finder.result();
@@ -1026,7 +1160,7 @@ function feed(tree: TreeLines, lines: readonly (Line | "cut")[]): void {
 }
 
 function search(
-  find: string,
+  find: string | undefined,
   role: string | undefined,
   lines: readonly Line[],
   max?: number,

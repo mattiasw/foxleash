@@ -199,16 +199,28 @@ describe("tools", () => {
       "A call made while the tab is loading another page, as right after a click on a link or a form submit, waits for that page and reads it.",
       "read_page never asks",
       "A link to the page's own site shows its address as a path starting with /, on that site; a link to another site shows its whole address. navigate takes such a path, while tab_open and download need the whole address.",
-      "read less with find (only the lines that contain a text), ref (one element and what it contains)",
+      "read less with find (only the lines that contain a text), role (only the lines of one role), ref (one element and what it contains)",
       "With find, read_page returns only the lines whose name, field value, text or link address, as the tree shows it between the quotes, contains that text, ignoring case, each after the lines of the elements that contain it: at most 20, with the number of other lines that match, or the number of lines searched when none does.",
       'in find, write a quote as " and a backslash as \\, not \\" or \\\\.',
       "Whitespace at either end of find is ignored, and a run of it inside counts as one space, as in the tree.",
       "A protected field's value is never matched.",
-      "role, given with find, keeps only matching lines of that role, such as link, button, heading or text.",
-      "find searches the whole page, past the 50,000-character cut too, within what ref, filter and depth keep.",
+      "find never searches role words, state words or element references.",
+      "With role and no find, read_page returns the lines of that role, such as iframe, heading, img, link, button or text, the way find returns its lines: at most 20, each after the lines of the elements that contain it, with the number of other lines of that role, or the number of lines searched when none has it.",
+      "Given with find, role keeps only the matching lines of that role.",
+      "find and role search the whole page, past the 50,000-character cut too, within what ref, filter and depth keep.",
     ]) {
       assert.ok(readPage?.description?.includes(words), words);
     }
+    assert.equal(readPage?.description?.includes("Only with find"), false);
+    const readPageArgs = readPage?.inputSchema.properties ?? {};
+    assert.match(
+      String(record(readPageArgs.find).description),
+      /; role words are not searched: use role for the lines of a role$/,
+    );
+    assert.equal(
+      record(readPageArgs.role).description,
+      "Return only the lines of this role, such as iframe, heading, img, link, button or text, each with the lines of the elements that contain it; with find, only the matching lines of this role",
+    );
     assert.deepEqual(Object.keys(readPage?.inputSchema.properties ?? {}), [
       "tabId",
       "filter",
@@ -919,6 +931,7 @@ describe("tools", () => {
       arguments: { tabId: 1, find: " Link ", role: "link" },
     });
     await client.callTool({ name: "read_page", arguments: { tabId: 1, find: "a" } });
+    await client.callTool({ name: "read_page", arguments: { tabId: 1, role: "iframe" } });
     assert.deepEqual(calls, [
       { method: "read_page", params: { tabId: 2 } },
       {
@@ -927,9 +940,11 @@ describe("tools", () => {
       },
       { method: "read_page", params: { tabId: 1, find: " Link ", role: "link" } },
       { method: "read_page", params: { tabId: 1, find: "a" } },
+      { method: "read_page", params: { tabId: 1, role: "iframe" } },
     ]);
     assert.deepEqual(Object.keys(record(calls[0]?.params)), ["tabId"]);
     assert.deepEqual(Object.keys(record(calls[3]?.params)), ["tabId", "find"]);
+    assert.deepEqual(Object.keys(record(calls[4]?.params)), ["tabId", "role"]);
   });
 
   it("refuses read_page arguments outside the schema", LIMIT, async () => {
@@ -1029,6 +1044,88 @@ describe("tools", () => {
     }
   });
 
+  it("answers a role that no line has with only Foxleash's count", LIMIT, async () => {
+    const cases: [number, string][] = [
+      [4001, "No line has that role. Foxleash searched 4,001 lines."],
+      [1, "No line has that role. Foxleash searched 1 line."],
+      [0, "No line has that role. Foxleash searched 0 lines."],
+    ];
+    for (const [searched, sentence] of cases) {
+      const { client } = await start(() => ({
+        tree: "",
+        truncated: false,
+        found: { shown: 0, matches: 0, searched },
+      }));
+      for (const role of ["heading", "text"]) {
+        const output = await client.callTool({
+          name: "read_page",
+          arguments: { tabId: 1, role },
+        });
+        assert.deepEqual(output, { content: [{ type: "text", text: sentence }] });
+      }
+    }
+  });
+
+  it(
+    "notes that find never searches role words when a role name matches nothing",
+    LIMIT,
+    async () => {
+      const noMatch = "No line matches. Foxleash searched 9 lines.";
+      const roleWord =
+        "find searches names, field values, text and link addresses, never role words. To get the lines of a role, give role without find.";
+      const { client } = await start((_method, params) =>
+        record(params).find === "text "
+          ? {
+              tree: 'heading "text"',
+              truncated: false,
+              found: { shown: 1, matches: 1, searched: 9 },
+            }
+          : { tree: "", truncated: false, found: { shown: 0, matches: 0, searched: 9 } },
+      );
+      const cases: [Record<string, unknown>, string[]][] = [
+        [{ find: " Heading " }, [noMatch, roleWord]],
+        [{ find: "IFRAME" }, [noMatch, roleWord]],
+        [{ find: "text" }, [noMatch, roleWord]],
+        [{ find: "\u0085link\n" }, [noMatch, roleWord]],
+        [{ find: "img" }, [noMatch, roleWord]],
+        [{ find: "headings" }, [noMatch]],
+        [{ find: "heading link" }, [noMatch]],
+        [{ find: "Heading 2" }, [noMatch]],
+        [{ find: "heading", role: "heading" }, [noMatch]],
+        [{ role: "heading" }, ["No line has that role. Foxleash searched 9 lines."]],
+      ];
+      for (const [args, expected] of cases) {
+        const output = await client.callTool({
+          name: "read_page",
+          arguments: { tabId: 1, ...args },
+        });
+        assert.deepEqual(texts(output), expected, JSON.stringify(args));
+      }
+      const matched = await client.callTool({
+        name: "read_page",
+        arguments: { tabId: 1, find: "text " },
+      });
+      assert.equal(texts(matched).length, 1);
+      assert.equal(unframed(matched), 'heading "text"');
+    },
+  );
+
+  it("checks a find with a long run of spaces for a role word at once", LIMIT, async () => {
+    const { client } = await start(() => ({
+      tree: "",
+      truncated: false,
+      found: { shown: 0, matches: 0, searched: 9 },
+    }));
+    const spaces = " ".repeat(200_000);
+    for (const find of [`a${spaces}b`, `${spaces}x`]) {
+      // A trim that backtracks blocks the event loop, which the test's timeout cannot interrupt.
+      const started = performance.now();
+      const output = await client.callTool({ name: "read_page", arguments: { tabId: 1, find } });
+      assert.ok(performance.now() - started < 2000);
+      assert.deepEqual(texts(output), ["No line matches. Foxleash searched 9 lines."]);
+    }
+  });
+
   it("adds after the frame how many matching lines are not shown", LIMIT, async () => {
     const links = Array.from({ length: 20 }, (_, index) => `  link "Link ${index}" [0a1b2c3d-2]`);
     const tree = ["list [0a1b2c3d-1]", ...links].join("\n");
@@ -1051,6 +1148,17 @@ describe("tools", () => {
         { shown: 20, matches: 990, searched: 4001 },
         { find: "link", role: "link" },
         ["970 matching lines are not shown. Narrow find, or read one element with ref."],
+      ],
+      [{ shown: 20, matches: 20, searched: 3000 }, { role: "link" }, []],
+      [
+        { shown: 20, matches: 21, searched: 30 },
+        { role: "link" },
+        ["1 matching line is not shown. Add find, or read one element with ref."],
+      ],
+      [
+        { shown: 20, matches: 1020, searched: 4001 },
+        { role: "link" },
+        ["1,000 matching lines are not shown. Add find, or read one element with ref."],
       ],
     ];
     for (const [found, args, notes] of cases) {
@@ -4484,7 +4592,7 @@ describe("batch of read_page finds", () => {
 
   /** A find's answer on a fake page: none for "none", 25 matches for "many", else one line. */
   function found(query: unknown): unknown {
-    const find = String(record(query).find);
+    const find = String(record(query).find ?? record(query).role);
     if (find === "none")
       return { tree: "", truncated: false, found: { shown: 0, matches: 0, searched: 9 } };
     const role = record(query).role ?? "text";
@@ -4647,6 +4755,15 @@ describe("batch of read_page finds", () => {
       ],
       [{ find: "a" }, {}],
       [{}, { find: "a" }],
+      [{ find: "a" }, { role: "link" }],
+      [{ find: "a", role: "link" }, { role: "heading" }],
+      [{ role: "a" }, { role: " " }],
+      [{ role: "\n" }, { find: "a" }],
+      [{ role: long }, { role: "a" }],
+      [{ role: "a" }, { role: long }],
+      [{ role: "a" }, {}],
+      [{ role: "a" }, { tabId: 4, role: "a" }],
+      [{ role: "a" }, { role: "b", ref: "0a1b2c3d-4" }],
     ];
     for (const [first, next] of cases) {
       const { client, calls } = await start(page(true));
@@ -4655,6 +4772,55 @@ describe("batch of read_page finds", () => {
       assert.ok(calls.every((call) => !Object.hasOwn(record(call.params), "finds")));
     }
   });
+
+  it(
+    "reads role-only steps and the finds after them with one request, each as it reads alone",
+    LIMIT,
+    async () => {
+      const steps = [
+        { role: "link" },
+        { role: "none" },
+        { find: "a" },
+        { find: "many", role: "link" },
+        { role: "many" },
+      ];
+      const { client, calls } = await start(page(true));
+      const output = await client.callTool({
+        name: "batch",
+        arguments: { steps: steps.map(step) },
+      });
+      assert.equal(output.isError, undefined);
+      assert.deepEqual(calls, [
+        {
+          method: "read_page",
+          params: {
+            tabId: 3,
+            role: "link",
+            finds: [
+              { role: "none" },
+              { find: "a" },
+              { find: "many", role: "link" },
+              { role: "many" },
+            ],
+          },
+        },
+      ]);
+      const finds = record(calls[0]?.params).finds;
+      assert.ok(Array.isArray(finds));
+      assert.deepEqual(finds.map(Object.keys), [["role"], ["find"], ["find", "role"], ["role"]]);
+      const expected: string[] = [];
+      for (const [index, args] of steps.entries()) {
+        expected.push(`Step ${index + 1} of 5, read_page: ok`, ...(await alone(args)));
+      }
+      assert.deepEqual(sameIds(output), expected);
+      assert.ok(expected.includes("No line has that role. Foxleash searched 9 lines."));
+      assert.ok(
+        expected.includes(
+          "5 matching lines are not shown. Add find, or read one element with ref.",
+        ),
+      );
+    },
+  );
 
   it("joins finds, roles and refs of 1,000 characters", LIMIT, async () => {
     const most = "a".repeat(1_000);
@@ -4756,7 +4922,7 @@ describe("batch of read_page finds", () => {
     ]);
   });
 
-  it("reads a step's args only with find and with the types read_page's shape gives", () => {
+  it("reads a step's args only with find or role and with the types read_page's shape gives", () => {
     assert.deepEqual(findStepOf({ tabId: 1, find: "a" }), {
       tabId: 1,
       filter: undefined,
@@ -4768,8 +4934,21 @@ describe("batch of read_page finds", () => {
     const full = { tabId: 1, filter: "interactive", depth: 2, ref: "r", find: "a", role: "link" };
     assert.deepEqual(findStepOf(full), full);
     assert.deepEqual(findStepOf({ ...full, filter: "all" }), { ...full, filter: "all" });
+    assert.deepEqual(findStepOf({ tabId: 1, role: "link" }), {
+      tabId: 1,
+      filter: undefined,
+      depth: undefined,
+      ref: undefined,
+      find: undefined,
+      role: "link",
+    });
     for (const args of [
       { tabId: 1 },
+      { tabId: 1, ref: "r" },
+      { tabId: 1, role: 1 },
+      { tabId: 1, find: 1, role: "link" },
+      { tabId: 1, find: null, role: "link" },
+      { tabId: "1", role: "link" },
       { tabId: "1", find: "a" },
       { tabId: 1, find: 1 },
       { tabId: 1, find: "a", filter: "links" },
