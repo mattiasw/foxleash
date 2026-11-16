@@ -169,7 +169,7 @@ export interface WebRequestEvent<Listener> {
   addListener(
     listener: Listener,
     filter: { urls: string[] },
-    extraInfoSpec?: ("requestHeaders" | "responseHeaders")[],
+    extraInfoSpec?: ("requestHeaders" | "responseHeaders" | "requestBody")[],
   ): void;
   removeListener(listener: Listener): void;
 }
@@ -192,6 +192,23 @@ export interface RequestDetails extends WebRequestDetails {
   originUrl?: string;
   /** From the requesting frame's parent up to the top-level document. */
   frameAncestors?: { url: string; frameId: number }[];
+  /** With "requestBody": null for a request that sent no body. */
+  requestBody?: RequestBody | null;
+}
+
+/** Firefox's webRequest requestBody. */
+export interface RequestBody {
+  error?: string;
+  /** A urlencoded part with no `=` gives an `undefined` value. */
+  formData?: Record<string, (string | undefined)[]>;
+  raw?: UploadChunk[];
+}
+
+export interface UploadChunk {
+  bytes?: ArrayBuffer;
+  file?: string;
+  /** Not in Firefox's schema: set when its byte limit cut the body. */
+  truncated?: boolean;
 }
 
 export interface SendHeadersDetails extends WebRequestDetails {

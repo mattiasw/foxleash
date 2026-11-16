@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import {
+  MAX_NETWORK_BODY_FIELDS,
   MAX_NETWORK_HEADER,
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_REQUESTS,
@@ -25,7 +26,12 @@ const SITE = "https://a.example";
 const URL_A = `${SITE}/page`;
 const OTHER = "https://b.example";
 const NONE: Result<"read_network"> = { recording: false, requests: [], truncated: false };
-const ALL: NetworkReadOptions = { failed: false, headers: true, limit: MAX_NETWORK_REQUESTS };
+const ALL: NetworkReadOptions = {
+  failed: false,
+  headers: true,
+  body: true,
+  limit: MAX_NETWORK_REQUESTS,
+};
 
 describe("network log", { timeout: 10000 }, () => {
   it("records a request's url, method, type, timing, status and headers", async () => {
@@ -1345,6 +1351,104 @@ describe("network log", { timeout: 10000 }, () => {
     );
   });
 
+  it("keeps the shape of what a request sent, read only with body true", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const tabId = tab.id;
+    request(tabId, `${SITE}/next`, {
+      type: "main_frame",
+      method: "POST",
+      timeStamp: 2000,
+      requestBody: { formData: { username: ["alice-Nw1"], password: ["hunter-Nw2"] } },
+    });
+    fake.navigateByUser(tabId, `${SITE}/next`);
+    await flush();
+    request(tabId, `${SITE}/api`, {
+      method: "POST",
+      timeStamp: 3000,
+      requestBody: { raw: [{ bytes: bytesOf('{"token":"token-Nw3","items":[]}') }] },
+    });
+    request(tabId, `${SITE}/get`, { timeStamp: 3001, requestBody: null });
+    request(tabId, `${SITE}/plain`, { timeStamp: 3002 });
+    const withBody = read(tabId, { ...ALL, headers: false });
+    assert.deepEqual(withBody.requests, [
+      {
+        url: `${SITE}/next`,
+        method: "POST",
+        type: "main_frame",
+        startTime: 2000,
+        requestBody: {
+          kind: "form",
+          fields: [
+            { name: "username", depth: 1, kind: "text", filled: true },
+            { name: "password", depth: 1, kind: "text", filled: true },
+          ],
+        },
+      },
+      {
+        url: `${SITE}/api`,
+        method: "POST",
+        type: "xmlhttprequest",
+        startTime: 3000,
+        requestBody: {
+          kind: "json",
+          fields: [
+            { name: "token", depth: 1, kind: "string", filled: true },
+            { name: "items", depth: 1, kind: "array", filled: false },
+          ],
+        },
+      },
+      { url: `${SITE}/get`, method: "GET", type: "xmlhttprequest", startTime: 3001 },
+      { url: `${SITE}/plain`, method: "GET", type: "xmlhttprequest", startTime: 3002 },
+    ]);
+    const serialized = JSON.stringify(withBody);
+    for (const secret of ["alice-Nw1", "hunter-Nw2", "token-Nw3"]) {
+      assert.equal(serialized.includes(secret), false, secret);
+    }
+    for (const options of [
+      { ...ALL, body: false },
+      { ...ALL, headers: false, body: false },
+    ]) {
+      const without = read(tabId, options);
+      assert.equal(without.requests.length, 4);
+      for (const returned of without.requests) {
+        assert.equal(Object.hasOwn(returned, "requestBody"), false);
+      }
+    }
+  });
+
+  it("counts a request's body shape in the page's character budget", async () => {
+    const { read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const keys = Array.from({ length: MAX_NETWORK_BODY_FIELDS }, (_, index) =>
+      `k${String(index).padStart(3, "0")}`.padEnd(100, "k"),
+    );
+    const body = JSON.stringify(Object.fromEntries(keys.map((key) => [key, 1])));
+    const url = (index: number) =>
+      `${SITE}/${String(index).padStart(3, "0")}`.padEnd(MAX_NETWORK_URL, "p");
+    // url, method, type, the body's kind, and each field's name and kind.
+    const plain = MAX_NETWORK_URL + "POST".length + "xmlhttprequest".length;
+    const chars = plain + "json".length + MAX_NETWORK_BODY_FIELDS * (100 + "number".length);
+    const fits = Math.floor(MAX_LOG_CHARS / chars);
+    // So that leaving out the body's kind, or the fields' kinds or names, would keep one more.
+    assert.ok(fits < MAX_NETWORK_REQUESTS);
+    assert.notEqual(Math.floor(MAX_LOG_CHARS / (chars - "json".length)), fits);
+    assert.notEqual(Math.floor(MAX_LOG_CHARS / (chars - MAX_NETWORK_BODY_FIELDS * 6)), fits);
+    assert.notEqual(Math.floor(MAX_LOG_CHARS / (chars - MAX_NETWORK_BODY_FIELDS * 100)), fits);
+    for (let index = 0; index <= fits; index += 1) {
+      request(tab.id, url(index), {
+        method: "POST",
+        requestBody: { raw: [{ bytes: bytesOf(body) }] },
+      });
+    }
+    const trimmed = read(tab.id);
+    assert.equal(trimmed.truncated, true);
+    assert.deepEqual(
+      urlsOf(trimmed),
+      Array.from({ length: fits }, (_, index) => url(index + 1)),
+    );
+  });
+
   it("applies pattern, types and failed together before the limit", async () => {
     const { fake, read, request, tabIn } = setup();
     const tab = await tabIn("s1", URL_A);
@@ -1598,7 +1702,11 @@ describe("network log", { timeout: 10000 }, () => {
   it("adds six non-blocking listeners for every URL, which return nothing", async () => {
     const { fake, request, tabIn } = setup();
     assert.deepEqual(fake.webRequestRegistrations, [
-      { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } },
+      {
+        event: "onBeforeRequest",
+        filter: { urls: ["<all_urls>"] },
+        extraInfoSpec: ["requestBody"],
+      },
       {
         event: "onSendHeaders",
         filter: { urls: ["<all_urls>"] },
@@ -1680,7 +1788,34 @@ describe("network log", { timeout: 10000 }, () => {
     header.value = "changed";
     assert.deepEqual(read(tab.id), before);
   });
+
+  it("returns copies of a body shape that a caller cannot change the log through", async () => {
+    const { read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    request(tab.id, `${SITE}/api`, {
+      method: "POST",
+      requestBody: { formData: { username: ["alice-Cp1"] } },
+    });
+    const before = structuredClone(read(tab.id));
+    const shape = read(tab.id).requests[0]?.requestBody;
+    assert.ok(shape?.fields !== undefined);
+    shape.kind = "other";
+    shape.truncated = true;
+    const field = shape.fields[0];
+    assert.ok(field !== undefined);
+    field.name = "changed";
+    field.filled = false;
+    shape.fields.push({ name: "added", depth: 1, kind: "text" });
+    assert.deepEqual(read(tab.id), before);
+  });
 });
+
+function bytesOf(text: string): ArrayBuffer {
+  const bytes = new TextEncoder().encode(text);
+  const copy = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(copy).set(bytes);
+  return copy;
+}
 
 function setup() {
   const fake = createFakeBrowser();

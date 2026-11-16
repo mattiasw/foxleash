@@ -58,6 +58,10 @@ export const TITLES = {
   network: "Fixture network",
   networkDone: "Fixture network done",
   networkHop: "Fixture network hop",
+  networkJson: "Fixture network JSON",
+  networkJsonDone: "Fixture network JSON done",
+  networkLogin: "Fixture network login",
+  networkLoginDone: "Fixture network login done",
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
   downloadLogin: "Fixture download login",
@@ -131,10 +135,21 @@ export const CONSOLE_TOKENS = {
 /** The only nonce the console CSP page's policy lets scripts run with. */
 export const CONSOLE_CSP_NONCE = "fixtureNonce7Jk";
 
-/** The credentials the network page sends and gets, which read_network must never show. */
+/**
+ * The credentials the network page sends and gets, and the values the network JSON and login
+ * pages send, which read_network must never show.
+ */
 export const NETWORK_SECRETS = {
   bearer: "network-bearer-Vb3Nq8",
   cookie: "network-cookie-Hs5Tz2",
+  jsonName: "network-json-name-Tc6Ly3",
+  jsonElement: "network-json-element-Gn2Qs8",
+  jsonToken: "network-json-token-Jb5Hv1",
+  /** A JSON key shaped like a value, which the name rule withholds. */
+  jsonKey: "network-key@Wq5Rt",
+  formJson: "network-form-json-Zp3Mc6",
+  loginUser: "network-login-user-Kd7Fp2",
+  loginPassword: "network-login-password-Rm4Wx9",
 } as const;
 
 /** The cookie /download/login sets, without which /download/private.txt answers 403. */
@@ -745,6 +760,17 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, networkOldPage(request.socket.localPort ?? 0));
     } else if (path === "/network-old-frame") {
       sendHtml(response, NETWORK_OLD_FRAME_PAGE);
+    } else if (path === "/network-json") {
+      sendHtml(response, NETWORK_JSON_PAGE);
+    } else if (path === "/network-login") {
+      sendHtml(response, NETWORK_LOGIN_PAGE);
+    } else if (path === "/network-login-post") {
+      request.resume();
+      sendPage(response, TITLES.networkLoginDone);
+    } else if (path === "/api/json" || path === "/api/form-json") {
+      request.resume();
+      response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
+      response.end("ok");
     } else if (path === "/api/fetch") {
       response.writeHead(200, {
         "Content-Type": "application/json",
@@ -3160,6 +3186,45 @@ window.addEventListener("pagehide", () => navigator.sendBeacon("http://127.0.0.1
 </body></html>
 `;
 }
+
+// On load: a fetch POST with a JSON body, then one that sends JSON as a urlencoded form, as
+// jQuery's $.post and axios do with a string; the title says when both finished.
+const NETWORK_JSON_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkJson}</title></head>
+<body><h1>${TITLES.networkJson}</h1>
+<script>
+window.addEventListener("load", async () => {
+  await fetch("/api/json", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      user: { name: "${NETWORK_SECRETS.jsonName}", nickname: "", age: 41, admin: false, manager: null },
+      items: ["${NETWORK_SECRETS.jsonElement}"],
+      "g-recaptcha-response": "${NETWORK_SECRETS.jsonToken}",
+      "${NETWORK_SECRETS.jsonKey}": true,
+    }),
+  });
+  await fetch("/api/form-json", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: JSON.stringify({ password: "${NETWORK_SECRETS.formJson}" }),
+  });
+  document.title = "${TITLES.networkJsonDone}";
+});
+</script>
+</body></html>
+`;
+
+const NETWORK_LOGIN_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkLogin}</title></head>
+<body><h1>${TITLES.networkLogin}</h1>
+<form method="post" action="/network-login-post">
+<label>User name <input type="text" name="username" value="${NETWORK_SECRETS.loginUser}"></label>
+<label>Password <input type="password" name="password" value="${NETWORK_SECRETS.loginPassword}"></label>
+<button type="submit">Sign in</button>
+</form>
+</body></html>
+`;
 
 const NETWORK_OLD_FRAME_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Network old frame</title></head>

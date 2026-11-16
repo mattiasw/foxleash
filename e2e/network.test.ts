@@ -26,6 +26,7 @@ interface NetworkRead {
   text: string;
 }
 
+const REF = "([a-z]{1,7}[1-9][0-9]*)";
 const POLL_MS = 100;
 const POLL_LIMIT_MS = 10_000;
 const REDACTED = "[redacted]";
@@ -200,6 +201,78 @@ describe("read_network in real Firefox", () => {
     }
   });
 
+  test("a fetch POST shows its JSON keys, never a value", async () => {
+    const tab = tabOf(
+      await harness.ok(session, "tab_open", { url: fixtures.url("/network-json") }),
+    ).id;
+    await waitForTitle(tab, TITLES.networkJsonDone);
+    const read = await readUntil(
+      tab,
+      (requests) =>
+        ["/api/json", "/api/form-json"].every(
+          (path) => requestTo(requests, path)?.status !== undefined,
+        ),
+      { body: true, headers: true },
+    );
+    assert.deepEqual(requestTo(read.requests, "/api/json")?.requestBody, {
+      kind: "json",
+      fields: [
+        { name: "user", depth: 1, kind: "object", filled: true },
+        { name: "name", depth: 2, kind: "string", filled: true },
+        { name: "nickname", depth: 2, kind: "string", filled: false },
+        { name: "age", depth: 2, kind: "number" },
+        { name: "admin", depth: 2, kind: "boolean" },
+        { name: "manager", depth: 2, kind: "null" },
+        { name: "items", depth: 1, kind: "array", filled: true },
+        { name: "[]", depth: 2, kind: "string", filled: true },
+        { name: "g-recaptcha-response", depth: 1, kind: "string", filled: true },
+        { name: "(name withheld)", depth: 1, kind: "boolean" },
+      ],
+    });
+    assert.deepEqual(requestTo(read.requests, "/api/form-json")?.requestBody, { kind: "other" });
+    assertNoSecrets(read.text);
+    for (const args of [{}, { body: false }]) {
+      const without = await readNetwork(tab, args);
+      assert.ok(requestTo(without.requests, "/api/json") !== undefined, without.text);
+      for (const request of without.requests) {
+        assert.equal(Object.hasOwn(request, "requestBody"), false, JSON.stringify(request));
+      }
+    }
+  });
+
+  test("a login form's POST shows its field names, never the password", async (t) => {
+    const tab = tabOf(
+      await harness.ok(session, "tab_open", { url: fixtures.url("/network-login") }),
+    ).id;
+    await waitForTitle(tab, TITLES.networkLogin);
+    const page = await harness.call(session, "read_page", { tabId: tab });
+    assert.equal(page.isError, false, page.text);
+    await harness.ok(session, "click", { tabId: tab, ref: refOf(page.text, 'button "Sign in"') });
+    await waitForTitle(tab, TITLES.networkLoginDone);
+    const read = await readUntil(
+      tab,
+      (requests) =>
+        requests[0] !== undefined &&
+        new URL(requests[0].url).pathname === "/network-login-post" &&
+        requests[0].status !== undefined,
+      { body: true, headers: true },
+    );
+    const [post] = read.requests;
+    assert.equal(post?.type, "main_frame", JSON.stringify(post));
+    assert.equal(post?.method, "POST");
+    assert.deepEqual(post?.requestBody, {
+      kind: "form",
+      fields: [
+        { name: "username", depth: 1, kind: "text", filled: true },
+        { name: "password", depth: 1, kind: "text", filled: true },
+      ],
+    });
+    assertNoSecrets(read.text);
+    const length = headerValue(post?.requestHeaders, "content-length");
+    assert.ok(length !== undefined, JSON.stringify(post?.requestHeaders));
+    t.diagnostic(`the login form's POST carries Content-Length: ${length}`);
+  });
+
   test("another session's read of the tab is refused", async () => {
     const other = await harness.connect();
     const text = await harness.refused(other, "read_network", { tabId: networkTab });
@@ -255,6 +328,12 @@ function requestTo(
 
 function headerValue(headers: readonly NetworkHeader[] | undefined, name: string) {
   return headers?.find((header) => header.name.toLowerCase() === name)?.value;
+}
+
+function refOf(tree: string, line: string): string {
+  const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];
+  assert.ok(ref !== undefined, `no ref for ${line} in:\n${tree}`);
+  return ref;
 }
 
 function assertNoSecrets(text: string): void {

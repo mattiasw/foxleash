@@ -2638,6 +2638,7 @@ describe("read_network", () => {
       "failed",
       "limit",
       "headers",
+      "body",
     ]);
     assert.equal(tool?.description?.includes(ASKS_FIRST), false);
     assert.equal(tool?.description?.includes("with its request and response headers"), false);
@@ -2654,6 +2655,10 @@ describe("read_network", () => {
       described("headers"),
       "true: include each request's request and response headers, which are left out unless true",
     );
+    assert.equal(
+      described("body"),
+      "true: include the shape of what each request sent (field names or JSON keys, the kind of each value and whether each is filled, never the values), which is left out unless true",
+    );
     for (const words of [
       "Its request and response headers are included only with headers true.",
       "types keeps only the requests whose type is exactly one of them",
@@ -2661,14 +2666,19 @@ describe("read_network", () => {
       "a redirect, or a request with no status or error yet, has not failed",
       "pattern, types and failed all apply before limit",
       "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted].",
-      "Request and response bodies are not included.",
+      "With body true, each request that sent a body includes requestBody, its shape and never a value or a length:",
+      "kind is form (each name once, filled by its first value), json (the keys of a JSON object or array, at most 4 deep, of an array only its first element, named []) or other.",
+      "Each field gives the kind of its value (text for a form value; string, number, boolean, null, object or array for JSON) and, for text, strings, objects and arrays, whether it is filled; an other body says whether it is filled when Foxleash got its bytes.",
+      "A name that is not a plain field name (an ASCII letter or _ first, then letters, digits, _ . : $ [ ] or -, at most 100 characters) is left out, and one (name withheld) field stands for all such names of an object or form; of names that differ only in numbers in brackets, such as a[0] and a[1], only the first is listed.",
+      "At most 100 fields are listed, the shallowest first, with truncated true in requestBody when more were left out.",
+      "A multipart file field is a text field, filled when the file has a name. Response bodies are not included.",
       "Requests made by the page's frames are included.",
       "or, for a page already open, from when the user approves its site or moves its tab into the tab group, with no requests.",
       "since is the time (ms since the epoch) from which the page has been recorded: requests started before it are missing, except that after a load the page's own request, which starts just before since, is included.",
       "a new approval or a move back starts recording again, with no requests.",
       "recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again",
       "a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording.",
-      "Foxleash keeps the newest 500 requests of a page (fewer when their headers are long), with URLs cut to 2,000 characters, header names and values to 1,000 and at most 100 headers each way.",
+      "Foxleash keeps the newest 500 requests of a page (fewer when their headers or body shapes are long), with URLs cut to 2,000 characters, header names and values to 1,000 and at most 100 headers each way.",
       "pattern is plain text, case-sensitive",
       "the newest limit (100 unless given, at most 500) are returned, fewer when they would not fit in one result",
       "truncated is true when matching requests were left out or the page made more requests than Foxleash kept",
@@ -2676,6 +2686,11 @@ describe("read_network", () => {
     ]) {
       assert.ok(tool?.description?.includes(words), words);
     }
+    assert.equal(
+      tool?.description?.includes("Request and response bodies are not included."),
+      false,
+    );
+    assert.equal(tool?.description?.includes("\u2014"), false);
     assert.equal(tool?.description?.includes("has not recorded the page since it loaded"), false);
     assert.equal(tool?.description?.includes("to start recording."), false);
   });
@@ -2709,6 +2724,7 @@ describe("read_network", () => {
       [{ tabId: 1, types: "script" }, "Invalid input: expected array, received string at types"],
       [{ tabId: 1, failed: "true" }, "Invalid input: expected boolean, received string at failed"],
       [{ tabId: 1, headers: 1 }, "Invalid input: expected boolean, received number at headers"],
+      [{ tabId: 1, body: "true" }, "Invalid input: expected boolean, received string at body"],
     ];
     for (const [args, reason] of cases) {
       const output = await client.callTool({ name: "read_network", arguments: args });
@@ -2728,6 +2744,7 @@ describe("read_network", () => {
       failed: true,
       limit: 500,
       headers: true,
+      body: true,
     });
     assert.deepEqual(all.calls, [
       {
@@ -2739,6 +2756,7 @@ describe("read_network", () => {
           failed: true,
           limit: 500,
           headers: true,
+          body: true,
         },
       },
     ]);
@@ -2754,6 +2772,7 @@ describe("read_network", () => {
       [{ tabId: 3, types: ["font"] }, ["tabId", "types"]],
       [{ tabId: 3, failed: false }, ["tabId", "failed"]],
       [{ tabId: 3, headers: true }, ["tabId", "headers"]],
+      [{ tabId: 3, body: false }, ["tabId", "body"]],
     ] as const) {
       const { calls } = await read(args);
       assert.deepEqual(Object.keys(record(calls[0]?.params)), keys);
@@ -2872,6 +2891,116 @@ describe("read_network", () => {
     assert.deepEqual(JSON.parse(unframed(most.output)), result([longest]));
     const many = await read({ tabId: 1 }, result(Array.from({ length: 500 }, () => request("/a"))));
     assert.equal(JSON.parse(unframed(many.output)).requests.length, 500);
+  });
+
+  it(
+    "returns body shapes inside the untrusted frame, with only the keys it knows",
+    LIMIT,
+    async () => {
+      const form = {
+        kind: "form",
+        fields: [
+          { name: "username", depth: 1, kind: "text", filled: true },
+          { name: "(name withheld)", depth: 1, kind: "text", filled: false },
+        ],
+      };
+      const json = {
+        kind: "json",
+        fields: [
+          { name: "g-recaptcha-response", depth: 1, kind: "string", filled: true },
+          { name: "items", depth: 1, kind: "array", filled: true },
+          { name: "[]", depth: 2, kind: "object", filled: true },
+          { name: "user[password]", depth: 3, kind: "string", filled: false },
+          { name: "ctl00$Main:x.y-z", depth: 3, kind: "number" },
+          { name: "_flag", depth: 3, kind: "boolean" },
+          { name: "none", depth: 4, kind: "null" },
+        ],
+        truncated: true,
+      };
+      const answer = result([
+        request("/form", { requestBody: form }),
+        request("/json", { requestBody: json }),
+        request("/other", { requestBody: { kind: "other", filled: true } }),
+        request("/file", { requestBody: { kind: "other" } }),
+        request("/empty", { requestBody: { kind: "json", fields: [] } }),
+      ]);
+      const { output } = await read({ tabId: 1, body: true }, answer);
+      assert.equal(output.isError, undefined);
+      const inner = unframed(output);
+      assert.equal(inner, pretty(answer));
+      assert.ok(inner.includes('"name": "g-recaptcha-response"'));
+      const extra = await read(
+        { tabId: 1, body: true },
+        result([
+          request("/a", {
+            requestBody: {
+              kind: "form",
+              value: "secret-Tl1",
+              size: 12,
+              fields: [
+                { name: "password", depth: 1, kind: "text", filled: true, value: "secret-Tl2" },
+              ],
+            },
+          }),
+        ]),
+      );
+      const stripped = unframed(extra.output);
+      assert.equal(
+        stripped,
+        pretty(
+          result([
+            request("/a", {
+              requestBody: {
+                kind: "form",
+                fields: [{ name: "password", depth: 1, kind: "text", filled: true }],
+              },
+            }),
+          ]),
+        ),
+      );
+      for (const word of ["secret-Tl", '"size"', '"value": "secret']) {
+        assert.equal(stripped.includes(word), false, word);
+      }
+    },
+  );
+
+  it("refuses a body shape outside its bounds", LIMIT, async () => {
+    const field = { name: "a", depth: 1, kind: "text", filled: true };
+    const shaped = (requestBody: unknown) => result([request("/a", { requestBody })]);
+    const answers: unknown[] = [
+      shaped(null),
+      shaped("form"),
+      shaped({}),
+      shaped({ kind: "xml" }),
+      shaped({ kind: "form", fields: Array.from({ length: 101 }, () => field) }),
+      shaped({ kind: "form", fields: {} }),
+      shaped({ kind: "other", filled: "yes" }),
+      shaped({ kind: "json", fields: [], truncated: "yes" }),
+      ...["a@b", "1a", "a".padEnd(101, "b"), "", "[x]", "(name hidden)", 1].map((name) =>
+        shaped({ kind: "form", fields: [{ ...field, name }] }),
+      ),
+      ...[0, 5, 1.5, "1"].map((depth) => shaped({ kind: "json", fields: [{ ...field, depth }] })),
+      shaped({ kind: "json", fields: [{ ...field, kind: "date" }] }),
+      shaped({ kind: "json", fields: [{ ...field, filled: "yes" }] }),
+      shaped({ kind: "json", fields: [{ name: "a", depth: 1 }] }),
+    ];
+    for (const answer of answers) {
+      const { output } = await read({ tabId: 1, body: true }, answer);
+      assert.deepEqual(
+        output,
+        { content: [{ type: "text", text: UNREADABLE }], isError: true },
+        JSON.stringify(answer)?.slice(0, 300),
+      );
+    }
+    const most = shaped({
+      kind: "json",
+      fields: [
+        ...Array.from({ length: 99 }, () => ({ ...field, name: "a".padEnd(100, "b") })),
+        { name: "z", depth: 4, kind: "array", filled: false },
+      ],
+    });
+    const longest = await read({ tabId: 1, body: true }, most);
+    assert.deepEqual(JSON.parse(unframed(longest.output)), most);
   });
 
   it("returns requests without header lists as Firefox gives them", LIMIT, async () => {

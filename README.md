@@ -128,7 +128,7 @@ part of the name that only one recipe has is enough.
 | `tabs_list`, `tab_open`, `tab_select`, `tab_close`, `navigate`, `resize_window` | Lists, opens, selects and closes the tabs in its group, loads and reloads pages in them, goes back and forward, and resizes the window. |
 | `read_page`, `get_page_text` | Reads a page as a tree of its elements, each with a reference the other tools act on, or as text. |
 | `screenshot` | Takes a PNG of what a tab shows or of one element, and can save it in the agent's working folder. |
-| `read_console`, `read_network` | Reads what a page wrote to its console, and its network requests, which it can filter by URL text, resource type and failure, with their headers when it asks. |
+| `read_console`, `read_network` | Reads what a page wrote to its console, and its network requests, which it can filter by URL text, resource type and failure, with their headers, or the field names of what each sent but never the values, when it asks. |
 | `click`, `hover`, `scroll`, `drag` | Uses the pointer on an element or at a point. |
 | `type`, `fill_form`, `press_key` | Types text, fills in several form fields in one call, and presses keys. |
 | `wait_for` | Waits for text, an element or a navigation. |

@@ -19,6 +19,8 @@ import {
   MAX_CONSOLE_TEXT,
   MAX_FILL_CHARS,
   MAX_FILL_FIELDS,
+  MAX_NETWORK_BODY_DEPTH,
+  MAX_NETWORK_BODY_FIELDS,
   MAX_NETWORK_HEADER,
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_PATTERN,
@@ -37,6 +39,11 @@ import {
   type MethodName,
   MIN_WAIT_FOR_MS,
   MIN_WINDOW_SIZE,
+  NETWORK_BODY_ELEMENT,
+  NETWORK_BODY_FIELD_KINDS,
+  NETWORK_BODY_KINDS,
+  NETWORK_BODY_NAME,
+  NETWORK_BODY_NAME_WITHHELD,
   onlySpaces,
   PAGE_VIEW_MAX_CHARS,
   type Params,
@@ -226,7 +233,7 @@ const CONSOLE_RESULT = z.object({
 });
 const DEFAULT_REQUESTS = DEFAULT_NETWORK_LIMIT.toLocaleString("en-US");
 const MAX_REQUESTS = MAX_NETWORK_REQUESTS.toLocaleString("en-US");
-const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache. Its request and response headers are included only with headers true. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. Request and response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved, or, for a page already open, from when the user approves its site or moves its tab into the tab group, with no requests. since is the time (ms since the epoch) from which the page has been recorded: requests started before it are missing, except that after a load the page's own request, which starts just before since, is included. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. When the user withdraws the approval or the tab leaves the tab group, what was recorded is gone; a new approval or a move back starts recording again, with no requests. recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again, for example when the tab went to another site without loading a page; a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. types keeps only the requests whose type is exactly one of them. failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request; a redirect, or a request with no status or error yet, has not failed. pattern, types and failed all apply before limit: of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
+const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache. Its request and response headers are included only with headers true. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. With body true, each request that sent a body includes requestBody, its shape and never a value or a length: kind is form (each name once, filled by its first value), json (the keys of a JSON object or array, at most ${MAX_NETWORK_BODY_DEPTH} deep, of an array only its first element, named ${NETWORK_BODY_ELEMENT}) or other. Each field gives the kind of its value (text for a form value; string, number, boolean, null, object or array for JSON) and, for text, strings, objects and arrays, whether it is filled; an other body says whether it is filled when Foxleash got its bytes. A name that is not a plain field name (an ASCII letter or _ first, then letters, digits, _ . : $ [ ] or -, at most 100 characters) is left out, and one ${NETWORK_BODY_NAME_WITHHELD} field stands for all such names of an object or form; of names that differ only in numbers in brackets, such as a[0] and a[1], only the first is listed. At most ${MAX_NETWORK_BODY_FIELDS} fields are listed, the shallowest first, with truncated true in requestBody when more were left out. A multipart file field is a text field, filled when the file has a name. Response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved, or, for a page already open, from when the user approves its site or moves its tab into the tab group, with no requests. since is the time (ms since the epoch) from which the page has been recorded: requests started before it are missing, except that after a load the page's own request, which starts just before since, is included. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. When the user withdraws the approval or the tab leaves the tab group, what was recorded is gone; a new approval or a move back starts recording again, with no requests. recording false means Foxleash could not start recording in the page, or recording stopped and nothing started it again, for example when the tab went to another site without loading a page; a later approval or a move into the tab group tries again, and reloading the page with navigate starts recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers or body shapes are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. types keeps only the requests whose type is exactly one of them. failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request; a redirect, or a request with no status or error yet, has not failed. pattern, types and failed all apply before limit: of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
 const UNREADABLE_NETWORK = "Firefox returned network requests Foxleash cannot read.";
 const NETWORK_HEADERS = z
   .array(
@@ -236,6 +243,26 @@ const NETWORK_HEADERS = z
     }),
   )
   .max(MAX_NETWORK_HEADERS);
+const NETWORK_BODY = z.object({
+  kind: z.enum(NETWORK_BODY_KINDS),
+  filled: z.boolean().optional(),
+  fields: z
+    .array(
+      z.object({
+        name: z.union([
+          z.string().regex(NETWORK_BODY_NAME),
+          z.literal(NETWORK_BODY_ELEMENT),
+          z.literal(NETWORK_BODY_NAME_WITHHELD),
+        ]),
+        depth: z.number().int().min(1).max(MAX_NETWORK_BODY_DEPTH),
+        kind: z.enum(NETWORK_BODY_FIELD_KINDS),
+        filled: z.boolean().optional(),
+      }),
+    )
+    .max(MAX_NETWORK_BODY_FIELDS)
+    .optional(),
+  truncated: z.boolean().optional(),
+});
 const NETWORK_RESULT = z.object({
   recording: z.boolean(),
   since: z.number().optional(),
@@ -253,6 +280,7 @@ const NETWORK_RESULT = z.object({
         fromCache: z.boolean().optional(),
         requestHeaders: NETWORK_HEADERS.optional(),
         responseHeaders: NETWORK_HEADERS.optional(),
+        requestBody: NETWORK_BODY.optional(),
       }),
     )
     .max(MAX_NETWORK_REQUESTS),
@@ -953,15 +981,22 @@ export function registerTools(
           .describe(
             "true: include each request's request and response headers, which are left out unless true",
           ),
+        body: z
+          .boolean()
+          .optional()
+          .describe(
+            "true: include the shape of what each request sent (field names or JSON keys, the kind of each value and whether each is filled, never the values), which is left out unless true",
+          ),
       },
     },
-    async ({ tabId, pattern, types, failed, limit, headers }) => {
+    async ({ tabId, pattern, types, failed, limit, headers, body }) => {
       const params: Params<"read_network"> = { tabId };
       if (pattern !== undefined) params.pattern = pattern;
       if (types !== undefined) params.types = types;
       if (failed !== undefined) params.failed = failed;
       if (limit !== undefined) params.limit = limit;
       if (headers !== undefined) params.headers = headers;
+      if (body !== undefined) params.body = body;
       const called = await callBridge(bridge, "read_network", params);
       if (!called.ok) return called.error;
       const parsed = NETWORK_RESULT.safeParse(called.result);

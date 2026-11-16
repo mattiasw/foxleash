@@ -53,6 +53,7 @@ apps/extension/src/propose.ts
 apps/extension/src/read-page.ts
 apps/extension/src/recipe-prompts.ts
 apps/extension/src/recipes.ts
+apps/extension/src/request-body.ts
 apps/extension/src/run.html
 apps/extension/src/run.ts
 apps/extension/src/screenshot.ts

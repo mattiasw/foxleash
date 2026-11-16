@@ -20,6 +20,7 @@ import type {
 } from "./browser-api.ts";
 import { createLiveDocuments, type LiveDocument } from "./live-documents.ts";
 import { capText } from "./page-messages.ts";
+import { bodyShape } from "./request-body.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { siteOf, withoutFragment } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
@@ -55,6 +56,7 @@ export interface NetworkReadOptions {
   types?: readonly string[];
   failed: boolean;
   headers: boolean;
+  body: boolean;
   limit: number;
 }
 
@@ -127,8 +129,9 @@ type Change = (request: NetworkRequest) => void;
 
 /**
  * Records the network requests of each live document (see live-documents.ts), per tab, with
- * credential headers redacted and every string capped as it arrives. Adds its listeners at once
- * (call it at the top level of the background script); none of them blocks a request.
+ * credential headers redacted, request bodies reduced to their shape and every string capped as
+ * it arrives. Adds its listeners at once (call it at the top level of the background script);
+ * none of them blocks a request.
  */
 export function createNetworkLog({ browser, groups, access, now }: NetworkLogDeps): NetworkLog {
   const logs = new Map<number, Log>();
@@ -145,7 +148,9 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   });
 
   const { webRequest } = browser;
-  webRequest.onBeforeRequest.addListener(onBeforeRequest, { urls: ["<all_urls>"] });
+  webRequest.onBeforeRequest.addListener(onBeforeRequest, { urls: ["<all_urls>"] }, [
+    "requestBody",
+  ]);
   webRequest.onSendHeaders.addListener(onSendHeaders, { urls: ["<all_urls>"] }, ["requestHeaders"]);
   webRequest.onHeadersReceived.addListener(onHeadersReceived, { urls: ["<all_urls>"] }, [
     "responseHeaders",
@@ -356,7 +361,7 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
     session: string,
     tabId: number,
     site: string,
-    { pattern, types, failed, headers, limit }: NetworkReadOptions,
+    { pattern, types, failed, headers, body, limit }: NetworkReadOptions,
   ): Result<"read_network"> {
     const log = current(tabId);
     if (log?.live === undefined || log.live.session !== session || log.live.site !== site) {
@@ -373,7 +378,7 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
     return {
       recording: true,
       since: log.at,
-      requests: kept.map((entry) => copyOf(entry.request, headers)),
+      requests: kept.map((entry) => copyOf(entry.request, headers, body)),
       truncated: log.dropped || matches.length > kept.length,
     };
   }
@@ -404,6 +409,8 @@ function entryOf(details: RequestDetails): Entry {
     requestHeaders: [],
     responseHeaders: [],
   };
+  const requestBody = bodyShape(details.requestBody);
+  if (requestBody !== undefined) request.requestBody = requestBody;
   return {
     requestId: details.requestId,
     request,
@@ -428,6 +435,12 @@ function charsOf(request: NetworkRequest): number {
   for (const { name, value } of [...request.requestHeaders, ...request.responseHeaders]) {
     chars += name.length + value.length;
   }
+  if (request.requestBody !== undefined) {
+    chars += request.requestBody.kind.length;
+    for (const { name, kind } of request.requestBody.fields ?? []) {
+      chars += name.length + kind.length;
+    }
+  }
   return chars;
 }
 
@@ -436,7 +449,7 @@ function hasFailed(request: NetworkRequest): boolean {
   return (request.status ?? 0) >= 400 || request.error !== undefined;
 }
 
-function copyOf(request: NetworkRequest, headers: boolean): NetworkRequestRead {
+function copyOf(request: NetworkRequest, headers: boolean, body: boolean): NetworkRequestRead {
   const copy: NetworkRequestRead = {
     url: request.url,
     method: request.method,
@@ -446,6 +459,11 @@ function copyOf(request: NetworkRequest, headers: boolean): NetworkRequestRead {
   if (headers) {
     copy.requestHeaders = request.requestHeaders.map((header) => ({ ...header }));
     copy.responseHeaders = request.responseHeaders.map((header) => ({ ...header }));
+  }
+  if (body && request.requestBody !== undefined) {
+    const { fields, ...shape } = request.requestBody;
+    copy.requestBody = { ...shape };
+    if (fields !== undefined) copy.requestBody.fields = fields.map((field) => ({ ...field }));
   }
   if (request.durationMs !== undefined) copy.durationMs = request.durationMs;
   if (request.status !== undefined) copy.status = request.status;

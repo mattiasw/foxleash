@@ -162,6 +162,20 @@
       ]
     },
     {
+      "listing": "Foxleash never gives it the values a request sent",
+      "evidence": [
+        {
+          "file": "apps/extension/src/request-body.ts",
+          "contains": "kind: \"text\",\n      filled: value.length > 0,"
+        },
+        { "file": "apps/extension/src/request-body.ts", "contains": "NETWORK_BODY_NAME_WITHHELD" },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "bodyShape(details.requestBody)"
+        }
+      ]
+    },
+    {
       "listing": "never gives it the values of password fields, of one-time code and card number fields that the page marks as such for autofill, or of text fields that Firefox filled in from your saved logins, addresses or cards, until you edit them",
       "evidence": [
         { "file": "apps/extension/src/page-tree.ts", "contains": "isProtectedField" },

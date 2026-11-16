@@ -183,6 +183,8 @@ export interface NetworkRequest {
   fromCache?: boolean;
   requestHeaders: NetworkHeader[];
   responseHeaders: NetworkHeader[];
+  /** The shape of what the request sent; absent when it sent no body. */
+  requestBody?: NetworkBody;
 }
 
 /** A request as read_network returns it: the headers only when the read asked for them. */
@@ -197,6 +199,53 @@ export const DEFAULT_NETWORK_LIMIT = 100;
 export const MAX_NETWORK_PATTERN = 1_000;
 /** The most resource types read_network's types takes. */
 export const MAX_NETWORK_TYPES = 20;
+
+export const NETWORK_BODY_KINDS = ["form", "json", "other"] as const;
+export type NetworkBodyKind = (typeof NETWORK_BODY_KINDS)[number];
+export const NETWORK_BODY_FIELD_KINDS = [
+  "text",
+  "string",
+  "number",
+  "boolean",
+  "null",
+  "object",
+  "array",
+] as const;
+export type NetworkBodyFieldKind = (typeof NETWORK_BODY_FIELD_KINDS)[number];
+/**
+ * A body's field name or key shown as it is: an ASCII letter or _ first, then ASCII letters,
+ * digits and _ . : $ [ ] -, at most 100 in all. Any other name could be a value.
+ */
+export const NETWORK_BODY_NAME = /^[A-Za-z_][A-Za-z0-9_.:$[\]-]{0,99}$/;
+/** The name shown for a JSON array's first element, the only one listed. */
+export const NETWORK_BODY_ELEMENT = "[]";
+/** Shown once per object or form in place of the names NETWORK_BODY_NAME does not match. */
+export const NETWORK_BODY_NAME_WITHHELD = "(name withheld)";
+/** The most fields a request body's shape lists, at all depths together. */
+export const MAX_NETWORK_BODY_FIELDS = 100;
+/** The deepest a JSON body's keys are listed; a key at the top level is at depth 1. */
+export const MAX_NETWORK_BODY_DEPTH = 4;
+
+export interface NetworkBodyField {
+  /** The name, NETWORK_BODY_ELEMENT, or NETWORK_BODY_NAME_WITHHELD. */
+  name: string;
+  /** 1 at the top level; a key inside an object or array is one deeper. */
+  depth: number;
+  kind: NetworkBodyFieldKind;
+  /** For text, string, object and array: false when empty. */
+  filled?: boolean;
+}
+
+/** What a request sent, without any value or length. */
+export interface NetworkBody {
+  kind: NetworkBodyKind;
+  /** For other, when Foxleash got its bytes: whether it had any. */
+  filled?: boolean;
+  /** For form and json, possibly empty. */
+  fields?: NetworkBodyField[];
+  /** Fields were left out by MAX_NETWORK_BODY_FIELDS or MAX_NETWORK_BODY_DEPTH. */
+  truncated?: boolean;
+}
 /** A request's URL and redirect target are cut to this many UTF-16 units. */
 export const MAX_NETWORK_URL = 2_000;
 /** Each header name and value, a request's method, type and error are cut to this many. */
@@ -475,6 +524,7 @@ export interface Methods {
       types?: string[];
       failed?: boolean;
       headers?: boolean;
+      body?: boolean;
       limit?: number;
     };
     result: {

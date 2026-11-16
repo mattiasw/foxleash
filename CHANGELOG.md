@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_network` can return only the requests of given resource types, such as scripts or fetch
   requests (`types`), and only the requests that failed, with status 400 or above or an error
   such as a refused connection (`failed`).
+- `read_network` can show what each request sent as field names, the kind of each value and
+  whether each is filled, never the values (`body`), for example to check that a form's field was
+  in a POST.
 
 ### Changed
 

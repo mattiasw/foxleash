@@ -220,7 +220,27 @@ the cache.
   (`headers`). Foxleash still records them, so a later read can ask for the headers of requests
   an earlier one left them out of.
 - The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers
-  are replaced with `[redacted]`, and request and response bodies are not included.
+  are replaced with `[redacted]`. Response bodies are not included.
+- With `body`, each request that sent a body includes `requestBody`: its shape, never a value, a
+  length or a size. Its `kind` is `form`, `json` or `other`. A form lists each field name once,
+  filled by its first value. A JSON object or array lists its keys, at most 4 deep, and of an
+  array only its first element, named `[]`. Each field gives its depth, the kind of its value
+  (`text` for a form value; `string`, `number`, `boolean`, `null`, `object` or `array` for JSON)
+  and, for text, strings, objects and arrays, whether it is `filled`. At most 100 fields are
+  listed, the shallowest first, so a large object cannot hide a later key; `truncated` in
+  `requestBody` says more were left out.
+- A field name or key is shown only when it looks like a field name: an ASCII letter or `_`
+  first, then ASCII letters, digits, `_ . : $ [ ] -`, at most 100 characters. Other names, such
+  as an email address or a number used as a key, could be values: one `(name withheld)` field
+  stands for all of them in an object or form. Of names that differ only in numbers in brackets,
+  such as `items[0]` and `items[1]`, the way a form sends an array, only the first is listed,
+  since their count could follow a value's length.
+- A multipart file field shows as a text field, filled when the file has a name; its size is not
+  shown. A body that is not a form although its content type says so, such as JSON or a token
+  sent as a form, shows as `other` with no fields, and so does a form of one field that is empty
+  or holds only white space. So does a body over 1,000,000 bytes, or one that is not JSON in
+  strict UTF-8, which says whether it is filled. When Firefox gives a file instead of the body's
+  bytes, `other` does not say whether it is filled.
 - Requests made by the page's frames are included.
 - Foxleash records a page's requests from when it starts loading in a tab of the agent's group
   on a site you approved, and loading a new page in the tab starts a new list, beginning with that
@@ -233,7 +253,8 @@ the cache.
 - The result gives `since`, the time from which the page has been recorded, when it is
   recording: requests that started earlier are missing. After a page load, `since` is the time the
   page was committed, and the page's own request, which starts just before it, is listed.
-- Foxleash keeps the newest 500 requests of a page, fewer when their headers are long.
+- Foxleash keeps the newest 500 requests of a page, fewer when their headers or body shapes are
+  long.
 - The agent can ask for the requests whose URL contains a piece of plain text (`pattern`).
 - It can ask for the requests of up to 20 resource types (`types`), such as `main_frame` for the
   page itself, `script`, `stylesheet`, `image`, `font` or `xmlhttprequest` for fetch and

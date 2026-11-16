@@ -177,6 +177,32 @@ When the page turns a password field into another kind of field after the agent 
 took a screenshot of it or acted in it while it was a password field, a screenshot hides the
 text of every input element in the page, input buttons included, outside its frames.
 
+### Request bodies
+
+`read_network` never returns a value from a request body, nor a value's length or the count of
+its parts, for any field: a body carries what protected fields hold, and a login form's POST
+carries the saved password Firefox filled in. It returns only the names of the fields, the kind
+of each value and whether each is filled, as `protected filled` says a field is filled. No length
+or size range is shown either, because an agent that can add text to a field and send the form
+again could read a value's exact length off any edge of a range.
+
+Exceptions and limits:
+
+- Names that do not look like field names are withheld, but a value used as a name or key still
+  shows when it looks like one: a plain word, or a token, UUID or JWT that starts with a letter or
+  `_` and is at most 100 characters long. So does a piece of a value in a body that a page builds
+  by joining text without escaping it (`pass=p&ss=w0rd` shows a field `ss`).
+- A form name is listed once, and of names that differ only in numbers in brackets (`a[0]`,
+  `a[1]`) only the first, but the number of other distinct plain names, and which of them are
+  empty, show: a code typed into one box per digit, each box with a name of its own, shows its
+  length.
+- With `headers: true`, the `Content-Length` request header gives a body's exact length in bytes.
+- A form sent with GET puts its values in the URL, which `read_network` shows.
+- A JSON body that grows past 1,000,000 bytes turns from `json` to `other`. An agent that can
+  fill another field of the same body with enough text can find the body's exact length from
+  where it turns, as `Content-Length` gives it.
+- Requests of frames from other sites show the shapes of their bodies too.
+
 ## Saved screenshots
 
 Saved screenshots go only into the agent's working folder, as new files, and never over an

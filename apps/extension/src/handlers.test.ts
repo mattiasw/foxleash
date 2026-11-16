@@ -6580,7 +6580,7 @@ describe("read_network", { timeout: 10000 }, () => {
       pattern: undefined,
       limit: undefined,
     });
-    const unset = { failed: false, headers: false };
+    const unset = { failed: false, headers: false, body: false };
     assert.deepEqual(context.networkReads, [
       {
         session: "s1",
@@ -6638,10 +6638,10 @@ describe("read_network", { timeout: 10000 }, () => {
     assert.deepEqual(context.networkReads, []);
   });
 
-  it("refuses failed and headers that are not true or false", async () => {
+  it("refuses failed, headers and body that are not true or false", async () => {
     const context = setup();
     const tab = await approvedTab(context);
-    for (const key of ["failed", "headers"]) {
+    for (const key of ["failed", "headers", "body"]) {
       for (const value of ["true", 1, 0, null]) {
         await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, [key]: value }), {
           code: "invalid_params",
@@ -6652,7 +6652,7 @@ describe("read_network", { timeout: 10000 }, () => {
     assert.deepEqual(context.networkReads, []);
   });
 
-  it("passes types, failed and headers through when given", async () => {
+  it("passes types, failed, headers and body through when given", async () => {
     const context = setup();
     const tab = await approvedTab(context);
     context.networkWith(recorded);
@@ -6667,40 +6667,58 @@ describe("read_network", { timeout: 10000 }, () => {
       failed: true,
       limit: 3,
       headers: true,
+      body: true,
     });
-    await context.call("s1", "read_network", { tabId: tab.id, failed: false, headers: false });
+    await context.call("s1", "read_network", {
+      tabId: tab.id,
+      failed: false,
+      headers: false,
+      body: false,
+    });
     await context.call("s1", "read_network", { tabId: tab.id, types: most });
     await context.call("s1", "read_network", { tabId: tab.id, headers: true });
     await context.call("s1", "read_network", { tabId: tab.id, types: ["a"] });
-    const [all, unset, longest, withHeaders, shortest] = context.networkReads;
+    await context.call("s1", "read_network", { tabId: tab.id, body: true });
+    const [all, unset, longest, withHeaders, shortest, withBody] = context.networkReads;
     assert.deepEqual(all?.options, {
       pattern: "/api",
       types,
       failed: true,
       headers: true,
+      body: true,
       limit: 3,
     });
     assert.notEqual(all?.options.types, types);
     assert.deepEqual(unset?.options, {
       failed: false,
       headers: false,
+      body: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(longest?.options, {
       types: most,
       failed: false,
       headers: false,
+      body: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(withHeaders?.options, {
       failed: false,
       headers: true,
+      body: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(shortest?.options, {
       types: ["a"],
       failed: false,
       headers: false,
+      body: false,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
+    assert.deepEqual(withBody?.options, {
+      failed: false,
+      headers: false,
+      body: true,
       limit: DEFAULT_NETWORK_LIMIT,
     });
   });
@@ -6708,7 +6726,14 @@ describe("read_network", { timeout: 10000 }, () => {
   it("reads params as own fields only", async () => {
     const context = setup();
     const tab = await approvedTab(context);
-    const inherited = { pattern: 1, limit: 0, types: ["script"], failed: true, headers: true };
+    const inherited = {
+      pattern: 1,
+      limit: 0,
+      types: ["script"],
+      failed: true,
+      headers: true,
+      body: true,
+    };
     const params = Object.assign(Object.create(inherited), { tabId: tab.id });
     await context.call("s1", "read_network", params);
     assert.deepEqual(context.networkReads, [
@@ -6716,7 +6741,7 @@ describe("read_network", { timeout: 10000 }, () => {
         session: "s1",
         tabId: tab.id,
         site: SITE,
-        options: { failed: false, headers: false, limit: DEFAULT_NETWORK_LIMIT },
+        options: { failed: false, headers: false, body: false, limit: DEFAULT_NETWORK_LIMIT },
       },
     ]);
   });
