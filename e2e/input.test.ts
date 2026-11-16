@@ -608,6 +608,43 @@ describe("type and press_key in real Firefox", () => {
     assert.equal(await evaluate(forms, "location.href"), forms.url);
   });
 
+  test("Enter in a form whose submit button has no type attribute and leads to another site is refused", async () => {
+    const forms = await open("/input-forms", TITLES.inputForms);
+    const ref = refOf(forms.tree, 'textbox "Away plain"');
+    const hits = fixtures.hits("/a");
+    const text = await harness.refused(session, "press_key", {
+      tabId: forms.tabId,
+      key: "Enter",
+      ref,
+    });
+    assert.ok(
+      text.includes(
+        `Enter on element ${ref} leads to a page on ${other}, which Foxleash does not open with press_key; call navigate with that address`,
+      ),
+      text,
+    );
+    await sleep(SETTLE_MS);
+    assert.deepEqual(await evaluate(forms, "window.submits"), []);
+    assert.deepEqual(await evaluate(forms, "window.clicks"), []);
+    assert.equal(await evaluate(forms, "location.href"), forms.url);
+    assert.equal(fixtures.hits("/a"), hits);
+  });
+
+  test("Enter in a form with no button whose relative action resolves against a base on another site is refused", async () => {
+    const based = await open("/act-base", TITLES.actBase);
+    const ref = refOf(based.tree, 'textbox "Based field"');
+    const hits = fixtures.hits("/a");
+    const text = await harness.refused(session, "press_key", {
+      tabId: based.tabId,
+      key: "Enter",
+      ref,
+    });
+    assert.ok(text.includes(`Enter on element ${ref} leads to a page on ${other},`), text);
+    await sleep(SETTLE_MS);
+    assert.equal(await evaluate(based, "location.href"), based.url);
+    assert.equal(fixtures.hits("/a"), hits);
+  });
+
   test("Enter on an SVG link does nothing but still sends keyup", async () => {
     const forms = await open("/input-forms", TITLES.inputForms);
     await evaluate(forms, 'document.getElementById("svg-link").focus()');

@@ -290,6 +290,27 @@ describe("click, hover, scroll and drag in real Firefox", () => {
     assert.equal(await evaluate(based, "location.href"), based.url);
   });
 
+  test("a form button with no type attribute that leads to another site is refused", async () => {
+    const links = await open("/act-links", TITLES.actLinks);
+    const ref = refOf(links.tree, 'button "Plain send"');
+    const text = await harness.refused(session, "click", { tabId: links.tabId, ref });
+    assert.ok(text.includes(`Element ${ref} leads to a page on ${other},`), text);
+    // Refused before the pointer moved.
+    assert.equal(await evaluate(links, "window.events"), 0);
+    assert.equal(await evaluate(links, "window.clicks"), 0);
+    assert.equal(await evaluate(links, "location.href"), links.url);
+  });
+
+  test("a form button whose relative action resolves against a base on another site is refused", async () => {
+    const based = await open("/act-base", TITLES.actBase);
+    const ref = refOf(based.tree, 'button "Based send"');
+    const hits = fixtures.hits("/a");
+    const text = await harness.refused(session, "click", { tabId: based.tabId, ref });
+    assert.ok(text.includes(`Element ${ref} leads to a page on ${other},`), text);
+    assert.equal(await evaluate(based, "location.href"), based.url);
+    assert.equal(fixtures.hits("/a"), hits);
+  });
+
   test("a link and a form button that lead out of the browser are refused, script links are not", async () => {
     const links = await open("/act-links", TITLES.actLinks);
     for (const line of ['link "Mail link"', 'button "Mail send"']) {

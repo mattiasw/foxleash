@@ -2463,6 +2463,7 @@ body { margin: 0; font: 14px sans-serif; }
 <button id="submit" class="at" style="left: 10px; top: 60px" type="submit">Send</button>
 </form>
 <label class="at" style="left: 150px; top: 60px" for="submit">Send label</label>
+<form action="${other}" method="get"><button id="plain-submit" class="at" style="left: 290px; top: 60px">Plain send</button></form>
 <svg class="at" style="left: 10px; top: 110px" width="120" height="30"><a href="${other}"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
 <svg class="at" style="left: 150px; top: 110px" width="120" height="30"><a><set attributeName="href" to="${other}"></set><rect width="120" height="30" fill="#ccc"></rect></a></svg>
 <div class="at" style="left: 290px; top: 110px"><template shadowrootmode="closed"><svg style="position: absolute; width: 0; height: 0"><slot></slot></svg><a href="${other}"><slot></slot></a></template><span class="at" style="position: static">Continue</span></div>
@@ -2532,14 +2533,16 @@ const ACT_MODAL_PAGE = `<!doctype html>
 <body style="margin: 0; overflow: hidden"><div style="height: 4000px">Modal page</div></body></html>
 `;
 
-// The root does not scroll and body does: the viewport takes the root's overflow, not body's.
-// A link whose relative address resolves against a base on the other site.
+// A link, an SVG link with an empty href, a form button and a buttonless form whose relative
+// addresses resolve against a base on the other site.
 function actBasePage(port: number): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.actBase}</title>
 <base href="http://localhost:${port}/"></head>
 <body style="margin: 0"><a href="a">Relative</a>
 <svg width="100" height="30" style="position: absolute; left: 0; top: 50px"><a href=""><rect width="100" height="30"/></a></svg>
+<form action="a" method="get" style="position: absolute; left: 0; top: 100px"><button type="submit">Based send</button></form>
+<form action="a" method="get" style="position: absolute; left: 0; top: 150px"><input aria-label="Based field" name="q"></form>
 </body></html>
 `;
 }
@@ -2848,6 +2851,7 @@ function inputFormsPage(port: number): string {
 <a id="mail-link" href="mailto:someone@example.org">Mail link</a>
 <svg width="120" height="30"><a id="svg-link" href="/a" tabindex="0"><rect width="120" height="30" fill="#ccc"></rect></a></svg>
 <div id="shadow-host"></div>
+<form id="away-plain" action="${other}"><input id="away-plain-field" aria-label="Away plain" name="q"><button id="away-plain-send">Away plain send</button></form>
 <script>
 window.submits = [];
 window.keys = [];
@@ -2929,6 +2933,7 @@ window.focusedId = () => {
 </body></html>
 `;
 
+// The root does not scroll and body does: the viewport takes the root's overflow, not body's.
 const ACT_BODY_SCROLL_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.actBodyScroll}</title>
 <style>
