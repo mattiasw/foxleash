@@ -20,6 +20,9 @@ const SAVE = 'button[data-answer="save"]';
 const DISCARD = 'button[data-answer="discard"]';
 const ALLOW = 'button[data-answer="allow"]';
 const NO = 'button[data-answer="no"]';
+// Each answer button's answer and label, in page order.
+const ANSWER_LABELS =
+  'JSON.stringify([...document.querySelectorAll("button[data-answer]")].map((button) => [button.dataset.answer, button.textContent]))';
 // Seeded as allowed always; never loaded.
 const ALWAYS = "https://a.example";
 const UNARMED = "The buttons respond a moment after this window is focused.";
@@ -195,6 +198,13 @@ describe("recipes the agent proposes, in real Firefox", () => {
     });
     assert.equal(state.current, false);
     assert.equal(state.readOnly, "false false false false");
+    assert.equal(
+      await firefox.evaluate(page, ANSWER_LABELS),
+      JSON.stringify([
+        ["discard", "Discard"],
+        ["save", "Save"],
+      ]),
+    );
   });
 
   test("only a trusted click on the armed Save stores the recipe", async (t) => {
@@ -777,6 +787,13 @@ describe("recipes the agent proposes, in real Firefox", () => {
         status: "",
         after: false,
       }),
+    );
+    assert.equal(
+      await firefox.evaluate(page, ANSWER_LABELS),
+      JSON.stringify([
+        ["no", "Don't allow"],
+        ["allow", "Allow these sites for this session"],
+      ]),
     );
 
     // A scripted click on an armed button grants nothing.

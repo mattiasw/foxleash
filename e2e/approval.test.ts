@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, afterEach, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { HOLD_JOIN_MS } from "../apps/extension/src/prompt-arming.ts";
+import { ARMING_DELAY_MS, HOLD_JOIN_MS } from "../apps/extension/src/prompt-arming.ts";
 import { type Firefox, KEY, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
@@ -19,6 +19,9 @@ const ANSWER = {
   once: 'button[data-answer="once"]',
   always: 'button[data-answer="always"]',
 } as const;
+// Each answer button's answer and label, in page order.
+const ANSWER_LABELS =
+  'JSON.stringify([...document.querySelectorAll("button[data-answer]")].map((button) => [button.dataset.answer, button.textContent]))';
 const UNARMED = "The buttons respond a moment after this window is focused.";
 const UNARMED_COUNT =
   "document.querySelectorAll('button[data-answer][aria-disabled=\"true\"]').length";
@@ -90,6 +93,14 @@ describe("the approval prompt, in real Firefox", () => {
     assert.equal(site.hits("/a"), 0);
     const prompt = await harness.promptContext(existing);
     await waitForQuestion(prompt, site.site);
+    assert.equal(
+      await firefox.evaluate(prompt, ANSWER_LABELS),
+      JSON.stringify([
+        ["no", "Don't allow"],
+        ["once", "Allow this session"],
+        ["always", "Always allow"],
+      ]),
+    );
 
     // Hidden, then shown: still unarmed, as arming takes a full second of focus.
     const elsewhere = await firefox.openContext("about:blank");
@@ -736,6 +747,69 @@ describe("the approval prompt, in real Firefox", () => {
     await heldUntilInput(async (prompt) => {
       await firefox.evaluate(prompt, CHORDED_RIGHT_PRESS);
     });
+  });
+
+  test("a click whose press began before the buttons armed does not answer", async (t) => {
+    const session = await connected();
+    t.after(() => session.close());
+    const hits = site.hits("/a");
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, site.site);
+    const elsewhere = await firefox.openContext("about:blank");
+    t.after(() => firefox.closeContext(elsewhere));
+    await firefox.activate(elsewhere);
+    assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+
+    // The press switches to the prompt first, so it goes down within the page's first second of
+    // focus; held, it starts no second again, and the page arms under it.
+    await firefox.press(prompt, ANSWER.once);
+    try {
+      assert.equal(await firefox.evaluate(prompt, UNARMED_COUNT), 3);
+      await waitFor(prompt, `String(${UNARMED_COUNT})`, "0");
+    } finally {
+      await firefox.release(prompt);
+    }
+    await stillPending(opening, PENDING_MS);
+    await waitForStatus(prompt, UNARMED);
+    assert.equal(site.hits("/a"), hits);
+
+    // The page still answers a click pressed while armed.
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, ANSWER.once);
+    assert.equal(tabOf(await opening).url, site.url("/a"));
+    assert.equal(site.hits("/a"), hits + 1);
+  });
+
+  test("a prompt in a visible tab of a window without focus stays unarmed, and the click that focuses it does not answer", async (t) => {
+    const session = await connected();
+    t.after(() => session.close());
+    // Opened in the window that has focus, before another window takes it.
+    const tabId = tabOf(await harness.ok(session, "tab_open")).id;
+    const front = await firefox.openWindow();
+    t.after(() => firefox.closeContext(front));
+    await firefox.activate(front);
+    const hits = site.hits("/a");
+    const existing = await promptContexts();
+    const navigating = pending(
+      harness.refused(session, "navigate", { tabId, url: site.url("/a") }),
+    );
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, site.site);
+    // Only BiDi until the click: a Marionette call on the prompt switches to its window, which
+    // focuses it.
+    const state = `JSON.stringify([document.visibilityState, document.hasFocus(), ${UNARMED_COUNT}])`;
+    const unfocused = JSON.stringify(["visible", false, 3]);
+    assert.equal(await firefox.evaluate(prompt, state), unfocused);
+    await sleep(ARMING_DELAY_MS + 500);
+    assert.equal(await firefox.evaluate(prompt, state), unfocused);
+
+    // The click focuses the window and lands at once.
+    await firefox.click(prompt, ANSWER.once);
+    await waitForStatus(prompt, UNARMED);
+    await stillPending(navigating, PENDING_MS);
+    assert.equal(site.hits("/a"), hits);
   });
 
   async function connected(): Promise<Session> {
