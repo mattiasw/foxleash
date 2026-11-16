@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   approve its site or move its tab into the agent's group, without loading it again, so a form
   keeps what you typed. Both say from when they have recorded the page (`since`). Before, such a
   page was recorded only once it loaded again.
+- The agent is told that screenshots show protected fields, such as those Firefox filled in from
+  your saved addresses, without their text, so it no longer takes a filled field that looks empty
+  in a screenshot for an empty one.
 
 ## [0.4.1] - 2026-11-16
 
