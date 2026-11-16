@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
   DEFAULT_NETWORK_LIMIT,
+  MAX_NETWORK_HEADER,
   MAX_NETWORK_PATTERN,
+  MAX_NETWORK_TYPES,
   type MethodName,
   type ProbeResult,
   type Result,
@@ -6567,22 +6569,144 @@ describe("read_network", { timeout: 10000 }, () => {
       pattern: undefined,
       limit: undefined,
     });
+    const unset = { failed: false, headers: false };
     assert.deepEqual(context.networkReads, [
-      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
-      { session: "s1", tabId: tab.id, site: SITE, options: { pattern: longest, limit: 500 } },
-      { session: "s1", tabId: tab.id, site: SITE, options: { pattern: "", limit: 1 } },
-      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
+      {
+        session: "s1",
+        tabId: tab.id,
+        site: SITE,
+        options: { ...unset, limit: DEFAULT_NETWORK_LIMIT },
+      },
+      {
+        session: "s1",
+        tabId: tab.id,
+        site: SITE,
+        options: { ...unset, pattern: longest, limit: 500 },
+      },
+      { session: "s1", tabId: tab.id, site: SITE, options: { ...unset, pattern: "", limit: 1 } },
+      {
+        session: "s1",
+        tabId: tab.id,
+        site: SITE,
+        options: { ...unset, limit: DEFAULT_NETWORK_LIMIT },
+      },
     ]);
     assert.equal(DEFAULT_NETWORK_LIMIT, 100);
+  });
+
+  it("refuses types that are not a list of 1 to 20 texts of 1 to 1,000 characters", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    const holed = ["script", "image"];
+    delete holed[0];
+    const sparse: unknown[] = new Array(2);
+    sparse[1] = "script";
+    const refused: unknown[] = [
+      "script",
+      null,
+      1,
+      { 0: "script", length: 1 },
+      [],
+      Array.from({ length: MAX_NETWORK_TYPES + 1 }, () => "script"),
+      ["script", 1],
+      ["script", null],
+      [""],
+      ["a".repeat(MAX_NETWORK_HEADER + 1)],
+      // 1,002 UTF-16 units in 501 code points.
+      ["\u{1F600}".repeat(501)],
+      holed,
+      sparse,
+    ];
+    for (const types of refused) {
+      await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, types }), {
+        code: "invalid_params",
+        message:
+          "read_network needs types to be a list of 1 to 20 resource types, each text of 1 to 1,000 characters.",
+      });
+    }
+    assert.deepEqual(context.networkReads, []);
+  });
+
+  it("refuses failed and headers that are not true or false", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    for (const key of ["failed", "headers"]) {
+      for (const value of ["true", 1, 0, null]) {
+        await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, [key]: value }), {
+          code: "invalid_params",
+          message: `read_network needs ${key} to be true or false.`,
+        });
+      }
+    }
+    assert.deepEqual(context.networkReads, []);
+  });
+
+  it("passes types, failed and headers through when given", async () => {
+    const context = setup();
+    const tab = await approvedTab(context);
+    context.networkWith(recorded);
+    const types = ["script", "xmlhttprequest"];
+    const most = Array.from({ length: MAX_NETWORK_TYPES }, (_, index) =>
+      String(index).padEnd(MAX_NETWORK_HEADER, "t"),
+    );
+    await context.call("s1", "read_network", {
+      tabId: tab.id,
+      pattern: "/api",
+      types,
+      failed: true,
+      limit: 3,
+      headers: true,
+    });
+    await context.call("s1", "read_network", { tabId: tab.id, failed: false, headers: false });
+    await context.call("s1", "read_network", { tabId: tab.id, types: most });
+    await context.call("s1", "read_network", { tabId: tab.id, headers: true });
+    await context.call("s1", "read_network", { tabId: tab.id, types: ["a"] });
+    const [all, unset, longest, withHeaders, shortest] = context.networkReads;
+    assert.deepEqual(all?.options, {
+      pattern: "/api",
+      types,
+      failed: true,
+      headers: true,
+      limit: 3,
+    });
+    assert.notEqual(all?.options.types, types);
+    assert.deepEqual(unset?.options, {
+      failed: false,
+      headers: false,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
+    assert.deepEqual(longest?.options, {
+      types: most,
+      failed: false,
+      headers: false,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
+    assert.deepEqual(withHeaders?.options, {
+      failed: false,
+      headers: true,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
+    assert.deepEqual(shortest?.options, {
+      types: ["a"],
+      failed: false,
+      headers: false,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
   });
 
   it("reads params as own fields only", async () => {
     const context = setup();
     const tab = await approvedTab(context);
-    const params = Object.assign(Object.create({ pattern: 1, limit: 0 }), { tabId: tab.id });
+    const inherited = { pattern: 1, limit: 0, types: ["script"], failed: true, headers: true };
+    const params = Object.assign(Object.create(inherited), { tabId: tab.id });
     await context.call("s1", "read_network", params);
     assert.deepEqual(context.networkReads, [
-      { session: "s1", tabId: tab.id, site: SITE, options: { limit: DEFAULT_NETWORK_LIMIT } },
+      {
+        session: "s1",
+        tabId: tab.id,
+        site: SITE,
+        options: { failed: false, headers: false, limit: DEFAULT_NETWORK_LIMIT },
+      },
     ]);
   });
 

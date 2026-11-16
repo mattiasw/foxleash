@@ -5,6 +5,7 @@ import {
   MAX_NETWORK_URL,
   type NetworkHeader,
   type NetworkRequest,
+  type NetworkRequestRead,
   type Result,
 } from "@foxleash/protocol";
 import type {
@@ -50,6 +51,9 @@ export interface NetworkLogDeps {
 
 export interface NetworkReadOptions {
   pattern?: string;
+  types?: readonly string[];
+  failed: boolean;
+  headers: boolean;
   limit: number;
 }
 
@@ -334,20 +338,23 @@ export function createNetworkLog({ browser, groups, access }: NetworkLogDeps): N
     session: string,
     tabId: number,
     site: string,
-    { pattern, limit }: NetworkReadOptions,
+    { pattern, types, failed, headers, limit }: NetworkReadOptions,
   ): Result<"read_network"> {
     const log = current(tabId);
     if (log?.live === undefined || log.live.session !== session || log.live.site !== site) {
       return { recording: false, requests: [], truncated: false };
     }
-    const matches =
-      pattern === undefined
-        ? log.entries
-        : log.entries.filter((entry) => entry.request.url.includes(pattern));
+    const typeSet = types === undefined ? undefined : new Set(types);
+    const matches = log.entries.filter(
+      ({ request }) =>
+        (pattern === undefined || request.url.includes(pattern)) &&
+        (typeSet === undefined || typeSet.has(request.type)) &&
+        (!failed || hasFailed(request)),
+    );
     const kept = matches.slice(Math.max(0, matches.length - limit));
     return {
       recording: true,
-      requests: kept.map((entry) => copyOf(entry.request)),
+      requests: kept.map((entry) => copyOf(entry.request, headers)),
       truncated: log.dropped || matches.length > kept.length,
     };
   }
@@ -405,15 +412,22 @@ function charsOf(request: NetworkRequest): number {
   return chars;
 }
 
-function copyOf(request: NetworkRequest): NetworkRequest {
-  const copy: NetworkRequest = {
+/** Status 400 or above, or Firefox's error; a redirect or a request still in flight has not. */
+function hasFailed(request: NetworkRequest): boolean {
+  return (request.status ?? 0) >= 400 || request.error !== undefined;
+}
+
+function copyOf(request: NetworkRequest, headers: boolean): NetworkRequestRead {
+  const copy: NetworkRequestRead = {
     url: request.url,
     method: request.method,
     type: request.type,
     startTime: request.startTime,
-    requestHeaders: request.requestHeaders.map((header) => ({ ...header })),
-    responseHeaders: request.responseHeaders.map((header) => ({ ...header })),
   };
+  if (headers) {
+    copy.requestHeaders = request.requestHeaders.map((header) => ({ ...header }));
+    copy.responseHeaders = request.responseHeaders.map((header) => ({ ...header }));
+  }
   if (request.durationMs !== undefined) copy.durationMs = request.durationMs;
   if (request.status !== undefined) copy.status = request.status;
   if (request.redirectUrl !== undefined) copy.redirectUrl = request.redirectUrl;

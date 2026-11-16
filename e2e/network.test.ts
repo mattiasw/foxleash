@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { NetworkHeader, NetworkRequest } from "@foxleash/protocol";
+import type { NetworkHeader, NetworkRequestRead } from "@foxleash/protocol";
 import {
   type FixtureServer,
   NETWORK_SECRETS,
@@ -20,7 +20,7 @@ import {
 
 interface NetworkRead {
   recording: boolean;
-  requests: NetworkRequest[];
+  requests: NetworkRequestRead[];
   truncated: boolean;
   /** The tool's whole result text, frame included. */
   text: string;
@@ -68,10 +68,13 @@ describe("read_network in real Firefox", () => {
   );
 
   test("lists the page's own request, its fetch, XHR and frame request", async () => {
-    const read = await readUntil(networkTab, (requests) =>
-      ["/api/fetch", "/api/xhr", "/api/frame"].every(
-        (path) => requestTo(requests, path)?.status !== undefined,
-      ),
+    const read = await readUntil(
+      networkTab,
+      (requests) =>
+        ["/api/fetch", "/api/xhr", "/api/frame"].every(
+          (path) => requestTo(requests, path)?.status !== undefined,
+        ),
+      { headers: true },
     );
     assert.equal(read.recording, true);
     const [page] = read.requests;
@@ -96,6 +99,38 @@ describe("read_network in real Firefox", () => {
       `http://localhost:${fixtures.port}/api/frame`,
     );
     assertNoSecrets(read.text);
+  });
+
+  test("leaves the headers out unless asked", async (t) => {
+    const without = await readUntil(networkTab, (requests) =>
+      ["/api/fetch", "/api/xhr", "/api/frame"].every(
+        (path) => requestTo(requests, path)?.status !== undefined,
+      ),
+    );
+    const withHeaders = await readNetwork(networkTab, { headers: true });
+    for (const request of without.requests) {
+      assert.equal(Object.hasOwn(request, "requestHeaders"), false, JSON.stringify(request));
+      assert.equal(Object.hasOwn(request, "responseHeaders"), false, JSON.stringify(request));
+    }
+    for (const request of withHeaders.requests) {
+      assert.ok(Array.isArray(request.requestHeaders), JSON.stringify(request));
+      assert.ok(Array.isArray(request.responseHeaders), JSON.stringify(request));
+    }
+    assert.ok(without.text.length < withHeaders.text.length);
+    t.diagnostic(
+      `read_network on the network page: ${Buffer.byteLength(without.text)} bytes for ${without.requests.length} requests without headers, ${Buffer.byteLength(withHeaders.text)} bytes for ${withHeaders.requests.length} with headers`,
+    );
+  });
+
+  test("types returns only the requests of those types", async () => {
+    await readUntil(networkTab, (requests) => requestTo(requests, "/api/xhr") !== undefined);
+    const read = await readNetwork(networkTab, { types: ["main_frame"] });
+    assert.deepEqual(
+      read.requests.map((request) => request.url),
+      [fixtures.url("/network")],
+    );
+    for (const request of read.requests) assert.equal(request.type, "main_frame");
+    assert.equal(read.truncated, false);
   });
 
   test("a pattern returns only the requests whose URL contains it", async () => {
@@ -123,6 +158,7 @@ describe("read_network in real Firefox", () => {
     const read = await readUntil(
       tab,
       (requests) => requestTo(requests, "/a")?.status !== undefined,
+      { headers: true },
     );
     assert.equal(
       read.requests.some((request) => new URL(request.url).pathname.startsWith("/api/")),
@@ -182,11 +218,12 @@ describe("read_network in real Firefox", () => {
   /** Reads until `done` holds for the requests of a recorded page, for at most POLL_LIMIT_MS. */
   async function readUntil(
     tabId: number,
-    done: (requests: readonly NetworkRequest[]) => boolean,
+    done: (requests: readonly NetworkRequestRead[]) => boolean,
+    args: Record<string, unknown> = {},
   ): Promise<NetworkRead> {
     const deadline = Date.now() + POLL_LIMIT_MS;
     for (;;) {
-      const read = await readNetwork(tabId);
+      const read = await readNetwork(tabId, args);
       if (read.recording && done(read.requests)) return read;
       if (Date.now() > deadline) assert.fail(`not the requests expected: ${read.text}`);
       await sleep(POLL_MS);
@@ -209,7 +246,10 @@ async function waitFor(check: () => Promise<boolean>, what: string): Promise<voi
   }
 }
 
-function requestTo(requests: readonly NetworkRequest[], path: string): NetworkRequest | undefined {
+function requestTo(
+  requests: readonly NetworkRequestRead[],
+  path: string,
+): NetworkRequestRead | undefined {
   return requests.find((request) => new URL(request.url).pathname === path);
 }
 

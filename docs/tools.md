@@ -203,16 +203,29 @@ with its level, kind, text and time.
 
 `read_network` returns a page's network requests, oldest first: each request's URL, method,
 resource type, start time, duration, status, redirect target, error and whether it came from
-the cache, with its request and response headers.
+the cache.
 
+- Each request's request and response headers are included only when the agent asks for them
+  (`headers`). Foxleash still records them, so a later read can ask for the headers of requests
+  an earlier one left them out of.
 - The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers
   are replaced with `[redacted]`, and request and response bodies are not included.
 - Requests made by the page's frames are included.
 - Foxleash records a page's requests from when it starts loading in a tab of the agent's group
   on a site you approved, and loading a new page in the tab starts a new list.
 - Foxleash keeps the newest 500 requests of a page, fewer when their headers are long.
-- The agent can ask for the requests whose URL contains a piece of plain text, and at most a
-  number of the newest ones (100 unless it asks for up to 500).
+- The agent can ask for the requests whose URL contains a piece of plain text (`pattern`).
+- It can ask for the requests of up to 20 resource types (`types`), such as `main_frame` for the
+  page itself, `script`, `stylesheet`, `image`, `font` or `xmlhttprequest` for fetch and
+  XMLHttpRequest. A type matches only when it is exactly the one Firefox reports, so a misspelled
+  type returns no requests.
+- It can ask for only the requests that failed (`failed`): those with status 400 or above, or with
+  an error such as a refused connection or a blocked or cancelled request. A redirect has not
+  failed, nor has a request with no status or error yet.
+- These filters apply together, and before the limit: of the requests that match all of them, the
+  newest are returned, 100 unless the agent asks for up to 500. The result says it is truncated
+  when matching requests were left out or the page made more requests than Foxleash kept;
+  requests a filter leaves out do not count.
 - When the page loaded before you approved the site, or since it loaded you withdrew the
   approval or the tab left the agent's group, the result says it is not recording, with no
   requests, until the page is loaded again.

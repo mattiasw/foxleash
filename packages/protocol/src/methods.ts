@@ -185,12 +185,18 @@ export interface NetworkRequest {
   responseHeaders: NetworkHeader[];
 }
 
+/** A request as read_network returns it: the headers only when the read asked for them. */
+export type NetworkRequestRead = Omit<NetworkRequest, "requestHeaders" | "responseHeaders"> &
+  Partial<Pick<NetworkRequest, "requestHeaders" | "responseHeaders">>;
+
 /** The most requests a page keeps, and the largest limit read_network takes. */
 export const MAX_NETWORK_REQUESTS = 500;
 /** How many requests read_network returns when the request gives no limit. */
 export const DEFAULT_NETWORK_LIMIT = 100;
 /** The longest pattern read_network takes. */
 export const MAX_NETWORK_PATTERN = 1_000;
+/** The most resource types read_network's types takes. */
+export const MAX_NETWORK_TYPES = 20;
 /** A request's URL and redirect target are cut to this many UTF-16 units. */
 export const MAX_NETWORK_URL = 2_000;
 /** Each header name and value, a request's method, type and error are cut to this many. */
@@ -457,8 +463,15 @@ export interface Methods {
   };
   /** `recording` is false when Foxleash has not recorded the page since it loaded. */
   read_network: {
-    params: { tabId: number; pattern?: string; limit?: number };
-    result: { recording: boolean; requests: NetworkRequest[]; truncated: boolean };
+    params: {
+      tabId: number;
+      pattern?: string;
+      types?: string[];
+      failed?: boolean;
+      headers?: boolean;
+      limit?: number;
+    };
+    result: { recording: boolean; requests: NetworkRequestRead[]; truncated: boolean };
   };
   /** `path` is the absolute path Firefox saved the file at, `bytes` its size. */
   download: { params: { url: string; filename: string }; result: { path: string; bytes: number } };

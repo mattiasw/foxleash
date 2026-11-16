@@ -5,7 +5,7 @@ import {
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
-  type NetworkRequest,
+  type NetworkRequestRead,
   type Result,
 } from "@foxleash/protocol";
 import type { HttpHeader, RequestDetails } from "./browser-api.ts";
@@ -25,7 +25,7 @@ const SITE = "https://a.example";
 const URL_A = `${SITE}/page`;
 const OTHER = "https://b.example";
 const NONE: Result<"read_network"> = { recording: false, requests: [], truncated: false };
-const ALL: NetworkReadOptions = { limit: MAX_NETWORK_REQUESTS };
+const ALL: NetworkReadOptions = { failed: false, headers: true, limit: MAX_NETWORK_REQUESTS };
 
 describe("network log", { timeout: 10000 }, () => {
   it("records a request's url, method, type, timing, status and headers", async () => {
@@ -867,8 +867,8 @@ describe("network log", { timeout: 10000 }, () => {
     assert.equal(result.requests.at(-1)?.url, `${SITE}/last`);
     assert.equal(result.truncated, true);
     // Dropped from the log, not only left out of the read.
-    assert.deepEqual(read(tab.id, { pattern: `${SITE}/0`, limit: 1 }).requests, []);
-    assert.deepEqual(read(tab.id, { pattern: "/last", limit: 1 }).truncated, true);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: `${SITE}/0`, limit: 1 }).requests, []);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "/last", limit: 1 }).truncated, true);
   });
 
   it("drops a page's own request reported after its commit first when the log is full", async () => {
@@ -885,7 +885,7 @@ describe("network log", { timeout: 10000 }, () => {
     assert.equal(result.requests[0]?.url, `${SITE}/0`);
     assert.equal(result.truncated, true);
     // Dropped from the log, not only left out of the read.
-    assert.deepEqual(read(tab.id, { pattern: URL_A, limit: 1 }).requests, []);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: URL_A, limit: 1 }).requests, []);
   });
 
   it("keeps the newest requests within the page's character budget", async () => {
@@ -1006,23 +1006,267 @@ describe("network log", { timeout: 10000 }, () => {
     for (const path of ["/a.js", "/api/one", "/api.two", "/API/three", "/api/four"]) {
       request(tab.id, `${SITE}${path}`);
     }
-    assert.deepEqual(urlsOf(read(tab.id, { pattern: "/api.", limit: 10 })), [`${SITE}/api.two`]);
-    assert.deepEqual(urlsOf(read(tab.id, { pattern: "/API", limit: 10 })), [`${SITE}/API/three`]);
-    assert.equal(read(tab.id, { pattern: "", limit: 10 }).requests.length, 5);
-    assert.deepEqual(read(tab.id, { pattern: "/api/", limit: 1 }), {
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, pattern: "/api.", limit: 10 })), [
+      `${SITE}/api.two`,
+    ]);
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, pattern: "/API", limit: 10 })), [
+      `${SITE}/API/three`,
+    ]);
+    assert.equal(read(tab.id, { ...ALL, pattern: "", limit: 10 }).requests.length, 5);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "/api/", limit: 1 }), {
       recording: true,
       requests: [read(tab.id).requests[4]],
       truncated: true,
     });
-    assert.deepEqual(read(tab.id, { pattern: "/api/", limit: 2 }).truncated, false);
-    assert.deepEqual(urlsOf(read(tab.id, { limit: 2 })), [`${SITE}/API/three`, `${SITE}/api/four`]);
-    assert.equal(read(tab.id, { limit: 5 }).truncated, false);
-    assert.equal(read(tab.id, { limit: 4 }).truncated, true);
-    assert.deepEqual(read(tab.id, { pattern: "nothing", limit: 1 }), {
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "/api/", limit: 2 }).truncated, false);
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, limit: 2 })), [
+      `${SITE}/API/three`,
+      `${SITE}/api/four`,
+    ]);
+    assert.equal(read(tab.id, { ...ALL, limit: 5 }).truncated, false);
+    assert.equal(read(tab.id, { ...ALL, limit: 4 }).truncated, true);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "nothing", limit: 1 }), {
       recording: true,
       requests: [],
       truncated: false,
     });
+  });
+
+  it("keeps only the requests whose type is exactly one of the given types", async () => {
+    const { read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    for (const type of ["script", "image", "xmlhttprequest", "stylesheet", "script"]) {
+      request(tab.id, `${SITE}/${type}`, { type });
+    }
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, types: ["script"] })), [
+      `${SITE}/script`,
+      `${SITE}/script`,
+    ]);
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, types: ["image", "script"] })), [
+      `${SITE}/script`,
+      `${SITE}/image`,
+      `${SITE}/script`,
+    ]);
+    assert.deepEqual(
+      read(tab.id, { ...ALL, types: ["stylesheet", "stylesheet"] }),
+      read(tab.id, { ...ALL, types: ["stylesheet"] }),
+    );
+    assert.equal(read(tab.id, { ...ALL, types: ["stylesheet"] }).requests.length, 1);
+    for (const types of [["font"], ["Script"], ["scrip"]]) {
+      assert.deepEqual(read(tab.id, { ...ALL, types }), {
+        recording: true,
+        requests: [],
+        truncated: false,
+      });
+    }
+    assert.deepEqual(read(tab.id, { ...ALL, types: ["script"] }, "s2"), NONE);
+  });
+
+  it("keeps only the requests that failed with failed", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const tabId = tab.id;
+    const timeStamp = 1100;
+    const done = (path: string, statusCode: number) => {
+      const requestId = request(tabId, `${SITE}${path}`);
+      fake.emitWebRequest("onCompleted", {
+        requestId,
+        tabId,
+        timeStamp,
+        statusCode,
+        fromCache: false,
+      });
+    };
+    done("/ok", 200);
+    done("/399", 399);
+    done("/400", 400);
+    // Its headers arrived, its body still loads.
+    const loading = request(tabId, `${SITE}/404`);
+    fake.emitWebRequest("onHeadersReceived", {
+      requestId: loading,
+      tabId,
+      timeStamp,
+      statusCode: 404,
+    });
+    done("/500", 500);
+    const moved = request(tabId, `${SITE}/moved`);
+    fake.emitWebRequest("onBeforeRedirect", {
+      requestId: moved,
+      tabId,
+      timeStamp,
+      statusCode: 302,
+      redirectUrl: `${SITE}/ok`,
+      fromCache: false,
+    });
+    const refused = request(tabId, `${SITE}/refused`);
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: refused,
+      tabId,
+      timeStamp,
+      error: "NS_ERROR_CONNECTION_REFUSED",
+    });
+    const cut = request(tabId, `${SITE}/cut`);
+    fake.emitWebRequest("onHeadersReceived", {
+      requestId: cut,
+      tabId,
+      timeStamp,
+      statusCode: 200,
+    });
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: cut,
+      tabId,
+      timeStamp,
+      error: "NS_ERROR_NET_INTERRUPT",
+    });
+    request(tabId, `${SITE}/in-flight`);
+    assert.deepEqual(
+      urlsOf(read(tabId, { ...ALL, failed: true })),
+      ["/400", "/404", "/500", "/refused", "/cut"].map((path) => `${SITE}${path}`),
+    );
+    assert.equal(read(tabId, { ...ALL, failed: true }).truncated, false);
+    assert.equal(read(tabId, { ...ALL, failed: false }).requests.length, 9);
+  });
+
+  it("leaves both header lists out unless headers is true", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const tabId = tab.id;
+    const id = request(tabId, `${SITE}/api`, { timeStamp: 1000 });
+    fake.emitWebRequest("onSendHeaders", {
+      requestId: id,
+      tabId,
+      timeStamp: 1001,
+      requestHeaders: [{ name: "Accept", value: "*/*" }],
+    });
+    fake.emitWebRequest("onCompleted", {
+      requestId: id,
+      tabId,
+      timeStamp: 1250,
+      statusCode: 200,
+      fromCache: true,
+      responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
+    });
+    const moved = request(tabId, `${SITE}/old`, { timeStamp: 1300 });
+    fake.emitWebRequest("onBeforeRedirect", {
+      requestId: moved,
+      tabId,
+      timeStamp: 1310,
+      statusCode: 301,
+      redirectUrl: `${SITE}/new`,
+      fromCache: false,
+    });
+    const broken = request(tabId, `${SITE}/broken`, { timeStamp: 1400 });
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: broken,
+      tabId,
+      timeStamp: 1450,
+      error: "NS_ERROR_NET_RESET",
+    });
+    const without = read(tabId, { ...ALL, headers: false });
+    assert.deepEqual(without, {
+      recording: true,
+      requests: [
+        {
+          url: `${SITE}/api`,
+          method: "GET",
+          type: "xmlhttprequest",
+          startTime: 1000,
+          durationMs: 250,
+          status: 200,
+          fromCache: true,
+        },
+        {
+          url: `${SITE}/old`,
+          method: "GET",
+          type: "xmlhttprequest",
+          startTime: 1300,
+          durationMs: 10,
+          status: 301,
+          redirectUrl: `${SITE}/new`,
+          fromCache: false,
+        },
+        {
+          url: `${SITE}/broken`,
+          method: "GET",
+          type: "xmlhttprequest",
+          startTime: 1400,
+          durationMs: 50,
+          error: "NS_ERROR_NET_RESET",
+        },
+      ],
+      truncated: false,
+    });
+    for (const returned of without.requests) {
+      assert.equal(Object.hasOwn(returned, "requestHeaders"), false);
+      assert.equal(Object.hasOwn(returned, "responseHeaders"), false);
+    }
+    assert.deepEqual(
+      read(tabId, { ...ALL, headers: true }).requests.map(({ requestHeaders, responseHeaders }) => [
+        requestHeaders,
+        responseHeaders,
+      ]),
+      [
+        [[{ name: "Accept", value: "*/*" }], [{ name: "Content-Type", value: "text/plain" }]],
+        [[], []],
+        [[], []],
+      ],
+    );
+  });
+
+  it("applies pattern, types and failed together before the limit", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const tabId = tab.id;
+    const sent: [string, string, number][] = [
+      ["/api/1", "xmlhttprequest", 500],
+      ["/api/2", "script", 500],
+      ["/api/3", "xmlhttprequest", 200],
+      ["/other/4", "xmlhttprequest", 404],
+      ["/api/5", "xmlhttprequest", 503],
+      ["/api/6", "xmlhttprequest", 404],
+    ];
+    for (const [path, type, statusCode] of sent) {
+      const requestId = request(tabId, `${SITE}${path}`, { type });
+      fake.emitWebRequest("onCompleted", {
+        requestId,
+        tabId,
+        timeStamp: 1100,
+        statusCode,
+        fromCache: false,
+      });
+    }
+    const options: NetworkReadOptions = {
+      ...ALL,
+      pattern: "/api/",
+      types: ["xmlhttprequest"],
+      failed: true,
+    };
+    assert.deepEqual(urlsOf(read(tabId, options)), [
+      `${SITE}/api/1`,
+      `${SITE}/api/5`,
+      `${SITE}/api/6`,
+    ]);
+    assert.equal(read(tabId, options).truncated, false);
+    assert.deepEqual(urlsOf(read(tabId, { ...options, limit: 2 })), [
+      `${SITE}/api/5`,
+      `${SITE}/api/6`,
+    ]);
+    assert.equal(read(tabId, { ...options, limit: 2 }).truncated, true);
+    assert.equal(read(tabId, { ...options, limit: 3 }).truncated, false);
+  });
+
+  it("reports dropped requests as truncated whatever the filters", async () => {
+    const { read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    for (let index = 0; index <= MAX_NETWORK_REQUESTS; index += 1) {
+      request(tab.id, `${SITE}/${index}`, { type: "script" });
+    }
+    assert.deepEqual(read(tab.id, { ...ALL, types: ["font"] }), {
+      recording: true,
+      requests: [],
+      truncated: true,
+    });
+    assert.equal(read(tab.id, { ...ALL, failed: true }).truncated, true);
   });
 
   it("forgets a closed tab's log and the request of the page it was loading", async (t) => {
@@ -1294,6 +1538,7 @@ describe("network log", { timeout: 10000 }, () => {
     assert.ok(first !== undefined);
     first.url = "changed";
     first.status = 500;
+    assert.ok(first.requestHeaders !== undefined && first.responseHeaders !== undefined);
     first.requestHeaders.push({ name: "X", value: "y" });
     const header = first.responseHeaders[0];
     assert.ok(header !== undefined);
@@ -1424,11 +1669,11 @@ function bigHeaders(count: number): HttpHeader[] {
 }
 
 function urlsOf(result: Result<"read_network">): string[] {
-  return result.requests.map((request: NetworkRequest) => request.url);
+  return result.requests.map((request: NetworkRequestRead) => request.url);
 }
 
 function startTimesOf(result: Result<"read_network">): number[] {
-  return result.requests.map((request: NetworkRequest) => request.startTime);
+  return result.requests.map((request: NetworkRequestRead) => request.startTime);
 }
 
 /** Keeps the log's warnings out of the test output. */

@@ -4,8 +4,10 @@ import {
   DEFAULT_WAIT_FOR_MS,
   type FoundTree,
   foundLinesOf,
+  MAX_NETWORK_HEADER,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
+  MAX_NETWORK_TYPES,
   MAX_RECIPE_SITES,
   MAX_WAIT_FOR_MS,
   MAX_WAIT_FOR_TEXT,
@@ -1852,10 +1854,7 @@ function tabIdParam(params: Params, method: string): number {
 
 /** Whether the result ends with a view of the page: unless the view param is false. */
 function viewParam(params: Params, method: string): boolean {
-  const view = own(params, "view");
-  if (view === undefined || view === true) return true;
-  if (view === false) return false;
-  throw new ToolError("invalid_params", `${method} needs view to be true or false.`);
+  return flagParam(params, method, "view", true);
 }
 
 /** A read_page reply from the page's content process: own fields only, and the cap again. */
@@ -2148,7 +2147,10 @@ function masksFor(
   return masks;
 }
 
-/** read_network's pattern and limit, the limit's default filled in. */
+/**
+ * read_network's options: pattern and types only when given, failed and headers false unless
+ * true, the limit's default filled in.
+ */
 function networkOptions(params: Params): NetworkReadOptions {
   const pattern = own(params, "pattern");
   if (
@@ -2160,6 +2162,8 @@ function networkOptions(params: Params): NetworkReadOptions {
       `read_network needs pattern to be text of at most ${MAX_NETWORK_PATTERN.toLocaleString("en-US")} characters.`,
     );
   }
+  const types = networkTypes(params);
+  const failed = flagParam(params, "read_network", "failed", false);
   const given = own(params, "limit");
   const limit = given === undefined ? DEFAULT_NETWORK_LIMIT : given;
   if (
@@ -2173,7 +2177,40 @@ function networkOptions(params: Params): NetworkReadOptions {
       `read_network needs limit to be a whole number from 1 to ${MAX_NETWORK_REQUESTS}.`,
     );
   }
-  return pattern === undefined ? { limit } : { pattern, limit };
+  const headers = flagParam(params, "read_network", "headers", false);
+  const options: NetworkReadOptions = { failed, headers, limit };
+  if (pattern !== undefined) options.pattern = pattern;
+  if (types !== undefined) options.types = types;
+  return options;
+}
+
+/** read_network's types, copied; the count is checked before any entry is read. */
+function networkTypes(params: Params): string[] | undefined {
+  const given = own(params, "types");
+  if (given === undefined) return undefined;
+  const message = `read_network needs types to be a list of 1 to ${MAX_NETWORK_TYPES} resource types, each text of 1 to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} characters.`;
+  if (!Array.isArray(given) || given.length < 1 || given.length > MAX_NETWORK_TYPES) {
+    throw new ToolError("invalid_params", message);
+  }
+  const entries: unknown[] = given;
+  const types: string[] = [];
+  // By index, so a hole reads as undefined and is refused.
+  for (let index = 0; index < entries.length; index++) {
+    const type = entries[index];
+    if (typeof type !== "string" || type.length < 1 || type.length > MAX_NETWORK_HEADER) {
+      throw new ToolError("invalid_params", message);
+    }
+    types.push(type);
+  }
+  return types;
+}
+
+/** A true-or-false param: `fallback` when absent. */
+function flagParam(params: Params, method: string, key: string, fallback: boolean): boolean {
+  const flag = own(params, key);
+  if (flag === undefined) return fallback;
+  if (flag === true || flag === false) return flag;
+  throw new ToolError("invalid_params", `${method} needs ${key} to be true or false.`);
 }
 
 function navigationTarget(params: Params): NavigationRequest {

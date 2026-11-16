@@ -7,11 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `read_network` can return only the requests of given resource types, such as scripts or fetch
+  requests (`types`), and only the requests that failed, with status 400 or above or an error
+  such as a refused connection (`failed`).
+
 ### Changed
 
 - The README is shorter. What each tool does in detail moved to `docs/tools.md`, the safeguards
   in full to `docs/security.md`, and the Claude Code settings that make browser tasks faster to
   `docs/claude-code.md`.
+- `read_network` leaves out request and response headers unless the agent asks for them
+  (`headers`), so a read is much shorter.
 
 ## [0.4.1] - 2026-11-16
 

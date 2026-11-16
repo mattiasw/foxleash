@@ -2600,10 +2600,32 @@ describe("read_network", () => {
     assert.deepEqual(Object.keys(tool?.inputSchema.properties ?? {}), [
       "tabId",
       "pattern",
+      "types",
+      "failed",
       "limit",
+      "headers",
     ]);
     assert.equal(tool?.description?.includes(ASKS_FIRST), false);
+    assert.equal(tool?.description?.includes("with its request and response headers"), false);
+    const described = (key: string) => record(tool?.inputSchema.properties?.[key]).description;
+    assert.equal(
+      described("types"),
+      "Only the requests whose type is exactly one of these, such as main_frame, script, stylesheet, image, font or xmlhttprequest (fetch and XMLHttpRequest)",
+    );
+    assert.equal(
+      described("failed"),
+      "true: only the requests that failed, with status 400 or above or an error",
+    );
+    assert.equal(
+      described("headers"),
+      "true: include each request's request and response headers, which are left out unless true",
+    );
     for (const words of [
+      "Its request and response headers are included only with headers true.",
+      "types keeps only the requests whose type is exactly one of them",
+      "failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request",
+      "a redirect, or a request with no status or error yet, has not failed",
+      "pattern, types and failed all apply before limit",
       "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted].",
       "Request and response bodies are not included.",
       "Requests made by the page's frames are included.",
@@ -2633,6 +2655,20 @@ describe("read_network", () => {
         { tabId: 1, pattern: "a".repeat(1001) },
         "Too big: expected string to have <=1000 characters at pattern",
       ],
+      [{ tabId: 1, types: [] }, "Too small: expected array to have >=1 items at types"],
+      [
+        { tabId: 1, types: Array.from({ length: 21 }, () => "script") },
+        "Too big: expected array to have <=20 items at types",
+      ],
+      [{ tabId: 1, types: [1] }, "Invalid input: expected string, received number at types[0]"],
+      [{ tabId: 1, types: [""] }, "Too small: expected string to have >=1 characters at types[0]"],
+      [
+        { tabId: 1, types: ["a".repeat(1001)] },
+        "Too big: expected string to have <=1000 characters at types[0]",
+      ],
+      [{ tabId: 1, types: "script" }, "Invalid input: expected array, received string at types"],
+      [{ tabId: 1, failed: "true" }, "Invalid input: expected boolean, received string at failed"],
+      [{ tabId: 1, headers: 1 }, "Invalid input: expected boolean, received number at headers"],
     ];
     for (const [args, reason] of cases) {
       const output = await client.callTool({ name: "read_network", arguments: args });
@@ -2645,16 +2681,39 @@ describe("read_network", () => {
   });
 
   it("asks Firefox with the tab id and only the options given", LIMIT, async () => {
-    const all = await read({ tabId: 2, pattern: "/api", limit: 500 });
+    const all = await read({
+      tabId: 2,
+      pattern: "/api",
+      types: ["script", "image"],
+      failed: true,
+      limit: 500,
+      headers: true,
+    });
     assert.deepEqual(all.calls, [
-      { method: "read_network", params: { tabId: 2, pattern: "/api", limit: 500 } },
+      {
+        method: "read_network",
+        params: {
+          tabId: 2,
+          pattern: "/api",
+          types: ["script", "image"],
+          failed: true,
+          limit: 500,
+          headers: true,
+        },
+      },
     ]);
+    const types = Array.from({ length: 20 }, (_, index) => String(index).padEnd(1000, "t"));
+    const most = await read({ tabId: 1, types });
+    assert.deepEqual(most.calls[0]?.params, { tabId: 1, types });
     const longest = await read({ tabId: 0, pattern: "a".repeat(1000), limit: 1 });
     assert.deepEqual(longest.calls[0]?.params, { tabId: 0, pattern: "a".repeat(1000), limit: 1 });
     for (const [args, keys] of [
       [{ tabId: 3 }, ["tabId"]],
       [{ tabId: 3, pattern: "" }, ["tabId", "pattern"]],
       [{ tabId: 3, limit: 7 }, ["tabId", "limit"]],
+      [{ tabId: 3, types: ["font"] }, ["tabId", "types"]],
+      [{ tabId: 3, failed: false }, ["tabId", "failed"]],
+      [{ tabId: 3, headers: true }, ["tabId", "headers"]],
     ] as const) {
       const { calls } = await read(args);
       assert.deepEqual(Object.keys(record(calls[0]?.params)), keys);
@@ -2748,7 +2807,8 @@ describe("read_network", () => {
       result([{ ...request("/a"), requestHeaders: [{ name: "a" }] }]),
       result([{ ...request("/a"), responseHeaders: [{ name: "n".repeat(1001), value: "" }] }]),
       result([{ ...request("/a"), responseHeaders: [{ name: "a", value: "v".repeat(1001) }] }]),
-      result([{ url: "https://a.example/", method: "GET", type: "image", startTime: 1 }]),
+      result([{ ...request("/a"), requestHeaders: null }]),
+      result([{ ...request("/a"), responseHeaders: "none" }]),
     ];
     for (const answer of answers) {
       const { output } = await read({ tabId: 1 }, answer);
@@ -2772,6 +2832,31 @@ describe("read_network", () => {
     assert.deepEqual(JSON.parse(unframed(most.output)), result([longest]));
     const many = await read({ tabId: 1 }, result(Array.from({ length: 500 }, () => request("/a"))));
     assert.equal(JSON.parse(unframed(many.output)).requests.length, 500);
+  });
+
+  it("returns requests without header lists as Firefox gives them", LIMIT, async () => {
+    const bare = {
+      url: "https://a.example/a",
+      method: "GET",
+      type: "xmlhttprequest",
+      startTime: 1000.5,
+      durationMs: 12.25,
+      status: 404,
+      fromCache: false,
+    };
+    const answer = result([
+      bare,
+      { url: "https://a.example/", method: "GET", type: "image", startTime: 1 },
+      { ...bare, requestHeaders: [{ name: "Accept", value: "*/*" }] },
+      request("/b"),
+    ]);
+    const { output } = await read({ tabId: 1 }, answer);
+    assert.equal(output.isError, undefined);
+    assert.equal(unframed(output), pretty(answer));
+    const [first, , third] = JSON.parse(unframed(output)).requests;
+    assert.equal(Object.hasOwn(first, "requestHeaders"), false);
+    assert.equal(Object.hasOwn(first, "responseHeaders"), false);
+    assert.equal(Object.hasOwn(third, "responseHeaders"), false);
   });
 
   it("returns the newest requests that fit when the whole result does not", LIMIT, async () => {

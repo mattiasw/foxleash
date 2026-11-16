@@ -23,6 +23,7 @@ import {
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_REQUESTS,
+  MAX_NETWORK_TYPES,
   MAX_NETWORK_URL,
   MAX_PAGE_TEXT_CHARS,
   MAX_RECIPE_DESCRIPTION,
@@ -224,7 +225,7 @@ const CONSOLE_RESULT = z.object({
 });
 const DEFAULT_REQUESTS = DEFAULT_NETWORK_LIMIT.toLocaleString("en-US");
 const MAX_REQUESTS = MAX_NETWORK_REQUESTS.toLocaleString("en-US");
-const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache, with its request and response headers. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. Request and response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. recording false means Foxleash has not recorded the page since it loaded: it loaded before the user approved the site, or since then the user withdrew the approval or the tab left the tab group; reload it with navigate to start recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. Of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
+const READ_NETWORK = `Read the network requests of the page in a tab of this session's Foxleash tab group, oldest first: each request's URL, method, type (Firefox's resource type, such as main_frame for the page itself, xmlhttprequest for fetch and XMLHttpRequest, script or image), start time (ms since the epoch), duration, status, redirect target, error and whether it came from the cache. Its request and response headers are included only with headers true. The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted]. Request and response bodies are not included. Requests made by the page's frames are included. Foxleash records a page's requests from when it starts loading in the tab on a site the user approved. Loading a new page in the tab starts a new list, beginning with that page's own request; a change of the address within the page (a fragment, history.pushState) keeps the list. recording false means Foxleash has not recorded the page since it loaded: it loaded before the user approved the site, or since then the user withdrew the approval or the tab left the tab group; reload it with navigate to start recording. Foxleash keeps the newest ${MAX_REQUESTS} requests of a page (fewer when their headers are long), with URLs cut to ${MAX_NETWORK_URL.toLocaleString("en-US")} characters, header names and values to ${MAX_NETWORK_HEADER.toLocaleString("en-US")} and at most ${MAX_NETWORK_HEADERS} headers each way. pattern is plain text, case-sensitive, that a request's URL must contain. types keeps only the requests whose type is exactly one of them. failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request; a redirect, or a request with no status or error yet, has not failed. pattern, types and failed all apply before limit: of the matching requests the newest limit (${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}) are returned, fewer when they would not fit in one result; truncated is true when matching requests were left out or the page made more requests than Foxleash kept. The tab must show a site the user approved; read_network never asks.`;
 const UNREADABLE_NETWORK = "Firefox returned network requests Foxleash cannot read.";
 const NETWORK_HEADERS = z
   .array(
@@ -248,8 +249,8 @@ const NETWORK_RESULT = z.object({
         redirectUrl: z.string().max(MAX_NETWORK_URL).optional(),
         error: z.string().max(MAX_NETWORK_HEADER).optional(),
         fromCache: z.boolean().optional(),
-        requestHeaders: NETWORK_HEADERS,
-        responseHeaders: NETWORK_HEADERS,
+        requestHeaders: NETWORK_HEADERS.optional(),
+        responseHeaders: NETWORK_HEADERS.optional(),
       }),
     )
     .max(MAX_NETWORK_REQUESTS),
@@ -922,6 +923,18 @@ export function registerTools(
           .max(MAX_NETWORK_PATTERN)
           .optional()
           .describe("Plain text, case-sensitive, that the request's URL must contain"),
+        types: z
+          .array(z.string().min(1).max(MAX_NETWORK_HEADER))
+          .min(1)
+          .max(MAX_NETWORK_TYPES)
+          .optional()
+          .describe(
+            "Only the requests whose type is exactly one of these, such as main_frame, script, stylesheet, image, font or xmlhttprequest (fetch and XMLHttpRequest)",
+          ),
+        failed: z
+          .boolean()
+          .optional()
+          .describe("true: only the requests that failed, with status 400 or above or an error"),
         limit: z
           .number()
           .int()
@@ -931,12 +944,21 @@ export function registerTools(
           .describe(
             `Return at most this many of the newest matching requests: ${DEFAULT_REQUESTS} unless given, at most ${MAX_REQUESTS}`,
           ),
+        headers: z
+          .boolean()
+          .optional()
+          .describe(
+            "true: include each request's request and response headers, which are left out unless true",
+          ),
       },
     },
-    async ({ tabId, pattern, limit }) => {
+    async ({ tabId, pattern, types, failed, limit, headers }) => {
       const params: Params<"read_network"> = { tabId };
       if (pattern !== undefined) params.pattern = pattern;
+      if (types !== undefined) params.types = types;
+      if (failed !== undefined) params.failed = failed;
       if (limit !== undefined) params.limit = limit;
+      if (headers !== undefined) params.headers = headers;
       const called = await callBridge(bridge, "read_network", params);
       if (!called.ok) return called.error;
       const parsed = NETWORK_RESULT.safeParse(called.result);
