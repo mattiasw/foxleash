@@ -157,12 +157,14 @@ export const SHOT_COLOURS = {
 
 /**
  * The text colours of the shot-fields page, as RGB: every protected field's, which nothing else
- * there uses, a plain field's in each context, and the selected text of the top plain field.
+ * there uses, a plain field's in each context, the selected text of the top plain field, and the
+ * shadow root's password field's, which a test turns into text.
  */
 export const SHOT_FIELD_COLOURS = {
   protected: [201, 17, 149],
   top: [0, 128, 64],
   shadow: [160, 96, 0],
+  shadowPassword: [176, 0, 48],
   frame: [0, 64, 192],
   data: [112, 48, 160],
   selection: [255, 120, 0],
@@ -1907,7 +1909,9 @@ input {
 `;
 
 // Protected fields in the top document, an open shadow root, a frame from another site and a
-// data: frame, each next to a plain field in a colour of its own; all in the first 500 px.
+// data: frame, each next to a plain field in a colour of its own; the shadow root also holds a
+// password field with no protecting token; all in the first 500 px. The shadow password's type is
+// written in capitals on purpose: the `type` property lowercases it, the attribute does not.
 function shotFieldsPage(port: number): string {
   const protectedColour = rgb(SHOT_FIELD_COLOURS.protected);
   return `<!doctype html>
@@ -1937,7 +1941,8 @@ iframe { display: block; width: 320px; height: 100px; border: 0; margin: 0 0 8px
 const shadow = document.getElementById("host").attachShadow({ mode: "open" });
 shadow.innerHTML = \`<style>${SHOT_FIELD_STYLE}</style>
 <input class="protected" autocomplete="cc-csc" value="123" aria-label="Security code">
-<input style="color: ${rgb(SHOT_FIELD_COLOURS.shadow)}" value="MMMM WWWW" aria-label="Shadow plain">\`;
+<input style="color: ${rgb(SHOT_FIELD_COLOURS.shadow)}" value="MMMM WWWW" aria-label="Shadow plain">
+<input id="shadow-pw" type="PASSWORD" style="color: ${rgb(SHOT_FIELD_COLOURS.shadowPassword)}" value="MMMMWWWW" aria-label="Shadow password">\`;
 </script>
 </body></html>
 `;

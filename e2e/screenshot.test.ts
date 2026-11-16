@@ -212,6 +212,7 @@ describe("screenshot in real Firefox", () => {
     fieldsTab = await open(session, "/shot-fields", TITLES.shotFields);
     const png = await shotOf({ tabId: fieldsTab });
     assertNone(png, PROTECTED, "protected");
+    assertNone(png, SHOT_FIELD_COLOURS.shadowPassword, "shadow password");
     for (const name of ["top", "shadow", "frame", "data"] as const) {
       assertDrawn(png, SHOT_FIELD_COLOURS[name], name);
     }
@@ -319,6 +320,39 @@ describe("screenshot in real Firefox", () => {
     assertNone(await shotOf({ tabId }), PROTECTED, "protected");
     await firefox.evaluate(context, 'document.getElementById("pw").type = "text"');
     const png = await shotOf({ tabId });
+    assertNone(png, PROTECTED, "protected");
+    assertNone(png, SHOT_FIELD_COLOURS.top, "top");
+    assertNone(png, SHOT_FIELD_COLOURS.shadow, "shadow");
+    assertDrawn(png, SHOT_FIELD_COLOURS.frame, "frame");
+    assertDrawn(png, SHOT_FIELD_COLOURS.data, "data");
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, colourOf("plain"))) === rgb(SHOT_FIELD_COLOURS.top)
+          ? true
+          : undefined,
+      SHEET_REMOVAL_MS,
+      "the plain field's own colour again",
+    );
+  });
+
+  test("a password field in a shadow root turned into text hides every input of the page", async () => {
+    const tabId = await open(session, "/shot-fields?shadow=1", TITLES.shotFields, { view: false });
+    const context = await contextOf(fixtures.url("/shot-fields?shadow=1"));
+    const read = await harness.call(session, "read_page", { tabId });
+    assert.equal(read.isError, false, read.text);
+    // Only the shadow field: `#pw` stays a password, so it cannot reveal the page by itself.
+    await firefox.evaluate(
+      context,
+      'document.getElementById("host").shadowRoot.getElementById("shadow-pw").type = "text"',
+    );
+    // Before the screenshot, whose mask sheets are removed afterwards without being awaited.
+    assertDrawn(
+      decodePng(await firefox.captureViewport(context)),
+      SHOT_FIELD_COLOURS.shadowPassword,
+      "shadow password, captured without Foxleash",
+    );
+    const png = await shotOf({ tabId });
+    assertNone(png, SHOT_FIELD_COLOURS.shadowPassword, "shadow password");
     assertNone(png, PROTECTED, "protected");
     assertNone(png, SHOT_FIELD_COLOURS.top, "top");
     assertNone(png, SHOT_FIELD_COLOURS.shadow, "shadow");
