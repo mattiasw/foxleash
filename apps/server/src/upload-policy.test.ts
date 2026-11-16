@@ -112,6 +112,16 @@ describe("uploadFolders", () => {
     ]);
   });
 
+  it("compares a linked home to the working folder on real paths", async () => {
+    const alias = join(root, "home-alias");
+    await symlink(home, alias);
+    // The cwd is the real home: a cwd of root would be noted even if home were not resolved.
+    assert.deepEqual(uploadFolders({ env: {}, cwd: home, home: alias }), {
+      folders: [join(alias, "Downloads")],
+      notes: [{ folder: home, reason: HOME_NOTE }],
+    });
+  });
+
   it("notes a working folder that is gone and keeps ~/Downloads", () => {
     assert.deepEqual(uploadFolders({ env: {}, cwd: undefined, home }), {
       folders: [join(home, "Downloads")],
