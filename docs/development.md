@@ -64,6 +64,12 @@ that file together with the sha256 of `linux-x86_64/en-US/firefox-<version>.tar.
 Mozilla's `https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`, as a change
 of its own (see ADR 0003).
 
+`FOXLEASH_E2E_SHARD=<index>/<total> npm run e2e`, for example `FOXLEASH_E2E_SHARD=2/3`, runs
+only that shard of the test files, through Node's `--test-shard`, which sorts the test files
+and deals them out round-robin. CI runs the suite as three shards in parallel jobs. The shard
+must go through the variable: `npm run e2e -- --test-shard=2/3` puts the flag after the test
+file pattern, where Node reads it as one more pattern and runs every file.
+
 The tests also act in the extension's own pages, which WebDriver reaches only with system
 access, so the test Firefox starts with `--marionette` and `--remote-allow-system-access`
 (see [ADR 0008](adr/0008-e2e-tests-act-in-extension-pages-through-bidi-and-marionette.md)).
