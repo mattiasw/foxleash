@@ -396,7 +396,8 @@ export function createSiteAccess<Handle>({
     const wasRunning = runningSessions.delete(session);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false);
-    // A session that reconnects with the same id asks again, so nothing from the gap is read.
+    // A session that reconnects with the same id asks again for these sites. Its documents on
+    // every site stop being live through the running-change listeners.
     for (const site of state?.allowed ?? []) withdrawn(session, site);
     if (wasRunning) runningChanged(session);
   }

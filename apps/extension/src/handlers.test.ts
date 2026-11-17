@@ -10669,3 +10669,110 @@ describe("a stopped session", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.has(tabId), true);
   });
 });
+
+describe("a request whose session ends while it runs", { timeout: 10000 }, () => {
+  /** Ends the session right after the next gate check of `context`, which still answers. */
+  function endAfterCheck(context: ReturnType<typeof setup>, session: string): void {
+    const { access } = context;
+    const check = access.check;
+    access.check = async (checked, url) => {
+      const decision = await check(checked, url);
+      access.endSession(session);
+      return decision;
+    };
+  }
+
+  it("opens no tab when the session ends during tab_open's gate check", async () => {
+    const context = setup();
+    const { fake, call, grant } = context;
+    await grant("https://a.example");
+    const creates = recordCreates(fake);
+    endAfterCheck(context, "s1");
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/" }), "session_ended");
+    assert.deepEqual(creates, []);
+    assert.equal(loadsOf(fake, "https://a.example/"), 0);
+  });
+
+  it("removes the new tab, unloaded, when the session ends before tab_open's load", async () => {
+    const { fake, access, call, grant } = setup();
+    await grant("https://a.example");
+    const user = fake.openTab({ url: "https://user.example/" });
+    const group = fake.browser.tabs.group;
+    fake.browser.tabs.group = async (options) => {
+      const grouped = await group(options);
+      access.endSession("s1");
+      return grouped;
+    };
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/" }), "session_ended");
+    assert.equal(loadsOf(fake, "https://a.example/"), 0);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("starts no load when the session ends during navigate's gate check", async () => {
+    const context = setup();
+    const { fake, call, open, grant } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    endAfterCheck(context, "s1");
+    await rejectsWith(
+      call("s1", "navigate", { tabId: tab.id, url: "https://a.example/next" }),
+      "session_ended",
+    );
+    assert.equal(loadsOf(fake, "https://a.example/next"), 0);
+  });
+
+  it("starts no load when the session ends after the user answered navigate's prompt", async () => {
+    const { fake, access, call, open, page } = setup();
+    const tab = await open("s1");
+    const navigating = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/" });
+    const shown = await page("s1");
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = async (tabId) => {
+      access.endSession("s1");
+      return get(tabId);
+    };
+    shown.deliver({ type: "answer", answer: "once" });
+    await rejectsWith(navigating, "session_ended");
+    assert.equal(loadsOf(fake, "https://a.example/"), 0);
+  });
+
+  it("loads nothing in place of the blank when the session ends during a reload", async () => {
+    const { fake, access, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/page");
+    const reloads = reloadToBlank(fake, () => access.endSession("s1"));
+    const updates = fake.tabUpdates.length;
+    await rejectsWith(call("s1", "navigate", { tabId: tab.id, action: "reload" }), "session_ended");
+    assert.deepEqual(reloads, [[tab.id, { bypassCache: true }]]);
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+  });
+
+  it("loads nothing again after going back when the session ends before that load", async () => {
+    const context = setup();
+    const { fake, access, call } = context;
+    const tab = await historyTab(context);
+    const steps = recordSteps(fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const getAllFrames = fake.browser.webNavigation.getAllFrames;
+    fake.browser.webNavigation.getAllFrames = async (details) => {
+      access.endSession("s1");
+      return getAllFrames(details);
+    };
+    await rejectsWith(call("s1", "navigate", { tabId: tab.id, action: "back" }), "session_ended");
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("selects no tab when the session ends during tab_select's reads", async () => {
+    const { fake, access, call, open } = setup();
+    const first = await open("s1");
+    await open("s1");
+    const updates = fake.tabUpdates.length;
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = async (tabId) => {
+      access.endSession("s1");
+      return get(tabId);
+    };
+    await rejectsWith(call("s1", "tab_select", { tabId: first.id }), "session_ended");
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(fake.tabs.get(first.id)?.active, false);
+  });
+});

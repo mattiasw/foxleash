@@ -8,7 +8,7 @@ import type { SiteAccess } from "./site-access.ts";
 
 /**
  * A top-frame document whose session may act on its site, uninterrupted since its commit, or
- * since access to it began.
+ * since access to it began. Only while that session runs: from its first request until it ends.
  */
 export interface LiveDocument {
   readonly session: string;
@@ -21,7 +21,17 @@ export interface LiveDocument {
 export interface LiveDocumentsDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
+  access: Pick<
+    SiteAccess,
+    | "view"
+    | "openPrompt"
+    | "onWithdraw"
+    | "onStop"
+    | "onGrant"
+    | "running"
+    | "onRunningChange"
+    | "generation"
+  >;
   /**
    * The `event` of the warning logged when a check fails for another reason than the gate, and
    * when a live document stops being live for a reason other than a commit, its tab closing, a
@@ -59,8 +69,9 @@ interface CatchUp {
  * group, on a site that session may act on, for as long as that access is not interrupted. When a
  * session may have gained access to the document a tab already shows (an approval, a storage
  * change, the tab joining a group), a catch-up checks that document and, when the gate passes,
- * keeps it from then on. Adds its listeners at once (call it at the top level of the background
- * script).
+ * keeps it from then on. Only a running session's documents are live: none once it ends, and a
+ * session that runs again catches up its tabs, empty. Adds its listeners at once (call it at the
+ * top level of the background script).
  */
 export function createLiveDocuments({
   browser,
@@ -81,6 +92,8 @@ export function createLiveDocuments({
   const catchUps = new Map<number, CatchUp>();
   // The group (-1 for none) each tab's last update showed it in.
   const groupSeen = new Map<number, number>();
+  // The latest commit's number when each session last started or stopped running.
+  const runningChangedAt = new Map<string, number>();
 
   browser.webNavigation.onCommitted.addListener(
     ({ tabId, frameId, url, timeStamp, documentId }) => {
@@ -154,6 +167,11 @@ export function createLiveDocuments({
     accessChanged();
     void catchUpTabs((other) => other === session);
   });
+  access.onRunningChange((session) => {
+    runningChangedAt.set(session, commits);
+    if (access.running(session)) void catchUpTabs((other) => other === session);
+    else dropDocuments(session);
+  });
 
   return { live };
 
@@ -168,12 +186,15 @@ export function createLiveDocuments({
       try {
         const tab = await browser.tabs.get(tabId);
         const session = groups.sessionOf(tab.groupId);
-        if (session !== undefined) {
+        if (session !== undefined && access.running(session)) {
           // The committed URL: the tab's own can still be the previous page's.
           const site = await allowedSiteFor(access, session, tabId, url);
           if (latest.get(tabId) !== commit) return;
           // Access changed while the gate ran: the catch-up once this check ends reads it again.
-          if (!pending.has(tabId)) {
+          // The session started or stopped running after the commit, so it did not run throughout:
+          // the catch-up of a start makes the page live, empty.
+          const changed = runningChangedAt.get(session);
+          if (!pending.has(tabId) && changed !== undefined && changed < commit) {
             // Before onDecided, so a withdrawal while it runs drops it.
             entry = { session, site, groupId: tab.groupId ?? -1, startedBy: "commit" };
             entries.set(tabId, entry);
@@ -279,14 +300,15 @@ export function createLiveDocuments({
     try {
       const tab = await browser.tabs.get(tabId);
       const session = groups.sessionOf(tab.groupId);
-      if (stale() || session === undefined) return;
+      if (stale() || session === undefined || !access.running(session)) return;
+      const generation = access.generation(session);
       const frames = await browser.webNavigation.getAllFrames({ tabId });
       // The committed document's URL: the tab's own can be a pending navigation's.
       const top = frames?.find((frame) => frame.frameId === 0);
       if (stale() || typeof top?.url !== "string") return;
       token.site = siteOf(top.url);
       const site = await allowedSiteFor(access, session, tabId, top.url);
-      if (stale()) return;
+      if (stale() || access.generation(session) !== generation) return;
       const entry: LiveDocument = { session, site, groupId: tab.groupId ?? -1, startedBy: "grant" };
       entries.set(tabId, entry);
       // A move to another group or a withdrawal while the gate ran found no entry to drop.
@@ -325,6 +347,11 @@ export function createLiveDocuments({
   /** The user stopped the session: none of its documents is live, whatever the site. */
   function stop(session: string): void {
     accessChanged();
+    dropDocuments(session);
+  }
+
+  /** None of the session's documents is live, whatever the site. */
+  function dropDocuments(session: string): void {
     for (const [tabId, entry] of [...entries]) {
       if (entry.session === session) entries.delete(tabId);
     }

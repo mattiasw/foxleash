@@ -9,7 +9,17 @@ import type { SiteAccess } from "./site-access.ts";
 export interface ConsoleRecordingDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting" | "webNavigation" | "storage">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
+  access: Pick<
+    SiteAccess,
+    | "view"
+    | "openPrompt"
+    | "onWithdraw"
+    | "onStop"
+    | "onGrant"
+    | "running"
+    | "onRunningChange"
+    | "generation"
+  >;
   timers: Timers<Handle>;
   now: () => number;
 }

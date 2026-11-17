@@ -61,7 +61,17 @@ export const REDACTED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
 export interface NetworkLogDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage" | "webRequest">;
   groups: Pick<SessionGroups, "sessionOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt" | "onWithdraw" | "onStop" | "onGrant">;
+  access: Pick<
+    SiteAccess,
+    | "view"
+    | "openPrompt"
+    | "onWithdraw"
+    | "onStop"
+    | "onGrant"
+    | "running"
+    | "onRunningChange"
+    | "generation"
+  >;
   now: () => number;
 }
 

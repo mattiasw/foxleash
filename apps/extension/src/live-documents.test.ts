@@ -983,6 +983,213 @@ describe("catching up with a document a tab already shows", { timeout: 10000 }, 
   });
 });
 
+describe("a session that ends", { timeout: 10000 }, () => {
+  it("stops at once every document of the session, also on a site allowed always", async () => {
+    const { documents, access, liveTab } = setup({});
+    const tab = await liveTab();
+    access.endSession("s1");
+    assert.equal(documents.live(tab.id), undefined);
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+  });
+
+  it("makes nothing live from a commit in its group after the end", async () => {
+    const decided: (LiveDocument | undefined)[] = [];
+    const { fake, documents, access, tabIn } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    access.endSession("s1");
+    await flush();
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(decided, [undefined]);
+  });
+
+  it("makes nothing live from a commit's check the end came during", async (t) => {
+    const decided: (LiveDocument | undefined)[] = [];
+    const { fake, documents, access, tabIn } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    await flush();
+    const release = holdView(t, access);
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    access.endSession("s1");
+    release();
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(decided, [undefined]);
+  });
+
+  it("makes nothing live from a catch-up after the end: a storage change or a join", async () => {
+    const { fake, documents, access, tabIn } = setup({});
+    const tab = await unrecorded(fake, tabIn);
+    const groupId = groupIdOf(fake, tab.id);
+    access.endSession("s1");
+    await grantSite(fake.browser, OTHER);
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    const joined = fake.openTab({ url: URL_A });
+    fake.setFrames(joined.id, [{ frameId: 0, url: URL_A, documentId: "doc-a" }]);
+    await fake.browser.tabs.group({ groupId, tabIds: [joined.id] });
+    await flush();
+    assert.equal(documents.live(joined.id), undefined);
+  });
+
+  it("makes nothing live from a catch-up the end came during", async (t) => {
+    const { fake, documents, access, tabIn } = setup({});
+    const tab = await unrecorded(fake, tabIn);
+    const release = holdView(t, access);
+    await grantSite(fake.browser, OTHER);
+    await flush();
+    access.endSession("s1");
+    release();
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+  });
+
+  it("catches up its tabs, empty, when it runs again, on the sites still allowed", async () => {
+    const decided: (string | undefined)[] = [];
+    const { fake, documents, sessions, access, liveTab } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live?.startedBy);
+        return true;
+      },
+    });
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    // A's site is stored as approved: allowed always. B's is allowed for the session only.
+    const always = await liveTab();
+    const forSession = await liveTab("s1", URL_B);
+    access.endSession("s1");
+    await flush();
+    decided.length = 0;
+    access.admit("s1");
+    await flush();
+    assert.deepEqual(documents.live(always.id), {
+      session: "s1",
+      site: SITE,
+      groupId: groupIdOf(fake, always.id),
+      startedBy: "grant",
+    });
+    assert.equal(documents.live(forSession.id), undefined);
+    assert.deepEqual(decided, ["grant"]);
+  });
+
+  it("makes nothing live for a session that never had a request", async () => {
+    const decided: (LiveDocument | undefined)[] = [];
+    const { fake, groups, documents } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live);
+        return true;
+      },
+    });
+    await grantSite(fake.browser, SITE);
+    const tab = fake.openTab();
+    await groups.ensureGroup("s1", tab);
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    assert.deepEqual(decided, [undefined]);
+  });
+
+  it("leaves another session's documents and checks as they are, also at a start", async (t) => {
+    const { fake, documents, access, liveTab, tabIn } = setup({});
+    const ended = await liveTab();
+    const other = await liveTab("s2");
+    const kept = documents.live(other.id);
+    const checked = await tabIn("s2");
+    await flush();
+    const release = holdView(t, access);
+    fake.navigateByUser(checked.id, URL_A);
+    await flush();
+    access.endSession("s1");
+    access.admit("s3");
+    await flush();
+    release();
+    await flush();
+    assert.equal(documents.live(ended.id), undefined);
+    assert.equal(documents.live(other.id), kept);
+    assert.equal(documents.live(checked.id)?.startedBy, "commit");
+  });
+
+  it("makes a commit checked across an end and a new start live only by the catch-up", async (t) => {
+    const decided: (string | undefined)[] = [];
+    const { fake, documents, access, tabIn } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live?.startedBy);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    await flush();
+    const release = holdView(t, access);
+    // The new start's catch-up lists the tabs only after the commit's check ended.
+    const listed = Promise.withResolvers<void>();
+    const query = fake.browser.tabs.query;
+    t.mock.method(fake.browser.tabs, "query", async (...args: unknown[]) => {
+      await listed.promise;
+      return Reflect.apply(query, fake.browser.tabs, args);
+    });
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    access.endSession("s1");
+    access.admit("s1");
+    release();
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    listed.resolve();
+    await flush();
+    assert.equal(documents.live(tab.id)?.startedBy, "grant");
+    assert.deepEqual(decided, [undefined, "grant"]);
+  });
+
+  it("makes a commit after the end live only by the catch-up of a start before its read", async (t) => {
+    const decided: (string | undefined)[] = [];
+    const { fake, documents, access, tabIn } = setup({
+      onDecided: (_tabId, live) => {
+        decided.push(live?.startedBy);
+        return true;
+      },
+    });
+    const tab = await tabIn();
+    await flush();
+    access.endSession("s1");
+    // The commit's check reads the tab only once the session runs again.
+    const read = Promise.withResolvers<void>();
+    const get = fake.browser.tabs.get;
+    t.mock.method(fake.browser.tabs, "get", async (...args: unknown[]) => {
+      await read.promise;
+      return Reflect.apply(get, fake.browser.tabs, args);
+    });
+    // And the start's catch-up lists the tabs only after that check ended.
+    const listed = Promise.withResolvers<void>();
+    const query = fake.browser.tabs.query;
+    t.mock.method(fake.browser.tabs, "query", async (...args: unknown[]) => {
+      await listed.promise;
+      return Reflect.apply(query, fake.browser.tabs, args);
+    });
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    access.admit("s1");
+    read.resolve();
+    await flush();
+    assert.equal(documents.live(tab.id), undefined);
+    listed.resolve();
+    await flush();
+    assert.equal(documents.live(tab.id)?.startedBy, "grant");
+    assert.deepEqual(decided, [undefined, "grant"]);
+  });
+});
+
 /** The tab's group, -1 for none. */
 function groupIdOf(fake: FakeBrowser, tabId: number): number {
   const tab = fake.tabs.get(tabId);
@@ -1056,6 +1263,8 @@ function setup(hooks: Pick<LiveDocumentsDeps, "onCommit" | "onDecided">) {
 
   /** A blank tab in the session's group, with A's site stored as approved. */
   async function tabIn(session = "s1"): Promise<FakeTab> {
+    // A group exists only after its session's first request admitted it.
+    access.admit(session);
     await grantSite(fake.browser, SITE);
     const tab = fake.openTab();
     await groups.ensureGroup(session, tab);
@@ -1071,7 +1280,7 @@ function setup(hooks: Pick<LiveDocumentsDeps, "onCommit" | "onDecided">) {
     return tab;
   }
 
-  return { fake, documents, sessions, access, tabIn, liveTab };
+  return { fake, groups, documents, sessions, access, tabIn, liveTab };
 }
 
 /** Keeps the log lines out of the test output; returns a reader for them. */

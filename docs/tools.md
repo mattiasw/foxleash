@@ -222,6 +222,9 @@ with its level, kind, text and time.
 - When you withdraw the approval or the tab leaves the agent's group, what was recorded is gone,
   and nothing the page logs meanwhile is ever returned. Approving the site again or moving the
   tab back starts recording again, with no messages.
+- Recording also ends when the agent's session ends, on every site, also one you allowed always:
+  pages loaded afterwards in its tabs are not recorded. When the same session reconnects, its tabs
+  start being recorded again, with no messages.
 - The result says it is not recording, with no messages, when Foxleash could not start its
   recorder in the page (some pages prevent it), or when recording stopped and nothing started it
   again, for example when the tab went to another site without loading a page. A later approval,
@@ -321,6 +324,9 @@ the cache.
 - When you withdraw the approval or the tab leaves the agent's group, what was recorded is gone,
   and nothing the page requests meanwhile is ever returned. Approving the site again or moving the
   tab back starts recording again, with no requests.
+- Recording also ends when the agent's session ends, on every site, also one you allowed always:
+  pages loaded afterwards in its tabs are not recorded. When the same session reconnects, its tabs
+  start being recorded again, with no requests.
 - The result says it is not recording, with no requests, when recording stopped and nothing
   started it again, for example when the tab went to another site without loading a page. A later
   approval, a change in Foxleash's settings or a move into the agent's group tries again; loading

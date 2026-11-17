@@ -499,12 +499,13 @@ describe("console recording", { timeout: 10000 }, () => {
 
   it("drops the recording when the tab leaves the group or closes", async (t) => {
     const warned = quiet(t);
-    const { fake, recordings, tabIn, groups } = setup();
+    const { fake, recordings, tabIn, groups, access } = setup();
     const ungrouped = await tabIn("s1", URL_A);
     fake.ungroup(ungrouped.id);
     assert.equal(recordings.liveRecording("s1", ungrouped.id), undefined);
 
     const moved = await tabIn("s1", URL_A);
+    access.admit("s2");
     await groups.ensureGroup("s2", moved);
     assert.equal(recordings.liveRecording("s1", moved.id), undefined);
 
@@ -671,6 +672,17 @@ describe("console recording", { timeout: 10000 }, () => {
     const tab = await tabIn("s1", "https://b.example/");
     assert.ok(recordings.liveRecording("s1", tab.id) !== undefined);
     access.endSession("s1");
+    assert.equal(recordings.liveRecording("s1", tab.id), undefined);
+  });
+
+  it("starts no recorder in its tabs once the session ended, also on a site allowed always", async () => {
+    const { fake, recordings, tabIn, access } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const injected = fake.injections.length;
+    access.endSession("s1");
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    await flush();
+    assert.equal(fake.injections.length, injected);
     assert.equal(recordings.liveRecording("s1", tab.id), undefined);
   });
 
@@ -905,6 +917,8 @@ function setup() {
 
   /** A tab in the session's group, on `url` with A's site stored as approved. */
   async function tabIn(session: string, url?: string): Promise<FakeTab> {
+    // A group exists only after its session's first request admitted it.
+    access.admit(session);
     await grantSite(fake.browser, SITE);
     const tab = fake.openTab();
     await groups.ensureGroup(session, tab);

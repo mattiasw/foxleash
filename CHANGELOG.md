@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A page that sets a very long title or address no longer makes `tabs_list` fail while its tab
   is open, or `tab_open` report a failure for a tab it opened. Foxleash now cuts a tab's title to
   500 characters and its address to 2,000, each ending with `…` when cut.
+- Pages loaded in the tabs of an agent session that has ended are no longer recorded, also on
+  sites you allowed always, and a `tab_open`, `navigate` or `tab_select` still running when its
+  session ended no longer opens or loads a page.
 
 ### Security
 

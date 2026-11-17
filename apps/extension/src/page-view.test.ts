@@ -125,6 +125,7 @@ describe("page views", { timeout: 10000 }, () => {
   it("forgets every view of a session the user stops, and keeps another session's", async () => {
     const { fake, groups, views, access, see, tab } = await setup();
     const shared = fake.openTab();
+    access.admit("s2");
     await groups.ensureGroup("s2", shared);
     fake.navigateByUser(shared.id, `${SITE}/`);
     await flush();
@@ -491,6 +492,8 @@ async function setup() {
   const other = await liveTab();
 
   async function liveTab(): Promise<FakeTab> {
+    // A group exists only after its session's first request admitted it.
+    access.admit("s1");
     const opened = fake.openTab();
     await groups.ensureGroup("s1", opened);
     fake.navigateByUser(opened.id, `${SITE}/`);

@@ -373,7 +373,7 @@ export function createHandlers<Handle>({
       };
     }
     if (url !== undefined && decision?.decision === "allowed") {
-      return { tab: await openOnPage(session, url) };
+      return { tab: await openOnPage(session, url, generation) };
     }
     if (url !== undefined) return { tab: await openOnPrompt(session, url, generation) };
     const tab = await groups.createTab(session, { url: "about:blank", active: false });
@@ -389,7 +389,8 @@ export function createHandlers<Handle>({
    * without asking the server unless the response was `no-store`. Not selected while the session
    * is asking the user something.
    */
-  async function openOnPage(session: string, url: string): Promise<TabInfo> {
+  async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
+    refuseIfEnded(session, generation);
     const tab = await groups.createTab(session, { url, active: false, discarded: true });
     try {
       await groups.ensureGroup(session, tab);
@@ -399,6 +400,7 @@ export function createHandlers<Handle>({
       throw error;
     }
     try {
+      refuseIfEnded(session, generation);
       noteReturned(
         await waitForLoad(
           browser,
@@ -415,6 +417,19 @@ export function createHandlers<Handle>({
       throw error;
     }
     return selectNewTab(session, tab.id);
+  }
+
+  /**
+   * Refuses to go on with a request whose session ended after the request arrived. Called right
+   * before a load starts, with no await in between.
+   */
+  function refuseIfEnded(session: string, generation: number): void {
+    if (access.generation(session) !== generation) {
+      throw new ToolError(
+        "session_ended",
+        "The session ended before Foxleash could finish the request.",
+      );
+    }
   }
 
   /**
@@ -442,7 +457,7 @@ export function createHandlers<Handle>({
     let loaded: TabInfo;
     try {
       await approval.answer;
-      loaded = await loadAfterAnswer(session, tab.id, url, { kind: "url", url });
+      loaded = await loadAfterAnswer(session, tab.id, url, { kind: "url", url }, generation);
     } catch (error) {
       // A tab the prompt was never shown in holds nothing the user saw.
       if (!approval.promptInTab) await removeNewTab(session, tab.id);
@@ -523,6 +538,7 @@ export function createHandlers<Handle>({
       if (gated !== undefined && gated.decision.decision !== "allowed") {
         return { tab: await approveAndLoad(session, tabId, gated.url, target, generation) };
       }
+      refuseIfEnded(session, generation);
       keepPrompt(session, tabId);
       const history =
         target.kind === "action" && target.action !== "reload"
@@ -531,7 +547,7 @@ export function createHandlers<Handle>({
       try {
         const loaded =
           isReload(target) && gated !== undefined
-            ? await reloadPage(session, tab, gated.url)
+            ? await reloadPage(session, tab, gated.url, generation)
             : await waitForLoad(
                 browser,
                 timers,
@@ -542,7 +558,9 @@ export function createHandlers<Handle>({
               );
         noteReturned(loaded);
         const shown =
-          history === undefined ? loaded : await reloadHistoryLoad(session, tabId, loaded, history);
+          history === undefined
+            ? loaded
+            : await reloadHistoryLoad(session, tabId, loaded, history, generation);
         if (shown !== loaded) noteReturned(shown);
         const view = await access.view(session);
         return { tab: view.tabInfo(shown) };
@@ -734,6 +752,7 @@ export function createHandlers<Handle>({
     tabId: number,
     loaded: Tab,
     history: HistoryLoad,
+    generation: number,
   ): Promise<Tab> {
     // Twice at most: a commit heard while the tab is read, of a page kept in memory perhaps, is
     // decided once more.
@@ -767,6 +786,7 @@ export function createHandlers<Handle>({
       ) {
         return loaded;
       }
+      refuseIfEnded(session, generation);
       history.stop();
       // No URL to wait for, so that a redirect still ends the wait; it still needs the load's
       // commit, so that the complete of a load stopped or cut off before it does not end it.
@@ -853,10 +873,16 @@ export function createHandlers<Handle>({
   }
 
   /** Makes a tab of the session's group the active tab of its window, without focusing the window. */
-  async function tabSelect(session: string, params: Params): Promise<Result<"tab_select">> {
+  async function tabSelect(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"tab_select">> {
     const tabId = tabIdParam(params, "tab_select");
     await groupTab(session, tabId);
     keepPromptInView(session, tabId);
+    // Selecting a tab Firefox unloaded loads its page.
+    refuseIfEnded(session, generation);
     const updated = await browser.tabs.update(tabId, { active: true });
     const view = await access.view(session);
     return { tab: view.tabInfo(updated) };
@@ -1603,7 +1629,7 @@ export function createHandlers<Handle>({
   ): Promise<TabInfo> {
     const { answer } = await access.ask(session, url, tabId, { generation });
     await answer;
-    return loadAfterAnswer(session, tabId, url, target);
+    return loadAfterAnswer(session, tabId, url, target, generation);
   }
 
   /** Loads the approved URL; on the prompt page it replaces the prompt in the tab's history. */
@@ -1612,19 +1638,21 @@ export function createHandlers<Handle>({
     tabId: number,
     url: string,
     target: NavigationTarget,
+    generation: number,
   ): Promise<TabInfo> {
     const view = await access.view(session);
     const group = await groups.groupOf(session);
     const tab = await existingTab(tabId);
     // No await from here to the load, so the tab cannot leave the group in between.
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
+    refuseIfEnded(session, generation);
     const site = siteOf(url);
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
     keepPrompt(session, tabId);
     const loaded =
       target.kind === "action" && !onPrompt && tab.url === url
-        ? await reloadPage(session, tab, url)
+        ? await reloadPage(session, tab, url, generation)
         : await waitForLoad(
             browser,
             timers,
@@ -1657,7 +1685,12 @@ export function createHandlers<Handle>({
    * either, but may come from the cache. A tab Firefox unloaded would reload about:blank, so its
    * page is loaded instead, which may also come from the cache.
    */
-  async function reloadPage(session: string, tab: Tab, url: string): Promise<Tab> {
+  async function reloadPage(
+    session: string,
+    tab: Tab,
+    url: string,
+    generation: number,
+  ): Promise<Tab> {
     const tabId = tab.id;
     if (tab.discarded === true) {
       return waitForLoad(
@@ -1690,6 +1723,7 @@ export function createHandlers<Handle>({
     ) {
       return current;
     }
+    refuseIfEnded(session, generation);
     return waitForLoad(
       browser,
       timers,

@@ -1204,13 +1204,14 @@ describe("network log", { timeout: 10000 }, () => {
   });
 
   it("records a tab whose id is 0", async () => {
-    const { fake, groups, read, request } = setup();
+    const { fake, groups, read, request, access } = setup();
     await grantSite(fake.browser, SITE);
     const tab = fake.openTab();
     fake.tabs.delete(tab.id);
     // The fake numbers tabs from 1; Firefox's ids are whole numbers of 0 or more.
     const zero: FakeTab = { ...tab, id: 0 };
     fake.tabs.set(0, zero);
+    access.admit("s1");
     await groups.ensureGroup("s1", zero);
     request(0, `${SITE}/`, { type: "main_frame" });
     fake.navigateByUser(0, `${SITE}/`);
@@ -2408,6 +2409,32 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     assert.deepEqual(read(tab.id).requests[0]?.responseBody, { text: "{}" });
   });
 
+  it("holds and copies nothing in its tabs once the session ended, and reads no gap later", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn, access, clock } = setup();
+    const tab = await liveTab(tabIn);
+    access.endSession("s1");
+    clock.now = 2000;
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    await flush();
+    await flush();
+    assert.deepEqual(holdsOf(fake), []);
+    const filters = fake.streamFilters.length;
+    request(tab.id, `${SITE}/gap`, { documentUrl: `${SITE}/next`, timeStamp: 2000 });
+    assert.equal(fake.streamFilters.length, filters);
+    clock.now = 3000;
+    access.admit("s1");
+    await flush();
+    await flush();
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 3000,
+      requests: [],
+      truncated: false,
+    });
+    assert.equal(holdsOf(fake).length, 1);
+  });
+
   it("releases a capture at a redirect, and the next hop decides on its own URL", async () => {
     const { fake, read, request, tabIn } = setup();
     const tab = await liveTab(tabIn);
@@ -2728,6 +2755,8 @@ function setup() {
 
   /** A tab in the session's group, on `url` with A's site stored as approved. */
   async function tabIn(session: string, url?: string): Promise<FakeTab> {
+    // A group exists only after its session's first request admitted it.
+    access.admit(session);
     await grantSite(fake.browser, SITE);
     const tab = fake.openTab();
     await groups.ensureGroup(session, tab);
