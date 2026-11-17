@@ -6,6 +6,7 @@ import path from "node:path";
 import { after, describe, test } from "node:test";
 import { crc32 } from "node:zlib";
 import {
+  auditAdvisories,
   type Bump,
   breakingChangeEntries,
   CommandError,
@@ -85,6 +86,19 @@ const ghRuns = (sha: string): string =>
     `repos/owner/repo/actions/runs?head_sha=${sha}&per_page=100`,
   );
 const GH = ghRuns(HEAD);
+const AUDIT = key(
+  "npm",
+  "audit",
+  "--json",
+  "--package-lock-only",
+  "--audit-level=none",
+  "--include=dev",
+  "--include=optional",
+  "--include=peer",
+  "--offline=false",
+  "--workspaces",
+  "--include-workspace-root",
+);
 const SHOW_CHANGELOG = key("git", "show", "HEAD:CHANGELOG.md");
 const SHOW_PACKAGE = key("git", "show", "HEAD:package.json");
 const SHOW_ORIGIN_PACKAGE = key("git", "show", "refs/remotes/origin/main:package.json");
@@ -351,6 +365,7 @@ function firstReleaseTree(): Tree {
       [tagList("v0.1.0")]: "",
       [lsRemote("v0.1.0")]: "",
       [GH]: runs(ciRun()),
+      [AUDIT]: json(auditReport()),
     },
   };
 }
@@ -440,6 +455,73 @@ function prePushTree(release: "first" | "second"): Tree {
     }
   }
   return tree;
+}
+
+type Advisory = { name: string; severity: string; title: string; url: string };
+type AuditEntry = Record<string, unknown> & { via: Record<string, unknown>[] };
+const CHALK: Advisory = {
+  name: "chalk",
+  severity: "critical",
+  title: "Malware in chalk",
+  url: "https://github.com/advisories/GHSA-2v46-p5h4-248w",
+};
+const UA_PARSER: Advisory = {
+  name: "ua-parser-js",
+  severity: "high",
+  title: "Embedded malware in ua-parser-js",
+  url: "https://github.com/advisories/GHSA-pjwm-rvh2-c87w",
+};
+const NO_COUNTS = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
+
+/** The entry `npm audit --json` prints for a package that has the advisory itself. */
+function auditEntry({ name, severity, title, url }: Advisory): AuditEntry {
+  return {
+    name,
+    severity,
+    isDirect: true,
+    via: [
+      {
+        source: 1107375,
+        name,
+        dependency: name,
+        title,
+        url,
+        severity,
+        cwe: ["CWE-506"],
+        cvss: { score: 0, vectorString: null },
+        range: "=1.0.0",
+      },
+    ],
+    effects: [],
+    range: "",
+    nodes: [`node_modules/${name}`],
+    fixAvailable: false,
+  };
+}
+
+/** A version 2 report with the given entries and the given tally of vulnerable packages. */
+function auditReportOf(
+  vulnerabilities: Record<string, unknown>,
+  counts: Record<string, unknown>,
+): Record<string, unknown> {
+  return {
+    auditReportVersion: 2,
+    vulnerabilities,
+    metadata: {
+      vulnerabilities: { ...counts, total: Object.keys(vulnerabilities).length },
+      dependencies: { prod: 4, dev: 0, optional: 0, peer: 0, peerOptional: 0, total: 3 },
+    },
+  };
+}
+
+/** The report of a lockfile with one vulnerable package per advisory, as npm prints it. */
+function auditReport(...advisories: Advisory[]): Record<string, unknown> {
+  const counts: Record<string, number> = { ...NO_COUNTS };
+  for (const { severity } of advisories) counts[severity] = (counts[severity] ?? 0) + 1;
+  return auditReportOf(
+    Object.fromEntries(advisories.map((advisory) => [advisory.name, auditEntry(advisory)])),
+    counts,
+  );
 }
 
 function fakeEnv(tree: Tree): FakeEnv {
@@ -772,6 +854,7 @@ describe("pre-roll", () => {
     assertClean(findings);
     assert.deepEqual(texts(findings, "INFO"), [
       `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
+      "npm audit: no advisories",
       "no previous tag: drift check skipped",
       "no previous tag: protocol check against a release skipped",
       "protocol 6, oldest served 3",
@@ -2127,6 +2210,7 @@ describe("listing", () => {
     ]);
     assert.deepEqual(texts(findings, "INFO"), [
       `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
+      "npm audit: no advisories",
       "manifest since v0.1.0: no change",
       "listing since v0.1.0: no change",
       "AMO source files since v0.1.0: no change",
@@ -2145,6 +2229,7 @@ describe("listing", () => {
     assertFail(findings, /^the server registers the tool "click"/);
     assert.deepEqual(texts(findings, "INFO"), [
       `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
+      "npm audit: no advisories",
       "protocol 6, oldest served 3",
     ]);
   });
@@ -2947,6 +3032,374 @@ describe("pre-push", () => {
   });
 });
 
+describe("npm audit", () => {
+  const stages: { name: string; tree: () => Tree; run: (env: FakeEnv) => Finding[] }[] = [
+    {
+      name: "pre-roll",
+      tree: firstReleaseTree,
+      run(env) {
+        const result = checkPreRoll(env, undefined);
+        assert.ok("findings" in result, JSON.stringify(result));
+        return result.findings;
+      },
+    },
+    { name: "pre-push", tree: () => prePushTree("first"), run: (env) => checkPrePush(env) },
+  ];
+  const LEFT_PAD: Advisory = {
+    name: "left-pad",
+    severity: "low",
+    title: "Slow padding",
+    url: "https://github.com/advisories/GHSA-aaaa-bbbb-cccc",
+  };
+  const SEMVER: Advisory = {
+    name: "semver",
+    severity: "moderate",
+    title: "Regular expression denial of service",
+    url: "https://github.com/advisories/GHSA-dddd-eeee-ffff",
+  };
+  const KIND: Advisory = {
+    name: "kind-of",
+    severity: "info",
+    title: "A note",
+    url: "https://github.com/advisories/GHSA-gggg-hhhh-iiii",
+  };
+  const CHALK_FAIL = `npm audit: chalk has a critical advisory: Malware in chalk ${CHALK.url}`;
+  const UA_PARSER_FAIL = `npm audit: ua-parser-js has a high advisory: Embedded malware in ua-parser-js ${UA_PARSER.url}`;
+
+  /** The findings of `stage` when `npm audit` answers `reply`, and the commands it ran. */
+  function audited(
+    stage: (typeof stages)[number],
+    reply: Reply,
+  ): { findings: Finding[]; env: FakeEnv } {
+    const tree = stage.tree();
+    tree.commands[AUDIT] = reply;
+    const env = fakeEnv(tree);
+    return { findings: stage.run(env), env };
+  }
+
+  for (const stage of stages) {
+    describe(stage.name, () => {
+      test("fails on a critical and a high advisory, naming each package and its link", () => {
+        const { findings } = audited(stage, json(auditReport(UA_PARSER, CHALK)));
+        assert.deepEqual(texts(findings, "FAIL"), [CHALK_FAIL, UA_PARSER_FAIL]);
+        assert.ok(!texts(findings, "INFO").includes("npm audit: no advisories"));
+      });
+
+      test("passes a clean report with one INFO line", () => {
+        const { findings } = audited(stage, json(auditReport()));
+        assertClean(findings);
+        assert.deepEqual(
+          texts(findings, "INFO").filter((text) => text.startsWith("npm audit:")),
+          ["npm audit: no advisories"],
+        );
+      });
+
+      test("prints low, moderate and info advisories as INFO and passes", () => {
+        const { findings } = audited(stage, json(auditReport(KIND, LEFT_PAD, SEMVER)));
+        assertClean(findings);
+        assert.deepEqual(
+          texts(findings, "INFO").filter((text) => text.startsWith("npm audit:")),
+          [
+            `npm audit: semver has a moderate advisory: ${SEMVER.title} ${SEMVER.url}`,
+            `npm audit: left-pad has a low advisory: ${LEFT_PAD.title} ${LEFT_PAD.url}`,
+            `npm audit: kind-of has a info advisory: ${KIND.title} ${KIND.url}`,
+          ],
+        );
+      });
+
+      test("fails on a high advisory next to lower ones, and prints the lower ones", () => {
+        const { findings } = audited(stage, json(auditReport(LEFT_PAD, UA_PARSER)));
+        assert.deepEqual(texts(findings, "FAIL"), [UA_PARSER_FAIL]);
+        assert.ok(
+          texts(findings, "INFO").includes(
+            `npm audit: left-pad has a low advisory: ${LEFT_PAD.title} ${LEFT_PAD.url}`,
+          ),
+        );
+      });
+
+      const failures: [string, CommandError, RegExp][] = [
+        [
+          "the registry cannot be reached",
+          new CommandError(
+            "npm audit --json",
+            1,
+            "npm warn audit request failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org\n",
+          ),
+          /^npm audit: `npm audit --json` failed \(status 1\): .*ENOTFOUND registry\.npmjs\.org$/,
+        ],
+        [
+          "it times out",
+          new CommandError("npm audit --json", null, "", "error spawnSync npm ETIMEDOUT"),
+          /^npm audit: `npm audit --json` failed \(error spawnSync npm ETIMEDOUT\): $/,
+        ],
+        [
+          "there is no lockfile",
+          new CommandError("npm audit --json", 1, "npm error code ENOLOCK\n"),
+          /^npm audit: `npm audit --json` failed \(status 1\): npm error code ENOLOCK$/,
+        ],
+      ];
+      for (const [name, error, pattern] of failures) {
+        test(`fails when ${name}`, () => {
+          const { findings } = audited(stage, error);
+          assertOnlyFail(findings, pattern);
+          assert.ok(!texts(findings, "INFO").includes("npm audit: no advisories"));
+        });
+      }
+
+      const entry = auditEntry(UA_PARSER);
+      const [item] = entry.via;
+      assert.ok(item);
+      const { url: _url, ...withoutUrl } = item;
+      const unusable: [string, unknown, RegExp][] = [
+        ["not JSON", "npm warn deprecated\n", /^npm audit printed no JSON report: "npm warn dep/],
+        ["no output", "", /^npm audit printed no JSON report: ""$/],
+        ["null", "null", /^unexpected npm audit output: the report is not an object$/],
+        ["a list", "[]", /^unexpected npm audit output: the report is not an object$/],
+        [
+          "an empty object",
+          {},
+          /^unexpected npm audit output: auditReportVersion is undefined, not 2$/,
+        ],
+        [
+          "version 1",
+          { ...auditReport(), auditReportVersion: 1 },
+          /^unexpected npm audit output: auditReportVersion is 1, not 2$/,
+        ],
+        [
+          "an error next to a clean report",
+          { ...auditReport(), error: { code: "EAUDIT", summary: "audit failed" } },
+          /^unexpected npm audit output: the report holds an error$/,
+        ],
+        [
+          "no vulnerabilities",
+          { auditReportVersion: 2, metadata: auditReport().metadata },
+          /^unexpected npm audit output: vulnerabilities is not an object$/,
+        ],
+        [
+          "vulnerabilities as a list",
+          { ...auditReport(), vulnerabilities: [] },
+          /^unexpected npm audit output: vulnerabilities is not an object$/,
+        ],
+        [
+          "an unknown severity on an entry",
+          auditReportOf({ "ua-parser-js": { ...entry, severity: "severe" } }, NO_COUNTS),
+          /^unexpected npm audit output: vulnerabilities\.ua-parser-js has no name, severity and via list$/,
+        ],
+        [
+          "an entry that is no object",
+          auditReportOf({ "ua-parser-js": "high" }, NO_COUNTS),
+          /^unexpected npm audit output: vulnerabilities\.ua-parser-js has no name, severity and via list$/,
+        ],
+        [
+          "an entry without a name",
+          auditReportOf({ x: { ...entry, name: undefined } }, { ...NO_COUNTS, high: 1 }),
+          /^unexpected npm audit output: vulnerabilities\.x has no name, severity and via list$/,
+        ],
+        [
+          "an entry whose via is no list",
+          auditReportOf({ x: { ...entry, via: "chalk" } }, { ...NO_COUNTS, high: 1 }),
+          /^unexpected npm audit output: vulnerabilities\.x has no name, severity and via list$/,
+        ],
+        [
+          "an unknown severity on an advisory",
+          auditReportOf(
+            { "ua-parser-js": { ...entry, via: [{ ...item, severity: "severe" }] } },
+            { ...NO_COUNTS, high: 1 },
+          ),
+          /^unexpected npm audit output: vulnerabilities\.ua-parser-js\.via has an item that is no package name or advisory$/,
+        ],
+        [
+          "an advisory without a url",
+          auditReportOf(
+            { "ua-parser-js": { ...entry, via: [withoutUrl] } },
+            { ...NO_COUNTS, high: 1 },
+          ),
+          /^unexpected npm audit output: vulnerabilities\.ua-parser-js\.via has an item that is no package name or advisory$/,
+        ],
+        [
+          "an advisory without a title",
+          auditReportOf(
+            { "ua-parser-js": { ...entry, via: [{ ...item, title: 7 }] } },
+            { ...NO_COUNTS, high: 1 },
+          ),
+          /via has an item that is no package name or advisory$/,
+        ],
+        [
+          "an advisory without a package",
+          auditReportOf(
+            { "ua-parser-js": { ...entry, via: [{ ...item, name: undefined }] } },
+            { ...NO_COUNTS, high: 1 },
+          ),
+          /via has an item that is no package name or advisory$/,
+        ],
+        [
+          "a via item that is a number",
+          auditReportOf({ x: { ...entry, via: [3] } }, { ...NO_COUNTS, high: 1 }),
+          /^unexpected npm audit output: vulnerabilities\.x\.via has an item that is no package name or advisory$/,
+        ],
+        [
+          "no metadata",
+          { auditReportVersion: 2, vulnerabilities: {} },
+          /^unexpected npm audit output: metadata\.vulnerabilities is not an object$/,
+        ],
+        [
+          "a high count with no entry",
+          auditReportOf({}, { ...NO_COUNTS, high: 1 }),
+          /^unexpected npm audit output: metadata\.vulnerabilities\.high is 1, but the entries hold 0$/,
+        ],
+        [
+          "a critical entry counted as high",
+          auditReportOf({ chalk: auditEntry(CHALK) }, { ...NO_COUNTS, high: 1 }),
+          /^unexpected npm audit output: metadata\.vulnerabilities\.high is 1, but the entries hold 0$/,
+        ],
+        [
+          "a count that is a string",
+          auditReportOf({ "ua-parser-js": entry }, { ...NO_COUNTS, high: "1" }),
+          /^unexpected npm audit output: metadata\.vulnerabilities\.high is "1", but the entries hold 1$/,
+        ],
+        [
+          "a missing count",
+          auditReportOf({}, { info: 0, low: 0, moderate: 0, high: 0 }),
+          /^unexpected npm audit output: metadata\.vulnerabilities\.critical is undefined, but the entries hold 0$/,
+        ],
+        [
+          "a critical entry with no advisory",
+          auditReportOf(
+            { chalk: { ...auditEntry(CHALK), via: [] } },
+            { ...NO_COUNTS, critical: 1 },
+          ),
+          /^unexpected npm audit output: the entries go up to critical, but the advisories up to none$/,
+        ],
+        [
+          "a critical entry whose only advisory is low",
+          auditReportOf(
+            { chalk: { ...auditEntry(CHALK), via: [{ ...item, severity: "low" }] } },
+            { ...NO_COUNTS, critical: 1 },
+          ),
+          /^unexpected npm audit output: the entries go up to critical, but the advisories up to low$/,
+        ],
+        [
+          "a high advisory in a low entry",
+          auditReportOf({ x: { ...entry, severity: "low" } }, { ...NO_COUNTS, low: 1 }),
+          /^unexpected npm audit output: the entries go up to low, but the advisories up to high$/,
+        ],
+      ];
+      for (const [name, reply, pattern] of unusable) {
+        test(`fails on unusable output: ${name}`, () => {
+          const { findings } = audited(stage, typeof reply === "string" ? reply : json(reply));
+          assertOnlyFail(findings, pattern);
+          assert.ok(!texts(findings, "INFO").includes("npm audit: no advisories"));
+        });
+      }
+
+      test("quotes the first 200 characters of output that is no JSON", () => {
+        const { findings } = audited(stage, `${"x".repeat(200)}tail`);
+        assert.deepEqual(texts(findings, "FAIL"), [
+          `npm audit printed no JSON report: "${"x".repeat(200)}..."`,
+        ]);
+        assert.deepEqual(texts(audited(stage, "x".repeat(200)).findings, "FAIL"), [
+          `npm audit printed no JSON report: "${"x".repeat(200)}"`,
+        ]);
+      });
+
+      test("fails once for a package that is vulnerable only through a dependency", () => {
+        const parent = { ...auditEntry(UA_PARSER), name: "parent", via: ["ua-parser-js"] };
+        const report = auditReportOf(
+          { parent, "ua-parser-js": auditEntry(UA_PARSER) },
+          { ...NO_COUNTS, high: 2 },
+        );
+        const { findings } = audited(stage, json(report));
+        assert.deepEqual(texts(findings, "FAIL"), [UA_PARSER_FAIL]);
+      });
+
+      test("runs npm audit once, with the lockfile-only, include, offline and workspace flags", () => {
+        const { env } = audited(stage, json(auditReport()));
+        assert.deepEqual(
+          env.calls.filter(([command]) => command === "npm"),
+          [JSON.parse(AUDIT)],
+        );
+      });
+    });
+  }
+
+  test("auditAdvisories lists each advisory once, highest severity first, then by package", () => {
+    const shared = auditEntry(SEMVER);
+    const report = auditReportOf(
+      {
+        zlib: auditEntry({ ...LEFT_PAD, name: "zlib" }),
+        semver: shared,
+        "semver-again": { ...shared, name: "semver-again", via: [...shared.via, "semver"] },
+        chalk: auditEntry(CHALK),
+        "left-pad": auditEntry(LEFT_PAD),
+        "ua-parser-js": auditEntry(UA_PARSER),
+        "another-high": auditEntry({ ...UA_PARSER, name: "another-high" }),
+      },
+      { ...NO_COUNTS, critical: 1, high: 2, moderate: 2, low: 2 },
+    );
+    const advisories = auditAdvisories(report);
+    assert.ok(Array.isArray(advisories), String(advisories));
+    assert.deepEqual(
+      advisories.map(({ name, severity }) => `${name} ${severity}`),
+      [
+        "chalk critical",
+        "another-high high",
+        "ua-parser-js high",
+        "semver moderate",
+        "left-pad low",
+        "zlib low",
+      ],
+    );
+    assert.deepEqual(advisories[3], SEMVER);
+  });
+
+  test("auditAdvisories refuses a package vulnerable through a dependency that has no entry", () => {
+    const parent = { ...auditEntry(UA_PARSER), name: "parent", via: ["ua-parser-js"] };
+    assert.equal(
+      auditAdvisories(auditReportOf({ parent }, { ...NO_COUNTS, high: 1 })),
+      "the entries go up to high, but the advisories up to none",
+    );
+  });
+
+  test("a title with a line break cannot print a line of its own", () => {
+    const tree = firstReleaseTree();
+    tree.commands[AUDIT] = json(auditReport({ ...UA_PARSER, title: "Bad\nINFO: forged line" }));
+    const out: string[] = [];
+    const status = runCli(["pre-roll"], fakeEnv(tree), {
+      out: (line) => out.push(line),
+      err: () => {},
+    });
+    assert.equal(status, 1);
+    assert.ok(
+      out.includes(
+        `FAIL: npm audit: ua-parser-js has a high advisory: Bad\\u000aINFO: forged line ${UA_PARSER.url}`,
+      ),
+      JSON.stringify(out),
+    );
+    assert.ok(!out.includes("INFO: forged line"));
+  });
+
+  test("the other subcommands run no audit", () => {
+    const calls = (run: (env: FakeEnv) => unknown, tree: Tree): string[][] => {
+      const env = fakeEnv(tree);
+      run(env);
+      return env.calls;
+    };
+    const all = [
+      calls((env) => checkChangelog(env), firstReleaseTree()),
+      calls((env) => checkListing(env), secondReleaseTree()),
+      calls((env) => checkProtocol(env), secondReleaseTree()),
+      calls((env) => checkPostRoll(env, "0.1.0"), postRollTree("first")),
+      calls((env) => checkPostBump(env, "0.1.0"), postBumpTree("first")),
+    ];
+    for (const list of all) {
+      assert.deepEqual(
+        list.filter(([command]) => command === "npm"),
+        [],
+      );
+    }
+  });
+});
+
 describe("artifacts", () => {
   const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-check-release-zip-")));
   after(() => rmSync(base, { recursive: true, force: true }));
@@ -3393,7 +3846,7 @@ describe("real git", () => {
     return bare;
   }
 
-  /** The real git, with origin's URLs reported as GitHub's and a green CI run for any sha. */
+  /** The real git, with origin's URLs as GitHub's, a green CI run for any sha, a clean audit. */
   function github(dir: string): Env {
     const env = realEnv(dir);
     return {
@@ -3403,6 +3856,7 @@ describe("real git", () => {
         if (command === "gh") {
           return runs(ciRun({ head_sha: /head_sha=(\w+)/.exec(args.at(-1) ?? "")?.[1] }));
         }
+        if (command === "npm") return json(auditReport());
         return env.sh(command, args);
       },
       listTools: () => [...FIXTURE_TOOLS],

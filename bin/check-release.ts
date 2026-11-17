@@ -64,6 +64,8 @@ type Run = {
   conclusion: string | null;
   started: number;
 };
+type Severity = "info" | "low" | "moderate" | "high" | "critical";
+type Advisory = { name: string; severity: Severity; title: string; url: string };
 
 const SUBCOMMANDS = [
   "changelog",
@@ -103,6 +105,22 @@ const ORIGIN_MAIN = "refs/remotes/origin/main";
 const CI_WORKFLOW = ".github/workflows/ci.yml";
 const SIGNATURE_FILES = ["META-INF/mozilla.rsa", "META-INF/mozilla.sf", "META-INF/manifest.mf"];
 const COMMAND_TIMEOUT_MS = 120_000;
+const SEVERITIES: readonly Severity[] = ["info", "low", "moderate", "high", "critical"];
+// --audit-level=none makes a finished audit exit 0 whatever it finds, so a non-zero exit means it
+// failed. --offline=false: npm exits 0 with an empty report, unaudited, when offline is set.
+// --workspaces --include-workspace-root: a workspaces setting would otherwise skip packages.
+const AUDIT_ARGS = [
+  "audit",
+  "--json",
+  "--package-lock-only",
+  "--audit-level=none",
+  "--include=dev",
+  "--include=optional",
+  "--include=peer",
+  "--offline=false",
+  "--workspaces",
+  "--include-workspace-root",
+];
 const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
 const MANIFEST = "apps/extension/manifest.json";
@@ -314,6 +332,7 @@ export function checkPreRoll(env: Env, bump: Bump | undefined): CheckResult {
   if (slug !== undefined && head !== undefined) {
     attempt(findings, "CI", () => checkCi(env, slug, head, findings));
   }
+  attempt(findings, "npm audit", () => checkAudit(env, findings));
   checkListingAgrees(env, tag, findings);
   checkProtocolServed(env, tag, findings);
   if (tag !== undefined) {
@@ -1034,6 +1053,7 @@ export function checkPrePush(env: Env): Finding[] {
   if (slug !== undefined && base !== undefined) {
     attempt(findings, "CI", () => checkCi(env, slug, base, findings));
   }
+  attempt(findings, "npm audit", () => checkAudit(env, findings));
   return findings;
 }
 
@@ -1850,6 +1870,103 @@ export function mainCiRuns(response: unknown, slug: string, head: string): Run[]
     result.push({ id, event, status, conclusion, started });
   }
   return result;
+}
+
+/** `npm audit` on the lockfile: each advisory of high or critical severity is a FAIL. */
+function checkAudit(env: Env, findings: Finding[]): void {
+  const output = env.sh("npm", AUDIT_ARGS);
+  let report: unknown;
+  try {
+    report = JSON.parse(output);
+  } catch {
+    const shown = output.length > 200 ? `${output.slice(0, 200)}...` : output;
+    findings.push(fail(`npm audit printed no JSON report: ${quote(shown)}`));
+    return;
+  }
+  const advisories = auditAdvisories(report);
+  if (typeof advisories === "string") {
+    findings.push(fail(`unexpected npm audit output: ${advisories}`));
+    return;
+  }
+  for (const { name, severity, title, url } of advisories) {
+    const text = `npm audit: ${name} has a ${severity} advisory: ${title} ${url}`;
+    const blocking = SEVERITIES.indexOf(severity) >= SEVERITIES.indexOf("high");
+    findings.push(blocking ? fail(text) : info(text));
+  }
+  if (advisories.length === 0) findings.push(info("npm audit: no advisories"));
+}
+
+/**
+ * The advisories of an `npm audit --json` report (version 2), highest severity first and then by
+ * package, each once. A package that is vulnerable only through a dependency adds none of its
+ * own: that dependency's entry holds the advisory. A string is the reason the report is unusable.
+ */
+export function auditAdvisories(report: unknown): Advisory[] | string {
+  if (!isRecord(report)) return "the report is not an object";
+  if (Object.hasOwn(report, "error")) return "the report holds an error";
+  if (report.auditReportVersion !== 2) {
+    return `auditReportVersion is ${JSON.stringify(report.auditReportVersion)}, not 2`;
+  }
+  const { vulnerabilities } = report;
+  if (!isRecord(vulnerabilities)) return "vulnerabilities is not an object";
+  const tally: Record<Severity, number> = { info: 0, low: 0, moderate: 0, high: 0, critical: 0 };
+  const found = new Map<string, Advisory>();
+  for (const [key, entry] of Object.entries(vulnerabilities)) {
+    const severity = severityOf(field(entry, "severity"));
+    const via = field(entry, "via");
+    if (typeof field(entry, "name") !== "string" || severity === undefined || !Array.isArray(via)) {
+      return `vulnerabilities.${key} has no name, severity and via list`;
+    }
+    tally[severity] += 1;
+    for (const item of via) {
+      if (typeof item === "string") continue;
+      const advisory = advisoryOf(item);
+      if (advisory === undefined) {
+        return `vulnerabilities.${key}.via has an item that is no package name or advisory`;
+      }
+      found.set(JSON.stringify([advisory.name, advisory.url]), advisory);
+    }
+  }
+  const counts = field(field(report, "metadata"), "vulnerabilities");
+  if (!isRecord(counts)) return "metadata.vulnerabilities is not an object";
+  for (const severity of SEVERITIES) {
+    if (counts[severity] !== tally[severity]) {
+      return `metadata.vulnerabilities.${severity} is ${JSON.stringify(counts[severity])}, but the entries hold ${tally[severity]}`;
+    }
+  }
+  const advisories = [...found.values()].sort(
+    (a, b) =>
+      SEVERITIES.indexOf(b.severity) - SEVERITIES.indexOf(a.severity) ||
+      a.name.localeCompare(b.name),
+  );
+  // npm rates an entry by its most severe advisory, its own or a dependency's, so the most severe
+  // entry and the most severe advisory agree.
+  const entriesUpTo = SEVERITIES.findLast((severity) => tally[severity] > 0) ?? "none";
+  const advisoriesUpTo = advisories[0]?.severity ?? "none";
+  if (entriesUpTo !== advisoriesUpTo) {
+    return `the entries go up to ${entriesUpTo}, but the advisories up to ${advisoriesUpTo}`;
+  }
+  return advisories;
+}
+
+function severityOf(value: unknown): Severity | undefined {
+  return SEVERITIES.find((severity) => severity === value);
+}
+
+function advisoryOf(value: unknown): Advisory | undefined {
+  const name = field(value, "name");
+  const severity = severityOf(field(value, "severity"));
+  const title = field(value, "title");
+  const url = field(value, "url");
+  if (
+    typeof name !== "string" ||
+    severity === undefined ||
+    typeof title !== "string" ||
+    typeof url !== "string"
+  ) {
+    return undefined;
+  }
+  return { name, severity, title, url };
 }
 
 function checkDescendsFromOriginMain(env: Env, findings: Finding[]): void {

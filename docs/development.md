@@ -237,6 +237,10 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   only in its JSON formatting (AMO's signed copy drops the final newline), and its manifest
   has `<version>`.
 
+`pre-roll` and `pre-push` also run `npm audit` on `package-lock.json`, development packages
+included, and fail on each advisory of high or critical severity and when the audit cannot
+run; lower advisories print as `INFO:` lines.
+
 The version fields are the root and workspace `package.json` files and `package-lock.json`.
 The extension's built manifest takes its version from `apps/extension/package.json`; the
 source `apps/extension/manifest.json` has no `version`.
