@@ -2,7 +2,9 @@
 
 **Status:** Accepted, 2026-11-17. Supersedes the rule "Non-blocking listeners only" and the
 rejected alternative "Response bodies" of
-[0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md).
+[0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md). Its capture rule
+("disconnects the filter" at the cap and on release) and measurement M4 are superseded by
+[0073](0073-response-capture-never-disconnects-after-the-start.md), 2026-11-17.
 
 ## Context
 

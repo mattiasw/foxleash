@@ -221,7 +221,10 @@
       "listing": "passes every byte of each response on to the page unchanged",
       "evidence": [
         { "file": "apps/extension/src/response-body.ts", "contains": "filter.write(event.data);" },
-        { "file": "apps/extension/src/response-body.ts", "contains": "filter.disconnect();" },
+        {
+          "file": "apps/extension/src/response-body.ts",
+          "contains": "function passOn(filter: StreamFilter): void {"
+        },
         { "file": "apps/extension/src/response-body.ts", "contains": "filter.close();" },
         {
           "file": "apps/extension/src/network-log.ts",

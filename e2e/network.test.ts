@@ -37,6 +37,8 @@ const REF = "([a-z]{1,7}[1-9][0-9]*)";
 const POLL_MS = 100;
 const POLL_LIMIT_MS = 10_000;
 const REDACTED = "[redacted]";
+/** How many times the order test fetches each of its responses. */
+const ORDERED_ROUNDS = 40;
 
 // One Firefox for the file, as in console.test.ts.
 describe("read_network in real Firefox", () => {
@@ -362,6 +364,48 @@ describe("read_network in real Firefox", () => {
     assert.deepEqual(requestTo(read.requests, "/api/body/stream")?.responseBody, {
       text: NETWORK_BODIES.stream.join(""),
     });
+  });
+
+  test("the page gets every chunk of a large response in order, kept or not", async (t) => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const expected = sha256(NETWORK_BODIES.ordered);
+    const paths = ["/api/body/ordered-json", "/api/body/ordered-binary"];
+    const differing = new Map<string, number[]>();
+    for (const path of paths) {
+      const started = Date.now();
+      const rounds: number[] = [];
+      for (let round = 0; round < ORDERED_ROUNDS; round += 1) {
+        if ((await firefox.evaluate(page.context, digestScript(path))) !== expected) {
+          rounds.push(round);
+        }
+      }
+      differing.set(path, rounds);
+      t.diagnostic(`${path}: ${Date.now() - started} ms for ${ORDERED_ROUNDS} fetches in the page`);
+    }
+    assert.deepEqual(
+      differing,
+      new Map(paths.map((path) => [path, []])),
+      paths
+        .map((path) => {
+          const rounds = differing.get(path) ?? [];
+          return `${path}: ${rounds.length} of ${ORDERED_ROUNDS} differ (rounds ${rounds.join(", ")})`;
+        })
+        .join("; "),
+    );
+    const read = await readUntil(
+      page.tab,
+      (requests) => requestTo(requests, "/api/body/ordered-json")?.responseBody !== undefined,
+      { responseBody: true, pattern: "/api/body/ordered-" },
+    );
+    assert.deepEqual(requestTo(read.requests, "/api/body/ordered-json")?.responseBody, {
+      text: NETWORK_BODIES.ordered.slice(0, MAX_NETWORK_RESPONSE_TEXT),
+      truncated: true,
+    });
+    const binary = read.requests.filter(
+      (request) => new URL(request.url).pathname === "/api/body/ordered-binary",
+    );
+    assert.equal(binary.length, ORDERED_ROUNDS);
+    assert.equal(binary.filter((request) => Object.hasOwn(request, "responseBody")).length, 0);
   });
 
   test("captures no response from another site, whether the page or its frame asked", async () => {

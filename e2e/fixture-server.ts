@@ -165,6 +165,15 @@ export const NETWORK_BODIES = {
   /** 36 bytes, answered with status 500 to a POST. */
   error: '{"error":"reCAPTCHA token invalid."}',
   large: "0123456789abcdef".repeat(12_500),
+  /**
+   * 1,200,000 bytes in 8-byte words, each its own byte offset in 7 hex digits and a newline. Not
+   * periodic, unlike `large`, whose period divides the chunk size: chunks that reach the page out
+   * of order, or not at all, change its bytes.
+   */
+  ordered: Array.from(
+    { length: 150_000 },
+    (_, index) => `${(index * 8).toString(16).padStart(7, "0")}\n`,
+  ).join(""),
   gzip: JSON.stringify({
     items: Array.from({ length: 300 }, (_, index) => ({ id: index, name: `item-${index}` })),
   }),
@@ -931,6 +940,12 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/api/body/large") {
       response.writeHead(200, { ...headers, "Content-Type": "text/plain; charset=utf-8" });
       response.end(NETWORK_BODIES.large);
+    } else if (path === "/api/body/ordered-json") {
+      response.writeHead(200, { ...headers, "Content-Type": "application/json" });
+      response.end(NETWORK_BODIES.ordered);
+    } else if (path === "/api/body/ordered-binary") {
+      response.writeHead(200, { ...headers, "Content-Type": "application/octet-stream" });
+      response.end(NETWORK_BODIES.ordered);
     } else if (path === "/api/body/gzip") {
       response.writeHead(200, {
         ...headers,

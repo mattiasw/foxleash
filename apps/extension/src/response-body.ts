@@ -1,6 +1,7 @@
-// Copies the text of a response as it passes to the page (ADR 0071). Every chunk is written on
-// before anything else happens to it, and the filter is disconnected at the cap and on any fault,
-// so the page always gets the whole response, unchanged.
+// Copies the text of a response as it passes to the page (ADR 0071, 0073). Every chunk is written
+// on, in order, before anything else happens to it; the copy stops at the cap and on any fault,
+// and the filter is handed back to Firefox only when the capture ends before the response starts,
+// so the page always gets the whole response, unchanged and in order.
 import {
   MAX_NETWORK_RESPONSE_BYTES,
   MAX_NETWORK_RESPONSE_TEXT,
@@ -25,7 +26,7 @@ export interface CaptureHooks {
 export interface ResponseCapture {
   /** The response's headers: the capture goes on only for a text-like Content-Type. */
   headers(responseHeaders: readonly HttpHeader[] | undefined): void;
-  /** Ends the capture with nothing stored and hands the rest of the response back to Firefox. */
+  /** Ends the capture with nothing stored; the rest of the response still passes on to the page. */
   release(): void;
   /** Asks `wanted` again, as after the site check's answer changed. */
   check(): void;
@@ -85,19 +86,9 @@ export function captureResponse(filter: StreamFilter, hooks: CaptureHooks): Resp
   // No more data will be copied: the response ended, or the cap cut it.
   let stopped = false;
   let ended = false;
-  // A disconnect threw because the filter had not started: `onstart` tries again.
-  let pendingDisconnect = false;
   // undefined until the headers came, null when they are not text-like.
   let encoding: string | null | undefined;
 
-  filter.onstart = () => {
-    if (!pendingDisconnect) return;
-    try {
-      filter.disconnect();
-    } catch {
-      // The handlers keep writing and close at the stop.
-    }
-  };
   filter.ondata = (event) => {
     try {
       filter.write(event.data);
@@ -147,7 +138,6 @@ export function captureResponse(filter: StreamFilter, hooks: CaptureHooks): Resp
     chunks.push(new Uint8Array(data.slice(0, left)));
     cut = true;
     stopped = true;
-    disconnect();
     settle();
   }
 
@@ -181,7 +171,6 @@ export function captureResponse(filter: StreamFilter, hooks: CaptureHooks): Resp
     if (ended) return;
     chunks = [];
     end();
-    disconnect();
   }
 
   function check(): void {
@@ -197,21 +186,45 @@ export function captureResponse(filter: StreamFilter, hooks: CaptureHooks): Resp
   function fail(): void {
     chunks = [];
     if (!ended) end();
-    disconnect();
   }
 
   function end(): void {
     ended = true;
+    passOn(filter);
     hooks.end();
   }
+}
 
-  function disconnect(): void {
+/**
+ * Takes over the filter's events once the capture ended, holding nothing but the filter, so the
+ * capture and its hooks can be freed while a long response still streams. A response that has not
+ * started is handed back to Firefox; one that has gets every chunk written on and is closed at the
+ * stop, since a disconnect while data flows can reorder or drop the chunks still on their way
+ * (ADR 0073).
+ */
+function passOn(filter: StreamFilter): void {
+  filter.onstart = () => {
     try {
       filter.disconnect();
     } catch {
-      pendingDisconnect = true;
+      // The handlers below keep writing and close at the stop.
     }
-  }
+  };
+  filter.ondata = (event) => {
+    try {
+      filter.write(event.data);
+    } catch {
+      // Only this chunk is lost; the later ones are still written.
+    }
+  };
+  filter.onstop = () => {
+    try {
+      filter.close();
+    } catch {
+      // Nothing more can reach the page through this filter either way.
+    }
+  };
+  filter.onerror = null;
 }
 
 /**

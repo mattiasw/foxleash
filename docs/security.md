@@ -260,10 +260,11 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
   response whose charset can decode ASCII bytes to other characters (UTF-16, ISO-2022-JP,
   Shift_JIS, GBK, gb18030, Big5, EUC-KR) is not kept, since it could hide a token from the
   redaction.
-- Foxleash writes each chunk of the response on to the page before it copies anything, and never
-  changes one. It disconnects from the response at the copy limit and on any fault, redirect,
-  error or end of recording, so the page gets the rest from Firefox; when Foxleash's background
-  stops in the middle of a response, the page still gets all of it.
+- Foxleash writes each chunk of the response on to the page, in the order it arrives, before it
+  copies anything, and never changes one. At the copy limit and on any fault, redirect, error or
+  end of recording it stops copying and keeps passing the rest of the response on until it ends;
+  a capture that ends before the response starts hands the response back to Firefox. When
+  Foxleash's background stops in the middle of a response, the page still gets all of it.
 - Nothing from before recording began, and nothing from a gap: a response still arriving when
   recording stops is never kept.
 - Firefox lets an add-on read a response only for a request one of its blocking listeners saw. So

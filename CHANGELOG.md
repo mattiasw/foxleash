@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The browser now says that a Foxleash program of version 0.4.0 or 0.4.1 is too old for the
   add-on, instead of showing it as connected while it refuses every tool call.
+- In a tab being recorded, a page's fetch and XMLHttpRequest requests could get a large response
+  with parts out of order or missing. Every response now reaches the page whole and in order.
 
 ## [0.5.0] - 2026-11-17
 

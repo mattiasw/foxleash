@@ -183,7 +183,8 @@ export interface WebRequestEvent<Listener> {
 /**
  * Firefox's webRequest StreamFilter: once attached, the page gets only what `write` passes on,
  * until `close` or `disconnect`. `disconnect` hands the rest of the response back to Firefox; it
- * throws before the filter started.
+ * throws before the filter started. After data has flowed, chunks still on their way can then reach
+ * the page out of order or not at all.
  */
 export interface StreamFilter {
   onstart: (() => void) | null;

@@ -2095,18 +2095,21 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     }
     access.forget("s1", OTHER);
     await flush();
-    assert.equal(filterFor(fake, granted)?.status, "disconnected");
-    assert.equal(filterFor(fake, stored)?.status, "transferringdata");
     await saveBlocklist(fake.browser, ["c.example"]);
     await flush();
-    assert.equal(filterFor(fake, stored)?.status, "disconnected");
-    for (const id of [granted, stored, own]) filterFor(fake, id)?.data("}");
-    filterFor(fake, own)?.stop();
+    for (const id of [granted, stored, own]) {
+      filterFor(fake, id)?.data("}");
+      filterFor(fake, id)?.stop();
+    }
     assert.deepEqual(
       read(tab.id).requests.map((entry) => entry.responseBody),
       [undefined, undefined, { text: "{}" }],
     );
-    assert.equal(filterFor(fake, granted)?.writtenText(), "{");
+    for (const id of [granted, stored]) {
+      assert.equal(filterFor(fake, id)?.disconnects, 0, id);
+      assert.equal(filterFor(fake, id)?.writtenText(), "{}", id);
+      assert.equal(filterFor(fake, id)?.closes, 1, id);
+    }
   });
 
   it("forgets the stored bodies of a site once it is withdrawn or blocklisted", async (t) => {
@@ -2158,8 +2161,10 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     release();
     await flush();
     assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
-    assert.equal(filterFor(fake, id)?.writtenText(), '{"while":"withdrawn"');
+    assert.equal(filterFor(fake, id)?.disconnects, 0);
+    assert.equal(filterFor(fake, id)?.status, "closed");
+    assert.equal(filterFor(fake, id)?.closes, 1);
+    assert.equal(filterFor(fake, id)?.writtenText(), '{"while":"withdrawn"}');
   });
 
   it("waits for the site check at the stop, then stores", async (t) => {
@@ -2190,7 +2195,11 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     // A withdrawal of a site no tab shows: only the network log reads the view.
     access.forget("s1", OTHER);
     await flush();
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    // A capture still open would ask for the site check again at the next chunk.
+    filterFor(fake, id)?.data("}");
+    await flush();
+    assert.equal(filterFor(fake, id)?.disconnects, 0);
+    assert.equal(filterFor(fake, id)?.writtenText(), "{}");
     assert.deepEqual(
       warnings.mock.calls.map((call) => JSON.parse(String(call.arguments[0]))),
       [{ event: "network_recording_failed", error: "Error: storage failed" }],
@@ -2270,7 +2279,12 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     await flush();
     await flush();
     assert.equal(holdsOf(fake).length, 1);
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.ok(released(filterFor(fake, id)));
+    filterFor(fake, id)?.data("}");
+    filterFor(fake, id)?.stop();
+    assert.equal(filterFor(fake, id)?.disconnects, 0);
+    assert.equal(filterFor(fake, id)?.writtenText(), "{}");
+    assert.equal(filterFor(fake, id)?.closes, 1);
     release();
     await flush();
     assert.deepEqual(read(tab.id), {
@@ -2289,7 +2303,11 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     filterFor(fake, id)?.data("{");
     access.stop("s1");
     await flush();
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.ok(released(filterFor(fake, id)));
+    filterFor(fake, id)?.data("}");
+    await flush();
+    assert.equal(filterFor(fake, id)?.disconnects, 0);
+    assert.equal(filterFor(fake, id)?.writtenText(), "{}");
     assert.deepEqual(
       warnings.mock.calls.filter((call) => String(call.arguments[0]).includes("stopped")),
       [],
@@ -2376,7 +2394,9 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     await flush();
     await flush();
     assert.equal(holdsOf(fake).length, 1);
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.equal(filterFor(fake, id)?.status, "transferringdata");
+    assert.equal(filterFor(fake, id)?.disconnects, 0);
+    assert.ok(released(filterFor(fake, id)));
     assert.deepEqual(read(tab.id), {
       recording: true,
       since: 3000,
@@ -2395,9 +2415,14 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     await flush();
     const id = request(tab.id, `${SITE}/a`);
     const first = filterFor(fake, id);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id, 302));
     first?.data("{");
     fake.emitWebRequest("onBeforeRedirect", redirectOf(tab.id, id, `${OTHER}/b`));
-    assert.equal(first?.status, "disconnected");
+    // A capture still open would store what the first hop passes on after the redirect.
+    first?.data("}");
+    first?.stop();
+    assert.equal(first?.disconnects, 0);
+    assert.equal(first?.closes, 1);
     request(tab.id, `${OTHER}/b`, { requestId: id });
     assert.equal(fake.streamFilters.length, 1);
     const hop = request(tab.id, `${SITE}/c`);
@@ -2420,9 +2445,14 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     const tab = await liveTab(tabIn);
     const id = request(tab.id, `${SITE}/a`);
     const first = filterFor(fake, id);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id));
     first?.data("{");
     request(tab.id, `${SITE}/a`, { requestId: id });
-    assert.equal(first?.status, "disconnected");
+    // A capture still open would store what the first hop passes on after it.
+    first?.data("}");
+    first?.stop();
+    assert.equal(first?.disconnects, 0);
+    assert.equal(first?.closes, 1);
     respond(fake, tab.id, id, "{}");
     assert.deepEqual(
       read(tab.id).requests.map((entry) => entry.responseBody),
@@ -2434,6 +2464,7 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     const { fake, read, request, tabIn } = setup();
     const tab = await liveTab(tabIn);
     const failed = request(tab.id, `${SITE}/failed`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, failed));
     filterFor(fake, failed)?.data("{");
     fake.emitWebRequest("onErrorOccurred", {
       requestId: failed,
@@ -2441,11 +2472,17 @@ describe("network log response bodies", { timeout: 10000 }, () => {
       timeStamp: 1100,
       error: "NS_ERROR_NET_RESET",
     });
-    assert.equal(filterFor(fake, failed)?.status, "disconnected");
+    // A capture still open would store what the filter passes on after the failure.
+    filterFor(fake, failed)?.data("}");
+    filterFor(fake, failed)?.stop();
+    assert.equal(filterFor(fake, failed)?.disconnects, 0);
+    assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
     const replaced = request(tab.id, `${SITE}/replaced`);
     filterFor(fake, replaced)?.data("{");
     fake.navigateByUser(tab.id, `${SITE}/next`);
-    assert.equal(filterFor(fake, replaced)?.status, "disconnected");
+    assert.equal(filterFor(fake, replaced)?.status, "transferringdata");
+    assert.equal(filterFor(fake, replaced)?.disconnects, 0);
+    assert.ok(released(filterFor(fake, replaced)));
     await flush();
     const closed = request(tab.id, `${SITE}/closed`, {
       documentUrl: `${SITE}/next`,
@@ -2453,7 +2490,9 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     });
     filterFor(fake, closed)?.data("{");
     fake.removeTab(tab.id);
-    assert.equal(filterFor(fake, closed)?.status, "disconnected");
+    assert.equal(filterFor(fake, closed)?.status, "transferringdata");
+    assert.equal(filterFor(fake, closed)?.disconnects, 0);
+    assert.ok(released(filterFor(fake, closed)));
     assert.deepEqual(read(tab.id), NONE);
   });
 
@@ -2537,7 +2576,12 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     assert.equal(filterFor(fake, open)?.status, "transferringdata");
     assert.equal(read(tab.id).requests[0]?.url, `${SITE}/open`);
     request(tab.id, `${SITE}/image`, { type: "image" });
-    assert.equal(filterFor(fake, open)?.status, "disconnected");
+    assert.equal(filterFor(fake, open)?.status, "transferringdata");
+    assert.equal(filterFor(fake, open)?.disconnects, 0);
+    // The released capture no longer takes one of the page's open captures.
+    const filters = fake.streamFilters.length;
+    for (let index = 0; index < MAX_OPEN_CAPTURES; index += 1) request(tab.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, filters + MAX_OPEN_CAPTURES);
   });
 });
 
@@ -2584,6 +2628,11 @@ async function liveTab(tabIn: Context["tabIn"]): Promise<FakeTab> {
 /** The latest filter made for the request. */
 function filterFor(fake: Context["fake"], requestId: string): FakeStreamFilter | undefined {
   return fake.streamFilters.findLast((filter) => filter.requestId === requestId);
+}
+
+/** Whether the filter's capture ended: its handlers then only pass the response on. */
+function released(filter: FakeStreamFilter | undefined): boolean {
+  return filter !== undefined && filter.onerror === null;
 }
 
 /** The holds currently added: the blocking listeners. */

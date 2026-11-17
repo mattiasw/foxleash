@@ -267,6 +267,8 @@ the cache.
   `Content-Type` names, or as UTF-8 when it names none or one Firefox does not know; bytes that do
   not decode show as U+FFFD. The text is cut to 32,768 characters, and `truncated` in
   `responseBody` says either cut took something.
+- The page gets every response whole and in order: a response Foxleash copies from passes
+  through it to its end, also past the 65,536 bytes it keeps.
 - As a best effort, the values of `access_token`, `refresh_token` and `id_token` fields (also with
   a prefix such as `oauth_access_token`, in camelCase such as `accessToken`, or with a hyphen) in
   JSON, JavaScript, XML elements and form or query text, and every JWT-shaped string, are replaced
