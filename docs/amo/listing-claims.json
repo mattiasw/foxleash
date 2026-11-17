@@ -136,15 +136,20 @@
       "evidence": [{ "file": "apps/extension/src/handlers.ts", "contains": "tab_not_in_group" }]
     },
     {
-      "listing": "with the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers redacted",
+      "listing": "with the Cookie, Set-Cookie, Authorization, Proxy-Authorization and request Content-Length headers redacted",
       "evidence": [
         { "file": "apps/extension/src/network-log.ts", "contains": "\"cookie\"" },
         { "file": "apps/extension/src/network-log.ts", "contains": "\"set-cookie\"" },
         { "file": "apps/extension/src/network-log.ts", "contains": "\"authorization\"" },
         { "file": "apps/extension/src/network-log.ts", "contains": "\"proxy-authorization\"" },
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"content-length\"" },
         {
           "file": "apps/extension/src/network-log.ts",
-          "contains": "REDACTED_HEADERS.has(name.toLowerCase())"
+          "contains": "redacted.has(name.toLowerCase())"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "redactHeaders(details.requestHeaders, REDACTED_REQUEST_HEADERS)"
         },
         {
           "file": "apps/extension/src/handlers.ts",

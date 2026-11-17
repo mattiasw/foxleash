@@ -62,6 +62,8 @@ export const TITLES = {
   networkJsonDone: "Fixture network JSON done",
   networkLogin: "Fixture network login",
   networkLoginDone: "Fixture network login done",
+  networkLarge: "Fixture network large",
+  networkLargeDone: "Fixture network large done",
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
   downloadLogin: "Fixture download login",
@@ -767,7 +769,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/network-login-post") {
       request.resume();
       sendPage(response, TITLES.networkLoginDone);
-    } else if (path === "/api/json" || path === "/api/form-json") {
+    } else if (path === "/network-large") {
+      sendHtml(response, NETWORK_LARGE_PAGE);
+    } else if (
+      path === "/api/json" ||
+      path === "/api/form-json" ||
+      path === "/api/json-at-limit" ||
+      path === "/api/json-over-limit"
+    ) {
       request.resume();
       response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       response.end("ok");
@@ -3210,6 +3219,33 @@ window.addEventListener("load", async () => {
     body: JSON.stringify({ password: "${NETWORK_SECRETS.formJson}" }),
   });
   document.title = "${TITLES.networkJsonDone}";
+});
+</script>
+</body></html>
+`;
+
+// Firefox's default for webextensions.webRequest.requestBodyMaxRawBytes.
+const FIREFOX_RAW_BODY_LIMIT = 16_777_216;
+
+// On load: a fetch POST of a JSON body exactly as long as Firefox's limit for request bodies, then
+// one a byte longer; the title says when both finished.
+const NETWORK_LARGE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkLarge}</title></head>
+<body><h1>${TITLES.networkLarge}</h1>
+<script>
+const sized = (bytes) => '{"a":"' + "x".repeat(bytes - 8) + '"}';
+window.addEventListener("load", async () => {
+  for (const [path, bytes] of [
+    ["/api/json-at-limit", ${FIREFOX_RAW_BODY_LIMIT}],
+    ["/api/json-over-limit", ${FIREFOX_RAW_BODY_LIMIT + 1}],
+  ]) {
+    await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: sized(bytes),
+    });
+  }
+  document.title = "${TITLES.networkLargeDone}";
 });
 </script>
 </body></html>

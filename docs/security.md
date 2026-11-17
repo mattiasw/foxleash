@@ -217,7 +217,8 @@ its parts, for any field: a body carries what protected fields hold, and a login
 carries the saved password Firefox filled in. It returns only the names of the fields, the kind
 of each value and whether each is filled, as `protected filled` says a field is filled. No length
 or size range is shown either, because an agent that can add text to a field and send the form
-again could read a value's exact length off any edge of a range.
+again could read a value's exact length off any edge of a range. The value of a request's
+`Content-Length` header is redacted, so a body's length does not show either.
 
 Exceptions and limits:
 
@@ -229,11 +230,10 @@ Exceptions and limits:
   `a[1]`) only the first, but the number of other distinct plain names, and which of them are
   empty, show: a code typed into one box per digit, each box with a name of its own, shows its
   length.
-- With `headers: true`, the `Content-Length` request header gives a body's exact length in bytes.
 - A form sent with GET puts its values in the URL, which `read_network` shows.
-- A JSON body that grows past 1,000,000 bytes turns from `json` to `other`. An agent that can
-  fill another field of the same body with enough text can find the body's exact length from
-  where it turns, as `Content-Length` gives it.
+- A JSON body that Firefox cuts at its limit for request bodies (16,777,216 bytes by default)
+  turns from `json` to `other`. An agent that can make the page send about 16 MiB in another
+  field of the same body can find the body's exact length from where it turns.
 - Requests of frames from other sites show the shapes of their bodies too.
 
 ## Saved screenshots

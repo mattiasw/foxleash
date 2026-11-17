@@ -228,8 +228,9 @@ the cache.
 - Each request's request and response headers are included only when the agent asks for them
   (`headers`). Foxleash still records them, so a later read can ask for the headers of requests
   an earlier one left them out of.
-- The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers
-  are replaced with `[redacted]`. Response bodies are not included.
+- The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers,
+  and of a request's `Content-Length` header, are replaced with `[redacted]`. Response bodies are
+  not included.
 - With `body`, each request that sent a body includes `requestBody`: its shape, never a value, a
   length or a size. Its `kind` is `form`, `json` or `other`. A form lists each field name once,
   filled by its first value. A JSON object or array lists its keys, at most 4 deep, and of an
@@ -247,9 +248,10 @@ the cache.
 - A multipart file field shows as a text field, filled when the file has a name; its size is not
   shown. A body that is not a form although its content type says so, such as JSON or a token
   sent as a form, shows as `other` with no fields, and so does a form of one field that is empty
-  or holds only white space. So does a body over 1,000,000 bytes, or one that is not JSON in
-  strict UTF-8, which says whether it is filled. When Firefox gives a file instead of the body's
-  bytes, `other` does not say whether it is filled.
+  or holds only white space. So does a body that Firefox cut because it is over its limit for
+  request bodies (16,777,216 bytes by default), or one that is not JSON in strict UTF-8, which
+  says whether it is filled. When Firefox gives a file instead of the body's bytes, `other` does
+  not say whether it is filled.
 - Requests made by the page's frames are included.
 - Foxleash records a page's requests from when it starts loading in a tab of the agent's group
   on a site you approved, and loading a new page in the tab starts a new list, beginning with that

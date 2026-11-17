@@ -16,6 +16,8 @@ import {
   MAX_LOG_CHARS,
   type NetworkReadOptions,
   REDACTED,
+  REDACTED_HEADERS,
+  REDACTED_REQUEST_HEADERS,
   redactHeaders,
 } from "./network-log.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -237,6 +239,60 @@ describe("network log", { timeout: 10000 }, () => {
     assert.doesNotMatch(JSON.stringify(read(tab.id)), /secret/);
   });
 
+  it("redacts a request's Content-Length in any letter case, never a response's", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const sent: HttpHeader[][] = [
+      [{ name: "Content-Length", value: "73" }],
+      // HTTP/2 names arrive lowercase; a request can carry the header more than once.
+      [
+        { name: "content-length", value: "73" },
+        { name: "CONTENT-LENGTH", value: "73" },
+      ],
+    ];
+    const received: HttpHeader[] = [{ name: "Content-Length", value: "512" }];
+    const ids = sent.map((requestHeaders) => {
+      const id = request(tab.id, `${SITE}/login`, { method: "POST" });
+      fake.emitWebRequest("onSendHeaders", {
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1010,
+        requestHeaders,
+      });
+      fake.emitWebRequest("onHeadersReceived", {
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1020,
+        statusCode: 200,
+        responseHeaders: received,
+      });
+      return id;
+    });
+    const kept = [{ name: "Content-Length", value: "512" }];
+    const responseHeaders = () => read(tab.id).requests.map((recorded) => recorded.responseHeaders);
+    assert.deepEqual(responseHeaders(), [kept, kept]);
+    for (const id of ids) {
+      fake.emitWebRequest("onCompleted", {
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1030,
+        statusCode: 200,
+        fromCache: false,
+        responseHeaders: received,
+      });
+    }
+    assert.deepEqual(responseHeaders(), [kept, kept]);
+    const requestHeaders = read(tab.id).requests.map((recorded) => recorded.requestHeaders);
+    assert.deepEqual(requestHeaders, [
+      [{ name: "Content-Length", value: REDACTED }],
+      [
+        { name: "content-length", value: REDACTED },
+        { name: "CONTENT-LENGTH", value: REDACTED },
+      ],
+    ]);
+    assert.doesNotMatch(JSON.stringify(requestHeaders), /73/);
+  });
+
   it("gives a header without a text value an empty value, and no headers for none", () => {
     // Firefox sends a header that is not valid UTF-8 as binaryValue only.
     const binary = { name: "X-Binary", binaryValue: [0xff, 0xfe] } as unknown as HttpHeader;
@@ -247,6 +303,34 @@ describe("network log", { timeout: 10000 }, () => {
     ]);
     assert.deepEqual(redactHeaders(undefined), []);
     assert.deepEqual(redactHeaders([]), []);
+  });
+
+  it("redacts a Content-Length only with the request set, which keeps the credential ones", () => {
+    const length = { name: "Content-Length", value: "73" };
+    const binaryLength = { name: "content-length", binaryValue: [0x37] } as unknown as HttpHeader;
+    const credentials: HttpHeader[] = [
+      { name: "Cookie", value: "secret-1" },
+      { name: "Set-Cookie", value: "secret-2" },
+      { name: "Authorization", value: "secret-3" },
+      { name: "Proxy-Authorization", value: "secret-4" },
+    ];
+    const redactedCredentials = credentials.map(({ name }) => ({ name, value: REDACTED }));
+    assert.deepEqual(redactHeaders([length, ...credentials]), [
+      { name: "Content-Length", value: "73" },
+      ...redactedCredentials,
+    ]);
+    assert.deepEqual(
+      redactHeaders([length, binaryLength, ...credentials], REDACTED_REQUEST_HEADERS),
+      [
+        { name: "Content-Length", value: REDACTED },
+        { name: "content-length", value: REDACTED },
+        ...redactedCredentials,
+      ],
+    );
+    assert.deepEqual(
+      [...REDACTED_HEADERS],
+      ["cookie", "set-cookie", "authorization", "proxy-authorization"],
+    );
   });
 
   it("caps urls, methods, types, errors, header names, values and counts", async () => {

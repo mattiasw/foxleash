@@ -240,7 +240,7 @@ describe("read_network in real Firefox", () => {
     }
   });
 
-  test("a login form's POST shows its field names, never the password", async (t) => {
+  test("a login form's POST shows its field names, never the password", async () => {
     const tab = tabOf(
       await harness.ok(session, "tab_open", { url: fixtures.url("/network-login") }),
     ).id;
@@ -268,9 +268,34 @@ describe("read_network in real Firefox", () => {
       ],
     });
     assertNoSecrets(read.text);
-    const length = headerValue(post?.requestHeaders, "content-length");
-    assert.ok(length !== undefined, JSON.stringify(post?.requestHeaders));
-    t.diagnostic(`the login form's POST carries Content-Length: ${length}`);
+    assert.equal(
+      headerValue(post?.requestHeaders, "content-length"),
+      REDACTED,
+      JSON.stringify(post?.requestHeaders),
+    );
+  });
+
+  test("a JSON body shows its keys up to Firefox's limit for request bodies, never past it", async () => {
+    const tab = tabOf(
+      await harness.ok(session, "tab_open", { url: fixtures.url("/network-large") }),
+    ).id;
+    await waitForTitle(tab, TITLES.networkLargeDone);
+    const read = await readUntil(
+      tab,
+      (requests) =>
+        ["/api/json-at-limit", "/api/json-over-limit"].every(
+          (path) => requestTo(requests, path)?.status !== undefined,
+        ),
+      { body: true },
+    );
+    assert.deepEqual(requestTo(read.requests, "/api/json-at-limit")?.requestBody, {
+      kind: "json",
+      fields: [{ name: "a", depth: 1, kind: "string", filled: true }],
+    });
+    assert.deepEqual(requestTo(read.requests, "/api/json-over-limit")?.requestBody, {
+      kind: "other",
+      filled: true,
+    });
   });
 
   test("another session's read of the tab is refused", async () => {

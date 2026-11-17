@@ -93,15 +93,15 @@ Why Foxleash requests each permission in its manifest:
 - tabs: Foxleash reads the URL and title of the tabs in the agent's tab group, so the agent can list its tabs and see where each one ended up.
 - tabGroups: Foxleash keeps each agent session's tabs in its own orange tab group titled Foxleash, and acts only on tabs in that group.
 - scripting: Foxleash runs its own scripts, bundled in the extension, in the agent's tabs to read pages, click, type, fill in forms, record console messages and hand an uploaded file to a page. During a screenshot it adds a style sheet that hides the text of password fields, of one-time code and card number fields marked for autofill, and of fields Firefox filled in from saved logins, addresses or cards, until the user edits them. It never runs code received from outside the extension.
-- webRequest: lets the agent read the network requests of the tabs in its group, with the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers redacted and request bodies reduced to their structure, never values. Foxleash does not block or change any request.
+- webRequest: lets the agent read the network requests of the tabs in its group, with the Cookie, Set-Cookie, Authorization, Proxy-Authorization and request Content-Length headers redacted and request bodies reduced to their structure, never values. Foxleash does not block or change any request.
 - webNavigation: tells Foxleash when a navigation in one of the agent's tabs has finished, lists a page's frames for screenshots and notes which show Firefox's error page (in memory only), and starts recording console messages and network requests when a page loads on a site the user approved, or, for a page already open, when the user approves its site or moves its tab into the agent's group.
 - downloads: the agent's download tool saves a file into the user's Firefox download folder without a file chooser and never over an existing file. The extension fetches the file with the user's cookies for that site and saves it only when the address the agent gave and the address after any redirects are on sites the user approved and not on the blocklist.
-- storage: keeps the user's settings, such as the sites the user approved and the blocklist, in the extension's local storage.
+- storage: keeps the user's settings, such as the approved sites and the blocklist, in the extension's local storage.
 - <all_urls>: the agent may work on any site the user approves, so the extension cannot list the sites in advance. It needs this to run its scripts in pages, see their network requests and take screenshots. It reads and acts in a page only while it is on a site the user approved with a click in the browser and not on its blocklist of financial and health sites. Content that page embeds from other sites, blocklisted ones included, can show up in what the agent reads.
 
 Firefox for Android: not supported (no native messaging or tab groups); each version is for Firefox desktop only.
 
-The native messaging host is the foxleash command from the same repository (apps/server/), run with Node.js 24. It is not extension code and is not in the source archive. The repository is private while Foxleash is in development; we can provide the program to you on request.
+The native messaging host is the foxleash command from the same repository (apps/server/), run with Node.js 24. It is not extension code and is not in the source archive. The repository is private while Foxleash is in development; we can provide the program on request.
 
 ## Data collection and handling
 

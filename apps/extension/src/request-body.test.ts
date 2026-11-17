@@ -454,24 +454,23 @@ describe("bodyShape", () => {
     });
   });
 
-  it("parses a JSON body of up to 1,000,000 bytes", () => {
-    const sized = (size: number) => `{"a":"${"x".repeat(size - 8)}"}`;
-    assert.equal(sized(1_000_000).length, 1_000_000);
-    assert.deepEqual(shapeOf(raw(sized(1_000_000)), ["xxxx"]), {
-      kind: "json",
-      fields: [{ name: "a", depth: 1, kind: "string", filled: true }],
-    });
-    assert.deepEqual(shapeOf(raw(sized(1_000_001)), ["xxxx"]), { kind: "other", filled: true });
-    const half = new TextEncoder().encode(sized(1_000_001));
-    assert.deepEqual(
-      shapeOf(
-        {
-          raw: [{ bytes: copyOf(half.slice(0, 500_000)) }, { bytes: copyOf(half.slice(500_000)) }],
-        },
-        ["xxxx"],
-      ),
-      { kind: "other", filled: true },
-    );
+  it("parses a JSON body of any size Firefox gives uncut, and no cut one", () => {
+    const body = new TextEncoder().encode(`{"a":"${"x".repeat(2_000_000 - 8)}"}`);
+    assert.equal(body.byteLength, 2_000_000);
+    const json = { kind: "json", fields: [{ name: "a", depth: 1, kind: "string", filled: true }] };
+    const whole = [{ bytes: copyOf(body) }];
+    const split = [
+      { bytes: copyOf(body.slice(0, 1_000_000)) },
+      { bytes: copyOf(body.slice(1_000_000)) },
+    ];
+    assert.deepEqual(shapeOf({ raw: whole }, ["xxxx"]), json);
+    assert.deepEqual(shapeOf({ raw: split }, ["xxxx"]), json);
+    for (const chunks of [whole, split]) {
+      const cut = chunks.map((chunk, index) =>
+        index === chunks.length - 1 ? { ...chunk, truncated: true } : chunk,
+      );
+      assert.deepEqual(shapeOf({ raw: cut }, ["xxxx"]), { kind: "other", filled: true });
+    }
   });
 
   it("gives other bodies as other, filled when they had bytes", () => {

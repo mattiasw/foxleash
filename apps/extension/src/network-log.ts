@@ -43,6 +43,11 @@ export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
   "authorization",
   "proxy-authorization",
 ]);
+/** A request's length follows what its body carries, protected values included (ADR 0070). */
+export const REDACTED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
+  ...REDACTED_HEADERS,
+  "content-length",
+]);
 
 export interface NetworkLogDeps {
   browser: Pick<BrowserApi, "tabs" | "webNavigation" | "storage" | "webRequest">;
@@ -247,7 +252,7 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
 
   function onSendHeaders(details: SendHeadersDetails): void {
     update(details.tabId, details.requestId, false, (request) => {
-      request.requestHeaders = redactHeaders(details.requestHeaders);
+      request.requestHeaders = redactHeaders(details.requestHeaders, REDACTED_REQUEST_HEADERS);
     });
   }
 
@@ -384,11 +389,14 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   }
 }
 
-/** The headers as Foxleash keeps them: capped, and the credential ones without their value. */
-export function redactHeaders(headers: readonly HttpHeader[] | undefined): NetworkHeader[] {
+/** The headers as Foxleash keeps them: capped, and those named in `redacted` without a value. */
+export function redactHeaders(
+  headers: readonly HttpHeader[] | undefined,
+  redacted: ReadonlySet<string> = REDACTED_HEADERS,
+): NetworkHeader[] {
   return (headers ?? []).slice(0, MAX_NETWORK_HEADERS).map(({ name, value }) => ({
     name: capText(name, MAX_NETWORK_HEADER).text,
-    value: REDACTED_HEADERS.has(name.toLowerCase())
+    value: redacted.has(name.toLowerCase())
       ? REDACTED
       : capText(value ?? "", MAX_NETWORK_HEADER).text,
   }));

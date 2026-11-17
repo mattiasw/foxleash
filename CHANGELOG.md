@@ -41,6 +41,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   your saved addresses, without their text, so it no longer takes a filled field that looks empty
   in a screenshot for an empty one.
 
+### Security
+
+- `read_network` no longer shows the `Content-Length` of a request, which gave the exact length of
+  what a form sent, such as a saved password Firefox filled in.
+
 ## [0.4.1] - 2026-11-16
 
 ### Changed

@@ -2776,7 +2776,7 @@ describe("read_network", () => {
       "failed true keeps only the requests that failed: status 400 or above, or an error such as a refused connection or a blocked or cancelled request",
       "a redirect, or a request with no status or error yet, has not failed",
       "pattern, types and failed all apply before limit",
-      "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers are replaced with [redacted].",
+      "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers, and of a request's Content-Length header, are replaced with [redacted].",
       "With body true, each request that sent a body includes requestBody, its shape and never a value or a length:",
       "kind is form (each name once, filled by its first value), json (the keys of a JSON object or array, at most 4 deep, of an array only its first element, named []) or other.",
       "Each field gives the kind of its value (text for a form value; string, number, boolean, null, object or array for JSON) and, for text, strings, objects and arrays, whether it is filled; an other body says whether it is filled when Foxleash got its bytes.",

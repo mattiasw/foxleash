@@ -12,8 +12,6 @@ import {
 import type { RequestBody, UploadChunk } from "./browser-api.ts";
 import { isRecord } from "./page-messages.ts";
 
-/** The largest raw body read as JSON; a larger one is other. */
-const MAX_JSON_BYTES = 1_000_000;
 const UTF8 = new TextDecoder("utf-8", { fatal: true });
 
 type Container = Record<string, unknown> | unknown[];
@@ -113,7 +111,7 @@ function rawShape(raw: readonly UploadChunk[]): NetworkBody {
   }
   const total = chunks.reduce((sum, bytes) => sum + bytes.byteLength, 0);
   // A cut prefix can parse as JSON the whole does not.
-  const json = cut || total > MAX_JSON_BYTES ? undefined : parsedJson(chunks, total);
+  const json = cut ? undefined : parsedJson(chunks, total);
   if (json === undefined) return { kind: "other", filled: total > 0 };
   return jsonShape(json);
 }
