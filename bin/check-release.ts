@@ -30,6 +30,7 @@ export type Bump = "patch" | "minor" | "major";
 export type Command =
   | { name: "changelog" }
   | { name: "listing" }
+  | { name: "protocol" }
   | { name: "pre-roll"; bump: Bump | undefined }
   | { name: "post-roll"; version: string }
   | { name: "post-bump"; version: string }
@@ -67,6 +68,7 @@ type Run = {
 const SUBCOMMANDS = [
   "changelog",
   "listing",
+  "protocol",
   "pre-roll",
   "post-roll",
   "post-bump",
@@ -104,6 +106,7 @@ const COMMAND_TIMEOUT_MS = 120_000;
 const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
 const MANIFEST = "apps/extension/manifest.json";
+const PROTOCOL = "packages/protocol/src/index.ts";
 const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
@@ -138,6 +141,7 @@ const USAGE = [
   "usage: npm run check:release -- <subcommand>",
   "  changelog                                CHANGELOG.md has the Keep a Changelog shape",
   "  listing                                  the manifest, the AMO listing and the tools agree",
+  "  protocol                                 the extension serves the latest release's server",
   "  pre-roll [--bump=patch|minor|major]      main is synced, clean and green; the next version",
   "  post-roll <version>                      the Unreleased entries moved to <version>",
   "  post-bump <version>                      every version field is <version>",
@@ -203,6 +207,7 @@ export function parseArgs(argv: readonly string[]): Command | Usage {
   if (name === "pre-roll") return { name, bump };
   if (name === "pre-push") return { name };
   if (name === "listing") return { name };
+  if (name === "protocol") return { name };
   return { name: "changelog" };
 }
 
@@ -222,6 +227,8 @@ function runCommand(command: Command, env: Env): CheckResult {
       return { findings: checkChangelog(env) };
     case "listing":
       return { findings: checkListing(env) };
+    case "protocol":
+      return { findings: checkProtocol(env) };
     case "pre-roll":
       return checkPreRoll(env, command.bump);
     case "post-roll":
@@ -308,6 +315,7 @@ export function checkPreRoll(env: Env, bump: Bump | undefined): CheckResult {
     attempt(findings, "CI", () => checkCi(env, slug, head, findings));
   }
   checkListingAgrees(env, tag, findings);
+  checkProtocolServed(env, tag, findings);
   if (tag !== undefined) {
     findings.push(info(tag === null ? "no previous tag: first release" : `previous tag: ${tag}`));
   }
@@ -787,6 +795,85 @@ function declarations(manifest: unknown): Record<string, unknown> {
     ? { ...data, required: field(data, "required") ?? [], optional: field(data, "optional") ?? [] }
     : data;
   return values;
+}
+
+export function checkProtocol(env: Env): Finding[] {
+  const findings: Finding[] = [];
+  const tag = attempt(findings, "latest tag", () => latestTag(env, findings));
+  checkProtocolServed(env, tag, findings);
+  return findings;
+}
+
+/**
+ * The extension serves every protocol from OLDEST_SERVED_PROTOCOL up to PROTOCOL_VERSION, so the
+ * oldest may not be above what the latest release shipped: that release's server would stop
+ * working at the next add-on update. `tag` is undefined when listing the tags failed, which is
+ * already a FAIL.
+ */
+function checkProtocolServed(env: Env, tag: string | null | undefined, findings: Finding[]): void {
+  const source = attempt(findings, "protocol source", () => env.readFile(PROTOCOL));
+  const read = (name: string): number | undefined =>
+    source === undefined
+      ? undefined
+      : attempt(findings, "working tree", () => protocolConstant(source, name));
+  const current = read("PROTOCOL_VERSION");
+  const oldest = read("OLDEST_SERVED_PROTOCOL");
+  const released =
+    typeof tag === "string"
+      ? attempt(findings, `tag ${tag}`, () =>
+          protocolConstant(
+            env.sh("git", ["show", `refs/tags/${tag}:${PROTOCOL}`]),
+            "PROTOCOL_VERSION",
+          ),
+        )
+      : undefined;
+  if (current !== undefined && oldest !== undefined && oldest > current) {
+    findings.push(fail(`OLDEST_SERVED_PROTOCOL ${oldest} is above PROTOCOL_VERSION ${current}`));
+  }
+  if (tag === null) {
+    findings.push(info("no previous tag: protocol check against a release skipped"));
+  }
+  if (released !== undefined) {
+    if (current !== undefined && current < released) {
+      findings.push(
+        fail(
+          `PROTOCOL_VERSION ${current} is below the PROTOCOL_VERSION ${released} of ${tag}: the number never goes down`,
+        ),
+      );
+    }
+    if (oldest !== undefined && oldest > released) {
+      const now = current === undefined ? "" : ` (current ${current})`;
+      findings.push(
+        fail(
+          `OLDEST_SERVED_PROTOCOL ${oldest} is above the PROTOCOL_VERSION ${released} of ${tag}${now}: the extension would not serve the server of ${tag}`,
+        ),
+      );
+    }
+  }
+  if (current !== undefined && oldest !== undefined) {
+    const numbers = `protocol ${current}, oldest served ${oldest}`;
+    findings.push(info(released === undefined ? numbers : `${numbers}, ${tag} has ${released}`));
+  }
+}
+
+/**
+ * The number in the line `export const <name> = <number>;` of the protocol source `text`. Every
+ * line that declares `name` counts, so a copy in a block comment or a string makes the value
+ * ambiguous instead of hiding the real declaration.
+ */
+function protocolConstant(text: string, name: string): number {
+  const declarations =
+    text.match(
+      new RegExp(`^[ \\t]*(?:export[ \\t]+)?(?:const|let|var)[ \\t]+${name}\\b.*$`, "gm"),
+    ) ?? [];
+  if (declarations.length > 1) {
+    throw new Error(`${declarations.length} lines declare ${name} in ${PROTOCOL}: expected one`);
+  }
+  const match = new RegExp(`^export const ${name} = (0|[1-9]\\d*);$`).exec(declarations[0] ?? "");
+  if (match?.[1] === undefined) {
+    throw new Error(`no line "export const ${name} = <number>;" in ${PROTOCOL}`);
+  }
+  return Number(match[1]);
 }
 
 export function checkPostRoll(env: Env, version: string): Finding[] {

@@ -26,6 +26,7 @@ jobs:
       - run: npm run lint
       - run: npm run check:release -- changelog
       - run: npm run check:release -- listing
+      - run: npm run check:release -- protocol
       - name: Test integrity
         run: npm run check:test-integrity
         env:

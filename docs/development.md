@@ -199,13 +199,20 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   the diffs of the manifest, the listing and `bin/amo-source-files.txt` between that tag and
   the working tree, and fails when the manifest's permissions, content script matches or
   data declarations changed but the listing did not.
+- `protocol`: the extension still serves the server of the latest release (see
+  [Protocol versions](#protocol-versions)). It reads `PROTOCOL_VERSION` and
+  `OLDEST_SERVED_PROTOCOL` from `packages/protocol/src/index.ts` in the working tree and
+  `PROTOCOL_VERSION` from the same file at the latest tag, and prints the three numbers. It fails
+  when a constant cannot be read, when `OLDEST_SERVED_PROTOCOL` is above `PROTOCOL_VERSION`, when
+  `PROTOCOL_VERSION` is below the tag's, and when `OLDEST_SERVED_PROTOCOL` is above the tag's.
+  Without a previous tag it skips the comparison with a release and says so.
 - `pre-roll [--bump=patch|minor|major]`: the changelog shape; HEAD is `main`, equal to
   origin's `main`, with a clean working tree; every version field agrees; the latest tag is
   on origin; Unreleased has entries; the bump is at least what the change types need
   (`Removed` major, `Added` or `Deprecated` minor, else patch; before 1.0.0 a major change
   needs only minor); the next tag exists neither here nor on origin; and the newest CI run of
-  `ci.yml` on `main` for HEAD succeeded. It also runs the `listing` checks. The first release
-  takes no `--bump`; every later one needs it.
+  `ci.yml` on `main` for HEAD succeeded. It also runs the `listing` and `protocol` checks. The
+  first release takes no `--bump`; every later one needs it.
 - `post-roll <version>`: Unreleased is empty, the top section is `## [<version>] - <today>`
   with exactly HEAD's Unreleased entries, the rest of the file is unchanged, `<version>` is
   at least the bump those entries need, and `CHANGELOG.md` is the only modified file.
@@ -233,7 +240,7 @@ source `apps/extension/manifest.json` has no `version`.
 The exit status is 0 when every check passes, 1 when one fails, 2 on a usage error, and 3
 when nothing fails but a warning (such as a bigger bump than the changes need, or a
 breaking change mentioned in a smaller bump) needs your confirmation. CI runs the
-`changelog` and `listing` checks.
+`changelog`, `listing` and `protocol` checks.
 
 ## Protocol versions
 
@@ -255,8 +262,9 @@ shape only: when it cannot serve the old shape without relaxing a safeguard, it 
 request with a `ToolError`. The unit test in `served-protocols.test.ts` fails until each version
 in the window has its step.
 
-`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the latest release. It may be
-raised to that number, and the steps below it are then deleted. Programs from before ADR 0072
+`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the latest release;
+`npm run check:release -- protocol` checks it, in CI and in `pre-roll`. It may be raised to that
+number, and the steps below it are then deleted. Programs from before ADR 0072
 (protocol 3 to 5) check the protocol exactly and refuse a newer extension, so the window serves
 programs from the first release that carries it on.
 

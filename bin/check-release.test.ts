@@ -16,6 +16,7 @@ import {
   checkPostRoll,
   checkPrePush,
   checkPreRoll,
+  checkProtocol,
   compareVersions,
   type Env,
   escapeControls,
@@ -131,6 +132,7 @@ const ENTRIES = [
 const OLD_SECTION = "## [0.1.0] - 2026-10-01\n\n### Added\n\n- The first release.";
 
 const MANIFEST = "apps/extension/manifest.json";
+const PROTOCOL = "packages/protocol/src/index.ts";
 const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
 const AMO_SOURCES = "bin/amo-source-files.txt";
@@ -234,6 +236,24 @@ function json(value: unknown): string {
   return `${JSON.stringify(value, null, 2)}\n`;
 }
 
+/** The protocol source with the given numbers; no `oldest` is a file from before the window. */
+function protocolSource(current: number, oldest?: number): string {
+  return [
+    "/** Bump when a message shape or method contract changes incompatibly. */",
+    `export const PROTOCOL_VERSION = ${current};`,
+    "",
+    ...(oldest === undefined
+      ? []
+      : [
+          "/** The oldest protocol version the extension still serves. */",
+          `export const OLDEST_SERVED_PROTOCOL = ${oldest};`,
+          "",
+        ]),
+    'export const NATIVE_HOST_NAME = "fixture";',
+    "",
+  ].join("\n");
+}
+
 function packageFiles(version: string, overrides: Record<string, string> = {}): Tree["files"] {
   const at = (source: string): string => overrides[source] ?? version;
   const files: Tree["files"] = {
@@ -302,6 +322,11 @@ function driftCommands(tag: string): Tree["commands"] {
   };
 }
 
+/** The reply of the protocol check at `tag`, a release from before the window. */
+function protocolCommands(tag: string): Tree["commands"] {
+  return { [show(`refs/tags/${tag}`, PROTOCOL)]: protocolSource(3) };
+}
+
 /** Clean, synced main with a green CI run and no tag: the state before the first release. */
 function firstReleaseTree(): Tree {
   return {
@@ -309,6 +334,7 @@ function firstReleaseTree(): Tree {
     files: {
       ...packageFiles("0.1.0"),
       ...listingFiles(),
+      [PROTOCOL]: protocolSource(6, 3),
       "CHANGELOG.md": changelog(`## [Unreleased]\n\n${ENTRIES}`),
     },
     commands: {
@@ -340,6 +366,7 @@ function secondReleaseTree(): Tree {
     [tagList("v0.2.0")]: "",
     [lsRemote("v0.2.0")]: "",
     ...driftCommands("v0.1.0"),
+    ...protocolCommands("v0.1.0"),
   });
   return tree;
 }
@@ -740,12 +767,14 @@ describe("versions and bumps", () => {
 });
 
 describe("pre-roll", () => {
-  test("passes the first release and prints the three INFO lines", () => {
+  test("passes the first release and prints its INFO lines", () => {
     const findings = preRoll(firstReleaseTree());
     assertClean(findings);
     assert.deepEqual(texts(findings, "INFO"), [
       `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
       "no previous tag: drift check skipped",
+      "no previous tag: protocol check against a release skipped",
+      "protocol 6, oldest served 3",
       "no previous tag: first release",
       "next version: 0.1.0",
     ]);
@@ -1037,6 +1066,7 @@ describe("pre-roll", () => {
       [lsRemote("v0.0.9")]: `${TAG_SHA}\trefs/tags/v0.0.9`,
       [revTag("v0.0.9")]: TAG_SHA,
       ...driftCommands("v0.0.9"),
+      ...protocolCommands("v0.0.9"),
     });
     assertOnlyFail(
       preRoll(tree, "minor"),
@@ -1133,6 +1163,7 @@ describe("bump rules in pre-roll", () => {
         [tagList(`v${nextVersion(version, "patch")}`)]: "",
         [lsRemote(`v${nextVersion(version, "patch")}`)]: "",
         ...driftCommands(tag),
+        ...protocolCommands(tag),
       });
     }
     return tree;
@@ -2099,6 +2130,7 @@ describe("listing", () => {
       "manifest since v0.1.0: no change",
       "listing since v0.1.0: no change",
       "AMO source files since v0.1.0: no change",
+      "protocol 6, oldest served 3, v0.1.0 has 3",
       "previous tag: v0.1.0",
       "next version: 0.2.0",
     ]);
@@ -2111,7 +2143,245 @@ describe("listing", () => {
     const findings = preRoll(tree, "minor");
     assert.equal(texts(findings, "FAIL").length, 2, JSON.stringify(texts(findings, "FAIL")));
     assertFail(findings, /^the server registers the tool "click"/);
-    assert.deepEqual(texts(findings, "INFO"), [`CI run 101 (push) green for ${HEAD.slice(0, 12)}`]);
+    assert.deepEqual(texts(findings, "INFO"), [
+      `CI run 101 (push) green for ${HEAD.slice(0, 12)}`,
+      "protocol 6, oldest served 3",
+    ]);
+  });
+});
+
+describe("protocol", () => {
+  const TAGGED = "v0.4.1";
+  const missing = (name: string): string =>
+    `no line "export const ${name} = <number>;" in ${PROTOCOL}`;
+
+  /** The numbers in the working tree, and what the latest tag, v0.4.1, shipped (none: no tag). */
+  function protocolTree(current: number, oldest: number | undefined, tagged?: number): Tree {
+    const tree: Tree = { files: { [PROTOCOL]: protocolSource(current, oldest) }, commands: {} };
+    tree.commands[TAGS] = tagged === undefined ? "" : TAGGED;
+    if (tagged !== undefined) {
+      tree.commands[show(`refs/tags/${TAGGED}`, PROTOCOL)] = protocolSource(tagged);
+    }
+    return tree;
+  }
+
+  function protocol(tree: Tree): Finding[] {
+    return checkProtocol(fakeEnv(tree));
+  }
+
+  test("passes with a tag and prints the three numbers", () => {
+    assert.deepEqual(protocol(protocolTree(6, 3, 3)), [
+      { level: "INFO", text: "protocol 6, oldest served 3, v0.4.1 has 3" },
+    ]);
+  });
+
+  test("passes without a tag and says there is no previous tag", () => {
+    assert.deepEqual(protocol(protocolTree(6, 3)), [
+      { level: "INFO", text: "no previous tag: protocol check against a release skipped" },
+      { level: "INFO", text: "protocol 6, oldest served 3" },
+    ]);
+  });
+
+  test("passes when the numbers meet at a boundary", () => {
+    assert.deepEqual(texts(protocol(protocolTree(6, 5, 5)), "FAIL"), []);
+    assert.deepEqual(texts(protocol(protocolTree(3, 3, 3)), "FAIL"), []);
+    assert.deepEqual(texts(protocol(protocolTree(4, 4)), "FAIL"), []);
+  });
+
+  test("fails when the oldest served is above the protocol of the latest tag", () => {
+    const findings = protocol(protocolTree(6, 4, 3));
+    assert.deepEqual(texts(findings, "FAIL"), [
+      "OLDEST_SERVED_PROTOCOL 4 is above the PROTOCOL_VERSION 3 of v0.4.1 (current 6): the extension would not serve the server of v0.4.1",
+    ]);
+    assert.deepEqual(texts(findings, "INFO"), ["protocol 6, oldest served 4, v0.4.1 has 3"]);
+  });
+
+  test("fails when the oldest served is above the current protocol", () => {
+    assert.deepEqual(texts(protocol(protocolTree(6, 7)), "FAIL"), [
+      "OLDEST_SERVED_PROTOCOL 7 is above PROTOCOL_VERSION 6",
+    ]);
+    assert.deepEqual(texts(protocol(protocolTree(6, 7, 6)), "FAIL"), [
+      "OLDEST_SERVED_PROTOCOL 7 is above PROTOCOL_VERSION 6",
+      "OLDEST_SERVED_PROTOCOL 7 is above the PROTOCOL_VERSION 6 of v0.4.1 (current 6): the extension would not serve the server of v0.4.1",
+    ]);
+  });
+
+  test("fails when the current protocol is below that of the latest tag", () => {
+    assert.deepEqual(texts(protocol(protocolTree(2, 2, 3)), "FAIL"), [
+      "PROTOCOL_VERSION 2 is below the PROTOCOL_VERSION 3 of v0.4.1: the number never goes down",
+    ]);
+  });
+
+  test("a constant missing from the working tree is one FAIL, and the rest is still read", () => {
+    const noCurrent = protocolTree(6, 3, 3);
+    noCurrent.files[PROTOCOL] = "export const OLDEST_SERVED_PROTOCOL = 4;\n";
+    assert.deepEqual(protocol(noCurrent), [
+      { level: "FAIL", text: `working tree: ${missing("PROTOCOL_VERSION")}` },
+      {
+        level: "FAIL",
+        text: "OLDEST_SERVED_PROTOCOL 4 is above the PROTOCOL_VERSION 3 of v0.4.1: the extension would not serve the server of v0.4.1",
+      },
+    ]);
+    assert.deepEqual(protocol(protocolTree(6, undefined, 3)), [
+      { level: "FAIL", text: `working tree: ${missing("OLDEST_SERVED_PROTOCOL")}` },
+    ]);
+  });
+
+  test("a missing protocol file is one FAIL", () => {
+    const tree = protocolTree(6, 3, 3);
+    delete tree.files[PROTOCOL];
+    assert.deepEqual(protocol(tree), [
+      { level: "FAIL", text: `protocol source: ENOENT: ${PROTOCOL}` },
+    ]);
+  });
+
+  test("a tag whose file has no PROTOCOL_VERSION is one FAIL, and the numbers still print", () => {
+    const tree = protocolTree(6, 3, 3);
+    tree.commands[show(`refs/tags/${TAGGED}`, PROTOCOL)] = "export const NOTHING = 3;\n";
+    assert.deepEqual(protocol(tree), [
+      { level: "FAIL", text: `tag v0.4.1: ${missing("PROTOCOL_VERSION")}` },
+      { level: "INFO", text: "protocol 6, oldest served 3" },
+    ]);
+  });
+
+  test("a failing git show is one FAIL naming the tag", () => {
+    const tree = protocolTree(6, 3, 3);
+    delete tree.commands[show(`refs/tags/${TAGGED}`, PROTOCOL)];
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      `tag v0.4.1: \`git show refs/tags/v0.4.1:${PROTOCOL}\` failed (status 1): not scripted in the test`,
+    ]);
+  });
+
+  test("a failing tag listing is one FAIL, and no tag is read", () => {
+    const tree = protocolTree(6, 3, 3);
+    tree.commands[TAGS] = new CommandError("git tag", 128, "fatal: broken");
+    const env = fakeEnv(tree);
+    assert.deepEqual(checkProtocol(env), [
+      { level: "FAIL", text: "latest tag: `git tag` failed (status 128): fatal: broken" },
+      { level: "INFO", text: "protocol 6, oldest served 3" },
+    ]);
+    assert.ok(!env.calls.some((call) => call[1] === "show"));
+  });
+
+  test("a malformed tag is reported once and the valid one is used", () => {
+    const tree = protocolTree(6, 3, 3);
+    tree.commands[TAGS] = "v0.4.1\nv0.5.0-rc";
+    const findings = protocol(tree);
+    assert.deepEqual(texts(findings, "FAIL"), ['the tag "v0.5.0-rc" is not a release tag vX.Y.Z']);
+    assert.deepEqual(texts(findings, "INFO"), ["protocol 6, oldest served 3, v0.4.1 has 3"]);
+  });
+
+  const unanchored: [string, string][] = [
+    ["commented out", "// export const PROTOCOL_VERSION = 6;"],
+    ["indented", "  export const PROTOCOL_VERSION = 6;"],
+    ["followed by a comment", "export const PROTOCOL_VERSION = 6; // current"],
+    ["with a leading zero", "export const PROTOCOL_VERSION = 06;"],
+    ["not an integer", "export const PROTOCOL_VERSION = 6.5;"],
+    ["a longer name", "export const PROTOCOL_VERSION_NEXT = 6;"],
+    ["not exported", "const PROTOCOL_VERSION = 6;"],
+  ];
+  for (const [name, line] of unanchored) {
+    test(`a constant line that is ${name} does not count`, () => {
+      const tree = protocolTree(6, 3, 3);
+      tree.files[PROTOCOL] = `${line}\nexport const OLDEST_SERVED_PROTOCOL = 3;\n`;
+      assert.deepEqual(texts(protocol(tree), "FAIL"), [
+        `working tree: ${missing("PROTOCOL_VERSION")}`,
+      ]);
+    });
+  }
+
+  test("a constant line is found after other lines", () => {
+    const tree = protocolTree(6, 3, 3);
+    tree.files[PROTOCOL] = [
+      "// export const PROTOCOL_VERSION = 9;",
+      "/**",
+      " * export const PROTOCOL_VERSION = 8;",
+      " */",
+      "",
+      "export const OLDEST_SERVED_PROTOCOL = 3;",
+      "export const PROTOCOL_VERSION = 6;",
+      "export const PROTOCOL_VERSION_NEXT = 7;",
+    ].join("\n");
+    assert.deepEqual(protocol(tree), [
+      { level: "INFO", text: "protocol 6, oldest served 3, v0.4.1 has 3" },
+    ]);
+  });
+
+  test("a second constant line, as in a block comment, is one FAIL and no number", () => {
+    const tree = protocolTree(6, 3, 3);
+    tree.files[PROTOCOL] = [
+      "export const PROTOCOL_VERSION = 6;",
+      "/*",
+      "export const OLDEST_SERVED_PROTOCOL = 3;",
+      "*/",
+      "export const OLDEST_SERVED_PROTOCOL = 5;",
+    ].join("\n");
+    assert.deepEqual(protocol(tree), [
+      {
+        level: "FAIL",
+        text: `working tree: 2 lines declare OLDEST_SERVED_PROTOCOL in ${PROTOCOL}: expected one`,
+      },
+    ]);
+    tree.files[PROTOCOL] = protocolSource(6, 3);
+    tree.commands[show(`refs/tags/${TAGGED}`, PROTOCOL)] =
+      `${protocolSource(3)}/*\nexport const PROTOCOL_VERSION = 2;\n*/\n`;
+    assert.deepEqual(protocol(tree), [
+      {
+        level: "FAIL",
+        text: `tag v0.4.1: 2 lines declare PROTOCOL_VERSION in ${PROTOCOL}: expected one`,
+      },
+      { level: "INFO", text: "protocol 6, oldest served 3" },
+    ]);
+  });
+
+  const otherDeclarations: [string, string][] = [
+    ["with a type", "export const OLDEST_SERVED_PROTOCOL: number = 7;"],
+    ["indented", "  export const OLDEST_SERVED_PROTOCOL = 7;"],
+    ["not exported", "const OLDEST_SERVED_PROTOCOL = 7;"],
+    ["a let", "export let OLDEST_SERVED_PROTOCOL = 7;"],
+    ["a var", "var OLDEST_SERVED_PROTOCOL = 7;"],
+  ];
+  for (const [name, declaration] of otherDeclarations) {
+    test(`a declaration ${name} beside a commented-out copy is one FAIL`, () => {
+      const tree = protocolTree(6, 3, 3);
+      tree.files[PROTOCOL] = [
+        "export const PROTOCOL_VERSION = 6;",
+        "/*",
+        "export const OLDEST_SERVED_PROTOCOL = 3;",
+        "*/",
+        declaration,
+      ].join("\n");
+      assert.deepEqual(texts(protocol(tree), "FAIL"), [
+        `working tree: 2 lines declare OLDEST_SERVED_PROTOCOL in ${PROTOCOL}: expected one`,
+      ]);
+    });
+  }
+
+  test("pre-roll reports the same FAIL, using the tag it already read", () => {
+    const tree = secondReleaseTree();
+    tree.files[PROTOCOL] = protocolSource(6, 4);
+    assert.deepEqual(texts(preRoll(tree, "minor"), "FAIL"), [
+      "OLDEST_SERVED_PROTOCOL 4 is above the PROTOCOL_VERSION 3 of v0.1.0 (current 6): the extension would not serve the server of v0.1.0",
+    ]);
+  });
+
+  test("pre-roll reports a malformed tag once", () => {
+    const tree = secondReleaseTree();
+    tree.commands[TAGS] = "v0.0.9\nv0.1.0-rc\nv0.1.0";
+    const env = fakeEnv(tree);
+    const result = checkPreRoll(env, "minor");
+    assert.ok("findings" in result);
+    assert.deepEqual(
+      texts(result.findings, "FAIL").filter((text) => text.includes("not a release tag")),
+      ['the tag "v0.1.0-rc" is not a release tag vX.Y.Z'],
+    );
+    assert.equal(env.calls.filter((call) => call.includes("--merged")).length, 1);
+  });
+
+  test("listing does not run the protocol check", () => {
+    const tree = firstReleaseTree();
+    delete tree.files[PROTOCOL];
+    assert.deepEqual(texts(checkListing(fakeEnv(tree)), "FAIL"), []);
   });
 });
 
@@ -3219,6 +3489,7 @@ describe("real git", () => {
     return {
       ...packageFiles(version),
       ...listingFiles(),
+      [PROTOCOL]: protocolSource(6, 3),
       ".gitignore": "artifacts/\n",
       "CHANGELOG.md": log,
     };
@@ -3606,8 +3877,10 @@ describe("runCli", () => {
     const { status, out, err } = cli(firstReleaseTree(), "pre-roll");
     assert.equal(status, 0);
     assert.deepEqual(err, []);
-    assert.deepEqual(out.slice(-4), [
+    assert.deepEqual(out.slice(-6), [
       "INFO: no previous tag: drift check skipped",
+      "INFO: no previous tag: protocol check against a release skipped",
+      "INFO: protocol 6, oldest served 3",
       "INFO: no previous tag: first release",
       "INFO: next version: 0.1.0",
       "check-release: pre-roll ok",
@@ -3721,6 +3994,9 @@ describe("runCli", () => {
     [["pre-push", "extra"], 'unexpected argument "extra"'],
     [["listing", "extra"], 'unexpected argument "extra"'],
     [["listing", "--bump=minor"], 'unknown option "--bump=minor" for listing'],
+    [["protocol", "extra"], 'unexpected argument "extra"'],
+    [["protocol", "--bump=minor"], 'unknown option "--bump=minor" for protocol'],
+    [["--help"], 'unknown subcommand "--help"'],
     [["changelog", "--verbose"], 'unknown option "--verbose" for changelog'],
     [["artifacts", "1.0.0", "--unsigned"], "--unsigned needs a path"],
     [["artifacts", "1.0.0", "--unsigned", ""], "--unsigned needs a path"],
@@ -3743,6 +4019,52 @@ describe("runCli", () => {
     });
   }
 
+  test("the usage lists every subcommand, for an unknown one and for --help", () => {
+    const subcommands = [
+      "changelog",
+      "listing",
+      "protocol",
+      "pre-roll",
+      "post-roll",
+      "post-bump",
+      "pre-push",
+      "artifacts",
+    ];
+    for (const argv of [["bogus"], ["--help"]]) {
+      const err: string[] = [];
+      runCli(argv, fakeEnv(firstReleaseTree()), { out: () => {}, err: (line) => err.push(line) });
+      for (const name of subcommands) {
+        assert.ok(
+          err.some((line) => line.startsWith(`  ${name} `)),
+          `${JSON.stringify(argv)} prints no usage line for ${name}`,
+        );
+      }
+      assert.ok(
+        err.includes(
+          "  protocol                                 the extension serves the latest release's server",
+        ),
+      );
+    }
+  });
+
+  test("a protocol run prints its findings and the verdict", () => {
+    const tree = firstReleaseTree();
+    assert.deepEqual(cli(tree, "protocol"), {
+      status: 0,
+      out: [
+        "INFO: no previous tag: protocol check against a release skipped",
+        "INFO: protocol 6, oldest served 3",
+        "check-release: protocol ok",
+      ],
+      err: [],
+    });
+    tree.files[PROTOCOL] = protocolSource(6, 7);
+    const { status, out } = cli(tree, "protocol");
+    assert.equal(status, 1);
+    assert.equal(out[0], "FAIL: OLDEST_SERVED_PROTOCOL 7 is above PROTOCOL_VERSION 6");
+    assert.equal(out.at(-1), "check-release: protocol failed");
+  });
+
   test("parseArgs builds each command", () => {
     assert.deepEqual(parseArgs(["changelog"]), { name: "changelog" });
     assert.deepEqual(parseArgs(["pre-roll"]), { name: "pre-roll", bump: undefined });
@@ -3751,6 +4073,7 @@ describe("runCli", () => {
     assert.deepEqual(parseArgs(["post-bump", "0.2.0"]), { name: "post-bump", version: "0.2.0" });
     assert.deepEqual(parseArgs(["pre-push"]), { name: "pre-push" });
     assert.deepEqual(parseArgs(["listing"]), { name: "listing" });
+    assert.deepEqual(parseArgs(["protocol"]), { name: "protocol" });
     assert.deepEqual(parseArgs(["artifacts", "1.0.0", "--unsigned", "x.xpi"]), {
       name: "artifacts",
       version: "1.0.0",
