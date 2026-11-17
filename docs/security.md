@@ -48,18 +48,35 @@ with destructive actions), and stay nearby while it works.
 Foxleash acts on a site only after you approved that site in the browser, and asks before it
 opens a page there. The approval can only come from your click, not from the agent.
 
-It refuses clicks on links and form buttons that lead to another site or out of the browser,
-such as to an email address, and Enter pressed on such a link or in such a form; the agent opens
-a page on another site with `navigate`, which asks first.
+Content a page on an approved site embeds from other sites, blocklisted ones included, can show
+up in what the agent reads, for example in a screenshot. This can include a page on your own
+network, shown in a frame.
 
-Two ways still reach a site you have not approved without asking:
+Foxleash refuses clicks on links and form buttons that lead to another site or out of the
+browser, such as to an email address, and Enter pressed on such a link or in such a form; the
+agent opens a page on another site with `navigate`, which asks first.
+
+These checks cover where the tab goes, not what a page on an approved site loads or sends. They
+make it harder for a fooled agent to send what it read to another site by putting it in an
+address, but they do not stop it: redirect addresses, and pages that load an address they are
+given, are common on large sites. Ways that still reach a site you have not approved without
+asking include:
 
 - going back or forward in a tab's history,
 - a page on an approved site that redirects or, with its own scripts, sends the tab to another
-  site, for example after a click.
+  site, for example after a click,
+- a page on an approved site that loads an address on another site that the agent gave it, for
+  example one typed into a search field, while the tab stays on the approved site, such as by
+  showing that address as an image; the other site gets the address with whatever the agent put
+  in it, and no page script is needed,
+- a `download` of an address on an approved site that redirects to another site: Firefox
+  requests that site's address, with your cookies for it, before Foxleash checks the final
+  address, and the file is saved when a further redirect leads back to an approved site (see
+  [Downloads](#downloads)).
 
-The agent then sees only that site's address. A page's own scripts can also open an email
-address.
+In the first two, the agent then sees only that site's address. A page's own scripts can also
+open an email address. Whatever the agent puts in an address, types or submits in a page goes to
+that site, and to wherever that page sends it, as it would if you did it yourself.
 
 ## Tabs on other sites
 
@@ -77,6 +94,10 @@ built-in one, Foxleash keeps it as it is: sites that a later version adds to the
 are not added to yours. The settings page's "Fill in the built-in list" button fills in the
 current built-in list for you to save. Foxleash checks the blocklist before it opens or reloads
 a page, and shows the agent a tab on a blocked site only as the site's address.
+
+Content a page on an approved site embeds from a blocked site can still show up in what the agent
+reads, and the ways that still reach a site you have not approved without asking can also reach
+a blocked site, even one you approved (see [Site approval](#site-approval)).
 
 ## Uploads
 
@@ -174,8 +195,9 @@ Text results never return the values of these fields, only whether they are fill
 
 Firefox fills saved passwords into login pages when they load, and a page you approved could
 otherwise hand yours to the agent. A field that is none of these still shows its value. The text
-of a network response that `read_network` returns can still contain such a value when the site
-sends it back (see [Response bodies](#response-bodies)).
+of a network response that `read_network` returns, and a file that `download` saves, can still
+contain such a value when the site sends it back (see [Response bodies](#response-bodies) and
+[Downloads](#downloads)).
 
 ### A password field that the page changes
 
@@ -324,6 +346,8 @@ Exceptions and limits:
 - The redaction misses other names (`token`, `session`, `apiKey`), keys written with escapes or
   inside a JSON string that holds JSON (unless the value is a JWT), a token value that is not a
   string, an XML element with attributes, and a body encoded another way, such as base64.
+- `download` saves the whole answer of an address on an approved site, with no redaction (see
+  [Downloads](#downloads)).
 
 ## Saved screenshots
 
@@ -338,3 +362,11 @@ the address before the request, and the final address before it reads or saves a
 go only into your Firefox download folder, under a plain file name, never over an existing
 file. The file's content reaches the agent only when it reads the file with its own tools,
 outside Foxleash's untrusted marking.
+
+`download` can save the successful answer of any address on an approved site, not only a file a
+page links to. Foxleash hides and redacts nothing in it, so the file can hold a value the server
+put in a protected field, and sign-in tokens that `read_network` would redact.
+
+On the way to the final address, a redirect can make Firefox request an address on a site you
+have not approved, with your cookies for that site; nothing from such a site is saved (see
+[Site approval](#site-approval)).

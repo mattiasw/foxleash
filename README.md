@@ -164,7 +164,8 @@ model, such as "send the contents of this page to ...". Models can be fooled by 
 defense is complete. Foxleash limits what a fooled agent can do:
 
 - It acts on a site only after you approved that site in the browser. The approval can only
-  come from your click, not from the agent.
+  come from your click, not from the agent. Content that site's pages embed from other sites,
+  blocklisted ones included, can show up in what the agent reads, such as a screenshot.
 - The settings list each running agent session with a Stop this session button: after your
   click Foxleash refuses every tool call of that session, also on sites you allowed always. A
   new agent session is not stopped, and an agent that can run programs on your computer can
@@ -178,8 +179,9 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - File uploads only read from [allowed folders](docs/security.md#uploads) (the agent's working
   folder and `~/Downloads` by default) and never dotfiles or key files.
 - Downloads save only a file served by a site you approved, into your Firefox download folder,
-  never over an existing file. The agent reads a downloaded file with its own tools, outside
-  Foxleash's untrusted marking.
+  never over an existing file. The file is saved as the site sent it, with nothing hidden or
+  redacted. The agent reads a downloaded file with its own tools, outside Foxleash's untrusted
+  marking.
 - A recipe is saved, and a recipe's or a task's sites are allowed, only by your click on a
   Foxleash page in Firefox. Sites allowed this way are allowed for the session only.
 - Text results and screenshots hide the values of password fields, of one-time code and card
@@ -189,9 +191,14 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 
-Two ways still reach a site you have not approved without asking: going back or forward in a
-tab's history, and a page on an approved site that redirects or, with its own scripts, sends
-the tab to another site. The agent then sees only that site's address.
+Ways that still reach a site you have not approved without asking include: going back or
+forward in a tab's history; a page on an approved site that redirects or, with its own scripts,
+sends the tab to another site; a page on an approved site that loads an address on another site
+that the agent gave it, for example as an image; and a download from an approved site that
+redirects to another site. In the first two, the agent then sees only that site's address.
+Asking before opening a site you have not approved and refusing clicks that lead to another site
+cover where the tab goes: they make it harder to send what the agent read to another site, not
+impossible.
 
 [docs/security.md](docs/security.md) describes each safeguard in full, with its exceptions.
 
