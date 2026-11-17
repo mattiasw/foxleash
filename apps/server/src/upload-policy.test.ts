@@ -230,6 +230,62 @@ describe("readAllowedFile accepts", () => {
     ]);
   });
 
+  it(
+    "binary OpenPGP files that hold no secret key, and headers that do not frame one",
+    LIMIT,
+    async () => {
+      const harmless = "ciphertext\n";
+      await expectOutcomes("accepted", [
+        ["old-version-1", packet([0x94, 0x58], 0x58, 1)],
+        ["old-version-7", packet([0x94, 0x58], 0x58, 7)],
+        ["new-version-1", packet([0xc5, 0x58], 0x58, 1)],
+        ["new-version-7", packet([0xc5, 0x58], 0x58, 7)],
+        // Each declared length one byte past the file's end.
+        ["short-old-one-octet", packet([0x94, 0x58], 0x57)],
+        ["short-old-two-octet", packet([0x95, 0x01, 0x00], 255)],
+        ["short-old-four-octet", packet([0x96, 0x00, 0x00, 0x01, 0x00], 255)],
+        ["short-new-one-octet", packet([0xc5, 0x58], 87)],
+        ["short-new-two-octet-low", packet([0xc5, 0xc0, 0x00], 191)],
+        ["short-new-two-octet-high", packet([0xc5, 0xdf, 0xff], 8382)],
+        ["short-new-two-octet-mixed", packet([0xc5, 0xc1, 0x05], 452)],
+        ["short-new-five-octet", packet([0xc5, 0xff, 0x00, 0x00, 0x01, 0x00], 255)],
+        // Below the smallest body a secret key packet has.
+        ["body-39", packet([0x94, 0x27], 39)],
+        ["body-0", Buffer.from([0x94, 0x00, 0x04, 0x00, 0x00])],
+        ["msgpack-array", Buffer.from([0x94, 0x01, 0x02, 0x03, 0x04])],
+        // New-format tags 21 and 37, whose low bits are 5.
+        ["new-tag-21", packet([0xd5, 0x58], 0x58)],
+        ["new-tag-37", packet([0xe5, 0x58], 0x58)],
+        ["huge-length", Buffer.from([0x96, 0xff, 0xff, 0xff, 0xff, 0x04])],
+        ["empty", Buffer.alloc(0)],
+        ["cut-95", Buffer.from([0x95])],
+        ["cut-95-01", Buffer.from([0x95, 0x01])],
+        ["cut-96", Buffer.from([0x96, 0x00, 0x00])],
+        ["cut-c5", Buffer.from([0xc5])],
+        ["cut-c5-c0", Buffer.from([0xc5, 0xc0])],
+        ["cut-c5-ff", Buffer.from([0xc5, 0xff, 0x00, 0x00])],
+        ["indeterminate", packet([0x97], 0x58)],
+        ["partial-low", packet([0xc5, 0xe0], 9000)],
+        ["partial-high", packet([0xc5, 0xfe], 17000)],
+        ["public-old", packet([0x98, 0x33], 0x33)],
+        ["public-old-two-octet", packet([0x99, 0x01, 0x0d], 0x10d)],
+        ["public-new", packet([0xc6, 0x58], 0x58)],
+        ["pkesk-old", packet([0x84, 0x5e], 0x5e, 3)],
+        ["pkesk-old-two-octet", packet([0x85, 0x01, 0x0c], 0x10c, 3)],
+        ["pkesk-new", packet([0xc1, 0x5e], 0x5e, 3)],
+        ["skesk-old", packet([0x8c, 0x0d], 0x0d)],
+        ["skesk-new", packet([0xc3, 0x0d], 0x0d)],
+        ["signature", packet([0x89, 0x01, 0x33], 0x133)],
+        // Bit 7 clear, with the other bits of a tag 5 header.
+        ["no-packet-old-bits", packet([0x14, 0x58], 0x58)],
+        ["no-packet-new-bits", packet([0x45, 0x58], 0x58)],
+        ["backup.gpg", harmless],
+        ["pubring.gpg", harmless],
+        ["pubring.kbx", harmless],
+      ]);
+    },
+  );
+
   it("a file that fills the budget exactly", LIMIT, async () => {
     const result = await read(join(work, "ok.txt"), [work], { remaining: 8 });
     assert.equal(result.ok, true);
@@ -340,6 +396,16 @@ describe("readAllowedFile refuses", () => {
       "KRB5CC_1000",
       "krb5cc_1000_AbC123",
       "krb5cc",
+      "secring.gpg",
+      "SECRING.GPG",
+      "secring.gpg~",
+      "secring.gpg.bak",
+      "secring.pgp",
+      "secring.skr",
+      "secring",
+      "secring-old.gpg",
+      "x.skr",
+      "X.SKR~",
     ]) {
       await writeFile(join(work, name), "key");
       assert.equal(reasonOf(await read(join(work, name))), KEY, name);
@@ -382,6 +448,36 @@ describe("readAllowedFile refuses", () => {
         "late.log",
         `${"a".repeat(1024 * 1024 + 1)}-----BEGIN EC PRIVATE KEY-----\nMHcCAQEE\n-----END EC PRIVATE KEY-----\n`,
       ],
+    ]);
+  });
+
+  it("a binary OpenPGP secret key at the file's start, whatever its name", LIMIT, async () => {
+    // The start of a real gpg 2.x Ed25519 export: Secret-Key packet, key version 4.
+    const gpgStart = [0x94, 0x58, 0x04, 0x6a, 0xfc, 0x24, 0x10, 0x16, 0x09, 0x2b, 0x06, 0x01];
+    const gpgPacket = Buffer.concat([
+      Buffer.from(gpgStart),
+      Buffer.alloc(2 + 0x58 - gpgStart.length, 0x04),
+    ]);
+    const gpgExport = Buffer.concat([gpgPacket, Buffer.alloc(478 - gpgPacket.length, 0x04)]);
+    await expectOutcomes(PRIVATE_KEY, [
+      ["pgp-binary", gpgPacket],
+      ["key-backup.gpg", gpgExport],
+      ["photo.jpg", gpgExport],
+      ["old-two-octet", packet([0x95, 0x05, 0x58], 0x558)],
+      ["old-four-octet", packet([0x96, 0x00, 0x00, 0x01, 0x00], 256)],
+      ["new-one-octet", packet([0xc5, 0x58], 0x58)],
+      ["new-two-octet-low", packet([0xc5, 0xc0, 0x00], 192)],
+      ["new-two-octet-high", packet([0xc5, 0xdf, 0xff], 8383)],
+      ["new-five-octet", packet([0xc5, 0xff, 0x00, 0x00, 0x01, 0x00], 256)],
+      ["subkey-split", packet([0x9c, 0x5d], 0x5d)],
+      ["subkey-old-two-octet", packet([0x9d, 0x01, 0x00], 256)],
+      ["subkey-old-four-octet", packet([0x9e, 0x00, 0x00, 0x01, 0x00], 256)],
+      ["subkey-new", packet([0xc7, 0x58], 0x58)],
+      ["old-version-2", packet([0x94, 0x58], 0x58, 2)],
+      ["old-version-6", packet([0x94, 0x58], 0x58, 6)],
+      ["new-version-2", packet([0xc5, 0x58], 0x58, 2)],
+      ["new-version-6", packet([0xc5, 0x58], 0x58, 6)],
+      ["smallest-body", packet([0x94, 0x28], 40)],
     ]);
   });
 
@@ -710,6 +806,18 @@ async function expectOutcomes(
 function reasonOf(result: ReadResult): string {
   assert.ok(!result.ok, `accepted ${result.ok ? result.path : ""}`);
   return result.reason;
+}
+
+/**
+ * An OpenPGP packet: `header`, then a body of `length` bytes that starts with the key version.
+ * Every other body byte is 4 too, so a parse that reads the version from the wrong place matches.
+ */
+function packet(header: readonly number[], length: number, version = 4): Buffer {
+  return Buffer.concat([
+    Buffer.from(header),
+    Buffer.from([version]),
+    Buffer.alloc(length - 1, 0x04),
+  ]);
 }
 
 /** Reads at most three bytes at a time. */

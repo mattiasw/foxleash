@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
+import {
+  OLDEST_SERVED_PROTOCOL,
+  PROTOCOL_VERSION,
+  type RequestMessage,
+  UPDATE_COMMAND,
+} from "@foxleash/protocol";
 import { ToolError } from "./handlers.ts";
 import { answerAs, STEPS, type Step } from "./served-protocols.ts";
 
@@ -26,6 +31,51 @@ describe("served protocol steps", () => {
         "rewrite of its old shape and a test through the real handler, or a comment saying why " +
         "nothing differs; delete the steps below OLDEST_SERVED_PROTOCOL.",
     );
+  });
+});
+
+describe("the protocol 6 step", () => {
+  const refusal =
+    "This Foxleash program is older than the extension and misses some private keys when it " +
+    `checks a file, so the extension refuses its uploads: update Foxleash with \`${UPDATE_COMMAND}\` ` +
+    "if you have not yet, then restart Firefox and your MCP client.";
+
+  for (const method of ["upload_chunk", "upload_file"] as const) {
+    it(`refuses ${method} with protocol_mismatch and never calls the handler`, async () => {
+      let calls = 0;
+      await assert.rejects(
+        answerAs(6, request(method, { uploadId: "u1" }), async () => {
+          calls += 1;
+          return null;
+        }),
+        (error) =>
+          error instanceof ToolError &&
+          error.code === "protocol_mismatch" &&
+          error.message === refusal,
+      );
+      assert.equal(calls, 0);
+    });
+  }
+
+  it("passes every other request and its result through unchanged", async () => {
+    const result = { tabs: [] };
+    let handled: RequestMessage | undefined;
+    const answered = await answerAs(6, tabs, async (received) => {
+      handled = received;
+      return result;
+    });
+    assert.equal(handled, tabs);
+    assert.equal(answered, result);
+  });
+
+  it("does not apply to a host of the current protocol", async () => {
+    const upload = request("upload_file", { uploadId: "u1" });
+    let handled: RequestMessage | undefined;
+    await answerAs(PROTOCOL_VERSION, upload, async (received) => {
+      handled = received;
+      return null;
+    });
+    assert.equal(handled, upload);
   });
 });
 

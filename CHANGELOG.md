@@ -14,6 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In a tab being recorded, a page's fetch and XMLHttpRequest requests could get a large response
   with parts out of order or missing. Every response now reaches the page whole and in order.
 
+### Security
+
+- `upload_file` now refuses a PGP secret key that gpg exported without armour, as
+  `gpg --export-secret-keys` writes it by default, and files named like a PGP secret keyring
+  (`secring.gpg`). Once the add-on has updated, it refuses uploads from an older Foxleash
+  program, whose check misses such keys, until you update the program.
+
 ## [0.5.0] - 2026-11-17
 
 ### Added

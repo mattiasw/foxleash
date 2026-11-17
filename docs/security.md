@@ -66,13 +66,19 @@ default.
 These are refused in any folder:
 
 - files and folders whose names start with a dot below an upload folder,
-- files named like keys (`id_*`, `*.pem`, `*.key`, `*.kdbx` and similar),
+- files named like keys (`id_*`, `*.pem`, `*.key`, `*.kdbx`, `secring.gpg` and similar),
 - files that hold a PEM, OpenSSH, PuTTY, PGP or age private key, such as an SSH key named
-  `deploy` or a service account key `.json`.
+  `deploy`, a service account key `.json` or a PGP key that `gpg --export-secret-keys` wrote
+  without armour.
 
-Keys in other forms, such as a WireGuard configuration or a binary DER key, are not recognised.
+Keys in other forms, such as a WireGuard configuration, a binary DER key, a binary PGP key that
+is cut short, sits inside an archive or follows other data, or a binary PGP key in base64, are not
+recognised.
 
 An upload takes at most 100 files and 10 MB.
+
+Once the extension has updated, it refuses uploads from an older Foxleash program, whose checks
+miss some keys, until you update the program.
 
 ## Recipes and site requests
 

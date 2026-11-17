@@ -43,6 +43,7 @@ const KEY_EXTENSIONS = new Set([
   "keystore",
   "kdbx",
   "keytab",
+  "skr",
 ]);
 // Text only a private key's own file format holds, matched raw and as base64 (a kubeconfig's
 // client-key-data is a base64 PEM key).
@@ -54,6 +55,9 @@ const PRIVATE_KEY_MARKERS = [
   "AGE-SECRET-KEY-", // an age identity
   "openssh-key-v1\u0000", // an OpenSSH key's own bytes, also without its PEM lines
 ].flatMap((marker) => [marker, ...base64Forms(marker)]);
+// The smallest real secret key packet body is larger; keeps small binary data, such as
+// MessagePack arrays, from matching.
+const MIN_KEY_BODY = 40;
 // O_NONBLOCK: opening a FIFO swapped in after the pre-check would otherwise hang the server.
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
 const TYPES = new Map([
@@ -215,14 +219,15 @@ function expandHome(given: string, home: string): string {
 }
 
 /**
- * `id_*`, `krb5cc*` (Kerberos credential caches), or a key extension anywhere after the first
- * part: `server.pem.bak`, `tls.key~`.
+ * `id_*`, `krb5cc*` (Kerberos credential caches), `secring*` (PGP and GnuPG secret keyrings), or
+ * a key extension anywhere after the first part: `server.pem.bak`, `tls.key~`.
  */
 function keyShaped(name: string): boolean {
   const lower = name.toLowerCase();
   return (
     lower.startsWith("id_") ||
     lower.startsWith("krb5cc") ||
+    lower.startsWith("secring") ||
     lower
       .split(".")
       .slice(1)
@@ -334,7 +339,42 @@ async function readOpened(
 }
 
 function holdsPrivateKey(bytes: Buffer): boolean {
-  return PRIVATE_KEY_MARKERS.some((marker) => bytes.includes(marker));
+  return (
+    startsWithSecretKeyPacket(bytes) || PRIVATE_KEY_MARKERS.some((marker) => bytes.includes(marker))
+  );
+}
+
+/** Whether the file starts with an OpenPGP Secret-Key or Secret-Subkey packet that fits in it. */
+function startsWithSecretKeyPacket(bytes: Buffer): boolean {
+  const packet = firstPacket(bytes);
+  if (packet === undefined || (packet.tag !== 5 && packet.tag !== 7)) return false;
+  if (packet.length < MIN_KEY_BODY || packet.start + packet.length > bytes.length) return false;
+  const version = bytes[packet.start];
+  return version !== undefined && version >= 2 && version <= 6;
+}
+
+// RFC 9580 section 4.2: an old- or new-format packet header with a definite length.
+function firstPacket(bytes: Buffer): { tag: number; start: number; length: number } | undefined {
+  const first = bytes[0];
+  if (first === undefined || (first & 0x80) === 0) return undefined;
+  if ((first & 0x40) === 0) {
+    const size = [1, 2, 4][first & 0x03];
+    if (size === undefined || bytes.length < 1 + size) return undefined;
+    const length =
+      size === 1 ? bytes.readUInt8(1) : size === 2 ? bytes.readUInt16BE(1) : bytes.readUInt32BE(1);
+    return { tag: (first >> 2) & 0x0f, start: 1 + size, length };
+  }
+  const tag = first & 0x3f;
+  const octet = bytes[1];
+  if (octet === undefined) return undefined;
+  if (octet < 192) return { tag, start: 2, length: octet };
+  if (octet <= 223) {
+    const second = bytes[2];
+    if (second === undefined) return undefined;
+    return { tag, start: 3, length: ((octet - 192) << 8) + second + 192 };
+  }
+  if (octet === 255 && bytes.length >= 6) return { tag, start: 6, length: bytes.readUInt32BE(2) };
+  return undefined;
 }
 
 /**

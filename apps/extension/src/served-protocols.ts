@@ -1,4 +1,5 @@
-import type { RequestMessage } from "@foxleash/protocol";
+import { type RequestMessage, UPDATE_COMMAND } from "@foxleash/protocol";
+import { ToolError } from "./handlers.ts";
 
 /** What differs between protocol `from` and `from + 1`, seen from a host of protocol `from`. */
 export interface Step {
@@ -9,8 +10,26 @@ export interface Step {
   result?: (result: unknown, request: RequestMessage) => unknown;
 }
 
+const OLD_UPLOAD_CHECK =
+  "This Foxleash program is older than the extension and misses some private keys when it " +
+  `checks a file, so the extension refuses its uploads: update Foxleash with \`${UPDATE_COMMAND}\` ` +
+  "if you have not yet, then restart Firefox and your MCP client.";
+
 /** One step per protocol from `OLDEST_SERVED_PROTOCOL` up to the one before `PROTOCOL_VERSION`. */
-export const STEPS: readonly Step[] = [];
+export const STEPS: readonly Step[] = [
+  // Protocol 7 refuses a binary PGP secret key in the program's upload check (ADR 0074); a
+  // program of 6 reads one, so its uploads are refused, upload_chunk too so nothing it read is
+  // staged.
+  {
+    from: 6,
+    request: (request) => {
+      if (request.method === "upload_chunk" || request.method === "upload_file") {
+        throw new ToolError("protocol_mismatch", OLD_UPLOAD_CHECK);
+      }
+      return request;
+    },
+  },
+];
 
 /**
  * Answers `request`, sent by a host of `protocol`, with `handle`, which speaks the current

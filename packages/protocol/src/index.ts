@@ -1,5 +1,5 @@
 /** Bump when a message shape or method contract changes incompatibly. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 
 /**
  * The oldest protocol version the extension still serves; never above the `PROTOCOL_VERSION`
