@@ -101,6 +101,29 @@ describe("toolbar badge in real Firefox", () => {
     await expectIndicator(agentTabId, "", TITLE_OFF);
   });
 
+  test("the tabs of a session that ended show no badge, also after the user navigates one", async () => {
+    const ending = await harness.connect();
+    const tab = tabOf(await harness.ok(ending, "tab_open", { url: fixtures.url("/text-main") }));
+    await expectIndicator(tab.id, "ON", TITLE_ON);
+    await ending.close();
+    await expectIndicator(tab.id, "", TITLE_OFF);
+
+    const context = await firefox.waitForContext(
+      (other) => other.url === fixtures.url("/text-main"),
+      WAIT_MS,
+    );
+    await firefox.navigate(context, fixtures.url("/a"));
+    // Firefox clears a tab's badge itself when it navigates, so a wrong ON would come later: once a
+    // tab of the running session shows ON after its own navigation, this tab's update was handled.
+    const running = await firefox.waitForContext(
+      (other) => other.url === fixtures.url("/b"),
+      WAIT_MS,
+    );
+    await firefox.navigate(running, fixtures.url("/text-main"));
+    await expectIndicator(userTabId, "ON", TITLE_ON);
+    await expectIndicator(tab.id, "", TITLE_OFF);
+  });
+
   async function queryTabs(): Promise<TabState[]> {
     const json = await firefox.evaluate(
       settings,

@@ -34,6 +34,7 @@ const indicator = createIndicator({
   browser,
   groups,
   stopped: (session) => access.stopped(session),
+  running: (session) => access.running(session),
 });
 const access = createSiteAccess({
   browser,
@@ -47,6 +48,7 @@ access.onStop((session) => {
   recipes.endSession(session);
   void indicator.refreshSession(session);
 });
+access.onRunningChange((session) => void indicator.refreshSession(session));
 const recordings = createConsoleRecording({
   browser,
   groups,

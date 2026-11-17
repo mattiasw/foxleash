@@ -2509,6 +2509,73 @@ describe("admit", () => {
   });
 });
 
+describe("running", () => {
+  it("is true from a session's admit until its end, also while it is stopped", () => {
+    const { access } = setup();
+    assert.equal(access.running("s1"), false);
+    access.admit("s1");
+    assert.equal(access.running("s1"), true);
+    assert.equal(access.running("s2"), false);
+    access.stop("s1");
+    assert.equal(access.running("s1"), true);
+    access.endSession("s1");
+    assert.equal(access.running("s1"), false);
+    access.admit("s2");
+    access.endSession("s2");
+    access.admit("s2");
+    assert.equal(access.running("s2"), true);
+  });
+
+  it("tells onRunningChange, in the order added, each time a session starts or stops running", () => {
+    const { access } = setup();
+    const calls: [string, string, boolean][] = [];
+    access.onRunningChange((session) => calls.push(["first", session, access.running(session)]));
+    access.onRunningChange((session) => calls.push(["second", session, access.running(session)]));
+    access.admit("s1");
+    access.admit("s1");
+    access.endSession("never-started");
+    access.endSession("s1");
+    access.endSession("s1");
+    access.admit("s1");
+    assert.deepEqual(calls, [
+      ["first", "s1", true],
+      ["second", "s1", true],
+      ["first", "s1", false],
+      ["second", "s1", false],
+      ["first", "s1", true],
+      ["second", "s1", true],
+    ]);
+  });
+
+  it("tells onRunningChange of a stopped session's admit before refusing it", () => {
+    const { access } = setup();
+    const calls: [string, boolean][] = [];
+    access.onRunningChange((session) => calls.push([session, access.running(session)]));
+    access.stop("s1");
+    assert.throws(() => access.admit("s1"), { code: "session_stopped" });
+    assert.throws(() => access.admit("s1"), { code: "session_stopped" });
+    assert.deepEqual(calls, [["s1", true]]);
+  });
+
+  it("tells onRunningChange of a session's end after onWithdraw", () => {
+    const events: string[] = [];
+    const { access, sessions } = setup((session, site) =>
+      events.push(`withdraw ${session} ${site}`),
+    );
+    access.onRunningChange((session) =>
+      events.push(`running ${session} ${access.running(session)}`),
+    );
+    access.admit("s1");
+    sessions.set("s1", state(["https://a.example"]));
+    access.endSession("s1");
+    assert.deepEqual(events, [
+      "running s1 true",
+      "withdraw s1 https://a.example",
+      "running s1 false",
+    ]);
+  });
+});
+
 describe("stop messages from the settings page", () => {
   it("stops a session on the settings page's request", async () => {
     const { fake, access } = setup();

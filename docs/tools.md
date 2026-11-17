@@ -25,7 +25,8 @@ it waits for text or a selector.
 Each agent session's tabs open in an orange tab group titled Foxleash, and Foxleash acts only on
 tabs in that group, including tabs you move into it and tabs that a page in the group opens,
 also after your own click. When the agent session ends, Foxleash closes its group if the group
-holds only blank tabs, so pages you may still be reading stay open.
+holds only blank tabs, so pages you may still be reading stay open. Those tabs no longer show ON
+on the toolbar button, unless the same session reconnects.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
 outside an agent session's group when the program is too old for the add-on or newer than it;

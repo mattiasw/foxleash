@@ -25,18 +25,20 @@ export interface Indicator {
 }
 
 /**
- * Shows ON on the toolbar button for tabs in a session's group, unless the user stopped that
- * session, and ! elsewhere while the program needs the user, and opens the settings on a click.
- * Registers its listeners at once, so the event page can be started for them.
+ * Shows ON on the toolbar button for tabs in a running session's group, unless the user stopped
+ * that session, and ! elsewhere while the program needs the user, and opens the settings on a
+ * click. Registers its listeners at once, so the event page can be started for them.
  */
 export function createIndicator({
   browser,
   groups,
   stopped,
+  running,
 }: {
   browser: BrowserApi;
   groups: Pick<SessionGroups, "sessionOf" | "groupOf">;
   stopped: (session: string) => boolean;
+  running: (session: string) => boolean;
 }): Indicator {
   // Every update: Firefox clears a tab's badge and title when it navigates to another document.
   browser.tabs.onUpdated.addListener((tabId, _changeInfo, tab) => {
@@ -54,7 +56,7 @@ export function createIndicator({
   async function show(tabId: number, groupId: number | undefined): Promise<void> {
     const session = groups.sessionOf(groupId);
     const halted = session !== undefined && stopped(session);
-    const on = session !== undefined && !halted;
+    const on = session !== undefined && !halted && running(session);
     // Null removes the tab's own value, so the tab shows the global one.
     const text = on ? BADGE_ON : halted ? "" : null;
     const title = on ? TITLE_ON : halted ? TITLE_STOPPED : null;

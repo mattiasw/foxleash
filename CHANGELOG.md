@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   add-on, instead of showing it as connected while it refuses every tool call.
 - In a tab being recorded, a page's fetch and XMLHttpRequest requests could get a large response
   with parts out of order or missing. Every response now reaches the page whole and in order.
+- The Foxleash button no longer shows ON on the tabs of an agent session that has ended.
 
 ### Security
 

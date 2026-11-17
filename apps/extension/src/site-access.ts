@@ -116,6 +116,11 @@ export interface SiteAccess {
   stop(session: string): void;
   /** Whether the user stopped the session. */
   stopped(session: string): boolean;
+  /**
+   * True from the session's `admit` until its `endSession`. A session the user stopped counts as
+   * running until it ends, and again after an `admit`, which records it before refusing it.
+   */
+  running(session: string): boolean;
   /** Each running session, and any other that holds answers, with its answers, sites sorted. */
   sessionAnswers(): Promise<SessionAnswers[]>;
   /** For a recipe's sites: what the session may do with each, as stored and granted now. Changes nothing. */
@@ -151,6 +156,14 @@ export interface SiteAccess {
    * order added. Covers sites allowed always, which `onWithdraw` never reports.
    */
   onStop(listener: (session: string) => void): void;
+  /**
+   * Calls `listener` each time the session starts or stops running, as `running` reports it:
+   * synchronously in `admit` when it records a session that was not running (also one the user
+   * stopped, before `admit` refuses it), and at the end of `endSession` for a session that was
+   * running, in the order added. Not on an `admit` of a running session, nor on `endSession` of
+   * one that is not running.
+   */
+  onRunningChange(listener: (session: string) => void): void;
   /**
    * Calls `listener` each time the session gains a site by the user's click: a prompt answered
    * once, or always once the answer is saved, and each site `allowForSession` grants.
@@ -229,6 +242,7 @@ export function createSiteAccess<Handle>({
   const withdrawals = new Set<(session: string, site: string) => void>();
   const grants = new Set<(session: string, site: string) => void>();
   const stops = new Set<(session: string) => void>();
+  const runningChanges = new Set<(session: string) => void>();
   // Sessions the user stopped, for the background page's life: `endSession` keeps them.
   const stoppedSessions = new Set<string>();
   // Each running session's number, given at its first `admit`.
@@ -270,6 +284,7 @@ export function createSiteAccess<Handle>({
     admit,
     stop,
     stopped: isStopped,
+    running: isRunning,
     sessionAnswers,
     siteStates,
     allowForSession,
@@ -277,6 +292,7 @@ export function createSiteAccess<Handle>({
     forget,
     onWithdraw,
     onStop,
+    onRunningChange,
     onGrant,
   };
 
@@ -370,17 +386,19 @@ export function createSiteAccess<Handle>({
     generations.set(session, generationOf(session) + 1);
     const state = sessions.get(session);
     sessions.delete(session);
-    runningSessions.delete(session);
+    const wasRunning = runningSessions.delete(session);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false);
     // A session that reconnects with the same id asks again, so nothing from the gap is read.
     for (const site of state?.allowed ?? []) withdrawn(session, site);
+    if (wasRunning) runningChanged(session);
   }
 
   function admit(session: string): void {
     if (!runningSessions.has(session)) {
       admitted += 1;
       runningSessions.set(session, admitted);
+      runningChanged(session);
     }
     if (stoppedSessions.has(session)) throw sessionStopped();
   }
@@ -398,6 +416,10 @@ export function createSiteAccess<Handle>({
 
   function isStopped(session: string): boolean {
     return stoppedSessions.has(session);
+  }
+
+  function isRunning(session: string): boolean {
+    return runningSessions.has(session);
   }
 
   function generationOf(session: string): number {
@@ -492,6 +514,14 @@ export function createSiteAccess<Handle>({
 
   function onStop(listener: (session: string) => void): void {
     stops.add(listener);
+  }
+
+  function onRunningChange(listener: (session: string) => void): void {
+    runningChanges.add(listener);
+  }
+
+  function runningChanged(session: string): void {
+    for (const listener of runningChanges) listener(session);
   }
 
   function onGrant(listener: (session: string, site: string) => void): void {
