@@ -191,6 +191,55 @@ describe("runHost, native side", () => {
     await finish(h, client);
   });
 
+  it("logs the extension's oldest protocol and passes it on to MCP peers", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, { oldestProtocol: PROTOCOL_VERSION - 1, allUrls: true });
+    assert.ok(
+      h.logs.some(
+        (line) =>
+          line.message === "extension connected" &&
+          isEqual(line.detail, {
+            version: EXTENSION_VERSION,
+            protocol: PROTOCOL_VERSION,
+            oldestProtocol: PROTOCOL_VERSION - 1,
+          }),
+      ),
+    );
+    const client = await connect(h);
+    client.send(mcpHello());
+    assert.deepEqual((await client.frames.next()).extension, {
+      connected: true,
+      protocol: PROTOCOL_VERSION,
+      version: EXTENSION_VERSION,
+      allUrls: true,
+      oldestProtocol: PROTOCOL_VERSION - 1,
+    });
+    await finish(h, client);
+  });
+
+  it("keeps the first hello's oldest protocol on a later stdio hello", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, { protocol: PROTOCOL_VERSION + 1, oldestProtocol: PROTOCOL_VERSION });
+    writeFrame(h.stdin, {
+      ...extensionHello(),
+      protocol: PROTOCOL_VERSION + 2,
+      oldestProtocol: PROTOCOL_VERSION + 2,
+      allUrls: false,
+    });
+    const client = await connect(h);
+    client.send(mcpHello());
+    assert.deepEqual((await client.frames.next()).extension, {
+      connected: true,
+      protocol: PROTOCOL_VERSION + 1,
+      version: EXTENSION_VERSION,
+      allUrls: false,
+      oldestProtocol: PROTOCOL_VERSION,
+    });
+    assert.equal(h.out.received(), 1);
+    await relay(h, client, "r1");
+    await finish(h, client);
+  });
+
   it("logs an invalid-JSON frame and an oversize frame, then keeps reading", LIMIT, async () => {
     const h = start();
     h.stdin.write(rawFrame("{"));
@@ -589,6 +638,68 @@ describe("runHost, socket side", () => {
     await finish(h, client);
   });
 
+  for (const oldestProtocol of [PROTOCOL_VERSION, PROTOCOL_VERSION - 1]) {
+    it(
+      `relays to a newer extension that serves protocol ${oldestProtocol} and later`,
+      LIMIT,
+      async () => {
+        const h = start();
+        await greetExtension(h, { protocol: PROTOCOL_VERSION + 1, oldestProtocol });
+        assert.ok(!h.logs.some((line) => line.message === "protocol mismatch with the extension"));
+        const client = await greet(h);
+        await relay(h, client, "r1");
+        await finish(h, client);
+      },
+    );
+  }
+
+  it("refuses requests while the host is older than the extension's window", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, {
+      protocol: PROTOCOL_VERSION + 2,
+      oldestProtocol: PROTOCOL_VERSION + 1,
+    });
+    const sentence =
+      `The Foxleash native host (version ${VERSION}, protocol ${PROTOCOL_VERSION}) is older ` +
+      `than the Foxleash extension (version ${EXTENSION_VERSION}, protocol ${PROTOCOL_VERSION + 2}, ` +
+      `which works with protocol ${PROTOCOL_VERSION + 1} and later): Firefox is still running ` +
+      "the old native host, so update Foxleash with `git pull && npm ci && npm run setup` if " +
+      "you have not yet and then restart Firefox.";
+    const client = await greet(h);
+    client.send(request("r1"));
+    assert.deepEqual(
+      await client.frames.next(),
+      errorResponse("r1", "protocol_mismatch", sentence),
+    );
+    await tick();
+    assert.equal(h.out.received(), 1);
+    await finish(h, client);
+  });
+
+  for (const oldestProtocol of [PROTOCOL_VERSION - 1, PROTOCOL_VERSION - 2]) {
+    it(
+      `refuses an older extension that serves protocol ${oldestProtocol} and later`,
+      LIMIT,
+      async () => {
+        const h = start();
+        await greetExtension(h, { protocol: PROTOCOL_VERSION - 1, oldestProtocol });
+        const sentence =
+          `The Foxleash extension (version ${EXTENSION_VERSION}, protocol ${PROTOCOL_VERSION - 1}) ` +
+          `is older than the Foxleash native host (version ${VERSION}, protocol ${PROTOCOL_VERSION}): ` +
+          "run `npm run setup` in your Foxleash folder and confirm the extension update in Firefox.";
+        const client = await greet(h);
+        client.send(request("r1"));
+        assert.deepEqual(
+          await client.frames.next(),
+          errorResponse("r1", "protocol_mismatch", sentence),
+        );
+        await tick();
+        assert.equal(h.out.received(), 1);
+        await finish(h, client);
+      },
+    );
+  }
+
   it("refuses requests from a peer that speaks another protocol", LIMIT, async () => {
     const h = start();
     const client = await connect(h);
@@ -774,6 +885,16 @@ describe("runHost, session end", () => {
     await until(() => h.logs.some((line) => line.message === "c1 disconnected"));
     await tick();
     assert.equal(h.out.received(), 3);
+    await finish(h);
+  });
+
+  it("tells a newer extension that serves this protocol when a session ends", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, { protocol: PROTOCOL_VERSION + 1, oldestProtocol: PROTOCOL_VERSION });
+    const client = await greet(h);
+    await relay(h, client, "r1");
+    await end(client);
+    assert.deepEqual(await h.out.next(), { type: "session_end", session: "s1" });
     await finish(h);
   });
 

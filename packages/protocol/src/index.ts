@@ -1,6 +1,12 @@
 /** Bump when a message shape or method contract changes incompatibly. */
 export const PROTOCOL_VERSION = 6;
 
+/**
+ * The oldest protocol version the extension still serves; never above the `PROTOCOL_VERSION`
+ * of the latest release.
+ */
+export const OLDEST_SERVED_PROTOCOL = 3;
+
 /** The native messaging host name, as registered with Firefox. */
 export const NATIVE_HOST_NAME = "foxleash";
 

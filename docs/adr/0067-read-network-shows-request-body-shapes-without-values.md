@@ -2,7 +2,7 @@
 
 **Status:** Accepted, 2026-11-16. Amends
 [0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md); supersedes the
-`PROTOCOL_VERSION` of [0065](0065-read-network-leaves-out-headers-unless-asked.md).
+`PROTOCOL_VERSION` of [0065](0065-read-network-leaves-out-headers-unless-asked.md). Its consequence that an extension and a server of different protocol versions refuse each other is superseded by [0072](0072-the-extension-serves-the-server-of-the-release-before.md), 2026-11-17.
 
 ## Context
 

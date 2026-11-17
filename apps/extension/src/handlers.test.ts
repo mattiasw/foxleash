@@ -6,6 +6,7 @@ import {
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_TYPES,
   type MethodName,
+  PROTOCOL_VERSION,
   type ProbeResult,
   type Result,
   type TabInfo,
@@ -49,12 +50,13 @@ import {
   VIEW_READ_MS,
   VIEW_START_LIMIT_MS,
 } from "./handlers.ts";
-import type { NetworkReadOptions } from "./network-log.ts";
+import { createNetworkLog, type NetworkReadOptions, REDACTED } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
 import { createPageViews } from "./page-view.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { FIELD_MASK_CSS, FRAME_HIDE_CSS, INPUT_MASK_CSS } from "./screenshot.ts";
+import { answerAs } from "./served-protocols.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite } from "./settings.ts";
 import {
@@ -6824,6 +6826,98 @@ describe("read_network", { timeout: 10000 }, () => {
     void opened.catch(() => {});
     assert.deepEqual(context.networkReads, []);
   });
+
+  describe("from a server of an older protocol, with the real network log", () => {
+    const sent = [
+      { name: "Cookie", value: "session=secret-1" },
+      { name: "Accept", value: "*/*" },
+    ];
+    const received = [
+      { name: "Set-Cookie", value: "a=secret-2" },
+      { name: "Content-Type", value: "text/plain" },
+    ];
+    const request = {
+      url: `${SITE}/api`,
+      method: "GET",
+      type: "xmlhttprequest",
+      startTime: 1000,
+      durationMs: 50,
+      status: 200,
+      fromCache: false,
+    };
+
+    /** An approved tab whose page made one request with headers in both directions. */
+    async function recordedTab(context: ReturnType<typeof setup>): Promise<TabInfo> {
+      const tab = await approvedTab(context);
+      await flush();
+      const { fake } = context;
+      const details = { requestId: "q1", tabId: tab.id };
+      fake.emitWebRequest("onBeforeRequest", {
+        ...details,
+        timeStamp: 1000,
+        frameId: 0,
+        url: `${SITE}/api`,
+        method: "GET",
+        type: "xmlhttprequest",
+        documentUrl: `${SITE}/page`,
+      });
+      fake.emitWebRequest("onSendHeaders", { ...details, timeStamp: 1001, requestHeaders: sent });
+      fake.emitWebRequest("onCompleted", {
+        ...details,
+        timeStamp: 1050,
+        statusCode: 200,
+        fromCache: false,
+        responseHeaders: received,
+      });
+      return tab;
+    }
+
+    it("answers protocol 3 with the redacted headers of every request", async () => {
+      const context = setup({ networkLog: true });
+      const tab = await recordedTab(context);
+      const result = await context.callAs(3, "s1", "read_network", {
+        tabId: tab.id,
+        pattern: "/api",
+        limit: 10,
+      });
+      assert.deepEqual(result, {
+        recording: true,
+        since: 1,
+        requests: [
+          {
+            ...request,
+            requestHeaders: [
+              { name: "Cookie", value: REDACTED },
+              { name: "Accept", value: "*/*" },
+            ],
+            responseHeaders: [
+              { name: "Set-Cookie", value: REDACTED },
+              { name: "Content-Type", value: "text/plain" },
+            ],
+          },
+        ],
+        truncated: false,
+      });
+    });
+
+    for (const protocol of [4, 5, PROTOCOL_VERSION]) {
+      it(`answers protocol ${protocol} without headers unless it asks for them`, async () => {
+        const context = setup({ networkLog: true });
+        const tab = await recordedTab(context);
+        const result = await context.callAs(protocol, "s1", "read_network", {
+          tabId: tab.id,
+          pattern: "/api",
+          limit: 10,
+        });
+        assert.deepEqual(result, {
+          recording: true,
+          since: 1,
+          requests: [request],
+          truncated: false,
+        });
+      });
+    }
+  });
 });
 
 describe("the tools that act in the page", { timeout: 10000 }, () => {
@@ -9860,8 +9954,15 @@ interface Save {
 /**
  * The handlers on a fake browser. With `pageViews`, results end with real views of the page;
  * without, no view is read, so that no further live-documents check runs at each commit.
+ * `networkLog` wires the real network log instead of one a test sets with `networkWith`.
  */
-function setup({ pageViews = false }: { pageViews?: boolean } = {}) {
+function setup({
+  pageViews = false,
+  networkLog = false,
+}: {
+  pageViews?: boolean;
+  networkLog?: boolean;
+} = {}) {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser, undefined, (url) => recipes.isBlankPage(url));
@@ -9904,13 +10005,15 @@ function setup({ pageViews = false }: { pageViews?: boolean } = {}) {
   };
   const networkReads: NetworkRead[] = [];
   let networkResult: Result<"read_network"> = { recording: false, requests: [], truncated: false };
-  const network = {
-    read: (session: string, tabId: number, site: string, options: NetworkReadOptions) => {
-      networkReads.push({ session, tabId, site, options });
-      return networkResult;
-    },
-    requestsSince: () => ({ begun: 0, open: 0 }),
-  };
+  const network = networkLog
+    ? createNetworkLog({ browser: fake.browser, groups, access, now: () => timers.now() })
+    : {
+        read: (session: string, tabId: number, site: string, options: NetworkReadOptions) => {
+          networkReads.push({ session, tabId, site, options });
+          return networkResult;
+        },
+        requestsSince: () => ({ begun: 0, open: 0 }),
+      };
   const saves: Save[] = [];
   const downloads = {
     save: async (session: string, url: string, filename: string) => {
@@ -9957,6 +10060,18 @@ function setup({ pageViews = false }: { pageViews?: boolean } = {}) {
   /** A request with the view left out, unless its params say otherwise. */
   const call = (session: string, method: MethodName, params: Record<string, unknown> = {}) =>
     callWithView(session, method, withoutView(method, params));
+  /** A request as a server of `protocol` sends it, answered as the extension answers it. */
+  const callAs = (
+    protocol: number,
+    session: string,
+    method: MethodName,
+    params: Record<string, unknown>,
+  ) =>
+    answerAs(
+      protocol,
+      { type: "request", id: `r${++requests}`, session, method, params },
+      handleRequest,
+    );
 
   async function open(session: string, url?: string): Promise<TabInfo> {
     const result = await call(session, "tab_open", url === undefined ? {} : { url });
@@ -10040,6 +10155,7 @@ function setup({ pageViews = false }: { pageViews?: boolean } = {}) {
     saves,
     call,
     callWithView,
+    callAs,
     open,
     list,
     navigate,

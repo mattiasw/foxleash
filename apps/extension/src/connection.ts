@@ -1,6 +1,7 @@
 import {
   type HelloMessage,
   NATIVE_HOST_NAME,
+  OLDEST_SERVED_PROTOCOL,
   PROTOCOL_VERSION,
   parseMessage,
   protocolMismatch,
@@ -16,7 +17,8 @@ import { fieldsOf, OPTIONS_PAGE } from "./site-access.ts";
 
 export interface ConnectionDeps<Handle> {
   browser: BrowserApi;
-  handleRequest: (request: RequestMessage) => Promise<unknown>;
+  /** Answers a request in the shape of `protocol`, the protocol of the host it came from. */
+  handleRequest: (request: RequestMessage, protocol: number) => Promise<unknown>;
   endSession: (session: string) => Promise<void>;
   timers: Timers<Handle>;
 }
@@ -29,6 +31,15 @@ export interface Connection {
   /** Whether the Foxleash program answered: "checking" until the first outcome. */
   state(): ProgramState;
 }
+
+/** What the host's welcome on a port decided: whether the extension serves that host. */
+type Verdict =
+  | { served: true; protocol: number; version: string }
+  | { served: false; protocol: number; version: string; mismatch: string };
+
+const NO_WELCOME =
+  "The Foxleash extension has not learned which version the native host is, so it cannot " +
+  "answer; restart Firefox if this continues.";
 
 const FIRST_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 10000;
@@ -46,6 +57,8 @@ export function createConnection<Handle>({
   let reconnectTimer: Handle | undefined;
   let delay = FIRST_RECONNECT_DELAY_MS;
   let programState: ProgramState = "checking";
+  /** Per port, so a new port starts without one and a welcome never affects another port. */
+  const verdicts = new WeakMap<Port, Verdict>();
 
   browser.permissions.onAdded.addListener(permissionsChanged);
   browser.permissions.onRemoved.addListener(permissionsChanged);
@@ -115,6 +128,7 @@ export function createConnection<Handle>({
       role: "extension",
       protocol: PROTOCOL_VERSION,
       version: browser.runtime.getManifest().version,
+      oldestProtocol: OLDEST_SERVED_PROTOCOL,
       ...(allUrls === undefined ? {} : { allUrls }),
     };
     current.postMessage(hello);
@@ -151,18 +165,24 @@ export function createConnection<Handle>({
     }
     const message = parsed.message;
     if (message.type === "request") answer(current, message).catch(logError);
-    else if (message.type === "welcome") welcomed(message);
+    else if (message.type === "welcome") welcomed(current, message);
     else if (message.type === "session_end") endSession(message.session).catch(logError);
     else warn({ event: "unexpected_message", type: message.type });
   }
 
   async function answer(current: Port, request: RequestMessage): Promise<void> {
-    respond(current, await outcome(request));
+    respond(current, await outcome(request, verdicts.get(current)));
   }
 
-  async function outcome(request: RequestMessage): Promise<ResponseMessage> {
+  async function outcome(
+    request: RequestMessage,
+    verdict: Verdict | undefined,
+  ): Promise<ResponseMessage> {
     try {
-      return { type: "response", id: request.id, ok: true, result: await handleRequest(request) };
+      if (verdict === undefined) throw new ToolError("protocol_mismatch", NO_WELCOME);
+      if (!verdict.served) throw new ToolError("protocol_mismatch", verdict.mismatch);
+      const result = await handleRequest(request, verdict.protocol);
+      return { type: "response", id: request.id, ok: true, result };
     } catch (error) {
       if (error instanceof ToolError) {
         return {
@@ -188,19 +208,26 @@ export function createConnection<Handle>({
     if (port === current) current.postMessage(response);
   }
 
-  function welcomed(welcome: WelcomeMessage): void {
+  function welcomed(current: Port, welcome: WelcomeMessage): void {
     delay = FIRST_RECONNECT_DELAY_MS;
     programState = "connected";
+    const { protocol, version } = welcome;
     const mismatch = protocolMismatch(
       {
         part: "extension",
         protocol: PROTOCOL_VERSION,
         version: browser.runtime.getManifest().version,
+        oldest: OLDEST_SERVED_PROTOCOL,
       },
-      { part: "host", protocol: welcome.protocol, version: welcome.version },
+      { part: "host", protocol, version },
     );
+    if (mismatch === null) {
+      verdicts.set(current, { served: true, protocol, version });
+      return;
+    }
+    verdicts.set(current, { served: false, protocol, version, mismatch });
     // The host reports a mismatch to the MCP side, so the port stays open.
-    if (mismatch !== null) warn({ event: "protocol_mismatch", message: mismatch });
+    warn({ event: "protocol_mismatch", message: mismatch });
   }
 
   function disconnected(current: Port): void {

@@ -235,6 +235,34 @@ when nothing fails but a warning (such as a bigger bump than the changes need, o
 breaking change mentioned in a smaller bump) needs your confirmation. CI runs the
 `changelog` and `listing` checks.
 
+## Protocol versions
+
+`PROTOCOL_VERSION` in `packages/protocol/src/index.ts` is raised when a message shape or a
+method contract changes incompatibly: a param that changes its meaning or default, a new param an
+older extension would not honour, a result key an older server needs and no longer gets, a
+renamed or removed method.
+
+Firefox updates the extension by itself, so the extension serves every protocol from
+`OLDEST_SERVED_PROTOCOL` up to `PROTOCOL_VERSION` and answers each request in the protocol of the
+native host it came from (ADR 0072). A host or `doctor` refuses only an extension older than
+itself; the MCP server and the host stay exact with each other.
+
+The commit that raises `PROTOCOL_VERSION` adds a step for the version it leaves behind to `STEPS`
+in `apps/extension/src/served-protocols.ts`. The step owes either the rewrite of the old shape (a
+request of its version into one of the next, a result of the next back into one of its version)
+with a test through the real handler, or a comment saying why nothing differs. A step changes
+shape only: when it cannot serve the old shape without relaxing a safeguard, it refuses the
+request with a `ToolError`. The unit test in `served-protocols.test.ts` fails until each version
+in the window has its step.
+
+`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the latest release. It may be
+raised to that number, and the steps below it are then deleted. Programs from before ADR 0072
+(protocol 3 to 5) check the protocol exactly and refuse a newer extension, so the window serves
+programs from the first release that carries it on.
+
+A release publishes its add-on before its server: a server refuses an add-on older than itself,
+so its program is made available only once its add-on version can be installed.
+
 ## Releasing
 
 A release starts from `main`; its commits are made on a `release/x.y.z` branch and reach

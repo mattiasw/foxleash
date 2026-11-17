@@ -10,9 +10,11 @@ import type { Readable, Writable } from "node:stream";
 import {
   EXTENSION_ID,
   NATIVE_HOST_NAME,
+  type PartInfo,
   PROTOCOL_VERSION,
   parseMessage,
   protocolMismatch,
+  versionsOf,
   type WelcomeMessage,
 } from "@foxleash/protocol";
 import { BridgeError, connectToHost } from "./bridge.ts";
@@ -558,12 +560,19 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     );
     return;
   }
-  const { protocol, version, allUrls } = extension;
-  report.line("ok", "extension", `version ${version}, protocol ${protocol}`);
-  const mismatch = protocolMismatch(
-    { part: "extension", protocol, version },
-    { part: "host", protocol: welcome.protocol, version: welcome.version },
-  );
+  const { protocol, version, allUrls, oldestProtocol } = extension;
+  const part: PartInfo = {
+    part: "extension",
+    protocol,
+    version,
+    ...(oldestProtocol === undefined ? {} : { oldest: oldestProtocol }),
+  };
+  report.line("ok", "extension", versionsOf(part));
+  const mismatch = protocolMismatch(part, {
+    part: "host",
+    protocol: welcome.protocol,
+    version: welcome.version,
+  });
   if (mismatch !== null) {
     report.line("FAIL", "extension", mismatch);
   }

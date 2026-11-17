@@ -1,6 +1,6 @@
 # 0001: Foxleash runs as two processes joined by a Unix socket, with a protocol version handshake
 
-**Status:** Accepted, 2026-10-17.
+**Status:** Accepted, 2026-10-17. Its exact protocol check is superseded by [0072](0072-the-extension-serves-the-server-of-the-release-before.md), 2026-11-17.
 
 ## Context
 

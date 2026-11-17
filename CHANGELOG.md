@@ -46,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The agent is told that screenshots show protected fields, such as those Firefox filled in from
   your saved addresses, without their text, so it no longer takes a filled field that looks empty
   in a screenshot for an empty one.
+- An extension update no longer stops Foxleash until you update the program too: the extension
+  keeps working with the program of the release before. This holds for programs from this version
+  on; with 0.4.1 and older, both parts still need the same version.
 
 ### Security
 

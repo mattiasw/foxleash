@@ -881,6 +881,76 @@ describe("doctor, the extension", () => {
     assert.equal(result.code, 1);
   });
 
+  it("accepts a newer extension that serves the host's protocol", LIMIT, async () => {
+    const f = await fixture();
+    const newer = PROTOCOL_VERSION + 1;
+    await fakeHost(
+      f.socketDir,
+      process.pid,
+      hostWelcome({
+        connected: true,
+        protocol: newer,
+        version: EXTENSION_VERSION,
+        allUrls: true,
+        oldestProtocol: PROTOCOL_VERSION,
+      }),
+    );
+    const result = await runDoctor(f);
+    assert.deepEqual(section(result, ["extension"]), [
+      `ok extension: version ${EXTENSION_VERSION}, protocol ${newer}, which works with protocol ${PROTOCOL_VERSION} and later`,
+      PERMISSION_OK,
+    ]);
+    assert.equal(result.code, 0);
+  });
+
+  it("fails a newer extension that no longer serves the host's protocol", LIMIT, async () => {
+    const f = await fixture();
+    const newer = PROTOCOL_VERSION + 2;
+    const oldest = PROTOCOL_VERSION + 1;
+    await fakeHost(
+      f.socketDir,
+      process.pid,
+      hostWelcome({
+        connected: true,
+        protocol: newer,
+        version: EXTENSION_VERSION,
+        allUrls: true,
+        oldestProtocol: oldest,
+      }),
+    );
+    const result = await runDoctor(f);
+    const window = `version ${EXTENSION_VERSION}, protocol ${newer}, which works with protocol ${oldest} and later`;
+    assert.deepEqual(section(result, ["extension"]), [
+      `ok extension: ${window}`,
+      `FAIL extension: The Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}) is older than the Foxleash extension (${window}): Firefox is still running the old native host, so update Foxleash with \`git pull && npm ci && npm run setup\` if you have not yet and then restart Firefox.`,
+      PERMISSION_OK,
+    ]);
+    assert.equal(result.code, 1);
+  });
+
+  it("fails an older extension whatever protocols it serves", LIMIT, async () => {
+    const f = await fixture();
+    const older = PROTOCOL_VERSION - 1;
+    await fakeHost(
+      f.socketDir,
+      process.pid,
+      hostWelcome({
+        connected: true,
+        protocol: older,
+        version: EXTENSION_VERSION,
+        allUrls: true,
+        oldestProtocol: older,
+      }),
+    );
+    const result = await runDoctor(f);
+    assert.deepEqual(section(result, ["extension"]), [
+      `ok extension: version ${EXTENSION_VERSION}, protocol ${older}`,
+      `FAIL extension: The Foxleash extension (version ${EXTENSION_VERSION}, protocol ${older}) is older than the Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}): run \`npm run setup\` in your Foxleash folder and confirm the extension update in Firefox.`,
+      PERMISSION_OK,
+    ]);
+    assert.equal(result.code, 1);
+  });
+
   it("fails an extension without access to all websites", LIMIT, async () => {
     const f = await fixture();
     await fakeHost(f.socketDir, process.pid, hostWelcome(connected(false)));

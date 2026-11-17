@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import { PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
+import { OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
 import { createConnection } from "./connection.ts";
 import {
   createFakeBrowser,
@@ -24,7 +24,14 @@ describe("connection hello", { timeout: 10000 }, () => {
       await flush();
       assert.equal(fake.ports.length, 1);
       assert.deepEqual(port(fake.ports, 0).posted, [
-        { type: "hello", role: "extension", protocol: PROTOCOL_VERSION, version: "1.2.3", allUrls },
+        {
+          type: "hello",
+          role: "extension",
+          protocol: PROTOCOL_VERSION,
+          version: "1.2.3",
+          oldestProtocol: OLDEST_SERVED_PROTOCOL,
+          allUrls,
+        },
       ]);
     });
   }
@@ -42,6 +49,7 @@ describe("connection hello", { timeout: 10000 }, () => {
       role: "extension",
       protocol: PROTOCOL_VERSION,
       version: "0.1.0",
+      oldestProtocol: OLDEST_SERVED_PROTOCOL,
     });
     assert.deepEqual(warnings(), [
       { event: "permission_check_failed", error: "Error: permissions unavailable" },
@@ -85,11 +93,11 @@ describe("connection hello", { timeout: 10000 }, () => {
 describe("connection requests", { timeout: 10000 }, () => {
   it("posts a handler's result as a response with the request's id", async (t) => {
     const seen: RequestMessage[] = [];
-    const { fake, open } = setup(t, async (received) => {
+    const { fake, openWelcomed } = setup(t, async (received) => {
       seen.push(received);
       return { tabs: [] };
     });
-    const host = await open();
+    const host = await openWelcomed();
     host.deliver({ ...request, extra: 1 });
     await flush();
     assert.deepEqual(seen, [request]);
@@ -100,10 +108,10 @@ describe("connection requests", { timeout: 10000 }, () => {
   });
 
   it("posts a tool error's code and message", async (t) => {
-    const { open } = setup(t, async () => {
+    const { openWelcomed } = setup(t, async () => {
       throw new ToolError("tab_not_found", "Tab 4 does not exist.");
     });
-    const host = await open();
+    const host = await openWelcomed();
     host.deliver(request);
     await flush();
     assert.deepEqual(host.posted.slice(1), [
@@ -117,10 +125,10 @@ describe("connection requests", { timeout: 10000 }, () => {
   });
 
   it("answers any other failure with browser_error, keeping Firefox's text in the log", async (t) => {
-    const { open, warnings } = setup(t, async () => {
+    const { openWelcomed, warnings } = setup(t, async () => {
       throw new Error("Invalid url https://secret.example/");
     });
-    const host = await open();
+    const host = await openWelcomed();
     host.deliver(request);
     await flush();
     assert.deepEqual(host.posted.slice(1), [
@@ -142,12 +150,12 @@ describe("connection requests", { timeout: 10000 }, () => {
 
   it("answers overlapping requests as each finishes", async (t) => {
     const pending = new Map<string, PromiseWithResolvers<unknown>>();
-    const { open } = setup(t, (received) => {
+    const { openWelcomed } = setup(t, (received) => {
       const result = Promise.withResolvers<unknown>();
       pending.set(received.id, result);
       return result.promise;
     });
-    const host = await open();
+    const host = await openWelcomed();
     host.deliver({ ...request, id: "slow" });
     host.deliver({ ...request, id: "fast" });
     pending.get("fast")?.resolve("fast result");
@@ -206,12 +214,12 @@ describe("connection requests", { timeout: 10000 }, () => {
 
   it("drops responses whose port closed while the request ran", async (t) => {
     const results = new Map<string, PromiseWithResolvers<unknown>>();
-    const { fake, timers, open, warnings } = setup(t, (received) => {
+    const { fake, timers, openWelcomed, warnings } = setup(t, (received) => {
       const result = Promise.withResolvers<unknown>();
       results.set(received.id, result);
       return result.promise;
     });
-    const first = await open();
+    const first = await openWelcomed();
     first.deliver({ ...request, id: "before" });
     first.deliver({ ...request, id: "after" });
     first.drop();
@@ -246,7 +254,14 @@ describe("connection welcome", { timeout: 10000 }, () => {
     ]);
     host.deliver(request);
     await flush();
-    assert.equal(host.posted.length, 2);
+    assert.deepEqual(host.posted.slice(1), [
+      {
+        type: "response",
+        id: "r1",
+        ok: false,
+        error: { code: "protocol_mismatch", message: fieldsOf(warnings()[0])?.message },
+      },
+    ]);
   });
 
   it("logs nothing for a welcome on the same protocol", async (t) => {
@@ -255,6 +270,104 @@ describe("connection welcome", { timeout: 10000 }, () => {
     host.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
     await flush();
     assert.deepEqual(warnings(), []);
+  });
+});
+
+describe("connection served protocols", { timeout: 10000 }, () => {
+  const served = [OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION - 1, PROTOCOL_VERSION].filter(
+    (protocol, index, all) => protocol >= OLDEST_SERVED_PROTOCOL && all.indexOf(protocol) === index,
+  );
+  for (const protocol of served) {
+    it(`answers a host of protocol ${protocol} in that protocol`, async (t) => {
+      const seen: [string, number][] = [];
+      const { open, warnings } = setup(t, async (received, answeredIn) => {
+        seen.push([received.id, answeredIn]);
+        return { tabs: [] };
+      });
+      const host = await open();
+      host.deliver({ type: "welcome", protocol, version: "0.4.1" });
+      host.deliver(request);
+      await flush();
+      assert.deepEqual(seen, [["r1", protocol]]);
+      assert.deepEqual(host.posted.slice(1), [
+        { type: "response", id: "r1", ok: true, result: { tabs: [] } },
+      ]);
+      assert.deepEqual(warnings(), []);
+    });
+  }
+
+  it("refuses every request from a host older than the protocols it serves", async (t) => {
+    const seen: RequestMessage[] = [];
+    const { open, warnings } = setup(t, async (received) => {
+      seen.push(received);
+      return null;
+    });
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL - 1, version: "0.2.0" });
+    host.deliver(request);
+    await flush();
+    const sentence =
+      `The Foxleash native host (version 0.2.0, protocol ${OLDEST_SERVED_PROTOCOL - 1}) is ` +
+      `older than the Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}, which ` +
+      `works with protocol ${OLDEST_SERVED_PROTOCOL} and later): Firefox is still running the ` +
+      "old native host, so update Foxleash with `git pull && npm ci && npm run setup` if you " +
+      "have not yet and then restart Firefox.";
+    assert.deepEqual(seen, []);
+    assert.deepEqual(host.posted.slice(1), [
+      {
+        type: "response",
+        id: "r1",
+        ok: false,
+        error: { code: "protocol_mismatch", message: sentence },
+      },
+    ]);
+    assert.deepEqual(warnings(), [{ event: "protocol_mismatch", message: sentence }]);
+  });
+
+  it("refuses every request before the host's welcome", async (t) => {
+    const seen: RequestMessage[] = [];
+    const { open } = setup(t, async (received) => {
+      seen.push(received);
+      return null;
+    });
+    const host = await open();
+    host.deliver(request);
+    await flush();
+    assert.deepEqual(seen, []);
+    assert.deepEqual(host.posted.slice(1), [noWelcome("r1")]);
+  });
+
+  it("refuses every request after a welcome that does not parse", async (t) => {
+    const { open, warnings } = setup(t);
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: 0, version: "0.1.0" });
+    host.deliver(request);
+    await flush();
+    assert.deepEqual(host.posted.slice(1), [noWelcome("r1")]);
+    assert.deepEqual(warnings(), [{ event: "invalid_message", error: "invalid protocol" }]);
+  });
+
+  it("starts a new port without the old port's welcome", async (t) => {
+    const seen: number[] = [];
+    const { fake, timers, openWelcomed } = setup(t, async (_received, protocol) => {
+      seen.push(protocol);
+      return null;
+    });
+    const first = await openWelcomed(OLDEST_SERVED_PROTOCOL);
+    first.drop();
+    timers.advance(500);
+    await flush();
+    const second = port(fake.ports, 1);
+    second.deliver({ ...request, id: "early" });
+    await flush();
+    assert.deepEqual(second.posted.slice(1), [noWelcome("early")]);
+    second.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    second.deliver({ ...request, id: "late" });
+    await flush();
+    assert.deepEqual(seen, [PROTOCOL_VERSION]);
+    assert.deepEqual(second.posted.slice(2), [
+      { type: "response", id: "late", ok: true, result: null },
+    ]);
   });
 });
 
@@ -416,6 +529,7 @@ describe("connection permission changes", { timeout: 10000 }, () => {
       role: "extension",
       protocol: PROTOCOL_VERSION,
       version: "0.1.0",
+      oldestProtocol: OLDEST_SERVED_PROTOCOL,
     });
     assert.deepEqual(warnings(), [
       { event: "permission_check_failed", error: "Error: permissions unavailable" },
@@ -642,7 +756,7 @@ describe("connection program state", { timeout: 10000 }, () => {
 
 function setup(
   t: TestContext,
-  handleRequest: (request: RequestMessage) => Promise<unknown> = async () => null,
+  handleRequest: (request: RequestMessage, protocol: number) => Promise<unknown> = async () => null,
   onEndSession: (session: string) => Promise<void> = async () => {},
 ) {
   const fake = createFakeBrowser();
@@ -663,11 +777,31 @@ function setup(
     return port(fake.ports, fake.ports.length - 1);
   }
 
+  async function openWelcomed(protocol = PROTOCOL_VERSION): Promise<FakePort> {
+    const host = await open();
+    host.deliver({ type: "welcome", protocol, version: "0.1.0" });
+    return host;
+  }
+
   function warnings(): unknown[] {
     return warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
   }
 
-  return { fake, timers, start, state, open, warnings, ended };
+  return { fake, timers, start, state, open, openWelcomed, warnings, ended };
+}
+
+function noWelcome(id: string) {
+  return {
+    type: "response",
+    id,
+    ok: false,
+    error: {
+      code: "protocol_mismatch",
+      message:
+        "The Foxleash extension has not learned which version the native host is, so it " +
+        "cannot answer; restart Firefox if this continues.",
+    },
+  };
 }
 
 function port(ports: FakePort[], index: number): FakePort {
@@ -682,6 +816,7 @@ function hello(allUrls: boolean) {
     role: "extension",
     protocol: PROTOCOL_VERSION,
     version: "0.1.0",
+    oldestProtocol: OLDEST_SERVED_PROTOCOL,
     allUrls,
   };
 }

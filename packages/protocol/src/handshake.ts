@@ -4,17 +4,30 @@ export interface PartInfo {
   part: Part;
   protocol: number;
   version: string;
+  /** The oldest protocol this part still works with; its `protocol` when absent. */
+  oldest?: number;
 }
 
-/** Returns null when both parts speak the same protocol, otherwise a sentence naming the stale one. */
+/**
+ * Returns null when the two parts work together: the part on the lower protocol is within the
+ * other's window. Otherwise returns a sentence naming the stale one.
+ */
 export function protocolMismatch(a: PartInfo, b: PartInfo): string | null {
   if (a.protocol === b.protocol) return null;
   const [stale, other] = a.protocol < b.protocol ? [a, b] : [b, a];
+  if (stale.protocol >= (other.oldest ?? other.protocol)) return null;
   return (
     `The ${NAME[stale.part]} (version ${stale.version}, protocol ${stale.protocol}) ` +
-    `is older than the ${NAME[other.part]} (version ${other.version}, protocol ${other.protocol}): ` +
+    `is older than the ${NAME[other.part]} (${versionsOf(other)}): ` +
     `${FIX[stale.part]}.`
   );
+}
+
+/** A part's version and protocol, and the oldest protocol it works with when that is older. */
+export function versionsOf(part: PartInfo): string {
+  const versions = `version ${part.version}, protocol ${part.protocol}`;
+  if (part.oldest === undefined || part.oldest >= part.protocol) return versions;
+  return `${versions}, which works with protocol ${part.oldest} and later`;
 }
 
 const UPDATE = "update Foxleash with `git pull && npm ci && npm run setup` if you have not yet";

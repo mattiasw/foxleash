@@ -11,6 +11,7 @@ import { createPageScripts } from "./page-scripts.ts";
 import { createPageViews } from "./page-view.ts";
 import { probePage } from "./probe-page.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
+import { answerAs } from "./served-protocols.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { createSiteAccess } from "./site-access.ts";
 import { createTabNavigations } from "./tab-navigations.ts";
@@ -98,7 +99,7 @@ const handleRequest = createHandlers({
 });
 const connection = createConnection({
   browser,
-  handleRequest,
+  handleRequest: (request, protocol) => answerAs(protocol, request, handleRequest),
   endSession: (session) => {
     access.endSession(session);
     uploads.endSession(session);

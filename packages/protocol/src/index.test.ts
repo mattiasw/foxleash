@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { EXTENSION_ID, NATIVE_HOST_NAME, PROTOCOL_VERSION } from "./index.ts";
+import {
+  EXTENSION_ID,
+  NATIVE_HOST_NAME,
+  OLDEST_SERVED_PROTOCOL,
+  PROTOCOL_VERSION,
+} from "./index.ts";
 
 describe("protocol constants", () => {
   it("uses a native host name Firefox accepts", () => {
@@ -14,5 +19,10 @@ describe("protocol constants", () => {
 
   it("starts the protocol at a positive integer", () => {
     assert.ok(Number.isInteger(PROTOCOL_VERSION) && PROTOCOL_VERSION > 0);
+  });
+
+  it("serves protocols from a positive integer up to the current one", () => {
+    assert.ok(Number.isInteger(OLDEST_SERVED_PROTOCOL) && OLDEST_SERVED_PROTOCOL > 0);
+    assert.ok(OLDEST_SERVED_PROTOCOL <= PROTOCOL_VERSION);
   });
 });

@@ -235,6 +235,63 @@ describe("parseMessage accepts", () => {
         } as const,
       },
     ]),
+    ...[1, 3].flatMap((oldestProtocol) => [
+      {
+        name: `a hello from the extension of protocol 3 with oldestProtocol ${oldestProtocol}`,
+        input: { ...hello, role: "extension", protocol: 3, oldestProtocol },
+        expected: {
+          type: "hello",
+          role: "extension",
+          protocol: 3,
+          version: "0.1.0",
+          oldestProtocol,
+        } as const,
+      },
+      {
+        name: `a welcome with an extension of protocol 3 and oldestProtocol ${oldestProtocol}`,
+        input: {
+          ...welcome,
+          extension: { ...connectedWelcome.extension, protocol: 3, oldestProtocol },
+        },
+        expected: {
+          type: "welcome",
+          protocol: 1,
+          version: "0.1.0",
+          extension: { connected: true, protocol: 3, version: "0.2.0", oldestProtocol },
+        } as const,
+      },
+    ]),
+    {
+      name: "a hello from the extension with allUrls and oldestProtocol",
+      input: { ...hello, role: "extension", protocol: 4, allUrls: false, oldestProtocol: 2 },
+      expected: {
+        type: "hello",
+        role: "extension",
+        protocol: 4,
+        version: "0.1.0",
+        allUrls: false,
+        oldestProtocol: 2,
+      },
+    },
+    {
+      name: "a welcome with an extension with allUrls and oldestProtocol",
+      input: {
+        ...welcome,
+        extension: { ...connectedWelcome.extension, protocol: 4, allUrls: true, oldestProtocol: 2 },
+      },
+      expected: {
+        type: "welcome",
+        protocol: 1,
+        version: "0.1.0",
+        extension: {
+          connected: true,
+          protocol: 4,
+          version: "0.2.0",
+          allUrls: true,
+          oldestProtocol: 2,
+        },
+      },
+    },
     {
       name: "a session end",
       input: sessionEnd,
@@ -452,10 +509,18 @@ describe("parseMessage rejects", () => {
     });
   }
 
+  // The bases are at protocol 1, so 2 is above their protocol.
+  const badOldestProtocols: unknown[] = [null, 0, -1, 1.5, "1", true, 2, Number.NaN];
   const fieldCases: { base: Fields; path: string[]; values: unknown[]; id?: string }[] = [
     { base: hello, path: ["role"], values: [MISSING, "host", 1] },
     { base: hello, path: ["allUrls"], values: [null, "true", 1, 0, {}] },
     { base: connectedWelcome, path: ["extension", "allUrls"], values: [null, "true", 1, 0, {}] },
+    { base: hello, path: ["oldestProtocol"], values: badOldestProtocols },
+    {
+      base: connectedWelcome,
+      path: ["extension", "oldestProtocol"],
+      values: badOldestProtocols,
+    },
     { base: connectedWelcome, path: ["extension"], values: [null, "x", []] },
     { base: connectedWelcome, path: ["extension", "connected"], values: [MISSING, "true", 1] },
     {
@@ -544,6 +609,14 @@ describe("parseMessage returns only validated fields", () => {
     assert.equal(Object.hasOwn(welcomeMessage.extension, "allUrls"), false);
   });
 
+  it("leaves oldestProtocol out when it is absent", () => {
+    const helloMessage = parsed({ ...hello, allUrls: true });
+    assert.equal(Object.hasOwn(helloMessage, "oldestProtocol"), false);
+    const welcomeMessage = parsed(connectedWelcome);
+    assert.ok(welcomeMessage.type === "welcome" && welcomeMessage.extension);
+    assert.equal(Object.hasOwn(welcomeMessage.extension, "oldestProtocol"), false);
+  });
+
   it("builds a fresh extension status", () => {
     const message = parsed(connectedWelcome);
     assert.ok(message.type === "welcome");
@@ -593,6 +666,18 @@ describe("parseMessage returns only validated fields", () => {
       {
         key: "allUrls",
         value: true,
+        input: connectedWelcome,
+        expected: { ok: true, message: connectedWelcome },
+      },
+      {
+        key: "oldestProtocol",
+        value: 1,
+        input: hello,
+        expected: { ok: true, message: hello },
+      },
+      {
+        key: "oldestProtocol",
+        value: 1,
         input: connectedWelcome,
         expected: { ok: true, message: connectedWelcome },
       },

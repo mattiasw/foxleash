@@ -62,7 +62,13 @@ export interface Host {
 
 type ExtensionState =
   | { greeted: false }
-  | { greeted: true; protocol: number; version: string; allUrls?: boolean };
+  | {
+      greeted: true;
+      protocol: number;
+      version: string;
+      allUrls?: boolean;
+      oldestProtocol?: number;
+    };
 
 interface Conn {
   socket: net.Socket;
@@ -267,22 +273,27 @@ export function runHost(options: HostOptions): Host {
       log("permission status updated", { allUrls: hello.allUrls });
       return;
     }
-    extension =
-      hello.allUrls === undefined
-        ? { greeted: true, protocol: hello.protocol, version: hello.version }
-        : {
-            greeted: true,
-            protocol: hello.protocol,
-            version: hello.version,
-            allUrls: hello.allUrls,
-          };
+    const oldest =
+      hello.oldestProtocol === undefined ? {} : { oldestProtocol: hello.oldestProtocol };
+    extension = {
+      greeted: true,
+      protocol: hello.protocol,
+      version: hello.version,
+      ...(hello.allUrls === undefined ? {} : { allUrls: hello.allUrls }),
+      ...oldest,
+    };
     const welcome: WelcomeMessage = { type: "welcome", protocol: PROTOCOL_VERSION, version };
     stdout.write(encodeFrame(JSON.stringify(welcome)));
     extensionMismatch = protocolMismatch(
       { part: "host", protocol: PROTOCOL_VERSION, version },
-      { part: "extension", protocol: hello.protocol, version: hello.version },
+      {
+        part: "extension",
+        protocol: hello.protocol,
+        version: hello.version,
+        ...(hello.oldestProtocol === undefined ? {} : { oldest: hello.oldestProtocol }),
+      },
     );
-    log("extension connected", { version: hello.version, protocol: hello.protocol });
+    log("extension connected", { version: hello.version, protocol: hello.protocol, ...oldest });
     if (extensionMismatch !== null) {
       log("protocol mismatch with the extension", extensionMismatch);
     }
@@ -418,10 +429,14 @@ export function runHost(options: HostOptions): Host {
     if (!extension.greeted) {
       return { connected: false };
     }
-    const { protocol, allUrls } = extension;
-    return allUrls === undefined
-      ? { connected: true, protocol, version: extension.version }
-      : { connected: true, protocol, version: extension.version, allUrls };
+    const { protocol, allUrls, oldestProtocol } = extension;
+    return {
+      connected: true,
+      protocol,
+      version: extension.version,
+      ...(allUrls === undefined ? {} : { allUrls }),
+      ...(oldestProtocol === undefined ? {} : { oldestProtocol }),
+    };
   }
 
   function relayRequest(conn: Conn, request: RequestMessage): void {

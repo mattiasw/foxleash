@@ -60,6 +60,7 @@ apps/extension/src/response-body.ts
 apps/extension/src/run.html
 apps/extension/src/run.ts
 apps/extension/src/screenshot.ts
+apps/extension/src/served-protocols.ts
 apps/extension/src/session-groups.ts
 apps/extension/src/settings.ts
 apps/extension/src/site-access.ts

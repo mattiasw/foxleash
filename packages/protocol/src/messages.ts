@@ -4,11 +4,18 @@ export type Role = "extension" | "mcp";
 
 export type ExtensionStatus =
   | { connected: false }
-  | { connected: true; protocol: number; version: string; allUrls?: boolean };
+  | {
+      connected: true;
+      protocol: number;
+      version: string;
+      allUrls?: boolean;
+      oldestProtocol?: number;
+    };
 
 /**
  * Keep these fields and their allowed values the same in every protocol version: a peer on
- * another protocol must still parse a hello to report which part is stale.
+ * another protocol must still parse a hello to report which part is stale, and `oldestProtocol`
+ * to judge whether it can serve that peer.
  */
 export interface HelloMessage {
   type: "hello";
@@ -16,11 +23,14 @@ export interface HelloMessage {
   protocol: number;
   version: string;
   allUrls?: boolean;
+  /** The oldest protocol the extension still serves; its `protocol` when absent. */
+  oldestProtocol?: number;
 }
 
 /**
- * Keep these fields and their allowed values the same in every protocol version: a peer on
- * another protocol must still parse a welcome to report which part is stale.
+ * Keep these fields and their allowed values the same in every protocol version, the
+ * extension status's `oldestProtocol` included: a peer on another protocol must still parse a
+ * welcome to report which part is stale.
  */
 export interface WelcomeMessage {
   type: "welcome";
@@ -93,10 +103,22 @@ function parseHello(fields: Fields): ParseResult {
   const version = own(fields, "version");
   if (!isVersion(version)) return fail("version");
   const allUrls = own(fields, "allUrls");
-  if (allUrls === undefined)
-    return { ok: true, message: { type: "hello", role, protocol, version } };
-  if (typeof allUrls !== "boolean") return fail("allUrls");
-  return { ok: true, message: { type: "hello", role, protocol, version, allUrls } };
+  if (allUrls !== undefined && typeof allUrls !== "boolean") return fail("allUrls");
+  const oldestProtocol = own(fields, "oldestProtocol");
+  if (oldestProtocol !== undefined && !(isProtocol(oldestProtocol) && oldestProtocol <= protocol)) {
+    return fail("oldestProtocol");
+  }
+  return {
+    ok: true,
+    message: {
+      type: "hello",
+      role,
+      protocol,
+      version,
+      ...(allUrls === undefined ? {} : { allUrls }),
+      ...(oldestProtocol === undefined ? {} : { oldestProtocol }),
+    },
+  };
 }
 
 function parseWelcome(fields: Fields): ParseResult {
@@ -122,9 +144,18 @@ function parseExtensionStatus(value: unknown): ExtensionStatus | string {
   const version = own(value, "version");
   if (!isVersion(version)) return "extension.version";
   const allUrls = own(value, "allUrls");
-  if (allUrls === undefined) return { connected: true, protocol, version };
-  if (typeof allUrls !== "boolean") return "extension.allUrls";
-  return { connected: true, protocol, version, allUrls };
+  if (allUrls !== undefined && typeof allUrls !== "boolean") return "extension.allUrls";
+  const oldestProtocol = own(value, "oldestProtocol");
+  if (oldestProtocol !== undefined && !(isProtocol(oldestProtocol) && oldestProtocol <= protocol)) {
+    return "extension.oldestProtocol";
+  }
+  return {
+    connected: true,
+    protocol,
+    version,
+    ...(allUrls === undefined ? {} : { allUrls }),
+    ...(oldestProtocol === undefined ? {} : { oldestProtocol }),
+  };
 }
 
 function parseRequest(fields: Fields): ParseResult {
