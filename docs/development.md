@@ -9,10 +9,13 @@
 
 ```sh
 npm ci
+npm run prepare
 ```
 
-This also installs the Git hooks: the pre-commit hook formats and lints staged files with
-Biome, and the pre-push hook runs the type check and the unit tests.
+`npm ci` runs no install scripts (see [Dependency updates](#dependency-updates)), so it does
+not install the Git hooks. `npm run prepare` does: the pre-commit hook formats and lints staged
+files with Biome, and the pre-push hook runs the type check and the unit tests. Run
+`npm run prepare` again after husky is updated, to refresh the hooks.
 
 ## Layout
 
@@ -153,7 +156,8 @@ runs. It needs a desktop with Firefox 142 or later.
 
 Mozilla reviewers rebuild the extension from a source archive. `npm run build:amo` builds
 `artifacts/foxleash-source-<version>.zip`, then extracts it into a temporary directory and
-runs `npm ci && npm run build` there, as a reviewer would. From that clean copy it builds
+runs `npm ci && npm run build` there, as a reviewer would. The archive ships `.npmrc`, so that
+`npm ci` runs no install scripts. From that clean copy it builds
 `artifacts/foxleash-<version>.xpi`. It fails unless:
 
 - every tracked file matches a ship or exclude rule in `bin/build-amo.ts`;
@@ -437,3 +441,24 @@ moment, or the workflow then cannot read the pull request's state, the merge is 
 15 seconds apart. After merging, the workflow starts CI on `main`
 itself, because a merge made with its own token starts no push run, and retries starting it the
 same way. The CI run it starts tests the updates merged together.
+
+Updates are merged without a person reading them because the checks are the gate: CI,
+including the end-to-end suite, runs on every Dependabot pull request, and an update that
+breaks something yet passes the checks shows a missing test to add. The 3-day wait skips
+releases younger than 3 days and proposes the newest release that is older, so a package that
+releases often still gets updated.
+
+Because updates are merged unread, the repository's `.npmrc` sets `ignore-scripts=true`: a
+dependency's install script would otherwise run at the next `npm ci` on every machine,
+including the one that signs releases. Today one dependency, esbuild, has an install script,
+and the build does not need it. The setting also makes npm skip `pre` and `post` scripts and
+lifecycle scripts such as `prepare`, so a step goes in the script that needs it instead; a unit
+test fails on any such script other than the root `prepare`, which Setup runs by name.
+
+When a future dependency really needs its install script, read the script, then run that one
+package's scripts by hand after `npm ci` with `npm rebuild <package> --ignore-scripts=false`,
+which runs no other package's scripts and not the repository's `prepare`. Never turn
+`ignore-scripts` off for the repository. Running it by hand fixes only the machine it is typed
+on: when the build or the program needs the script, the same command goes after every `npm ci`
+that needs it (CI, `bin/build-amo.ts` and the archive's README, the users' update command), as
+a recorded decision.

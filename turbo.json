@@ -36,6 +36,7 @@
       "env": ["FOXLEASH_TEST_REPORTER"],
       "inputs": [
         "bin/**",
+        ".npmrc",
         ".github/workflows/dependabot-automerge.yml",
         "apps/server/src/**",
         "docs/amo/**",

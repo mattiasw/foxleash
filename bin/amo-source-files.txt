@@ -1,3 +1,4 @@
+.npmrc
 .nvmrc
 README.md
 apps/extension/build.ts

@@ -17,7 +17,13 @@ const TOOL = "bin/build-amo.ts";
 const LIST = "bin/amo-source-files.txt";
 const README_TEMPLATE = "bin/amo-source-readme.md";
 
-const TOP_LEVEL_SHIP = new Set([".nvmrc", "package-lock.json", "package.json", "turbo.json"]);
+const TOP_LEVEL_SHIP = new Set([
+  ".npmrc",
+  ".nvmrc",
+  "package-lock.json",
+  "package.json",
+  "turbo.json",
+]);
 const TOP_LEVEL_EXCLUDE = new Set([
   ".gitignore",
   "AGENTS.md",

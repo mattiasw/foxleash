@@ -20,6 +20,9 @@ From the root of this archive, run:
 npm ci && npm run build
 ```
 
+The archive's `.npmrc` turns off the install scripts of the dependencies; the build needs none
+of them.
+
 The unminified extension appears in `apps/extension/dist/`: `background.js`, `options.js`,
 `welcome.js` and `content.js`, bundled by esbuild from `apps/extension/src/` and
 `packages/protocol/src/`; `approve.js`, `propose.js` and `run.js`, bundled from

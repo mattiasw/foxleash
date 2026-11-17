@@ -33,6 +33,7 @@ const LINK_ERROR = /tracked symlinks or submodules/;
 const RULE_ERROR = /Add a ship or exclude rule/;
 
 const SHIPPED = [
+  ".npmrc",
   ".nvmrc",
   "apps/extension/build.ts",
   "apps/extension/icons/foxleash.svg",
