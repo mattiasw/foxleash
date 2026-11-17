@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The settings page says that the built-in blocklist is short and names mostly sites in the
+  United States, the Nordic countries and the United Kingdom: a site that is not on it is not
+  blocked until you add it.
+
 ### Fixed
 
 - The browser now says that a Foxleash program of version 0.4.0 or 0.4.1 is too old for the

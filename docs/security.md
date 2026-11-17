@@ -87,8 +87,9 @@ extension's settings page in the add-ons manager, each with a Revoke button.
 ## The blocklist
 
 A built-in list of common financial and health sites is blocked by default. The list is short
-and cannot name every such site: a site that is not on it, such as a regional care provider, is
-not blocked until you add it. You can edit the list in the extension's settings page, one domain
+and names mostly sites in the United States, the Nordic countries and the United Kingdom. It
+cannot name every such site: a site that is not on it, such as a regional care provider, is not
+blocked until you add it. You can edit the list in the extension's settings page, one domain
 per line; a domain blocks itself and its subdomains. While your saved list differs from the
 built-in one, Foxleash keeps it as it is: sites that a later version adds to the built-in list
 are not added to yours. The settings page's "Fill in the built-in list" button fills in the
@@ -98,6 +99,15 @@ a page, and shows the agent a tab on a blocked site only as the site's address.
 Content a page on an approved site embeds from a blocked site can still show up in what the agent
 reads, and the ways that still reach a site you have not approved without asking can also reach
 a blocked site, even one you approved (see [Site approval](#site-approval)).
+
+An entry is a domain or an IPv4 address; an IPv6 address cannot be entered. An IPv4 entry also
+covers the same address written as an IPv4-mapped IPv6 address, such as `[::ffff:192.168.1.1]`,
+but no other IPv6 form of it, such as the NAT64 address `[64:ff9b::c0a8:101]`. Any other site
+with an IPv6 address in place of a domain, such as `http://[2001:db8::1]`, cannot be blocked.
+
+Foxleash tells the agent when it refuses a site because it is on the blocklist, without asking
+you, and `start_recipe` and `request_sites` return which of the sites they name are blocked, so
+an agent can find out which sites are on your list.
 
 ## Uploads
 
