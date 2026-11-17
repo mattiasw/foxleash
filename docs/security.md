@@ -70,13 +70,15 @@ asking include:
   showing that address as an image; the other site gets the address with whatever the agent put
   in it, and no page script is needed,
 - a `download` of an address on an approved site that redirects to another site: Firefox
-  requests that site's address, with your cookies for it, before Foxleash checks the final
-  address, and the file is saved when a further redirect leads back to an approved site (see
-  [Downloads](#downloads)).
+  requests that site's address, with all your cookies for it, including those that a link from
+  another site would not carry, before Foxleash checks the final address, and the file is saved
+  when a further redirect leads back to an approved site (see [Downloads](#downloads)).
 
-In the first two, the agent then sees only that site's address. A page's own scripts can also
-open an email address. Whatever the agent puts in an address, types or submits in a page goes to
-that site, and to wherever that page sends it, as it would if you did it yourself.
+In the first two, the agent then sees only that site's address. When an address the agent opens or
+downloads answers with a redirect to another site, Firefox sends that site all your cookies for it,
+including those that a link from another site would not carry. A page's own scripts can also open an
+email address. Whatever the agent puts in an address, types or submits in a page goes to that site,
+and to wherever that page sends it, as it would if you did it yourself.
 
 ## Tabs on other sites
 
@@ -387,16 +389,18 @@ rule (see [The risk](#the-risk)).
 
 ## Downloads
 
-Downloads save only a file served by a site you approved, after any redirects: Foxleash checks
-the address before the request, and the final address before it reads or saves anything. They
-go only into your Firefox download folder, under a plain file name, never over an existing
-file. The file's content reaches the agent only when it reads the file with its own tools,
-outside Foxleash's untrusted marking.
+Downloads save only a file served by a site you approved, after any redirects: Foxleash checks the
+address before the request, and the final address before it reads or saves anything. The request
+carries all your cookies for the site, as a request from that site's own page would. Downloads go
+only into your Firefox download folder, under a plain file name, never over an existing file. The
+file's content reaches the agent only when it reads the file with its own tools, outside Foxleash's
+untrusted marking.
 
 `download` can save the successful answer of any address on an approved site, not only a file a
 page links to. Foxleash hides and redacts nothing in it, so the file can hold a value the server
 put in a protected field, and sign-in tokens that `read_network` would redact.
 
 On the way to the final address, a redirect can make Firefox request an address on a site you
-have not approved, with your cookies for that site; nothing from such a site is saved (see
-[Site approval](#site-approval)).
+have not approved or on the blocklist, also with all your cookies for that site, including those
+that a link from another site would not carry; no file from such a site is saved (see [Site
+approval](#site-approval)).

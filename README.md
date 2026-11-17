@@ -193,14 +193,15 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 
-Ways that still reach a site you have not approved without asking include: going back or
-forward in a tab's history; a page on an approved site that redirects or, with its own scripts,
-sends the tab to another site; a page on an approved site that loads an address on another site
-that the agent gave it, for example as an image; and a download from an approved site that
-redirects to another site. In the first two, the agent then sees only that site's address.
-Asking before opening a site you have not approved and refusing clicks that lead to another site
-cover where the tab goes: they make it harder to send what the agent read to another site, not
-impossible.
+Ways that still reach a site you have not approved without asking include: going back or forward in
+a tab's history; a page on an approved site that redirects or, with its own scripts, sends the tab
+to another site; a page on an approved site that loads an address on another site that the agent
+gave it, for example as an image; and a download from an approved site that redirects to another
+site. In the first two, the agent then sees only that site's address. When an address the agent
+opens or downloads answers with a redirect to another site, Firefox sends that site all your cookies
+for it, including those that a link from another site would not carry. Asking before opening a site
+you have not approved and refusing clicks that lead to another site cover where the tab goes: they
+make it harder to send what the agent read to another site, not impossible.
 
 [docs/security.md](docs/security.md) describes each safeguard in full, with its exceptions.
 

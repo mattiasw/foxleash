@@ -26,6 +26,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Pages loaded in the tabs of an agent session that has ended are no longer recorded, also on
   sites you allowed always, and a `tab_open`, `navigate` or `tab_select` still running when its
   session ended no longer opens or loads a page.
+- The add-on listing and the docs said that a download's request carries your cookies as
+  following the link would. They now say that it carries all your cookies for the site, as a
+  request from that site's own page would, and that when an address the agent opens or
+  downloads answers with a redirect to another site, Firefox sends that site all your cookies
+  for it, including those that a link from another site would not carry.
 
 ### Security
 

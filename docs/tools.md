@@ -510,14 +510,17 @@ how to change them.
 
 `download` saves a file from the web, given its whole URL (with the page's site in front of a
 link address that `read_page` shows as a path) and a plain file name such as `receipt.pdf`.
-Foxleash fetches the file with your cookies for the site, as following the link would, saves it
-in your Firefox download folder and returns its absolute path and size; the agent can move it
-from there.
+Foxleash fetches the file with all your cookies for the site, as a request from that site's own
+page would, saves it in your Firefox download folder and returns its absolute path and size; the
+agent can move it from there.
 
 - The file is saved even where Firefox would open it in another application, such as a PDF set
   to open in a PDF viewer.
 - The URL, and the address the file comes from after any redirects, must be on sites you
-  approved, and `download` never asks.
+  approved, and `download` never asks. A redirect on the way can still make Firefox request an
+  address on a site you have not approved or on the blocklist, with all your cookies for that
+  site, including those that a link from another site would not carry; no file from such a site
+  is saved.
 - The name must not contain a slash or backslash, control or formatting characters, or start
   with a dot, and Firefox refuses some others, such as names ending in `.desktop`. Firefox adds
   a number when the name is taken, so an existing file is never replaced.
