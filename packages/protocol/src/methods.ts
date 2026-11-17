@@ -1,9 +1,15 @@
 export interface TabInfo {
   id: number;
+  /** Page text, cut to MAX_TAB_URL; only the site's address on a site the session may not use. */
   url: string;
+  /** Page text, cut to MAX_TAB_TITLE; empty while loading and on a site the session may not use. */
   title: string;
   active: boolean;
 }
+/** A tab's title is cut to this many UTF-16 units, ending with `…` when cut. */
+export const MAX_TAB_TITLE = 500;
+/** A tab's address is cut to this many UTF-16 units, ending with `…` when cut. */
+export const MAX_TAB_URL = 2_000;
 
 export type NavigateAction = "back" | "forward" | "reload";
 

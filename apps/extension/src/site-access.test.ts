@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { MAX_TAB_TITLE, MAX_TAB_URL } from "@foxleash/protocol";
 import type { MessageSender, RuntimePort, Tab } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -12,6 +13,7 @@ import {
 import { ToolError } from "./handlers.ts";
 import { createSessionGroups, type SessionGroups } from "./session-groups.ts";
 import { grantSite, readSettings } from "./settings.ts";
+import { redactedUrl } from "./site.ts";
 import {
   APPROVAL_WAIT_MS,
   type Approval,
@@ -144,6 +146,90 @@ describe("tabInfo", () => {
       const info = view.tabInfo(url === undefined ? rest : { ...rest, url });
       assert.deepEqual(info, { id: 3, url: redacted, title: "", active: true }, String(url));
       assert.deepEqual(Object.keys(info).sort(), ["active", "id", "title", "url"]);
+    }
+  });
+
+  it("cuts a long title on an allowed site and marks the cut", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const view = await access.view("s1");
+    const shown = `${"t".repeat(MAX_TAB_TITLE)}…`;
+    for (const title of [`${"t".repeat(MAX_TAB_TITLE)}x`, "t".repeat(MAX_TAB_TITLE * 20)]) {
+      const info = view.tabInfo(tab({ url: "https://a.example/", title }));
+      assert.deepEqual(info, { id: 3, url: "https://a.example/", title: shown, active: true });
+    }
+    const exact = "t".repeat(MAX_TAB_TITLE);
+    assert.equal(view.tabInfo(tab({ url: "https://a.example/", title: exact })).title, exact);
+  });
+
+  it("cuts a long address on an allowed site and still treats the tab as allowed", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const view = await access.view("s1");
+    const base = "https://a.example/";
+    const long = base + "p".repeat(MAX_TAB_URL);
+    const info = view.tabInfo(tab({ url: long, title: "Inbox" }));
+    assert.deepEqual(info, {
+      id: 3,
+      url: `${long.slice(0, MAX_TAB_URL)}…`,
+      title: "Inbox",
+      active: true,
+    });
+    assert.deepEqual(Object.keys(info).sort(), ["active", "id", "title", "url"]);
+    const oneOver = base + "p".repeat(MAX_TAB_URL + 1 - base.length);
+    assert.equal(view.tabInfo(tab({ url: oneOver })).url, `${oneOver.slice(0, MAX_TAB_URL)}…`);
+    const exact = base + "p".repeat(MAX_TAB_URL - base.length);
+    assert.equal(view.tabInfo(tab({ url: exact })).url, exact);
+  });
+
+  it("decides on the whole address when the site alone is longer than the cut", async () => {
+    const { fake, access } = setup();
+    const site = `https://${"a".repeat(MAX_TAB_URL + 100)}.example`;
+    await grantSite(fake.browser, site);
+    const view = await access.view("s1");
+    const url = `${site}/x`;
+    assert.deepEqual(view.tabInfo(tab({ url, title: "Inbox" })), {
+      id: 3,
+      url: `${url.slice(0, MAX_TAB_URL)}…`,
+      title: "Inbox",
+      active: true,
+    });
+  });
+
+  it("does not leave half a surrogate pair before the cut mark", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const view = await access.view("s1");
+    const title = `${"a".repeat(MAX_TAB_TITLE - 1)}😀b`;
+    const info = view.tabInfo(tab({ url: "https://a.example/", title }));
+    assert.equal(info.title, `${"a".repeat(MAX_TAB_TITLE - 1)}…`);
+  });
+
+  it("keeps the title of a loading tab empty however long it is", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const view = await access.view("s1");
+    const loading = tab({ url: "https://a.example/", title: "t".repeat(9_000), status: "loading" });
+    assert.equal(view.tabInfo(loading).title, "");
+  });
+
+  it("cuts a long redacted address", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://a.example");
+    const view = await access.view("s1");
+    for (const url of [
+      `https://${"a".repeat(3000)}.example/x`,
+      `https://${"a.".repeat(1500)}example/x`,
+      `${"x".repeat(3001)}:y`,
+    ]) {
+      const redacted = redactedUrl(url);
+      assert.ok(redacted.length > MAX_TAB_URL, url.slice(0, 20));
+      const info = view.tabInfo(tab({ url, title: "Secret" }));
+      assert.deepEqual(
+        info,
+        { id: 3, url: `${redacted.slice(0, MAX_TAB_URL)}…`, title: "", active: true },
+        url.slice(0, 20),
+      );
     }
   });
 

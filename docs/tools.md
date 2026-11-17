@@ -68,6 +68,9 @@ to, and leave the others alone.
 - `tabs_list` lists the tabs in the session's group. A tab's `active` field is Firefox's: it
   marks the active tab of its window, which changes whenever any tab in that window is opened or
   selected.
+- For a tab on a site you approved, the agent gets the tab's title cut to 500 characters and its
+  address cut to 2,000, each ending with `…` when cut, in every result that shows the tab. The
+  address an action's result reports after a page load is cut the same way.
 - The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
   never closes the last tab of a window.
 - `resize_window` resizes the whole window that holds the agent's group, your own tabs in it

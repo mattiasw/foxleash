@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In a tab being recorded, a page's fetch and XMLHttpRequest requests could get a large response
   with parts out of order or missing. Every response now reaches the page whole and in order.
 - The Foxleash button no longer shows ON on the tabs of an agent session that has ended.
+- A page that sets a very long title or address no longer makes `tabs_list` fail while its tab
+  is open, or `tab_open` report a failure for a tab it opened. Foxleash now cuts a tab's title to
+  500 characters and its address to 2,000, each ending with `…` when cut.
 
 ### Security
 

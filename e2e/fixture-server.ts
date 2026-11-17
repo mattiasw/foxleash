@@ -82,6 +82,7 @@ export const TITLES = {
   viewShop: "Fixture view shop",
   viewLarge: "Fixture view large",
   recordingForm: "Fixture recording form",
+  longAddress: "Fixture long address",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -118,6 +119,16 @@ export interface NavigationVariant {
 export const WAIT_LATE_TEXT = "The late text has arrived";
 /** How long the wait pages wait after loading before they add their text or navigate. */
 export const WAIT_LATE_MS = 2000;
+
+/** The long title page sets its title to this character repeated LONG_TITLE_CHARS times. */
+export const LONG_TITLE_CHAR = "T";
+export const LONG_TITLE_CHARS = 9_000_000;
+/**
+ * The long address page pushes its address plus `?` and this character repeated
+ * LONG_ADDRESS_CHARS times. Firefox refuses an address much longer than this.
+ */
+export const LONG_ADDRESS_CHAR = "u";
+export const LONG_ADDRESS_CHARS = 100_000;
 
 /** What the recording form page's Log button logs, followed by a dash and the click's number. */
 export const RECORDING_TOKEN = "recording-token-Hq3";
@@ -560,6 +571,10 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendPage(response, TITLES.a);
     } else if (path === "/b") {
       sendPage(response, TITLES.b);
+    } else if (path === "/long-title") {
+      sendHtml(response, LONG_TITLE_PAGE);
+    } else if (path === "/long-address") {
+      sendHtml(response, LONG_ADDRESS_PAGE);
     } else if (path === "/wait-late") {
       sendHtml(response, WAIT_LATE_PAGE);
     } else if (path === "/wait-navigate") {
@@ -1124,6 +1139,23 @@ function sendHtml(
 // The console pages with a Log button log only when it is clicked, so a test can wait until
 // Foxleash records the page first.
 const CONSOLE_LOG_BUTTON = `<button id="log" style="position: fixed; left: 10px; top: 10px; width: 120px; height: 40px; margin: 0">Log</button>`;
+
+const LONG_TITLE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8">
+<script>document.title = ${JSON.stringify(LONG_TITLE_CHAR)}.repeat(${LONG_TITLE_CHARS});</script>
+</head>
+<body><p>A page with a very long title</p></body></html>
+`;
+
+const LONG_ADDRESS_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.longAddress}</title>
+<script>
+const query = ${JSON.stringify(LONG_ADDRESS_CHAR)}.repeat(${LONG_ADDRESS_CHARS});
+history.pushState(null, "", "/long-address?" + query);
+</script>
+</head>
+<body><p>A page with a very long address</p></body></html>
+`;
 
 const WAIT_LATE_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.waitLate}</title></head>

@@ -1,6 +1,7 @@
-import type { TabInfo } from "@foxleash/protocol";
+import { MAX_TAB_TITLE, MAX_TAB_URL, type TabInfo } from "@foxleash/protocol";
 import type { BrowserApi, MessageSender, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
+import { capText } from "./page-messages.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { effectiveBlocklist, grantSite, readSettings } from "./settings.ts";
 import { hostOf, matchesDomain, redactedUrl, siteOf } from "./site.ts";
@@ -322,9 +323,15 @@ export function createSiteAccess<Handle>({
       if (allowed(url)) {
         // A loading tab can report the new URL while its title is still the previous page's.
         const title = tab.status === "complete" ? (tab.title ?? "") : "";
-        return { id: tab.id, url, title, active: tab.active };
+        return {
+          id: tab.id,
+          url: shownTabText(url, MAX_TAB_URL),
+          title: shownTabText(title, MAX_TAB_TITLE),
+          active: tab.active,
+        };
       }
-      return { id: tab.id, url: redactedUrl(tab.url), title: "", active: tab.active };
+      const shownUrl = shownTabText(redactedUrl(tab.url), MAX_TAB_URL);
+      return { id: tab.id, url: shownUrl, title: "", active: tab.active };
     };
     return { blocked, allowed, tabInfo };
   }
@@ -893,6 +900,12 @@ export function post(port: Port, message: unknown): void {
 export function fieldsOf(message: unknown): Record<string, unknown> | undefined {
   if (typeof message !== "object" || message === null) return undefined;
   return { ...message };
+}
+
+/** Page text in a tab's TabInfo, cut to `max` UTF-16 units and ending with … when cut. */
+function shownTabText(text: string, max: number): string {
+  const cut = capText(text, max);
+  return cut.truncated ? `${cut.text}…` : cut.text;
 }
 
 function isAnswer(value: unknown): value is Answer {
