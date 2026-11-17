@@ -2,11 +2,15 @@
 // into the user's own cache, no sudo, no system package, and never the machine's own Firefox,
 // whose version floats.
 //
-// The pin is bin/firefox-version.json, plain JSON so CI can key its cache on hashFiles() of it.
-// It is raised by hand, as its own change (ADR 0003); docs/development.md says how. The sha256
-// comes from Mozilla's SHA256SUMS for that release, never from the downloaded file.
+// There are two pins: bin/firefox-version.json for the current release and
+// bin/firefox-esr-version.json for the ESR. FOXLEASH_E2E_FIREFOX=esr selects the ESR; unset,
+// empty or release selects the release. Each is plain JSON so CI can key its cache on hashFiles()
+// of it. Each is raised by hand, as its own change (ADR 0003, ADR 0076); docs/development.md says
+// how. The sha256 comes from Mozilla's SHA256SUMS for that release, never from the downloaded
+// file.
 //
 // Usage: node bin/install-firefox.ts   (prints the Firefox binary path)
+//        FOXLEASH_E2E_FIREFOX=esr node bin/install-firefox.ts
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
@@ -23,7 +27,7 @@ import {
   statSync,
 } from "node:fs";
 import { homedir as osHomedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
@@ -32,7 +36,10 @@ export interface Pin {
   sha256: string;
 }
 
-export const PIN_PATH = join(import.meta.dirname, "firefox-version.json");
+export const PIN_PATHS = {
+  release: join(import.meta.dirname, "firefox-version.json"),
+  esr: join(import.meta.dirname, "firefox-esr-version.json"),
+};
 
 /** The whole download, body included. The tarball is about 85 MB. */
 export const DOWNLOAD_TIMEOUT_MS = 300_000;
@@ -47,6 +54,7 @@ export const EXTRACT_TIMEOUT_MS = 180_000;
 export const STALE_TEMP_MS = 60 * 60 * 1000;
 
 export interface EnsureOptions {
+  pinPath?: string;
   pin?: Pin;
   root?: string;
   platform?: string;
@@ -68,7 +76,8 @@ export interface EnsureOptions {
  * already owns the account.
  */
 export async function ensureFirefox({
-  pin = readPin(),
+  pinPath = selectedPinPath(),
+  pin = readPin(pinPath),
   root = cacheRoot(),
   platform = process.platform,
   arch = process.arch,
@@ -105,7 +114,7 @@ export async function ensureFirefox({
     const actual = await sha256File(archive);
     if (actual !== pin.sha256) {
       throw new Error(
-        `Checksum mismatch for ${url}: expected ${pin.sha256} (bin/firefox-version.json), got ${actual}. ` +
+        `Checksum mismatch for ${url}: expected ${pin.sha256} (${relative(dirname(import.meta.dirname), pinPath)}), got ${actual}. ` +
           "The download has been deleted and nothing was installed.",
       );
     }
@@ -139,8 +148,21 @@ export async function ensureFirefox({
   }
 }
 
+/**
+ * The pin FOXLEASH_E2E_FIREFOX selects. An unknown value throws, so a typo never quietly runs the
+ * tests on the release.
+ */
+export function selectedPinPath({ env = process.env }: { env?: NodeJS.ProcessEnv } = {}): string {
+  const value = env.FOXLEASH_E2E_FIREFOX;
+  if (value === undefined || value === "" || value === "release") return PIN_PATHS.release;
+  if (value === "esr") return PIN_PATHS.esr;
+  throw new Error(
+    `FOXLEASH_E2E_FIREFOX must be "release" or "esr" (unset or empty means "release"), got ${JSON.stringify(value)}.`,
+  );
+}
+
 export function readPin(
-  path = PIN_PATH,
+  path = PIN_PATHS.release,
   { read = readUtf8 }: { read?: (path: string) => string } = {},
 ): Pin {
   let parsed: unknown;
@@ -162,15 +184,15 @@ function readUtf8(path: string): string {
  * Checks the shape of the pin, so a typo fails here rather than as a 404 or as a checksum
  * mismatch that reads like a supply-chain problem.
  */
-export function validatePin(pin: unknown, source = PIN_PATH): Pin {
+export function validatePin(pin: unknown, source = PIN_PATHS.release): Pin {
   if (typeof pin !== "object" || pin === null) {
     throw new Error(`${source}: expected an object with version and sha256.`);
   }
   const version: unknown = Reflect.get(pin, "version");
   const sha256: unknown = Reflect.get(pin, "sha256");
-  if (typeof version !== "string" || !/^\d+\.\d+(\.\d+)?$/.test(version)) {
+  if (typeof version !== "string" || !/^\d+\.\d+(\.\d+)?(esr)?$/.test(version)) {
     throw new Error(
-      `${source}: "version" must be a Firefox release number such as 156.0.1, got ${JSON.stringify(version)}.`,
+      `${source}: "version" must be a Firefox release number such as 160.0.1 or 153.7.0esr, got ${JSON.stringify(version)}.`,
     );
   }
   if (typeof sha256 !== "string" || !/^[0-9a-f]{64}$/.test(sha256)) {
@@ -215,9 +237,10 @@ export function assertSupportedPlatform({
   if (platform === "linux" && arch === "x64") return;
   throw new Error(
     `Foxleash's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
-      "bin/firefox-version.json pins only the linux-x86_64 tarball. To extend it, pin a " +
-      "second tarball's sha256 from Mozilla's releases/<version>/SHA256SUMS and teach " +
-      "archiveUrl() in bin/install-firefox.ts to pick it (see docs/development.md).",
+      "bin/firefox-version.json and bin/firefox-esr-version.json pin only the linux-x86_64 " +
+      "tarball. To extend them, pin a second tarball's sha256 from Mozilla's " +
+      "releases/<version>/SHA256SUMS and teach archiveUrl() in bin/install-firefox.ts to pick " +
+      "it (see docs/development.md).",
   );
 }
 

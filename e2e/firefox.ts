@@ -107,23 +107,33 @@ const BLOCKED_POPUPS = `const [url] = arguments;
 const tab = gBrowser.tabs.find((candidate) => candidate.linkedBrowser.currentURI.spec === url);
 if (tab === undefined) throw new Error("no tab shows " + url);
 return tab.linkedBrowser.popupAndRedirectBlocker.getBlockedPopupCount();`;
+// Firefox 153 ESR installs the session store modules under resource:///modules/sessionstore/;
+// later versions under moz-src:///browser/components/sessionstore/.
+const IMPORT_SESSION_STORE = `function importSessionStore(file) {
+  try {
+    return ChromeUtils.importESModule("moz-src:///browser/components/sessionstore/" + file);
+  } catch (srcError) {
+    try {
+      return ChromeUtils.importESModule("resource:///modules/sessionstore/" + file);
+    } catch (resourceError) {
+      throw new Error(srcError.message + "; " + resourceError.message);
+    }
+  }
+}
+`;
 // Unloads the tab showing a URL, in any window, as Firefox does to save memory, after flushing its
 // session store (which saves the form data) until the store holds that page as the tab's current
 // entry. After a flush and the unload, the store has held an about:blank entry after the page as
 // the current one, and selecting the tab then loaded about:blank. Firefox refuses to unload the
 // selected tab.
-const DISCARD_TAB = `const [url, timeoutMs] = arguments;
+const DISCARD_TAB = `${IMPORT_SESSION_STORE}const [url, timeoutMs] = arguments;
 const found = [...Services.wm.getEnumerator("navigator:browser")]
   .flatMap((win) => [...win.gBrowser.tabs].map((tab) => ({ win, tab })))
   .find(({ tab }) => tab.linkedBrowser.currentURI.spec === url);
 if (found === undefined) throw new Error("no tab shows " + url);
 const { win, tab } = found;
-const { TabStateFlusher } = ChromeUtils.importESModule(
-  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
-);
-const { SessionStore } = ChromeUtils.importESModule(
-  "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
-);
+const { TabStateFlusher } = importSessionStore("TabStateFlusher.sys.mjs");
+const { SessionStore } = importSessionStore("SessionStore.sys.mjs");
 const { setTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
 const deadline = Date.now() + timeoutMs;
 function stored() {
@@ -157,13 +167,9 @@ return flushed().then(() => {
 // Collects every loaded tab's whole history into the session store first, in every window (an
 // unloaded tab has no frame loader), then finds the tab by its stored history, so a tab showing
 // about:blank is found.
-const SESSION_HISTORY = `const [url] = arguments;
-const { TabStateFlusher } = ChromeUtils.importESModule(
-  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
-);
-const { SessionStore } = ChromeUtils.importESModule(
-  "moz-src:///browser/components/sessionstore/SessionStore.sys.mjs",
-);
+const SESSION_HISTORY = `${IMPORT_SESSION_STORE}const [url] = arguments;
+const { TabStateFlusher } = importSessionStore("TabStateFlusher.sys.mjs");
+const { SessionStore } = importSessionStore("SessionStore.sys.mjs");
 const allTabs = [...Services.wm.getEnumerator("navigator:browser")].flatMap((win) => [...win.gBrowser.tabs]);
 return Promise.all(
   allTabs
@@ -182,9 +188,7 @@ return Promise.all(
 });`;
 // Collects every loaded tab's whole history and state into the session store, in every window, so
 // a quit right after writes them all to the session file. An unloaded tab has no frame loader.
-const FLUSH_ALL_TABS = `const { TabStateFlusher } = ChromeUtils.importESModule(
-  "moz-src:///browser/components/sessionstore/TabStateFlusher.sys.mjs",
-);
+const FLUSH_ALL_TABS = `${IMPORT_SESSION_STORE}const { TabStateFlusher } = importSessionStore("TabStateFlusher.sys.mjs");
 const flushes = [];
 for (const window of Services.wm.getEnumerator("navigator:browser")) {
   for (const tab of window.gBrowser.tabs) {
@@ -376,7 +380,8 @@ export async function launchFirefox({
       profileDir,
       "--remote-debugging-port=0",
       "--marionette",
-      // WebDriver may open and script extension pages only with system access.
+      // WebDriver may open and script extension pages only with system access. Firefox 159 and
+      // later also need MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1 in their environment (set below).
       "--remote-allow-system-access",
     ],
     {
@@ -385,7 +390,7 @@ export async function launchFirefox({
       // No crash reporter: its helper process puts itself in a session and process group of its
       // own, out of reach of the group kill and the watchdog, and a crash would write a minidump
       // outside the throwaway profile and try to upload it.
-      env: { ...env, MOZ_CRASHREPORTER_DISABLE: "1" },
+      env: { ...env, MOZ_CRASHREPORTER_DISABLE: "1", MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1" },
     },
   );
   track(child);

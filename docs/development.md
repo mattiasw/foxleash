@@ -60,22 +60,36 @@ Foxleash. It installs the native host into that home, installs the extension ove
 BiDi, serves fixture pages from a local HTTP server, and calls the real MCP tools through
 `foxleash mcp`, as an MCP client would.
 
-The suite runs on linux x64 only. The first run downloads Firefox into
-`${XDG_CACHE_HOME:-~/.cache}/foxleash-firefox` and checks it against the sha256 pinned in
-`bin/firefox-version.json`; later runs reuse it. To raise the pin, set the new version in
-that file together with the sha256 of `linux-x86_64/en-US/firefox-<version>.tar.xz` from
-Mozilla's `https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`, as a change
-of its own (see ADR 0003).
+The suite runs on linux x64 only, on two pinned Firefox versions: the current release,
+pinned in `bin/firefox-version.json`, and the ESR, pinned in `bin/firefox-esr-version.json`.
+The first run on each downloads it into `${XDG_CACHE_HOME:-~/.cache}/foxleash-firefox` and
+checks it against its pin's sha256; later runs reuse it. `npm run e2e` runs the suite on the
+release, and `FOXLEASH_E2E_FIREFOX=esr npm run e2e` on the ESR. Unset, empty or `release`
+selects the release; any other value stops the run.
+
+To raise the release pin, set the new version in `bin/firefox-version.json` together with the
+sha256 of `linux-x86_64/en-US/firefox-<version>.tar.xz` from Mozilla's
+`https://archive.mozilla.org/pub/firefox/releases/<version>/SHA256SUMS`. Raise the ESR pin in
+`bin/firefox-esr-version.json` the same way, under its `<version>esr` name: for example
+`releases/153.8.0esr/SHA256SUMS` and `firefox-153.8.0esr.tar.xz`. When Mozilla's current ESR
+(`FIREFOX_ESR` in `https://product-details.mozilla.org/1.0/firefox_versions.json`) moves to
+the next ESR major, the ESR pin moves to it. Each raise is a change of its own (see ADR 0003
+and ADR 0076), and also updates the exact version and sha256 in that pin's test in
+`bin/install-firefox.test.ts`, "ships a pin that validates" or "ships an ESR pin that
+validates".
 
 `FOXLEASH_E2E_SHARD=<index>/<total> npm run e2e`, for example `FOXLEASH_E2E_SHARD=2/3`, runs
 only that shard of the test files, through Node's `--test-shard`, which sorts the test files
-and deals them out round-robin. CI runs the suite as three shards in parallel jobs. The shard
-must go through the variable: `npm run e2e -- --test-shard=2/3` puts the flag after the test
-file pattern, where Node reads it as one more pattern and runs every file.
+and deals them out round-robin. CI runs the suite on both pins, as three shards each, in six
+parallel jobs. The shard must go through the variable: `npm run e2e -- --test-shard=2/3` puts
+the flag after the test file pattern, where Node reads it as one more pattern and runs every
+file.
 
 The tests also act in the extension's own pages, which WebDriver reaches only with system
 access, so the test Firefox starts with `--marionette` and `--remote-allow-system-access`
-(see [ADR 0008](adr/0008-e2e-tests-act-in-extension-pages-through-bidi-and-marionette.md)).
+(see [ADR 0008](adr/0008-e2e-tests-act-in-extension-pages-through-bidi-and-marionette.md)),
+and with `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` in its environment, which Firefox 159 and later
+require.
 The harness opens the session over Marionette (`WebDriver:NewSession` with
 `webSocketUrl: true`) and connects BiDi to the WebSocket URL it returns. BiDi installs the
 extension, opens, navigates and closes tabs and evaluates script in them; Marionette only

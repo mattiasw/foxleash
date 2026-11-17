@@ -1,6 +1,6 @@
 # 0008: End-to-end tests act in extension pages through BiDi and Marionette, with system access
 
-**Status:** Accepted, 2026-10-19.
+**Status:** Accepted, 2026-10-19. Its launch is amended by [0076](0076-e2e-tests-run-on-the-current-firefox-release-and-the-esr.md), 2026-11-17: from Firefox 159 on, system access also needs `MOZ_REMOTE_ALLOW_SYSTEM_ACCESS=1` in Firefox's environment.
 
 ## Context
 

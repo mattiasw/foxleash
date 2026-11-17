@@ -38,11 +38,13 @@ jobs:
         run: npm run build:amo
 
   e2e:
+    name: e2e (${{ matrix.firefox }}, ${{ matrix.shard }}/3)
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
+        firefox: [release, esr]
         shard: [1, 2, 3]
     steps:
       - uses: actions/checkout@v7
@@ -54,8 +56,10 @@ jobs:
       - uses: actions/cache@v6
         with:
           path: ~/.cache/foxleash-firefox
-          key: firefox-${{ runner.os }}-${{ hashFiles('bin/firefox-version.json') }}
+          key: firefox-${{ runner.os }}-${{ matrix.firefox }}-${{ hashFiles(matrix.firefox == 'esr' && 'bin/firefox-esr-version.json' || 'bin/firefox-version.json') }}
       # The shard goes through the environment: npm appends arguments after the test file glob.
+      # The 3 is the shard count per Firefox, not strategy.job-total, which counts both pins' jobs.
       - run: npm run e2e
         env:
-          FOXLEASH_E2E_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+          FOXLEASH_E2E_FIREFOX: ${{ matrix.firefox }}
+          FOXLEASH_E2E_SHARD: ${{ matrix.shard }}/3

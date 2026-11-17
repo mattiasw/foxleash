@@ -41,6 +41,11 @@ after(() => {
   }
 });
 
+// The ensureFirefox calls below that pass no pinPath read FOXLEASH_E2E_FIREFOX; a value exported
+// for the end-to-end suite must not change them.
+const PIN_SELECTOR = "FOXLEASH_E2E_FIREFOX";
+delete process.env[PIN_SELECTOR];
+
 // Imported with XDG_CACHE_HOME naming a file, so a script guard that wrongly reads true fails the
 // run at once instead of installing Firefox into the real cache.
 const importGuard = join(makeTempDirectory("install-firefox-import-"), "file");
@@ -51,7 +56,7 @@ process.env[CACHE_HOME] = importGuard;
 const {
   DOWNLOAD_TIMEOUT_MS,
   EXTRACT_TIMEOUT_MS,
-  PIN_PATH,
+  PIN_PATHS,
   STALE_TEMP_MS,
   archiveUrl,
   assertSupportedPlatform,
@@ -61,6 +66,7 @@ const {
   extractArchive,
   firefoxBinaryPath,
   readPin,
+  selectedPinPath,
   sha256File,
   sweepStaleTemps,
   validatePin,
@@ -137,11 +143,21 @@ function setAge(path: string, mtimeMs: number): void {
 
 describe("bin/firefox-version.json and the pin checks", () => {
   test("ships a pin that validates", () => {
-    assert.equal(PIN_PATH, join(import.meta.dirname, "firefox-version.json"));
-    assert.deepEqual(readPin(), {
-      version: "156.0.1",
-      sha256: "7405c0487fa3e517c1e20e5aec0ed14014185dad6357d99a59b53f65acb10ed6",
+    assert.equal(PIN_PATHS.release, join(import.meta.dirname, "firefox-version.json"));
+    assert.deepEqual(readPin(PIN_PATHS.release), {
+      version: "160.0.1",
+      sha256: "844d8a77aa4672a08ded949b6206f84d91bb82f6637c090fd58c3126e9d44119",
     });
+    assert.ok(!readPin(PIN_PATHS.release).version.endsWith("esr"));
+  });
+
+  test("ships an ESR pin that validates", () => {
+    assert.equal(PIN_PATHS.esr, join(import.meta.dirname, "firefox-esr-version.json"));
+    assert.deepEqual(readPin(PIN_PATHS.esr), {
+      version: "153.7.0esr",
+      sha256: "7d2eb92ca3a7b2a83de092eb9b94c853980214de2fbfdccb2ac39d61c593c5a5",
+    });
+    assert.ok(readPin(PIN_PATHS.esr).version.endsWith("esr"));
   });
 
   test("accepts two- and three-part release numbers", () => {
@@ -151,6 +167,17 @@ describe("bin/firefox-version.json and the pin checks", () => {
     });
     assert.deepEqual(validatePin({ version: "156.0.1", sha256: ANY_SHA }), {
       version: "156.0.1",
+      sha256: ANY_SHA,
+    });
+  });
+
+  test("accepts an ESR version", () => {
+    assert.deepEqual(validatePin({ version: "153.7.0esr", sha256: ANY_SHA }), {
+      version: "153.7.0esr",
+      sha256: ANY_SHA,
+    });
+    assert.deepEqual(validatePin({ version: "140.0esr", sha256: ANY_SHA }), {
+      version: "140.0esr",
       sha256: ANY_SHA,
     });
   });
@@ -169,7 +196,14 @@ describe("bin/firefox-version.json and the pin checks", () => {
     ["a numeric version", { version: 156, sha256: ANY_SHA }, /: "version" must be .* got 156\.$/],
     ["a channel name", { version: "latest", sha256: ANY_SHA }, /: "version" must be/],
     ["a single number", { version: "156", sha256: ANY_SHA }, /: "version" must be/],
-    ["a trailing suffix", { version: "156.0.1esr", sha256: ANY_SHA }, /: "version" must be/],
+    ["a trailing suffix", { version: "160.0b1", sha256: ANY_SHA }, /: "version" must be/],
+    [
+      "a release-candidate suffix",
+      { version: "160.0.1rc", sha256: ANY_SHA },
+      /: "version" must be/,
+    ],
+    ["a suffix after esr", { version: "153.7.0esr1", sha256: ANY_SHA }, /: "version" must be/],
+    ["a capitalized ESR", { version: "153.7.0ESR", sha256: ANY_SHA }, /: "version" must be/],
     ["a leading prefix", { version: "v156.0", sha256: ANY_SHA }, /: "version" must be/],
     ["a four-part version", { version: "156.0.1.2", sha256: ANY_SHA }, /: "version" must be/],
     ["a missing sha", { version: "156.0.1" }, /: "sha256" must be .* got undefined\.$/],
@@ -187,13 +221,14 @@ describe("bin/firefox-version.json and the pin checks", () => {
 
   test("names the pin file by default", () => {
     assert.throws(() => validatePin(null), {
-      message: `${PIN_PATH}: expected an object with version and sha256.`,
+      message: `${PIN_PATHS.release}: expected an object with version and sha256.`,
     });
   });
 
   test("describes a valid version in its refusal", () => {
     assert.throws(() => validatePin({ version: "x" }, "/x/pin.json"), {
-      message: '/x/pin.json: "version" must be a Firefox release number such as 156.0.1, got "x".',
+      message:
+        '/x/pin.json: "version" must be a Firefox release number such as 160.0.1 or 153.7.0esr, got "x".',
     });
   });
 
@@ -253,6 +288,26 @@ describe("bin/firefox-version.json and the pin checks", () => {
   });
 });
 
+describe("bin/install-firefox.ts pin selection", () => {
+  test("selects the release when FOXLEASH_E2E_FIREFOX is unset, empty or release", () => {
+    assert.equal(selectedPinPath({ env: {} }), PIN_PATHS.release);
+    assert.equal(selectedPinPath({ env: { FOXLEASH_E2E_FIREFOX: "" } }), PIN_PATHS.release);
+    assert.equal(selectedPinPath({ env: { FOXLEASH_E2E_FIREFOX: "release" } }), PIN_PATHS.release);
+  });
+
+  test("selects the ESR when FOXLEASH_E2E_FIREFOX is esr", () => {
+    assert.equal(selectedPinPath({ env: { FOXLEASH_E2E_FIREFOX: "esr" } }), PIN_PATHS.esr);
+  });
+
+  for (const value of ["ESR", "beta", " esr", "constructor"]) {
+    test(`refuses FOXLEASH_E2E_FIREFOX=${JSON.stringify(value)}, naming the allowed values`, () => {
+      assert.throws(() => selectedPinPath({ env: { FOXLEASH_E2E_FIREFOX: value } }), {
+        message: `FOXLEASH_E2E_FIREFOX must be "release" or "esr" (unset or empty means "release"), got ${JSON.stringify(value)}.`,
+      });
+    });
+  }
+});
+
 describe("bin/install-firefox.ts constants", () => {
   test("bounds the download, the extraction and a temp entry's age", () => {
     assert.equal(DOWNLOAD_TIMEOUT_MS, 300_000);
@@ -266,6 +321,13 @@ describe("bin/install-firefox.ts paths", () => {
     assert.equal(
       archiveUrl("156.0.1"),
       "https://archive.mozilla.org/pub/firefox/releases/156.0.1/linux-x86_64/en-US/firefox-156.0.1.tar.xz",
+    );
+  });
+
+  test("derives the ESR's tarball URL", () => {
+    assert.equal(
+      archiveUrl("153.7.0esr"),
+      "https://archive.mozilla.org/pub/firefox/releases/153.7.0esr/linux-x86_64/en-US/firefox-153.7.0esr.tar.xz",
     );
   });
 
@@ -306,9 +368,10 @@ describe("bin/install-firefox.ts platform check", () => {
       assert.throws(() => assertSupportedPlatform({ platform, arch }), {
         message:
           `Foxleash's end-to-end tests run only on linux x64, and this is ${platform} ${arch}. ` +
-          "bin/firefox-version.json pins only the linux-x86_64 tarball. To extend it, pin a " +
-          "second tarball's sha256 from Mozilla's releases/<version>/SHA256SUMS and teach " +
-          "archiveUrl() in bin/install-firefox.ts to pick it (see docs/development.md).",
+          "bin/firefox-version.json and bin/firefox-esr-version.json pin only the linux-x86_64 " +
+          "tarball. To extend them, pin a second tarball's sha256 from Mozilla's " +
+          "releases/<version>/SHA256SUMS and teach archiveUrl() in bin/install-firefox.ts to pick " +
+          "it (see docs/development.md).",
       });
     });
   }
@@ -370,6 +433,7 @@ describe("bin/install-firefox.ts ensureFirefox", () => {
 
     await assert.rejects(
       ensureFirefox({
+        pinPath: PIN_PATHS.release,
         pin: { version: "156.0.1", sha256: wrong },
         root,
         ...LINUX,
@@ -379,6 +443,30 @@ describe("bin/install-firefox.ts ensureFirefox", () => {
       {
         message:
           `Checksum mismatch for ${archiveUrl("156.0.1")}: expected ${wrong} (bin/firefox-version.json), ` +
+          `got ${fixture.sha256}. The download has been deleted and nothing was installed.`,
+      },
+    );
+    assert.deepEqual(readdirSync(root), []);
+  });
+
+  test("names the ESR pin file in a checksum mismatch of the ESR", async () => {
+    const fixture = makeFixtureArchive();
+    const root = makeTempDirectory("install-firefox-root-");
+    const { download } = copyingDownload(fixture.archive);
+    const wrong = "b".repeat(64);
+
+    await assert.rejects(
+      ensureFirefox({
+        pinPath: PIN_PATHS.esr,
+        pin: { version: "153.7.0esr", sha256: wrong },
+        root,
+        ...LINUX,
+        download,
+        log: silentLog().log,
+      }),
+      {
+        message:
+          `Checksum mismatch for ${archiveUrl("153.7.0esr")}: expected ${wrong} (bin/firefox-esr-version.json), ` +
           `got ${fixture.sha256}. The download has been deleted and nothing was installed.`,
       },
     );
@@ -424,6 +512,24 @@ describe("bin/install-firefox.ts ensureFirefox", () => {
     );
     assert.deepEqual(calls, []);
     assert.deepEqual(lines, []);
+  });
+
+  test("reads the pin from the given pin file by default", async () => {
+    const root = makeTempDirectory("install-firefox-root-");
+    const binary = makeInstalled(root, readPin(PIN_PATHS.esr).version);
+    const { download, calls } = copyingDownload("/nonexistent");
+
+    assert.equal(
+      await ensureFirefox({
+        pinPath: PIN_PATHS.esr,
+        root,
+        ...LINUX,
+        download,
+        log: silentLog().log,
+      }),
+      binary,
+    );
+    assert.deepEqual(calls, []);
   });
 
   test("sweeps a stale download on the installed path too, and leaves a fresh one", async () => {
@@ -846,7 +952,11 @@ describe("bin/install-firefox.ts as a script", {
   test("prints the installed binary path, from the cache under XDG_CACHE_HOME", () => {
     // An installed pin, so the script runs end to end without the network.
     const cache = makeTempDirectory("install-firefox-xdg-");
-    const binary = makeInstalled(join(cache, "foxleash-firefox"), readPin().version, "");
+    const binary = makeInstalled(
+      join(cache, "foxleash-firefox"),
+      readPin(PIN_PATHS.release).version,
+      "",
+    );
 
     const result = spawnSync(process.execPath, [SCRIPT], {
       env: scriptEnv(cache),
@@ -874,6 +984,42 @@ describe("bin/install-firefox.ts as a script", {
     assert.equal(result.stdout, "");
     assert.match(result.stderr, /^\[install-firefox\] ENOTDIR/);
   });
+
+  test("prints the ESR binary path when FOXLEASH_E2E_FIREFOX is esr", () => {
+    const cache = makeTempDirectory("install-firefox-xdg-");
+    const binary = makeInstalled(
+      join(cache, "foxleash-firefox"),
+      readPin(PIN_PATHS.esr).version,
+      "",
+    );
+
+    const result = spawnSync(process.execPath, [SCRIPT], {
+      env: { ...scriptEnv(cache), FOXLEASH_E2E_FIREFOX: "esr" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    assert.equal(result.stderr, "");
+    assert.equal(result.status, 0);
+    assert.equal(result.stdout, `${binary}\n`);
+  });
+
+  test("exits 1 naming the variable when FOXLEASH_E2E_FIREFOX is unknown", () => {
+    const cache = makeTempDirectory("install-firefox-xdg-");
+
+    const result = spawnSync(process.execPath, [SCRIPT], {
+      env: { ...scriptEnv(cache), FOXLEASH_E2E_FIREFOX: "beta" },
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+
+    assert.equal(result.status, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(
+      result.stderr,
+      '[install-firefox] FOXLEASH_E2E_FIREFOX must be "release" or "esr" (unset or empty means "release"), got "beta".\n',
+    );
+  });
 });
 
 /**
@@ -894,5 +1040,6 @@ function scriptEnv(cacheHome: string): NodeJS.ProcessEnv {
   };
   delete env.NO_PROXY;
   delete env.no_proxy;
+  delete env.FOXLEASH_E2E_FIREFOX;
   return env;
 }

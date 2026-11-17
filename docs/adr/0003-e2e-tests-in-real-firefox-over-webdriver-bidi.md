@@ -1,6 +1,6 @@
 # 0003: End-to-end tests run in real Firefox over WebDriver BiDi, not Playwright
 
-**Status:** Accepted, 2026-10-17.
+**Status:** Accepted, 2026-10-17. Its single pinned Firefox is superseded by [0076](0076-e2e-tests-run-on-the-current-firefox-release-and-the-esr.md), 2026-11-17.
 
 ## Context
 
