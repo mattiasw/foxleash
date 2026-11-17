@@ -45,6 +45,7 @@ import {
   PROBE_CUTOFF_MS,
   PROBE_TIMEOUT_MS,
   READ_CONSOLE_TIMEOUT_MS,
+  refuseIfEnded,
   SCREENSHOT_TIMEOUT_MS,
   ToolError,
   VIEW_READ_MS,
@@ -68,6 +69,7 @@ import {
 } from "./site-access.ts";
 import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
+import { WAIT_POLL_MS } from "./wait-for.ts";
 import { LOAD_AFTER_READY_MS, LOAD_GRACE_MS, LOAD_TIMEOUT_MS } from "./wait-for-load.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
@@ -4231,8 +4233,8 @@ describe("approval", { timeout: 10000 }, () => {
     const user = fake.openTab({ url: "https://user.example/" });
     sessions.set("s1", { allowed: new Set(["https://b.example"]), refused: new Set(), closed: 0 });
     const opening = assert.rejects(call("s1", "tab_open", { url: "https://a.example/page" }), {
-      code: "approval_closed",
-      message: "The session ended before Foxleash could ask whether to allow https://a.example.",
+      code: "session_ended",
+      message: "The session ended before Foxleash could finish the request.",
     });
     access.endSession("s1");
     await flush();
@@ -8994,9 +8996,19 @@ describe("download", { timeout: 10000 }, () => {
       filename: "receipt.pdf",
     });
     assert.deepEqual(saves, [
-      { session: "s1", url: "https://a.example/x", filename: "receipt.pdf" },
+      { session: "s1", url: "https://a.example/x", filename: "receipt.pdf", generation: 0 },
     ]);
     assert.deepEqual(result, { path: "/downloads/receipt.pdf", bytes: 3 });
+  });
+
+  it("passes the generation read on arrival", async () => {
+    const { call, saves, access } = setup();
+    access.endSession("s1");
+    await call("s1", "download", { url: "https://a.example/x", filename: "receipt.pdf" });
+    assert.deepEqual(
+      saves.map(({ generation }) => generation),
+      [1],
+    );
   });
 });
 
@@ -10003,6 +10015,7 @@ interface Save {
   session: string;
   url: string;
   filename: string;
+  generation: number;
 }
 
 /**
@@ -10046,8 +10059,11 @@ function setup({
       tabId: number,
       type: string,
       params: Record<string, unknown>,
+      generation: number,
       onSend?: () => void,
     ) {
+      // As the real page scripts refuse, right before they send.
+      refuseIfEnded(access, session, generation);
       pageCalls.push({ session, tabId, type, params });
       onSend?.();
       return pageReply(type);
@@ -10070,8 +10086,8 @@ function setup({
       };
   const saves: Save[] = [];
   const downloads = {
-    save: async (session: string, url: string, filename: string) => {
-      saves.push({ session, url, filename });
+    save: async (session: string, url: string, filename: string, generation: number) => {
+      saves.push({ session, url, filename, generation });
       return { path: `/downloads/${filename}`, bytes: 3 };
     },
   };
@@ -10858,5 +10874,332 @@ describe("a request whose session ends while it runs", { timeout: 10000 }, () =>
     await rejectsWith(call("s1", "tab_select", { tabId: first.id }), "session_ended");
     assert.deepEqual(fake.tabUpdates.slice(updates), []);
     assert.equal(fake.tabs.get(first.id)?.active, false);
+  });
+
+  /** Ends the session right after `tabs.group` grouped a tab, as when it ends during ensureGroup. */
+  function endAfterGroup(context: ReturnType<typeof setup>, reconnect = false): void {
+    const { fake, access } = context;
+    const group = fake.browser.tabs.group;
+    fake.browser.tabs.group = async (options) => {
+      const grouped = await group(options);
+      access.endSession("s1");
+      if (reconnect) access.admit("s1");
+      return grouped;
+    };
+  }
+
+  it("closes the blank tab when the session ends while tab_open groups it", async () => {
+    const context = setup();
+    const { fake, call } = context;
+    const user = fake.openTab({ url: "https://user.example/" });
+    endAfterGroup(context);
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("closes only the blank tab when the session's group holds a page", async () => {
+    const context = setup();
+    const { fake, call, open, grant } = context;
+    await grant("https://a.example");
+    const user = fake.openTab({ url: "https://user.example/" });
+    const page = await open("s1", "https://a.example/");
+    const groupId = groupIdOf(fake, page.id);
+    endAfterGroup(context);
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    assert.deepEqual([...fake.tabs.keys()], [user.id, page.id]);
+    assert.equal(groupIdOf(fake, page.id), groupId);
+  });
+
+  it("closes the session's own window when the session ends while tab_open groups its blank tab", async () => {
+    const context = setup();
+    const { fake, call } = context;
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ active: true });
+    endAfterGroup(context);
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    assert.equal(fake.windowCreations.length, 1);
+    assert.equal(fake.windowRemovals.length, 1);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("has closed the blank tab when it answers, for a session that reconnected too", async () => {
+    const context = setup();
+    const { fake, call } = context;
+    const user = fake.openTab({ url: "https://user.example/" });
+    const remove = fake.browser.tabs.remove;
+    fake.browser.tabs.remove = async (tabIds) => {
+      await flush();
+      return remove(tabIds);
+    };
+    endAfterGroup(context, true);
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("leaves the own window of a session that reconnected with the same id", async () => {
+    const context = setup();
+    const { fake, call } = context;
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    fake.openTab({ active: true });
+    endAfterGroup(context, true);
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    assert.equal(fake.windowCreations.length, 1);
+    assert.deepEqual(fake.windowRemovals, []);
+  });
+
+  it("opens no tab or window when the session ends during the gate check of a site to ask about", async () => {
+    const context = setup();
+    const { fake, access, call } = context;
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ url: "https://user.example/" });
+    const creates = recordCreates(fake);
+    endAfterCheck(context, "s1");
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/" }), "session_ended");
+    assert.deepEqual(creates, []);
+    assert.deepEqual(fake.windowCreations, []);
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("selects no tab when the session ends during tab_open's load", async () => {
+    const { fake, access, call, grant } = setup();
+    await grant("https://a.example");
+    const user = fake.openTab({ url: "https://user.example/", active: true });
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const updated = await update(tabId, properties);
+      if (properties.url !== undefined) access.endSession("s1");
+      return updated;
+    };
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/" }), "session_ended");
+    const opened = [...fake.tabs.keys()].filter((id) => id !== user.id);
+    assert.equal(opened.length, 1);
+    const [tabId] = opened;
+    assert.ok(tabId !== undefined);
+    assert.deepEqual(
+      fake.tabUpdates.filter((each) => each.active === true),
+      [],
+    );
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+    groupIdOf(fake, tabId);
+  });
+
+  it("resizes no window when the session ends while resize_window reads its group", async () => {
+    const { fake, access, call, open } = setup();
+    await open("s1");
+    const updates = fake.windowUpdates.length;
+    const get = fake.browser.tabGroups.get;
+    fake.browser.tabGroups.get = async (groupId) => {
+      access.endSession("s1");
+      return get(groupId);
+    };
+    await rejectsWith(call("s1", "resize_window", { width: 900, height: 700 }), "session_ended");
+    assert.deepEqual(fake.windowUpdates.slice(updates), []);
+  });
+
+  it("closes no tab when the session ends right before tab_close removes it", async () => {
+    const { fake, access, call, open } = setup();
+    const first = await open("s1");
+    await open("s1");
+    const query = fake.browser.tabs.query;
+    fake.browser.tabs.query = async (info) => {
+      access.endSession("s1");
+      return query(info);
+    };
+    await rejectsWith(call("s1", "tab_close", { tabId: first.id }), "session_ended");
+    assert.equal(fake.tabs.has(first.id), true);
+  });
+
+  it("leaves the navigation unspent when the session ends during a navigation wait", async () => {
+    const { fake, access, call, open, grant, replyWith, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await click("s1", tab.id, call, replyWith);
+    const waiting = call("s1", "wait_for", { tabId: tab.id, navigation: true });
+    await flush();
+    access.endSession("s1");
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await rejectsWith(waiting, "session_ended");
+    // The navigation no wait returned for counts for the next wait at once.
+    const again = call("s1", "wait_for", { tabId: tab.id, navigation: true, timeoutMs: 2000 });
+    await flush();
+    timers.advance(2000);
+    assert.deepEqual(await again, {
+      tab: { ...tab, url: "https://a.example/next", title: "Title of https://a.example/next" },
+    });
+  });
+
+  it("runs no probe when the session ends during probe_input's gate", async () => {
+    const { fake, access, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = async (tabId) => {
+      access.endSession("s1");
+      return get(tabId);
+    };
+    await rejectsWith(call("s1", "probe_input", { tabId: tab.id }), "session_ended");
+    assert.deepEqual(fake.injections, []);
+  });
+
+  /** Ends the session when the page receives `ending`, which it answers with `reply`. */
+  function endOn(context: ReturnType<typeof setup>, ending: string, reply: unknown): void {
+    context.replyWith(async (type) => {
+      if (type !== ending) return defaultReply(type);
+      context.access.endSession("s1");
+      return reply;
+    });
+  }
+
+  it("returns a click sent before the end, with an unreadable view and no read", async () => {
+    const context = setup();
+    const { callWithView, open, grant, pageCalls } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const clicked = { ref: "a2", x: 1, y: 2 };
+    endOn(context, "click", clicked);
+    assert.deepEqual(await callWithView("s1", "click", { tabId: tab.id, ref: "a2" }), {
+      ...clicked,
+      after: UNKNOWN,
+      view: { kind: "none", reason: "unreadable" },
+    });
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["click"],
+    );
+  });
+
+  it("returns an upload sent before the end, with an unreadable view and no read", async () => {
+    const context = setup();
+    const { callWithView, open, grant, pageCalls } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    endOn(context, "upload_file", { target: "input" });
+    assert.deepEqual(
+      await callWithView("s1", "upload_file", {
+        tabId: tab.id,
+        ref: "a2",
+        upload: "none",
+        files: [{ name: "empty.txt", type: "text/plain", size: 0 }],
+      }),
+      {
+        target: "input",
+        files: [{ name: "empty.txt", size: 0 }],
+        after: UNKNOWN,
+        view: { kind: "none", reason: "unreadable" },
+      },
+    );
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["upload_file"],
+    );
+  });
+
+  it("stops a wait for text at the first poll after the end, before its timeout", async () => {
+    const context = setup();
+    const { call, open, timers, pageCalls } = context;
+    const tab = await open("s1");
+    endOn(context, "wait_for", false);
+    const waiting = call("s1", "wait_for", { tabId: tab.id, text: "Saved" });
+    await flush();
+    timers.advance(WAIT_POLL_MS);
+    await rejectsWith(waiting, "session_ended");
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["wait_for"],
+    );
+  });
+
+  it("captures nothing when the session ends during a screenshot's element read", async () => {
+    const context = setup();
+    const { fake, call, open, grant, pageCalls } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    endOn(context, "element_rect", {
+      rect: { left: 10, top: 20, width: 120, height: 80 },
+      viewport: { width: 1280, height: 720 },
+      scroll: { x: 0, y: 0 },
+    });
+    await rejectsWith(
+      call("s1", "screenshot", { tabId: tab.id, ref: "0a1b2c3d-4" }),
+      "session_ended",
+    );
+    assert.deepEqual(
+      pageCalls.map(({ type }) => type),
+      ["element_rect"],
+    );
+    assert.deepEqual(fake.cssCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("hides nothing and captures nothing when the session ends after a screenshot's last page read", async () => {
+    const context = setup();
+    const { fake, call, open, grant } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    endOn(context, "password_fields", { revealed: false });
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "session_ended",
+      message: "The session ended before Foxleash could finish the request.",
+    });
+    assert.deepEqual(fake.cssCalls, []);
+    assert.deepEqual(fake.captures, []);
+  });
+
+  it("captures nothing and takes its masks out when the session ends while they go in", async () => {
+    const context = setup();
+    const { fake, access, call, open, grant, replyWith } = context;
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    // Revealed, so no page read follows the capture to refuse it.
+    replyWith(async (type) =>
+      type === "password_fields" ? { revealed: true } : defaultReply(type),
+    );
+    const insert = fake.browser.scripting.insertCSS;
+    fake.browser.scripting.insertCSS = async (injection) => {
+      access.endSession("s1");
+      return insert(injection);
+    };
+    await rejectsWith(call("s1", "screenshot", { tabId: tab.id }), "session_ended");
+    await flush();
+    assert.deepEqual(fake.captures, []);
+    const methods = fake.cssCalls.map(({ method }) => method);
+    assert.ok(methods.includes("insertCSS"));
+    assert.equal(
+      methods.filter((method) => method === "removeCSS").length,
+      methods.filter((method) => method === "insertCSS").length,
+    );
+  });
+
+  it("asks the page nothing when the session ends while read_console waits for its tab", async () => {
+    const { fake, access, call, open, pageCalls } = setup();
+    const tab = await open("s1");
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = async (tabId) => {
+      access.endSession("s1");
+      return get(tabId);
+    };
+    await rejectsWith(call("s1", "read_console", { tabId: tab.id }), "session_ended");
+    assert.deepEqual(pageCalls, []);
+  });
+
+  it("returns a navigate whose load began before the end, with an unreadable view and no read", async () => {
+    const { fake, access, callWithView, open, grant, pageCalls } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const updated = await update(tabId, properties);
+      access.endSession("s1");
+      return updated;
+    };
+    const result = await callWithView("s1", "navigate", {
+      tabId: tab.id,
+      url: "https://a.example/next",
+    });
+    assert.ok("tab" in result && "view" in result);
+    assert.equal(result.tab.url, "https://a.example/next");
+    assert.deepEqual(result.view, { kind: "none", reason: "unreadable" });
+    assert.deepEqual(pageCalls, []);
   });
 });

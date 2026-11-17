@@ -39,7 +39,7 @@ const TIMED_OUT = {
 describe("download", { timeout: 10000 }, () => {
   it("refuses a start URL on a site the session may not act on, before any request", async () => {
     const { downloads, fetchCalls } = await setup();
-    await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf", 0), {
       code: "site_not_approved",
       message: `Foxleash is not allowed on ${UNAPPROVED} in this session; open it with tab_open or navigate first, which asks the user.`,
     });
@@ -48,9 +48,11 @@ describe("download", { timeout: 10000 }, () => {
 
   it("refuses a start URL on a blocked site, approved or not, before any request", async () => {
     const { fake, downloads, fetchCalls } = await setup();
-    await assert.rejects(downloads.save("s1", `${BLOCKED}/x`, "x.pdf"), { code: "site_blocked" });
+    await assert.rejects(downloads.save("s1", `${BLOCKED}/x`, "x.pdf", 0), {
+      code: "site_blocked",
+    });
     await grantSite(fake.browser, BLOCKED);
-    await assert.rejects(downloads.save("s1", `${BLOCKED}/x`, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", `${BLOCKED}/x`, "x.pdf", 0), {
       code: "site_blocked",
       message: `Foxleash does not act on ${BLOCKED}: it is on Foxleash's blocklist, which by default lists common financial and health sites.`,
     });
@@ -61,15 +63,15 @@ describe("download", { timeout: 10000 }, () => {
     const { downloads, sessions, respondWith } = await setup();
     sessions.set("s1", { allowed: new Set([UNAPPROVED]), refused: new Set(), closed: 0 });
     respondWith(() => response(`${UNAPPROVED}/x`, BYTES));
-    assert.equal((await downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf")).bytes, BYTES.length);
-    await assert.rejects(downloads.save("s2", `${UNAPPROVED}/x`, "x.pdf"), {
+    assert.equal((await downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf", 0)).bytes, BYTES.length);
+    await assert.rejects(downloads.save("s2", `${UNAPPROVED}/x`, "x.pdf", 0), {
       code: "site_not_approved",
     });
   });
 
   it("fetches with the user's cookies, saves the bytes under the name and returns the file", async () => {
     const { fake, downloads, fetchCalls, blobs, revoked, timers } = await setup();
-    const result = await downloads.save("s1", URL_A, "receipt.pdf");
+    const result = await downloads.save("s1", URL_A, "receipt.pdf", 0);
     assert.deepEqual(result, {
       path: `${FAKE_DOWNLOAD_FOLDER}/receipt.pdf`,
       bytes: BYTES.length,
@@ -96,7 +98,7 @@ describe("download", { timeout: 10000 }, () => {
     const { fake, downloads, blobs, respondWith } = await setup();
     const parts = [new Uint8Array([1, 2]), new Uint8Array([3]), new Uint8Array([4, 5, 6])];
     respondWith(() => response(URL_A, stream(parts).body));
-    assert.equal((await downloads.save("s1", URL_A, "x.bin")).bytes, 6);
+    assert.equal((await downloads.save("s1", URL_A, "x.bin", 0)).bytes, 6);
     const blob = blobs.get(fake.downloadCalls[0]?.url ?? "");
     assert.deepEqual(
       new Uint8Array((await blob?.arrayBuffer()) ?? new ArrayBuffer(0)),
@@ -107,7 +109,7 @@ describe("download", { timeout: 10000 }, () => {
   it("saves an empty file for a response without a body", async () => {
     const { fake, downloads, respondWith } = await setup();
     respondWith(() => response(URL_A, null, { status: 204 }));
-    assert.deepEqual(await downloads.save("s1", URL_A, "empty.txt"), {
+    assert.deepEqual(await downloads.save("s1", URL_A, "empty.txt", 0), {
       path: `${FAKE_DOWNLOAD_FOLDER}/empty.txt`,
       bytes: 0,
     });
@@ -118,7 +120,7 @@ describe("download", { timeout: 10000 }, () => {
     const { fake, downloads, fetchCalls, respondWith } = await setup();
     const body = stream([BYTES]);
     respondWith(() => response(`${UNAPPROVED}/elsewhere`, body.body));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "site_not_approved",
       message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
@@ -131,14 +133,14 @@ describe("download", { timeout: 10000 }, () => {
     const { fake, downloads, respondWith } = await setup();
     await grantSite(fake.browser, BLOCKED);
     respondWith(() => response(`${BLOCKED}/x`, BYTES));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), { code: "site_blocked" });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), { code: "site_blocked" });
     assert.deepEqual(fake.downloadCalls, []);
   });
 
   it("refuses a response whose URL is not a web URL", async () => {
     const { fake, downloads, respondWith } = await setup();
     respondWith(() => response("", BYTES));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), FETCH_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
     assert.deepEqual(fake.downloadCalls, []);
   });
 
@@ -146,7 +148,7 @@ describe("download", { timeout: 10000 }, () => {
     const { fake, downloads, respondWith } = await setup();
     for (const final of [`${SITE}/other`, `${OTHER}/x`]) {
       respondWith(() => response(final, BYTES));
-      assert.equal((await downloads.save("s1", URL_A, "x.pdf")).bytes, BYTES.length);
+      assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
     }
     assert.equal(fake.downloadCalls.length, 2);
   });
@@ -161,18 +163,49 @@ describe("download", { timeout: 10000 }, () => {
         }).body,
       ),
     );
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "site_not_approved",
       message: `The link led to ${SITE}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
     assert.deepEqual(fake.downloadCalls, []);
   });
 
+  it("sends no request when the session ends during the first site check", async () => {
+    const { downloads, access, fetchCalls, holdView, views } = await setup();
+    const release = holdView(1);
+    const saving = downloads.save("s1", URL_A, "x.pdf", access.generation("s1"));
+    await until(() => views() === 1);
+    access.endSession("s1");
+    release();
+    await assert.rejects(saving, {
+      code: "session_ended",
+      message: "The session ended before Foxleash could finish the request.",
+    });
+    assert.deepEqual(fetchCalls, []);
+  });
+
+  it("saves nothing when the session ends while the body arrives", async () => {
+    const { fake, downloads, access, blobs, respondWith } = await setup();
+    respondWith(() =>
+      response(
+        URL_A,
+        stream([BYTES], (index) => {
+          if (index === 0) access.endSession("s1");
+        }).body,
+      ),
+    );
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", access.generation("s1")), {
+      code: "session_ended",
+    });
+    assert.deepEqual(fake.downloadCalls, []);
+    assert.equal(blobs.size, 0);
+  });
+
   it("refuses a response that is not a success, with its status", async () => {
     const { fake, downloads, respondWith } = await setup();
     for (const status of [404, 403, 500, 301]) {
       respondWith(() => response(URL_A, "no", { status }));
-      await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
+      await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
         code: "download_failed",
         message: `The server answered with status ${status}; nothing was saved.`,
       });
@@ -183,7 +216,7 @@ describe("download", { timeout: 10000 }, () => {
   it("names the site, not the status, for a failure on a site the session may not act on", async () => {
     const { downloads, respondWith } = await setup();
     respondWith(() => response(`${UNAPPROVED}/missing`, "no", { status: 404 }));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "site_not_approved",
       message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
@@ -197,7 +230,7 @@ describe("download", { timeout: 10000 }, () => {
         headers: { "content-length": String(DOWNLOAD_MAX_BYTES + 1) },
       }),
     );
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "download_too_large",
       message: "The file is larger than 100 MiB; nothing was saved.",
     });
@@ -214,10 +247,10 @@ describe("download", { timeout: 10000 }, () => {
         headers: { "content-length": String(DOWNLOAD_MAX_BYTES) },
       }),
     );
-    assert.equal((await downloads.save("s1", URL_A, "big.bin")).bytes, DOWNLOAD_MAX_BYTES);
+    assert.equal((await downloads.save("s1", URL_A, "big.bin", 0)).bytes, DOWNLOAD_MAX_BYTES);
     const over = stream([...full, new Uint8Array(1), new Uint8Array(1)]);
     respondWith(() => response(URL_A, over.body));
-    await assert.rejects(downloads.save("s1", URL_A, "big.bin"), {
+    await assert.rejects(downloads.save("s1", URL_A, "big.bin", 0), {
       code: "download_too_large",
     });
     assert.equal(over.pulled(), 5);
@@ -228,7 +261,7 @@ describe("download", { timeout: 10000 }, () => {
   it("refuses a fetch that fails, and a body that fails while it arrives", async () => {
     const { fake, downloads, respondWith } = await setup();
     respondWith(() => Promise.reject(new TypeError("NetworkError when attempting to fetch")));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), FETCH_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
     respondWith(() =>
       response(
         URL_A,
@@ -237,36 +270,36 @@ describe("download", { timeout: 10000 }, () => {
         }).body,
       ),
     );
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), FETCH_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
     assert.deepEqual(fake.downloadCalls, []);
   });
 
   it("refuses a name Firefox will not save under, without passing on Firefox's text", async () => {
     const { fake, downloads, revoked } = await setup();
     fake.failNextDownload(new Error("filename must not contain illegal characters"));
-    await assert.rejects(downloads.save("s1", URL_A, "x.desktop"), {
+    await assert.rejects(downloads.save("s1", URL_A, "x.desktop", 0), {
       code: "invalid_params",
       message:
         'Firefox would not save a file named "x.desktop"; choose a plain name with a usual extension, such as receipt.pdf.',
     });
     assert.equal(revoked.length, 1);
     assert.equal(fake.downloadListenerCount(), 0);
-    assert.equal((await downloads.save("s1", URL_A, "x.pdf")).bytes, BYTES.length);
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
   });
 
   it("refuses with a write failure when Firefox rejects the save for another reason", async () => {
     const { fake, downloads, revoked } = await setup();
     fake.failNextDownload(new Error("An unexpected error occurred"));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), WRITE_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), WRITE_FAILED);
     fake.failNextDownload("filename must not be absolute");
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), WRITE_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), WRITE_FAILED);
     assert.equal(revoked.length, 2);
   });
 
   it("refuses a download Firefox interrupts", async () => {
     const { fake, downloads, revoked } = await setup();
     fake.downloadState = "interrupted";
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), WRITE_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), WRITE_FAILED);
     assert.equal(revoked.length, 1);
     assert.equal(fake.downloadListenerCount(), 0);
   });
@@ -274,15 +307,15 @@ describe("download", { timeout: 10000 }, () => {
   it("finishes when Firefox reports the end before the download's id", async () => {
     const { fake, downloads } = await setup();
     fake.downloadTiming = "event_before_id";
-    assert.equal((await downloads.save("s1", URL_A, "x.pdf")).bytes, BYTES.length);
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
     fake.downloadState = "interrupted";
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf"), WRITE_FAILED);
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), WRITE_FAILED);
   });
 
   it("waits for the download's own end, ignoring other downloads and other changes", async () => {
     const { fake, downloads } = await setup();
     fake.downloadTiming = "held";
-    const saving = track(downloads.save("s1", URL_A, "x.pdf"));
+    const saving = track(downloads.save("s1", URL_A, "x.pdf", 0));
     await until(() => fake.downloadCalls.length === 1);
     await flush();
     fake.finishDownload(99, "complete");
@@ -300,7 +333,7 @@ describe("download", { timeout: 10000 }, () => {
   it("refuses a held download that Firefox then interrupts", async () => {
     const { fake, downloads } = await setup();
     fake.downloadTiming = "held";
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => fake.downloadCalls.length === 1);
     await flush();
     fake.finishDownload(1, "interrupted");
@@ -310,7 +343,7 @@ describe("download", { timeout: 10000 }, () => {
   it("refuses a finished download Firefox no longer lists", async () => {
     const { fake, downloads } = await setup();
     fake.downloadTiming = "held";
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => fake.downloadCalls.length === 1);
     await flush();
     fake.downloads.delete(1);
@@ -321,7 +354,7 @@ describe("download", { timeout: 10000 }, () => {
   it("times out a fetch that does not answer, and aborts it", async () => {
     const { fake, downloads, fetchCalls, respondWith, timers } = await setup();
     respondWith((init) => never(init.signal));
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => fetchCalls.length === 1);
     timers.advance(DOWNLOAD_TIMEOUT_MS - 1);
     await flush();
@@ -335,7 +368,7 @@ describe("download", { timeout: 10000 }, () => {
   it("saves nothing after a timeout that came during the last site check", async () => {
     const { fake, downloads, holdView, views, timers } = await setup();
     const release = holdView(3);
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => views() === 3);
     timers.advance(DOWNLOAD_TIMEOUT_MS);
     await assert.rejects(saving, TIMED_OUT);
@@ -347,7 +380,7 @@ describe("download", { timeout: 10000 }, () => {
   it("cancels a save that does not end within the timeout, and frees its bytes", async () => {
     const { fake, downloads, revoked, timers } = await setup();
     fake.downloadTiming = "held";
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => fake.downloadCalls.length === 1);
     await flush();
     timers.advance(DOWNLOAD_TIMEOUT_MS);
@@ -361,7 +394,7 @@ describe("download", { timeout: 10000 }, () => {
     const { fake, downloads, revoked, timers } = await setup();
     fake.downloadTiming = "held";
     fake.failCancel(new Error("Download 1 cannot be canceled"));
-    const saving = downloads.save("s1", URL_A, "x.pdf");
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
     await until(() => fake.downloadCalls.length === 1);
     await flush();
     timers.advance(DOWNLOAD_TIMEOUT_MS);
@@ -376,8 +409,8 @@ describe("download", { timeout: 10000 }, () => {
   it("refuses a second download while one is in progress, and takes one after it ends", async () => {
     const { fake, downloads, fetchCalls } = await setup();
     fake.downloadTiming = "held";
-    const first = downloads.save("s1", URL_A, "x.pdf");
-    await assert.rejects(downloads.save("s2", URL_A, "y.pdf"), {
+    const first = downloads.save("s1", URL_A, "x.pdf", 0);
+    await assert.rejects(downloads.save("s2", URL_A, "y.pdf", 0), {
       code: "download_busy",
       message: "Foxleash is already saving a file; try again when it has finished.",
     });
@@ -386,21 +419,21 @@ describe("download", { timeout: 10000 }, () => {
     await flush();
     fake.finishDownload(1, "complete");
     await first;
-    const second = downloads.save("s1", URL_A, "y.pdf");
+    const second = downloads.save("s1", URL_A, "y.pdf", 0);
     await until(() => fake.downloadCalls.length === 2);
     await flush();
     fake.finishDownload(2, "interrupted");
     await assert.rejects(second, WRITE_FAILED);
     fake.downloadTiming = "immediate";
-    assert.equal((await downloads.save("s1", URL_A, "z.pdf")).bytes, BYTES.length);
+    assert.equal((await downloads.save("s1", URL_A, "z.pdf", 0)).bytes, BYTES.length);
   });
 
   it("takes a download after one that was refused", async () => {
     const { downloads } = await setup();
-    await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf"), {
+    await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf", 0), {
       code: "site_not_approved",
     });
-    assert.equal((await downloads.save("s1", URL_A, "x.pdf")).bytes, BYTES.length);
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
   });
 });
 
@@ -469,6 +502,7 @@ async function setup() {
         await holds.get(viewCount);
         return access.view(session);
       },
+      generation: (session: string) => access.generation(session),
     },
     timers,
     fetch: async (url, init) => {
@@ -503,6 +537,7 @@ async function setup() {
     fake,
     timers,
     sessions,
+    access,
     downloads,
     fetchCalls,
     blobs,

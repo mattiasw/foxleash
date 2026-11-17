@@ -300,16 +300,20 @@ export function createHandlers<Handle>({
     screenshot,
     upload_chunk: uploadChunk,
     upload_file: uploadFile,
-    click: (session, params) => pageAction(session, params, "click", clickOptions, pointResultOf),
-    hover: (session, params) => pageAction(session, params, "hover", hoverOptions, pointResultOf),
-    scroll: (session, params) =>
-      pageAction(session, params, "scroll", scrollOptions, scrollResultOf),
-    drag: (session, params) => pageAction(session, params, "drag", dragOptions, dragResultOf),
-    type: (session, params) => pageAction(session, params, "type", typeOptions, typeResultOf),
-    press_key: (session, params) =>
-      pageAction(session, params, "press_key", pressKeyOptions, pressKeyResultOf),
-    fill_form: (session, params) =>
-      pageAction(session, params, "fill_form", fillFormOptions, fillFormResultOf),
+    click: (session, params, generation) =>
+      pageAction(session, params, "click", clickOptions, pointResultOf, generation),
+    hover: (session, params, generation) =>
+      pageAction(session, params, "hover", hoverOptions, pointResultOf, generation),
+    scroll: (session, params, generation) =>
+      pageAction(session, params, "scroll", scrollOptions, scrollResultOf, generation),
+    drag: (session, params, generation) =>
+      pageAction(session, params, "drag", dragOptions, dragResultOf, generation),
+    type: (session, params, generation) =>
+      pageAction(session, params, "type", typeOptions, typeResultOf, generation),
+    press_key: (session, params, generation) =>
+      pageAction(session, params, "press_key", pressKeyOptions, pressKeyResultOf, generation),
+    fill_form: (session, params, generation) =>
+      pageAction(session, params, "fill_form", fillFormOptions, fillFormResultOf, generation),
     read_console: readConsole,
     read_network: readNetwork,
     download,
@@ -356,7 +360,9 @@ export function createHandlers<Handle>({
     const started = now();
     const viewed = viewParam(params, "tab_open");
     const { tab } = await openTab(session, params, generation);
-    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+    return viewed
+      ? { tab, view: await pageView(session, tab.id, [], started, generation) }
+      : { tab };
   }
 
   async function openTab(
@@ -378,7 +384,15 @@ export function createHandlers<Handle>({
     if (url !== undefined) return { tab: await openOnPrompt(session, url, generation) };
     const tab = await groups.createTab(session, { url: "about:blank", active: false });
     await groups.ensureGroup(session, tab);
-    return { tab: await selectNewTab(session, tab.id) };
+    try {
+      refuseIfEnded(access, session, generation);
+    } catch (error) {
+      await removeNewTab(session, tab.id);
+      // The end found no blank tab of this call to close.
+      if (!access.running(session)) await groups.endSession(session);
+      throw error;
+    }
+    return { tab: await selectNewTab(session, tab.id, generation) };
   }
 
   /**
@@ -390,7 +404,7 @@ export function createHandlers<Handle>({
    * is asking the user something.
    */
   async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
-    refuseIfEnded(session, generation);
+    refuseIfEnded(access, session, generation);
     const tab = await groups.createTab(session, { url, active: false, discarded: true });
     try {
       await groups.ensureGroup(session, tab);
@@ -400,7 +414,7 @@ export function createHandlers<Handle>({
       throw error;
     }
     try {
-      refuseIfEnded(session, generation);
+      refuseIfEnded(access, session, generation);
       noteReturned(
         await waitForLoad(
           browser,
@@ -416,20 +430,7 @@ export function createHandlers<Handle>({
       await removeNewTab(session, tab.id);
       throw error;
     }
-    return selectNewTab(session, tab.id);
-  }
-
-  /**
-   * Refuses to go on with a request whose session ended after the request arrived. Called right
-   * before a load starts, with no await in between.
-   */
-  function refuseIfEnded(session: string, generation: number): void {
-    if (access.generation(session) !== generation) {
-      throw new ToolError(
-        "session_ended",
-        "The session ended before Foxleash could finish the request.",
-      );
-    }
+    return selectNewTab(session, tab.id, generation);
   }
 
   /**
@@ -439,6 +440,7 @@ export function createHandlers<Handle>({
    * `openOnPage`'s is, unless the session is asking the user something.
    */
   async function openOnPrompt(session: string, url: string, generation: number): Promise<TabInfo> {
+    refuseIfEnded(access, session, generation);
     const promptUrl = access.newPromptUrl();
     const tab = await groups.createTab(session, {
       url: promptUrl,
@@ -464,14 +466,19 @@ export function createHandlers<Handle>({
       throw error;
     }
     if (approval.promptInTab) return loaded;
-    return selectNewTab(session, tab.id);
+    return selectNewTab(session, tab.id, generation);
   }
 
   /**
    * Selects a tab tab_open opened, unless the session's question is open in a tab, which would
    * then be hidden. The check and the select start in the same turn, with no await in between.
    */
-  async function selectNewTab(session: string, tabId: number): Promise<TabInfo> {
+  async function selectNewTab(
+    session: string,
+    tabId: number,
+    generation: number,
+  ): Promise<TabInfo> {
+    refuseIfEnded(access, session, generation);
     const tab = asking(session)
       ? await browser.tabs.get(tabId)
       : await browser.tabs.update(tabId, { active: true });
@@ -503,7 +510,9 @@ export function createHandlers<Handle>({
     const started = now();
     const viewed = viewParam(params, "navigate");
     const { tab } = await navigateTab(session, params, generation);
-    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+    return viewed
+      ? { tab, view: await pageView(session, tab.id, [], started, generation) }
+      : { tab };
   }
 
   async function navigateTab(
@@ -538,7 +547,7 @@ export function createHandlers<Handle>({
       if (gated !== undefined && gated.decision.decision !== "allowed") {
         return { tab: await approveAndLoad(session, tabId, gated.url, target, generation) };
       }
-      refuseIfEnded(session, generation);
+      refuseIfEnded(access, session, generation);
       keepPrompt(session, tabId);
       const history =
         target.kind === "action" && target.action !== "reload"
@@ -786,7 +795,7 @@ export function createHandlers<Handle>({
       ) {
         return loaded;
       }
-      refuseIfEnded(session, generation);
+      refuseIfEnded(access, session, generation);
       history.stop();
       // No URL to wait for, so that a redirect still ends the wait; it still needs the load's
       // commit, so that the complete of a load stopped or cut off before it does not end it.
@@ -828,10 +837,15 @@ export function createHandlers<Handle>({
    * the tab within CLOSE_CONFIRM_TIMEOUT_MS it refuses, saying the page asked the user to confirm
    * leaving it; when the user chose to stay on the page, it says so.
    */
-  async function tabClose(session: string, params: Params): Promise<Result<"tab_close">> {
+  async function tabClose(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"tab_close">> {
     const tabId = tabIdParam(params, "tab_close");
     const { groupId } = await groupTab(session, tabId);
     const closed = await groups.closeTab(tabId, (current) => {
+      refuseIfEnded(access, session, generation);
       if (current.groupId !== groupId) throw notInGroup(tabId);
       keepPrompt(session, tabId);
     });
@@ -882,7 +896,7 @@ export function createHandlers<Handle>({
     await groupTab(session, tabId);
     keepPromptInView(session, tabId);
     // Selecting a tab Firefox unloaded loads its page.
-    refuseIfEnded(session, generation);
+    refuseIfEnded(access, session, generation);
     const updated = await browser.tabs.update(tabId, { active: true });
     const view = await access.view(session);
     return { tab: view.tabInfo(updated) };
@@ -895,14 +909,24 @@ export function createHandlers<Handle>({
    * tab, and that no earlier wait returned for, counts at once. The tab must still be in the group
    * when the wait ends.
    */
-  async function waitFor(session: string, params: Params): Promise<Result<"wait_for">> {
+  async function waitFor(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"wait_for">> {
     const started = now();
     const viewed = viewParam(params, "wait_for");
-    const { tab } = await waitInTab(session, params);
-    return viewed ? { tab, view: await pageView(session, tab.id, [], started) } : { tab };
+    const { tab } = await waitInTab(session, params, generation);
+    return viewed
+      ? { tab, view: await pageView(session, tab.id, [], started, generation) }
+      : { tab };
   }
 
-  async function waitInTab(session: string, params: Params): Promise<{ tab: TabInfo }> {
+  async function waitInTab(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<{ tab: TabInfo }> {
     const tabId = tabIdParam(params, "wait_for");
     const condition = waitCondition(params);
     const timeoutMs = waitTimeoutMs(params);
@@ -927,11 +951,15 @@ export function createHandlers<Handle>({
             `Tab ${tabId} did not finish a navigation within ${secondsText(timeoutMs)}.`,
           );
         }
+        // Before the take, so a navigation no wait returned for stays unspent.
+        refuseIfEnded(access, session, generation);
         // Spends the navigation this wait returned for: the tracker's listeners, added first,
         // have numbered it.
         navigations.takeFinished(session, tabId);
       }
-    } else if (!(await waitForPage({ pages, timers }, session, tabId, condition, timeoutMs))) {
+    } else if (
+      !(await waitForPage({ pages, timers }, session, tabId, condition, timeoutMs, generation))
+    ) {
       const what = "text" in condition ? "that text" : "an element matching that selector";
       throw new ToolError(
         "wait_timeout",
@@ -947,7 +975,11 @@ export function createHandlers<Handle>({
    * Resizes the window that holds the session's group, out of a maximized, minimized or full-screen
    * state first, and returns the size Firefox reports for it.
    */
-  async function resizeWindow(session: string, params: Params): Promise<Result<"resize_window">> {
+  async function resizeWindow(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"resize_window">> {
     const width = windowSize(own(params, "width"));
     const height = windowSize(own(params, "height"));
     const group = await groups.groupOf(session);
@@ -957,6 +989,7 @@ export function createHandlers<Handle>({
         "This session has no tab group yet; open a tab with tab_open first.",
       );
     }
+    refuseIfEnded(access, session, generation);
     // A maximized or full-screen window ignores a size; the normal state combines with one.
     await browser.windows.update(group.windowId, { state: "normal", width, height });
     const resized = await browser.windows.get(group.windowId);
@@ -975,12 +1008,16 @@ export function createHandlers<Handle>({
   }
 
   /** Reads the page in a tab through the content script, which runs only after the site gate. */
-  async function readPage(session: string, params: Params): Promise<Result<"read_page">> {
+  async function readPage(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"read_page">> {
     const tabId = tabIdParam(params, "read_page");
     const options = readPageOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
     const before = views.document(tabId);
-    const reply = await pages.request(session, tabId, "read_page", options);
+    const reply = await pages.request(session, tabId, "read_page", options, generation);
     const { tree, truncated } = treeReadOf(reply, tabId);
     if (!isFindRead(options)) {
       // What the model now has of the page: the next view says what changed since.
@@ -998,11 +1035,15 @@ export function createHandlers<Handle>({
   }
 
   /** Reads a page's text through the content script, which runs only after the site gate. */
-  async function getPageText(session: string, params: Params): Promise<Result<"get_page_text">> {
+  async function getPageText(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"get_page_text">> {
     const tabId = tabIdParam(params, "get_page_text");
     const options = pageTextOptions(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
-    const reply = await pages.request(session, tabId, "get_page_text", options);
+    const reply = await pages.request(session, tabId, "get_page_text", options, generation);
     const text = pageTextOf(reply, options);
     if (text === undefined) {
       throw new ToolError(
@@ -1018,7 +1059,11 @@ export function createHandlers<Handle>({
    * session may act on, with the text of protected fields hidden. Never asks, and never captures
    * whichever tab happens to be active.
    */
-  async function screenshot(session: string, params: Params): Promise<Result<"screenshot">> {
+  async function screenshot(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"screenshot">> {
     const tabId = tabIdParam(params, "screenshot");
     const ref = screenshotRef(params);
     const timeout = screenshotTimeout(tabId);
@@ -1029,7 +1074,10 @@ export function createHandlers<Handle>({
       reject(timeout);
     }, SCREENSHOT_TIMEOUT_MS);
     try {
-      return await Promise.race([maskedScreenshot(session, tabId, ref, () => expired), timedOut]);
+      return await Promise.race([
+        maskedScreenshot(session, tabId, ref, () => expired, generation),
+        timedOut,
+      ]);
     } finally {
       timers.clearTimeout(timer);
     }
@@ -1040,14 +1088,18 @@ export function createHandlers<Handle>({
     tabId: number,
     ref: string | undefined,
     expired: () => boolean,
+    generation: number,
   ): Promise<Result<"screenshot">> {
     const { site, visits, frames } = await screenshotGate(session, tabId, true);
     try {
-      const rect = ref === undefined ? undefined : await elementArea(session, tabId, ref);
-      const revealed = await passwordRevealed(session, tabId);
-      const dataUrl = await maskedCapture(tabId, rect, revealed, expired);
+      const rect =
+        ref === undefined ? undefined : await elementArea(session, tabId, ref, generation);
+      const revealed = await passwordRevealed(session, tabId, generation);
+      const dataUrl = await maskedCapture(session, tabId, rect, revealed, expired, generation);
       // A field revealed after the check was captured without the input mask.
-      if (!revealed && (await passwordRevealed(session, tabId))) throw pageChanged(tabId);
+      if (!revealed && (await passwordRevealed(session, tabId, generation))) {
+        throw pageChanged(tabId);
+      }
       // Nothing from the page reaches the agent once the user has withdrawn access.
       if (
         (await allowedPageSite({ browser, groups, access }, session, tabId)) !== site ||
@@ -1121,15 +1173,30 @@ export function createHandlers<Handle>({
   }
 
   /** The element's box in the page, scrolled into view and cut to the viewport. */
-  async function elementArea(session: string, tabId: number, ref: string): Promise<CaptureArea> {
-    const area = captureRect(await pages.request(session, tabId, "element_rect", { ref }), tabId);
+  async function elementArea(
+    session: string,
+    tabId: number,
+    ref: string,
+    generation: number,
+  ): Promise<CaptureArea> {
+    const area = captureRect(
+      await pages.request(session, tabId, "element_rect", { ref }, generation),
+      tabId,
+    );
     if ("code" in area) throw new ToolError(area.code, area.message);
     return area.rect;
   }
 
   /** Whether the page turned a remembered password field into another kind. */
-  async function passwordRevealed(session: string, tabId: number): Promise<boolean> {
-    const reply = revealedReply(await pages.request(session, tabId, "password_fields", {}), tabId);
+  async function passwordRevealed(
+    session: string,
+    tabId: number,
+    generation: number,
+  ): Promise<boolean> {
+    const reply = revealedReply(
+      await pages.request(session, tabId, "password_fields", {}, generation),
+      tabId,
+    );
     if ("code" in reply) throw new ToolError(reply.code, reply.message);
     return reply.revealed;
   }
@@ -1144,10 +1211,12 @@ export function createHandlers<Handle>({
    * the frame is, or lies inside, another add-on's frame, so hidden.
    */
   async function maskedCapture(
+    session: string,
     tabId: number,
     rect: CaptureArea | undefined,
     revealed: boolean,
     expired: () => boolean,
+    generation: number,
   ): Promise<string> {
     const timeout = new ToolError(
       "page_timeout",
@@ -1167,6 +1236,7 @@ export function createHandlers<Handle>({
       const frames = await Promise.race([browser.webNavigation.getAllFrames({ tabId }), timedOut]);
       // The screenshot answered already: nothing more goes into the page, nothing is captured.
       if (expired()) throw timeout;
+      refuseIfEnded(access, session, generation);
       const top = frames?.find((frame) => frame.frameId === 0);
       if (frames === null || top === undefined) {
         throw screenshotFailedError(tabId);
@@ -1189,6 +1259,7 @@ export function createHandlers<Handle>({
       );
       await Promise.race([Promise.all(taken), timedOut]);
       if (expired()) throw timeout;
+      refuseIfEnded(access, session, generation);
       return await Promise.race([
         browser.tabs.captureTab(
           tabId,
@@ -1198,6 +1269,7 @@ export function createHandlers<Handle>({
       ]);
     } catch (error: unknown) {
       if (error === timeout) throw timeout;
+      if (error instanceof ToolError && error.code === "session_ended") throw error;
       // Firefox's own error text can repeat the page's URL.
       throw screenshotFailedError(tabId);
     } finally {
@@ -1227,7 +1299,11 @@ export function createHandlers<Handle>({
    * script, which runs only after the site gate. The bytes are taken first, so any failure
    * leaves nothing staged.
    */
-  async function uploadFile(session: string, params: Params): Promise<Result<"upload_file">> {
+  async function uploadFile(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"upload_file">> {
     const upload = own(params, "upload");
     if (typeof upload !== "string") {
       throw new ToolError("invalid_params", "upload_file needs upload to be a string.");
@@ -1254,11 +1330,16 @@ export function createHandlers<Handle>({
       offset += size;
       return { name, type, bytes };
     });
-    const watch = settle.begin(session, tabId);
+    const watch = settle.begin(session, tabId, generation);
     let result: Result<"upload_file"> & { after: ActAfter };
     try {
-      const reply = await pages.request(session, tabId, "upload_file", { ref, files: handed }, () =>
-        watch.sent(),
+      const reply = await pages.request(
+        session,
+        tabId,
+        "upload_file",
+        { ref, files: handed },
+        generation,
+        () => watch.sent(),
       );
       // The reply comes from the page's content process: only its own target is read.
       const target = isRecord(reply) ? ownField(reply, "target") : undefined;
@@ -1273,7 +1354,7 @@ export function createHandlers<Handle>({
     } finally {
       watch.stop();
     }
-    return viewed ? withActView(session, tabId, result, [ref], started) : result;
+    return viewed ? withActView(session, tabId, result, [ref], started, generation) : result;
   }
 
   /**
@@ -1287,16 +1368,17 @@ export function createHandlers<Handle>({
     tool: "click" | "hover" | "scroll" | "drag" | "type" | "press_key" | "fill_form",
     parse: (params: Params) => O | string,
     check: (reply: unknown, options: O) => R | undefined,
+    generation: number,
   ): Promise<R & { after: ActAfter; view?: PageView }> {
     const started = now();
     const viewed = viewParam(params, tool);
     const tabId = tabIdParam(params, tool);
     const options = parse(params);
     if (typeof options === "string") throw new ToolError("invalid_params", options);
-    const watch = settle.begin(session, tabId);
+    const watch = settle.begin(session, tabId, generation);
     let result: R & { after: ActAfter };
     try {
-      const reply = await pages.request(session, tabId, tool, options, () => {
+      const reply = await pages.request(session, tabId, tool, options, generation, () => {
         navigations.acted(session, tabId);
         watch.sent();
       });
@@ -1313,7 +1395,7 @@ export function createHandlers<Handle>({
       watch.stop();
     }
     return viewed
-      ? withActView(session, tabId, result, actFocus(options, result), started)
+      ? withActView(session, tabId, result, actFocus(options, result), started, generation)
       : result;
   }
 
@@ -1327,13 +1409,14 @@ export function createHandlers<Handle>({
     result: R,
     focus: readonly string[],
     started: number,
+    generation: number,
   ): Promise<R & { view?: PageView }> {
     const { page } = result.after;
     if (page === "closed") return result;
     const view: PageView =
       page === "loading"
         ? { kind: "none", reason: "loading" }
-        : await pageView(session, tabId, focus, started);
+        : await pageView(session, tabId, focus, started, generation);
     return { ...result, view };
   }
 
@@ -1346,12 +1429,13 @@ export function createHandlers<Handle>({
     tabId: number,
     focus: readonly string[],
     started: number,
+    generation: number,
   ): Promise<PageView> {
     if (now() - started > VIEW_START_LIMIT_MS) return UNREADABLE_VIEW;
     const before = views.document(tabId);
     let read: TreeRead;
     try {
-      read = await viewRead(session, tabId);
+      read = await viewRead(session, tabId, generation);
     } catch (error: unknown) {
       return refusedView(session, tabId, error);
     }
@@ -1359,7 +1443,7 @@ export function createHandlers<Handle>({
   }
 
   /** The tree the view shows, within VIEW_READ_MS; not an act, so wait_for's mark stays. */
-  async function viewRead(session: string, tabId: number): Promise<TreeRead> {
+  async function viewRead(session: string, tabId: number, generation: number): Promise<TreeRead> {
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
     const timer = timers.setTimeout(
       () => reject(new Error("The view's read timed out.")),
@@ -1367,7 +1451,7 @@ export function createHandlers<Handle>({
     );
     try {
       const reply = await Promise.race([
-        pages.request(session, tabId, "read_page", { filter: VIEW_FILTER }),
+        pages.request(session, tabId, "read_page", { filter: VIEW_FILTER }, generation),
         timedOut,
       ]);
       return treeReadOf(reply, tabId);
@@ -1398,23 +1482,31 @@ export function createHandlers<Handle>({
   }
 
   /** Reads what the page in a tab wrote to its console, through the content script. */
-  async function readConsole(session: string, params: Params): Promise<Result<"read_console">> {
+  async function readConsole(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"read_console">> {
     const tabId = tabIdParam(params, "read_console");
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
     const timer = timers.setTimeout(() => reject(consoleTimeout(tabId)), READ_CONSOLE_TIMEOUT_MS);
     try {
-      return await Promise.race([recordedConsole(session, tabId), timedOut]);
+      return await Promise.race([recordedConsole(session, tabId, generation), timedOut]);
     } finally {
       timers.clearTimeout(timer);
     }
   }
 
-  async function recordedConsole(session: string, tabId: number): Promise<Result<"read_console">> {
+  async function recordedConsole(
+    session: string,
+    tabId: number,
+    generation: number,
+  ): Promise<Result<"read_console">> {
     // The recording of the page a navigation under way brings, not of the page it replaces.
     await navigationSettled(session, tabId);
     const begun = navigations.begun(tabId);
     const live = recordings.liveRecording(session, tabId);
-    const reply = await pages.request(session, tabId, "read_console", {});
+    const reply = await pages.request(session, tabId, "read_console", {}, generation);
     // The reply comes from the page's content process: own fields only, and the caps again.
     const result = parseConsoleResult(reply);
     if (result === undefined) {
@@ -1444,7 +1536,11 @@ export function createHandlers<Handle>({
    * Saves the file at a URL on a site the session may already act on into Firefox's download
    * folder. Never asks.
    */
-  async function download(session: string, params: Params): Promise<Result<"download">> {
+  async function download(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"download">> {
     const url = own(params, "url");
     if (typeof url !== "string") {
       throw new ToolError("invalid_params", "download needs url to be a string.");
@@ -1460,7 +1556,7 @@ export function createHandlers<Handle>({
     const problem = downloadNameProblem(filename);
     if (problem !== undefined) throw new ToolError("invalid_params", problem);
     // A string: downloadNameProblem refuses anything else.
-    return downloads.save(session, href, String(filename));
+    return downloads.save(session, href, String(filename), generation);
   }
 
   /**
@@ -1581,9 +1677,14 @@ export function createHandlers<Handle>({
    * Runs the bundled input probe in a tab on a site the session may act on. Never asks: the
    * site must already be allowed, through tab_open or navigate and the user's click.
    */
-  async function probeInput(session: string, params: Params): Promise<Result<"probe_input">> {
+  async function probeInput(
+    session: string,
+    params: Params,
+    generation: number,
+  ): Promise<Result<"probe_input">> {
     const tabId = tabIdParam(params, "probe_input");
     const site = await allowedPageSite({ browser, groups, access }, session, tabId);
+    refuseIfEnded(access, session, generation);
     const frames = await injectProbe(tabId, site);
     const top = frames.find((frame) => frame.frameId === 0);
     if (top === undefined || top.error !== undefined || top.result === undefined) {
@@ -1645,7 +1746,7 @@ export function createHandlers<Handle>({
     const tab = await existingTab(tabId);
     // No await from here to the load, so the tab cannot leave the group in between.
     if (group === undefined || tab.groupId !== group.id) throw notInGroup(tabId);
-    refuseIfEnded(session, generation);
+    refuseIfEnded(access, session, generation);
     const site = siteOf(url);
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
@@ -1723,7 +1824,7 @@ export function createHandlers<Handle>({
     ) {
       return current;
     }
-    refuseIfEnded(session, generation);
+    refuseIfEnded(access, session, generation);
     return waitForLoad(
       browser,
       timers,
@@ -1821,6 +1922,24 @@ function watchTopDocuments(
       const oldest = documents.values().next();
       if (!oldest.done) documents.delete(oldest.value);
     }
+  }
+}
+
+/**
+ * Refuses to go on with a request whose session ended after the request arrived. Called right
+ * before a browser call that acts, with no await in between. Never after one: what it did has
+ * happened, and refusing then would misreport it.
+ */
+export function refuseIfEnded(
+  access: Pick<SiteAccess, "generation">,
+  session: string,
+  generation: number,
+): void {
+  if (access.generation(session) !== generation) {
+    throw new ToolError(
+      "session_ended",
+      "The session ended before Foxleash could finish the request.",
+    );
   }
 }
 

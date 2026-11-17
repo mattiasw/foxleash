@@ -9,13 +9,14 @@ interface Request {
   tabId: number;
   type: string;
   params: Record<string, unknown>;
+  generation: number;
   at: number;
 }
 
 describe("waitForPage", { timeout: 10000 }, () => {
   it("asks the page every WAIT_POLL_MS until it answers true", async () => {
     const { timers, pages, requests, answer, elapsed } = setup();
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "Saved" }, 10_000);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "Saved" }, 10_000, 0);
     for (let poll = 0; poll < 3; poll += 1) {
       answer(false);
       await flush();
@@ -32,7 +33,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
 
   it("retries a page in transition, then resolves once it answers true", async () => {
     const { timers, pages, requests, answer, fail, elapsed } = setup();
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { selector: "#done" }, 10_000);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { selector: "#done" }, 10_000, 0);
     const codes = ["page_changed", "page_unreachable", "page_timeout", "page_loading"];
     for (const [index, code] of codes.entries()) {
       fail(new ToolError(code, "In transition."));
@@ -53,7 +54,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
   it("rejects at once with any other error, and asks no more", async () => {
     const { timers, pages, requests, fail } = setup();
     const refusal = new ToolError("site_not_approved", "Not approved.");
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 0);
     fail(refusal);
     await assert.rejects(waiting, (error: unknown) => error === refusal);
     assert.equal(timers.pending(), 0);
@@ -62,9 +63,22 @@ describe("waitForPage", { timeout: 10000 }, () => {
     assert.equal(requests.length, 1);
   });
 
+  it("rejects at once when the session ended, asking with the generation it was given", async () => {
+    const { timers, pages, requests, fail } = setup();
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 3);
+    const ended = new ToolError("session_ended", "Ended.");
+    fail(ended);
+    await assert.rejects(waiting, (error: unknown) => error === ended);
+    assert.deepEqual(
+      requests.map(({ generation }) => generation),
+      [3],
+    );
+    assert.equal(timers.pending(), 0);
+  });
+
   it("rejects with an error that only looks like a retried one by its message", async () => {
     const { timers, pages, fail } = setup();
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 0);
     const plain = new Error("page_changed");
     fail(plain);
     await assert.rejects(waiting, (error: unknown) => error === plain);
@@ -73,7 +87,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
 
   it("resolves false at the deadline while a request is pending, and starts nothing after", async () => {
     const { timers, pages, requests, answer, elapsed } = setup();
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 1000);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 1000, 0);
     answer(false);
     await flush();
     tick(timers, elapsed, WAIT_POLL_MS);
@@ -93,7 +107,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
   it("rejects at the deadline with the last poll's retried error", async () => {
     const { timers, pages, fail, elapsed } = setup();
     const changed = new ToolError("page_changed", "Changed.");
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 300);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 300, 0);
     fail(new ToolError("page_unreachable", "Unreachable."));
     await flush();
     tick(timers, elapsed, WAIT_POLL_MS);
@@ -106,7 +120,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
 
   it("resolves false at the deadline when a false followed the retried error", async () => {
     const { timers, pages, answer, fail, elapsed } = setup();
-    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 300);
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 300, 0);
     fail(new ToolError("page_changed", "Changed."));
     await flush();
     tick(timers, elapsed, WAIT_POLL_MS);
@@ -120,7 +134,7 @@ describe("waitForPage", { timeout: 10000 }, () => {
   it("keeps asking after any reply other than exactly true", async () => {
     for (const reply of ["true", 1, {}, null, undefined]) {
       const { timers, pages, requests, answer, elapsed } = setup();
-      const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000);
+      const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 0);
       answer(reply);
       await flush();
       tick(timers, elapsed, WAIT_POLL_MS);
@@ -211,8 +225,14 @@ function setup() {
   const elapsed = { ms: 0 };
   const replies: PromiseWithResolvers<unknown>[] = [];
   const pages = {
-    request(session: string, tabId: number, type: string, params: Record<string, unknown>) {
-      requests.push({ session, tabId, type, params, at: elapsed.ms });
+    request(
+      session: string,
+      tabId: number,
+      type: string,
+      params: Record<string, unknown>,
+      generation: number,
+    ) {
+      requests.push({ session, tabId, type, params, generation, at: elapsed.ms });
       const reply = Promise.withResolvers<unknown>();
       replies.push(reply);
       return reply.promise;

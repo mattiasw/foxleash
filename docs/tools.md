@@ -26,7 +26,13 @@ Each agent session's tabs open in an orange tab group titled Foxleash, and Foxle
 tabs in that group, including tabs you move into it and tabs that a page in the group opens,
 also after your own click. When the agent session ends, Foxleash closes its group if the group
 holds only blank tabs, so pages you may still be reading stay open. Those tabs no longer show ON
-on the toolbar button, unless the same session reconnects.
+on the toolbar button, unless the same session reconnects. A tool call still running when the
+agent session ends stops before its next step in the browser: it sends no more input or files to
+the page, opens, selects or closes no tab, starts loading no page, resizes no window, takes no
+screenshot and saves no file. A blank tab it was opening right then is closed again. A step it
+took before the session ended, such as a click already sent or a page that already began
+loading, is not undone: a tab whose page began loading stays open, and Foxleash does not select it
+once the session has ended.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
 outside an agent session's group when the program is too old for the add-on or newer than it;
@@ -548,7 +554,8 @@ recipe only when you click Save there; Discard drops it.
   or ask you about a site, and cannot close the page's tab or load another page in it.
 - After three recipe pages or pages asking for sites that you discarded, refused or closed,
   Foxleash opens no more in that session.
-- A page still open when the session ends stays open and can still save.
+- A page still open when the session ends stays open and can still save. A page not yet shown
+  when the session ends is not shown.
 
 ### `list_recipes` and `get_recipe`
 

@@ -35,8 +35,8 @@ const WATCHED = { watch: "w.1", element: BUTTON };
 describe("act settle", { timeout: 10000 }, () => {
   describe("on a page that stays", () => {
     it("answers unchanged once the page has been quiet for QUIET_MS", async () => {
-      const { act, finish, polls } = await started();
-      const { after } = await act();
+      const { act, finish, polls, generations } = await started();
+      const { after } = await act(WATCHED, undefined, 7);
       const { value, elapsed } = await finish(after);
       assert.deepEqual(value, { element: BUTTON, page: "unchanged" });
       assert.equal(elapsed, QUIET_MS);
@@ -44,6 +44,7 @@ describe("act settle", { timeout: 10000 }, () => {
         { session: "s1", tabId: polls[0]?.tabId, type: "page_changes", params: { watch: "w.1" } },
         { session: "s1", tabId: polls[0]?.tabId, type: "page_changes", params: { watch: "w.1" } },
       ]);
+      assert.deepEqual(generations, [7, 7]);
     });
 
     it("answers changed when the page changed, and waits until it is quiet again", async () => {
@@ -238,7 +239,7 @@ describe("act settle", { timeout: 10000 }, () => {
         const { settle, finish, page, tab, timers } = await started();
         page.changes = changes;
         page.quietMs = QUIET_MS;
-        const watch = settle.begin("s1", tab.id);
+        const watch = settle.begin("s1", tab.id, 0);
         await flush();
         watch.sent();
         // The deadline passes within MIN_SETTLE_MS of the reply, after a quiet poll.
@@ -522,7 +523,7 @@ describe("act settle", { timeout: 10000 }, () => {
         queries.push(info);
         return query(info);
       };
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       assert.deepEqual(queries, [{ groupId: tab.groupId }]);
@@ -531,7 +532,7 @@ describe("act settle", { timeout: 10000 }, () => {
 
     it("leaves openedTabs out when the group was not known when the act was sent", async () => {
       const { settle, fake, finish, groups, tab } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       watch.sent();
       void groups.ensureGroup("s1", fake.openTab());
       const { value } = await finish(watch.after(WATCHED));
@@ -562,7 +563,7 @@ describe("act settle", { timeout: 10000 }, () => {
   describe("bounds", () => {
     it("answers at once when the deadline passed during the act's page request", async () => {
       const { settle, tab, timers, polls } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       timers.advance(PAGE_REQUEST_MS);
@@ -577,7 +578,7 @@ describe("act settle", { timeout: 10000 }, () => {
 
     it("answers with what it knows when the deadline passes during the settle", async () => {
       const { settle, fake, finish, tab, timers, waits } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       begin(fake, tab.id, NEXT);
@@ -592,7 +593,7 @@ describe("act settle", { timeout: 10000 }, () => {
     it("answers the last poll's outcome when the deadline passes during the quiet wait", async () => {
       const { settle, finish, page, tab, timers } = await started();
       page.restless = true;
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       timers.advance(PAGE_REQUEST_MS - 500);
@@ -604,7 +605,7 @@ describe("act settle", { timeout: 10000 }, () => {
 
     it("looks up no address once the deadline passed", async () => {
       const { settle, fake, finish, tab, timers } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       begin(fake, tab.id, NEXT);
@@ -631,7 +632,7 @@ describe("act settle", { timeout: 10000 }, () => {
 
     it("sends no poll once the deadline passed while it waited for the navigation", async () => {
       const { settle, fake, finish, tab, timers, polls } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       begin(fake, tab.id, NEXT);
@@ -651,7 +652,7 @@ describe("act settle", { timeout: 10000 }, () => {
       const { settle, page, tab, timers } = await started();
       page.state = "superseded";
       const before = timers.pending();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       assert.deepEqual(await watch.after(WATCHED), { element: BUTTON, page: "unknown" });
@@ -664,7 +665,7 @@ describe("act settle", { timeout: 10000 }, () => {
     it("leaves no timer of its own behind, after the settle and after stop", async () => {
       const { settle, tab, timers, finish } = await started();
       const before = timers.pending();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       await finish(watch.after(WATCHED));
@@ -677,7 +678,7 @@ describe("act settle", { timeout: 10000 }, () => {
     it("clears every timer when stopped during the settle", async () => {
       const { settle, tab, timers } = await started();
       const before = timers.pending();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       await flush();
       watch.sent();
       void watch.after(WATCHED);
@@ -689,7 +690,7 @@ describe("act settle", { timeout: 10000 }, () => {
 
     it("answers unknown, without polling, for an act that was never sent", async () => {
       const { settle, tab, polls } = await started();
-      const watch = settle.begin("s1", tab.id);
+      const watch = settle.begin("s1", tab.id, 0);
       assert.deepEqual(await watch.after(WATCHED), { element: BUTTON, page: "unknown" });
       watch.stop();
       assert.deepEqual(polls, []);
@@ -786,6 +787,7 @@ async function started() {
     },
   };
   const polls: Poll[] = [];
+  const generations: number[] = [];
   let answer = async (): Promise<unknown> => {
     if (page.state !== "current") return { state: page.state };
     if (page.restless) page.change();
@@ -798,8 +800,10 @@ async function started() {
       tabId: number,
       type: string,
       params: Record<string, unknown>,
+      generation: number,
     ) => {
       polls.push({ session, tabId, type, params });
+      generations.push(generation);
       return answer();
     },
   };
@@ -839,8 +843,8 @@ async function started() {
   const tab = fake.tabs.get(opened.id) ?? opened;
 
   /** Begins a watch, sends the act, runs `during` as the page acts, and gets the reply. */
-  async function act(reply: unknown = WATCHED, during?: () => void) {
-    const watch = settle.begin("s1", tab.id);
+  async function act(reply: unknown = WATCHED, during?: () => void, generation = 0) {
+    const watch = settle.begin("s1", tab.id, generation);
     // The session's group resolves.
     await flush();
     watch.sent();
@@ -871,6 +875,7 @@ async function started() {
     tab,
     page,
     polls,
+    generations,
     waits,
     network,
     act,

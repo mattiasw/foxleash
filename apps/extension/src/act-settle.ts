@@ -50,7 +50,7 @@ export interface ActSettleDeps<Handle> {
 
 export interface ActSettle {
   /** Starts watching an act in the tab: call it at the start of the tool call. */
-  begin(session: string, tabId: number): ActWatch;
+  begin(session: string, tabId: number, generation: number): ActWatch;
 }
 
 export interface ActWatch {
@@ -92,7 +92,7 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
   const { browser, groups, access, timers, navigations, network, pages, now } = deps;
   return { begin };
 
-  function begin(session: string, tabId: number): ActWatch {
+  function begin(session: string, tabId: number, generation: number): ActWatch {
     const started: Handle[] = [];
     let expired = false;
     const deadline = Promise.withResolvers<typeof DEADLINE>();
@@ -184,7 +184,7 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
           if (watch === undefined) return { page: "unknown" };
           const asked = now();
           const poll = await raced(
-            pages.request(session, tabId, "page_changes", { watch }).then(
+            pages.request(session, tabId, "page_changes", { watch }, generation).then(
               (answer) => answer,
               () => FAILED,
             ),

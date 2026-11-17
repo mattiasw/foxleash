@@ -1,18 +1,23 @@
 import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
 import type { BrowserApi, DownloadDelta, Timers } from "./browser-api.ts";
-import { ToolError } from "./handlers.ts";
+import { refuseIfEnded, ToolError } from "./handlers.ts";
 import { siteOf } from "./site.ts";
 import { type SiteAccess, siteBlocked } from "./site-access.ts";
 
 /** Saves files from approved sites into Firefox's download folder (ADR 0019). */
 export interface Downloads {
   /** `url` is a canonical http(s) href and `filename` a name `downloadNameProblem` accepts. */
-  save(session: string, url: string, filename: string): Promise<{ path: string; bytes: number }>;
+  save(
+    session: string,
+    url: string,
+    filename: string,
+    generation: number,
+  ): Promise<{ path: string; bytes: number }>;
 }
 
 export interface DownloadsDeps<Handle> {
   browser: Pick<BrowserApi, "downloads">;
-  access: Pick<SiteAccess, "view">;
+  access: Pick<SiteAccess, "view" | "generation">;
   timers: Timers<Handle>;
   fetch: (
     url: string,
@@ -43,6 +48,7 @@ export function createDownloads<Handle>({
     session: string,
     url: string,
     filename: string,
+    generation: number,
   ): Promise<{ path: string; bytes: number }> {
     if (busy) {
       throw new ToolError(
@@ -63,7 +69,7 @@ export function createDownloads<Handle>({
     }, DOWNLOAD_TIMEOUT_MS);
     try {
       return await Promise.race([
-        fetchAndSave(session, url, filename, controller.signal),
+        fetchAndSave(session, url, filename, controller.signal, generation),
         timedOut,
       ]);
     } finally {
@@ -79,8 +85,10 @@ export function createDownloads<Handle>({
     url: string,
     filename: string,
     signal: AbortSignal,
+    generation: number,
   ): Promise<{ path: string; bytes: number }> {
     await downloadGate(session, url, notApproved);
+    refuseIfEnded(access, session, generation);
     let response: Response;
     try {
       response = await fetch(url, { credentials: "include", cache: "no-store", signal });
@@ -101,6 +109,7 @@ export function createDownloads<Handle>({
     await downloadGate(session, response.url, ledElsewhere);
     // The call already answered with a timeout: a file saved now would only be left behind.
     if (signal.aborted) throw fetchFailed();
+    refuseIfEnded(access, session, generation);
     const path = await saveFile(blob, filename, signal);
     return { path, bytes };
   }

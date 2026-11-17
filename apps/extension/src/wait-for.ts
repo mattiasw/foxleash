@@ -24,6 +24,7 @@ export function waitForPage<Handle>(
   tabId: number,
   check: { text: string } | { selector: string },
   timeoutMs: number,
+  generation: number,
 ): Promise<boolean> {
   const { promise, resolve, reject } = Promise.withResolvers<boolean>();
   let settled = false;
@@ -41,7 +42,7 @@ export function waitForPage<Handle>(
 
   async function poll(): Promise<void> {
     try {
-      const reply = await pages.request(session, tabId, "wait_for", check);
+      const reply = await pages.request(session, tabId, "wait_for", check, generation);
       if (settled) return;
       retried = undefined;
       // The reply is the page's: only exactly true counts.

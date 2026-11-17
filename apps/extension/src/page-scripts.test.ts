@@ -40,7 +40,7 @@ describe("page script requests", { timeout: 10000 }, () => {
   it("refuses a tab that does not exist", async () => {
     const { fake, pages, open } = setup();
     await open("s1");
-    await assert.rejects(pages.request("s1", 99, "echo", {}), {
+    await assert.rejects(pages.request("s1", 99, "echo", {}, 0), {
       code: "tab_not_found",
       message: "Tab 99 does not exist.",
     });
@@ -59,7 +59,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       ["s2", inS1],
       ["s3", inS1],
     ] as const) {
-      await assert.rejects(pages.request(session, tabId, "echo", {}), {
+      await assert.rejects(pages.request(session, tabId, "echo", {}, 0), {
         code: "tab_not_in_group",
         message: `Tab ${tabId} is not in this session's tab group; open a tab with tab_open first.`,
       });
@@ -71,7 +71,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const { fake, pages, call, promptOf } = setup();
     const opened = call("s1", "tab_open", { url: `${SITE}/` });
     const prompt = await promptOf("s1");
-    await assert.rejects(pages.request("s1", prompt.tabId, "echo", {}), {
+    await assert.rejects(pages.request("s1", prompt.tabId, "echo", {}, 0), {
       code: "approval_pending",
       message: `Foxleash is waiting for the user to answer in tab ${prompt.tabId} whether to allow ${SITE}. Try again after the user has answered.`,
     });
@@ -86,7 +86,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     for (const url of ["about:blank", promptUrl, "file:///home/x.html"]) {
       fake.navigateByUser(tab.id, url);
       await flush();
-      await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
         code: "page_not_web",
         message: `Foxleash acts only on http and https pages, and tab ${tab.id} shows another kind of page.`,
       });
@@ -104,9 +104,9 @@ describe("page script requests", { timeout: 10000 }, () => {
       message:
         "Foxleash does not act on https://www.paypal.com: it is on Foxleash's blocklist, which by default lists common financial and health sites.",
     };
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), blocked);
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), blocked);
     await grant("https://www.paypal.com");
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), blocked);
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), blocked);
     assertNothingSent(fake);
   });
 
@@ -115,7 +115,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const tab = await open("s1");
     fake.navigateByUser(tab.id, `${SITE}/x`);
     await flush();
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
       code: "site_not_approved",
       message: `Foxleash is not allowed on ${SITE} in this session; call navigate with tab ${tab.id} and action reload to ask the user.`,
     });
@@ -136,7 +136,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       return { ok: true, site: SITE, result: { answer: 42 } };
     });
     const params = { text: "hi" };
-    assert.deepEqual(await pages.request("s1", tab.id, "echo", params), { answer: 42 });
+    assert.deepEqual(await pages.request("s1", tab.id, "echo", params, 0), { answer: 42 });
     assert.deepEqual(fake.injections, [
       { tabId: tab.id, frameIds: [0], files: [CONTENT_SCRIPT], injectImmediately: true },
     ]);
@@ -152,8 +152,8 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant(SITE);
     const tab = await open("s1", `${SITE}/`);
     fake.setContentScript(tab.id, async () => ({ ok: true, site: SITE, result: 1 }));
-    await pages.request("s1", tab.id, "echo", {});
-    await pages.request("s1", tab.id, "echo", {});
+    await pages.request("s1", tab.id, "echo", {}, 0);
+    await pages.request("s1", tab.id, "echo", {}, 0);
     assert.equal(fake.injections.length, 2);
     assert.equal(fake.tabMessages.length, 2);
   });
@@ -170,9 +170,9 @@ describe("page script requests", { timeout: 10000 }, () => {
     const onSend = () => {
       sends += 1;
     };
-    await rejectsWith(pages.request("s1", outside.id, "click", {}, onSend), "tab_not_in_group");
+    await rejectsWith(pages.request("s1", outside.id, "click", {}, 0, onSend), "tab_not_in_group");
     await rejectsWith(
-      pages.request("s1", approvedNot.id, "click", {}, onSend),
+      pages.request("s1", approvedNot.id, "click", {}, 0, onSend),
       "site_not_approved",
     );
     assert.equal(sends, 0);
@@ -186,7 +186,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     await flush();
     sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
     fake.setContentScript(tab.id, contentScript(SITE));
-    assert.deepEqual(await pages.request("s1", tab.id, "echo", { a: 1 }), { echoed: { a: 1 } });
+    assert.deepEqual(await pages.request("s1", tab.id, "echo", { a: 1 }, 0), { echoed: { a: 1 } });
   });
 
   it("round-trips through the content script's dispatcher, its errors included", async () => {
@@ -194,18 +194,18 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant(SITE);
     const tab = await open("s1", `${SITE}/`);
     fake.setContentScript(tab.id, contentScript(SITE));
-    assert.deepEqual(await pages.request("s1", tab.id, "echo", { a: [1, "b"] }), {
+    assert.deepEqual(await pages.request("s1", tab.id, "echo", { a: [1, "b"] }, 0), {
       echoed: { a: [1, "b"] },
     });
-    await assert.rejects(pages.request("s1", tab.id, "stale", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "stale", {}, 0), {
       code: "stale_ref",
       message: "Element x-1 is from a page the tab no longer shows.",
     });
-    await assert.rejects(pages.request("s1", tab.id, "secret", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "secret", {}, 0), {
       code: "page_error",
       message: `Foxleash could not complete the request in the page in tab ${tab.id}.`,
     });
-    await assert.rejects(pages.request("s1", tab.id, "toString", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "toString", {}, 0), {
       code: "invalid_params",
       message: "Foxleash's page script has no request of that type.",
     });
@@ -221,7 +221,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       fake.setContentScript(tab.id, (message) =>
         handlePageMessage(message, { site, handlers, adopt: noop, before: noop }),
       );
-      await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
         code: "page_changed",
         message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
       });
@@ -271,7 +271,7 @@ describe("page script requests", { timeout: 10000 }, () => {
           await flush();
           return [{ frameId: 0, result: null }];
         });
-        await rejectsWith(pages.request("s1", tab.id, "echo", {}), code);
+        await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), code);
         assert.deepEqual(fake.tabMessages, []);
       });
     }
@@ -282,7 +282,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         access.forget("s1", SITE);
         return [{ frameId: 0, result: null }];
       });
-      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "site_not_approved");
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "site_not_approved");
       assert.deepEqual(fake.tabMessages, []);
     });
   });
@@ -297,7 +297,7 @@ describe("page script requests", { timeout: 10000 }, () => {
           await flush();
           return { ok: true, site: SITE, result: "page text" };
         });
-        await rejectsWith(pages.request("s1", tab.id, "echo", {}), code);
+        await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), code);
         assert.equal(fake.tabMessages.length, 1);
       });
     }
@@ -308,7 +308,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         access.forget("s1", SITE);
         return { ok: true, site: SITE, result: "page text" };
       });
-      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "site_not_approved");
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "site_not_approved");
     });
 
     it("refuses the answer from a tab that shows another allowed site by then", async () => {
@@ -319,7 +319,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (shown !== undefined) shown.url = "https://b.example/";
         return { ok: true, site: SITE, result: "page text" };
       });
-      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_changed");
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_changed");
     });
   });
 
@@ -350,7 +350,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const tab = await open("s1", `${SITE}/secret-path`);
     const timersBefore = timers.pending();
     fake.failNextInjection(new Error(`Missing host permission for ${SITE}/secret-path`));
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
       code: "page_unreachable",
       message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
     });
@@ -366,7 +366,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     t.mock.method(fake.browser.scripting, "executeScript", () => {
       throw new Error(`Bad target ${SITE}/`);
     });
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
       code: "page_unreachable",
       message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
     });
@@ -386,7 +386,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const tab = await open("s1", `${SITE}/`);
       fake.setContentScript(tab.id, contentScript(SITE));
       fake.injectionResults = frames;
-      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_unreachable", name);
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_unreachable", name);
       assert.deepEqual(fake.tabMessages, []);
     });
   }
@@ -397,7 +397,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const tab = await open("s1", `${SITE}/`);
     fake.setContentScript(tab.id, contentScript(SITE));
     fake.injectionResults = [{ frameId: 3, error: new Error("boom") }, { frameId: 0 }];
-    assert.deepEqual(await pages.request("s1", tab.id, "echo", {}), { echoed: {} });
+    assert.deepEqual(await pages.request("s1", tab.id, "echo", {}, 0), { echoed: {} });
   });
 
   it("times out an injection that never settles, sending nothing", async (t) => {
@@ -407,7 +407,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const timersBefore = timers.pending();
     fake.setContentScript(tab.id, contentScript(SITE));
     t.mock.method(fake.browser.scripting, "executeScript", () => new Promise(() => {}));
-    const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+    const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
     await flush();
     timers.advance(PAGE_INJECTION_MS - 1);
     await flush();
@@ -427,7 +427,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const tab = await open("s1", `${SITE}/`);
     const timersBefore = timers.pending();
     fake.setContentScript(tab.id, () => new Promise(() => {}));
-    const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+    const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
     await flush();
     assert.equal(fake.tabMessages.length, 1);
     timers.advance(PAGE_REPLY_MS - 1);
@@ -448,7 +448,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const tab = await open("s1", `${SITE}/`);
       const timersBefore = timers.pending();
       fake.setContentScript(tab.id, () => new Promise(() => {}));
-      const { request, settled } = track(pages.request("s1", tab.id, type, {}));
+      const { request, settled } = track(pages.request("s1", tab.id, type, {}, 0));
       await flush();
       assert.equal(fake.tabMessages.length, 1);
       timers.advance(PAGE_REPLY_MS - 1);
@@ -470,7 +470,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const tab = await open("s1", `${SITE}/`);
       const timersBefore = timers.pending();
       fake.setContentScript(tab.id, () => new Promise(() => {}));
-      const { request } = track(pages.request("s1", tab.id, type, {}));
+      const { request } = track(pages.request("s1", tab.id, type, {}, 0));
       await flush();
       timers.advance(PAGE_REPLY_MS);
       await assert.rejects(request, {
@@ -491,7 +491,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant(SITE);
     const tab = await open("s1", `${SITE}/`);
     const timersBefore = timers.pending();
-    await assert.rejects(pages.request("s1", tab.id, "echo", {}), {
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
       code: "page_changed",
       message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
     });
@@ -518,7 +518,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const tab = await open("s1", `${SITE}/`);
       const timersBefore = timers.pending();
       fake.setContentScript(tab.id, () => new Promise(() => {}));
-      const request = pages.request("s1", tab.id, "echo", {});
+      const request = pages.request("s1", tab.id, "echo", {}, 0);
       await flush();
       assert.equal(fake.tabMessages.length, 1);
       end(fake, tab.id);
@@ -534,7 +534,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     fake.setContentScript(tab.id, contentScript(SITE));
     fake.navigateByUser(tab.id, `${SITE}/next`);
     await flush();
-    await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_changed");
+    await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_changed");
     assert.equal(fake.tabMessages.length, 1);
   });
 
@@ -543,7 +543,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant(SITE);
     const tab = await open("s1", `${SITE}/`);
     fake.setContentScript(tab.id, async () => ({ ok: true, site: SITE, result: () => 1 }));
-    await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_changed");
+    await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_changed");
   });
 
   it("checks the reply", async () => {
@@ -551,9 +551,9 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant(SITE);
     const tab = await open("s1", `${SITE}/`);
     fake.setContentScript(tab.id, async () => ({ ok: true, site: "https://b.example" }));
-    await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_changed");
+    await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_changed");
     fake.setContentScript(tab.id, async () => undefined);
-    await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_error");
+    await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_error");
   });
 
   describe("tags each message for the document that takes it", () => {
@@ -566,9 +566,9 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, open, tab } = await grantedTab();
       const other = await open("s1", `${SITE}/other`);
       fake.setContentScript(other.id, contentScript(SITE));
-      await pages.request("s1", other.id, "echo", {});
-      await pages.request("s1", tab.id, "echo", {});
-      await pages.request("s1", other.id, "echo", {});
+      await pages.request("s1", other.id, "echo", {}, 0);
+      await pages.request("s1", tab.id, "echo", {}, 0);
+      await pages.request("s1", other.id, "echo", {}, 0);
       assert.deepEqual(tagsSent(fake), ["a", "b", "c"]);
       assert.deepEqual(
         fake.tabMessages.map((sent) => sent.tabId),
@@ -589,7 +589,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         }
       });
       for (let sent = 0; sent < TAG_BLOCK + 1; sent += 1) {
-        await pages.request("s1", tab.id, "echo", {});
+        await pages.request("s1", tab.id, "echo", {}, 0);
       }
       assert.deepEqual(marks, [
         [TAG_BLOCK, 0],
@@ -603,10 +603,10 @@ describe("page script requests", { timeout: 10000 }, () => {
 
     it("hands out tags above the stored mark after a restart", async () => {
       const { fake, pages, tab, restart } = await grantedTab();
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       const restarted = restart();
-      await restarted.request("s1", tab.id, "echo", {});
-      await restarted.request("s1", tab.id, "echo", {});
+      await restarted.request("s1", tab.id, "echo", {}, 0);
+      await restarted.request("s1", tab.id, "echo", {}, 0);
       assert.deepEqual(tagsSent(fake), [
         "a",
         documentTag(TAG_BLOCK + 1),
@@ -619,17 +619,17 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, tab, restart } = await grantedTab();
       const get = t.mock.method(fake.browser.storage.local, "get");
       const set = t.mock.method(fake.browser.storage.local, "set");
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       const first = get.mock.callCount();
       get.mock.resetCalls();
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       // The gate reads storage too: what a request reads once the mark is known.
       const gate = get.mock.callCount();
       assert.equal(first, gate + 1);
       get.mock.resetCalls();
       set.mock.resetCalls();
       const restarted = restart();
-      const requests = [1, 2, 3].map(() => restarted.request("s1", tab.id, "echo", {}));
+      const requests = [1, 2, 3].map(() => restarted.request("s1", tab.id, "echo", {}, 0));
       await Promise.all(requests);
       assert.equal(get.mock.callCount(), 3 * gate + 1);
       assert.equal(set.mock.callCount(), 1);
@@ -647,7 +647,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (Object.hasOwn(items, TAG_MARK_KEY)) await stored.promise;
         await set(items);
       });
-      const request = track(pages.request("s1", tab.id, "echo", {}));
+      const request = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       assert.equal(request.settled(), false);
       assertNothingSent(fake);
@@ -670,7 +670,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         },
       );
       const timersBefore = timers.pending();
-      const first = track(pages.request("s1", tab.id, "echo", {}));
+      const first = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       timers.advance(TAG_RESERVE_MS - 1);
       await flush();
@@ -678,7 +678,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       timers.advance(1);
       await assert.rejects(first.request, REFUSED(tab.id));
       // A later request waits on the same write, which is not started again.
-      const second = track(pages.request("s1", tab.id, "echo", {}));
+      const second = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       timers.advance(TAG_RESERVE_MS);
       await assert.rejects(second.request, REFUSED(tab.id));
@@ -686,7 +686,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       assert.equal(mock.mock.callCount(), 1);
       stored.resolve();
       await flush();
-      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}), { echoed: {} });
+      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}, 0), { echoed: {} });
       assert.deepEqual(tagsSent(fake), ["a"]);
       assert.equal(timers.pending(), timersBefore);
       assert.deepEqual(warned(), []);
@@ -706,7 +706,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         await set(items);
       });
       const requests = Array.from({ length: TAG_BLOCK + 1 }, () =>
-        track(pages.request("s1", tab.id, "echo", {})),
+        track(pages.request("s1", tab.id, "echo", {}, 0)),
       );
       for (let turn = 0; turn < 5; turn += 1) await flush();
       assert.equal(writes.length, 1);
@@ -731,14 +731,14 @@ describe("page script requests", { timeout: 10000 }, () => {
       const warned = warnings(t);
       const { fake, pages, tab, restart } = await grantedTab();
       fake.failNextSet();
-      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
       assertNothingSent(fake);
       assert.equal(await storedMark(fake), undefined);
-      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}), { echoed: {} });
+      assert.deepEqual(await pages.request("s1", tab.id, "echo", {}, 0), { echoed: {} });
       const restarted = restart();
       fake.failNextSet();
-      await assert.rejects(restarted.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
-      await restarted.request("s1", tab.id, "echo", {});
+      await assert.rejects(restarted.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
+      await restarted.request("s1", tab.id, "echo", {}, 0);
       assert.deepEqual(tagsSent(fake), ["a", documentTag(TAG_BLOCK + 1)]);
       assert.deepEqual(warned(), [
         { event: "tag_mark_failed", error: "Error: Storage is full" },
@@ -761,16 +761,16 @@ describe("page script requests", { timeout: 10000 }, () => {
       });
       // The gate's reads in a request once the mark is known.
       const known = restart();
-      await known.request("s1", tab.id, "echo", {});
+      await known.request("s1", tab.id, "echo", {}, 0);
       const before = reads;
-      await known.request("s1", tab.id, "echo", {});
+      await known.request("s1", tab.id, "echo", {}, 0);
       // The gate runs before the tag is reserved, after the injection and after the answer.
       const gateReads = (reads - before) / 3;
       assert.ok(Number.isInteger(gateReads) && gateReads > 0);
       failAt = reads + gateReads + 1;
-      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
       assert.equal(reads, failAt);
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       assert.deepEqual(tagsSent(fake), [
         documentTag(TAG_BLOCK + 1),
         documentTag(TAG_BLOCK + 2),
@@ -785,23 +785,23 @@ describe("page script requests", { timeout: 10000 }, () => {
         const { fake, tab, restart } = await grantedTab();
         await fake.browser.storage.local.set({ [TAG_MARK_KEY]: mark });
         const pages = restart();
-        await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
-        await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+        await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
+        await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
         assertNothingSent(fake);
         assert.deepEqual(warned(), [{ event: "ignored_tag_mark" }, { event: "ignored_tag_mark" }]);
         // Read again on each request, so a repaired mark needs no restart.
         await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 7 });
-        await pages.request("s1", tab.id, "echo", {});
+        await pages.request("s1", tab.id, "echo", {}, 0);
         assert.deepEqual(tagsSent(fake), [documentTag(8)]);
       });
     }
 
     it("keeps counting from its own mark when the stored one goes down", async () => {
       const { fake, pages, tab } = await grantedTab();
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       await fake.browser.storage.local.set({ [TAG_MARK_KEY]: 0 });
       for (let sent = 1; sent < TAG_BLOCK + 1; sent += 1) {
-        await pages.request("s1", tab.id, "echo", {});
+        await pages.request("s1", tab.id, "echo", {}, 0);
       }
       const tags = tagsSent(fake);
       assert.equal(new Set(tags).size, TAG_BLOCK + 1);
@@ -813,7 +813,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const warned = warnings(t);
       const { fake, tab, restart } = await grantedTab();
       await fake.browser.storage.local.set({ [TAG_MARK_KEY]: MAX_TAG_NUMBER });
-      await assert.rejects(restart().request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      await assert.rejects(restart().request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
       assertNothingSent(fake);
       assert.deepEqual(warned(), [{ event: "tags_used_up" }]);
     });
@@ -823,9 +823,9 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, tab, restart } = await grantedTab();
       await fake.browser.storage.local.set({ [TAG_MARK_KEY]: MAX_TAG_NUMBER - 1 });
       const pages = restart();
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
       assert.equal(await storedMark(fake), MAX_TAG_NUMBER);
-      await assert.rejects(pages.request("s1", tab.id, "echo", {}), REFUSED(tab.id));
+      await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), REFUSED(tab.id));
       assert.deepEqual(tagsSent(fake), ["zzzzzzz"]);
       assert.deepEqual(warned(), [{ event: "tags_used_up" }]);
     });
@@ -833,7 +833,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     it("refuses a tab outside the group before it reserves a tag", async () => {
       const { fake, pages } = await grantedTab();
       const outside = fake.openTab({ url: `${SITE}/` });
-      await rejectsWith(pages.request("s1", outside.id, "echo", {}), "tab_not_in_group");
+      await rejectsWith(pages.request("s1", outside.id, "echo", {}, 0), "tab_not_in_group");
       assert.equal(await storedMark(fake), undefined);
       assertNothingSent(fake);
     });
@@ -859,7 +859,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const timersBefore = timers.pending();
       assert.equal(navigations.underWay(tab.id), false);
       begin(fake, tab.id, NEXT);
-      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       assertNothingSent(fake);
       timers.advance(NAVIGATION_WAIT_MS - 1);
@@ -877,7 +877,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, timers, tab } = await grantedTab();
       const timersBefore = timers.pending();
       begin(fake, tab.id, NEXT);
-      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       timers.advance(NAVIGATION_WAIT_MS - 1);
       await flush();
@@ -894,7 +894,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       assert.ok(shown !== undefined);
       shown.url = "about:blank";
       assert.equal(navigations.underWay(tab.id), false);
-      await rejectsWith(pages.request("s1", tab.id, "echo", {}), "page_not_web");
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_not_web");
       assertNothingSent(fake);
     });
 
@@ -911,7 +911,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         }
         return get(tabId);
       });
-      const request = pages.request("s1", tab.id, "echo", {});
+      const request = pages.request("s1", tab.id, "echo", {}, 0);
       await flush();
       assertNothingSent(fake);
       land(fake, tab.id, NEXT, answering("new page"));
@@ -922,7 +922,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     it("waits when the gate meets the swap of a navigation that began as the last one ended", async () => {
       const { fake, pages, tab } = await grantedTab();
       begin(fake, tab.id, NEXT);
-      const request = pages.request("s1", tab.id, "echo", {});
+      const request = pages.request("s1", tab.id, "echo", {}, 0);
       await flush();
       land(fake, tab.id, NEXT, answering("next page"));
       // The page's own script moves on as soon as it is parsed.
@@ -946,7 +946,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         }
         return [{ frameId: 0, result: null }];
       });
-      const request = pages.request("s1", tab.id, "echo", {});
+      const request = pages.request("s1", tab.id, "echo", {}, 0);
       await flush();
       assert.deepEqual(fake.tabMessages, []);
       land(fake, tab.id, NEXT, answering("new page"));
@@ -962,7 +962,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         begin(fake, tab.id, NEXT);
         return { ok: true, site: SITE, result: "old page" };
       });
-      const request = pages.request("s1", tab.id, "read_page", {});
+      const request = pages.request("s1", tab.id, "read_page", {}, 0);
       await flush();
       assert.equal(fake.tabMessages.length, 1);
       land(fake, tab.id, NEXT, answering("new page"));
@@ -981,7 +981,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         access.stop("s1");
         return { ok: true, site: SITE, result: "old page" };
       });
-      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}, 0));
       await flush();
       assert.equal(settled(), true);
       await rejectsWith(request, "session_stopped");
@@ -998,7 +998,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         return { ok: true, site: SITE, result: "old page" };
       };
       fake.setContentScript(tab.id, movingOn());
-      await rejectsWith(pages.request("s1", tab.id, "read_page", {}), "page_changed");
+      await rejectsWith(pages.request("s1", tab.id, "read_page", {}, 0), "page_changed");
       assert.equal(fake.tabMessages.length, 2);
       // A page still loading the next one at the end of the second run.
       let answers = 0;
@@ -1008,7 +1008,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         return { ok: true, site: SITE, result: "old page" };
       };
       fake.setContentScript(tab.id, leaving);
-      const request = pages.request("s1", tab.id, "read_page", {});
+      const request = pages.request("s1", tab.id, "read_page", {}, 0);
       await flush();
       land(fake, tab.id, NEXT, leaving);
       await assert.rejects(request, { code: LOADING.code, message: LOADING.message(tab.id) });
@@ -1022,7 +1022,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         await injected;
         return [{ frameId: 0, result: null }];
       });
-      const request = pages.request("s1", tab.id, "read_page", {});
+      const request = pages.request("s1", tab.id, "read_page", {}, 0);
       await flush();
       timers.advance(NAVIGATION_WAIT_MS);
       begin(fake, tab.id, NEXT);
@@ -1039,7 +1039,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         await injected;
         return [{ frameId: 0, result: null }];
       });
-      const request = pages.request("s1", tab.id, "read_page", {});
+      const request = pages.request("s1", tab.id, "read_page", {}, 0);
       await flush();
       timers.advance(NAVIGATION_WAIT_MS);
       begin(fake, tab.id, NEXT);
@@ -1054,7 +1054,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         begin(fake, tab.id, NEXT);
         return { ok: true, site: SITE, result: "clicked" };
       });
-      assert.equal(await pages.request("s1", tab.id, "click", {}), "clicked");
+      assert.equal(await pages.request("s1", tab.id, "click", {}, 0), "clicked");
       assert.equal(fake.tabMessages.length, 1);
       assert.equal(navigations.underWay(tab.id), true);
     });
@@ -1066,7 +1066,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         swap(fake, tab.id);
         return { ok: true, site: SITE, result: "clicked" };
       });
-      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}, 0));
       await flush();
       assert.equal(settled(), false);
       land(fake, tab.id, NEXT, answering("new page"));
@@ -1083,7 +1083,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (shown !== undefined) shown.url = "https://b.example/";
         return { ok: true, site: SITE, result: "clicked" };
       });
-      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}, 0));
       await flush();
       assert.equal(settled(), true);
       assert.equal(navigations.underWay(tab.id), true);
@@ -1098,7 +1098,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         swap(fake, tab.id);
         return { ok: true, site: SITE, result: "clicked" };
       });
-      const request = pages.request("s1", tab.id, "click", {});
+      const request = pages.request("s1", tab.id, "click", {}, 0);
       await flush();
       land(fake, tab.id, "https://b.example/", answering("other site"));
       await assert.rejects(request, ranChanged(tab.id, "click"));
@@ -1113,7 +1113,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         swap(fake, tab.id);
         return { ok: true, site: SITE, result: "clicked" };
       });
-      const { request, settled } = track(pages.request("s1", tab.id, "click", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "click", {}, 0));
       await flush();
       timers.advance(NAVIGATION_WAIT_MS - 1);
       await flush();
@@ -1139,7 +1139,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         swap(fake, tab.id);
         return { ok: true, site: SITE, result: "clicked" };
       });
-      const request = pages.request("s1", tab.id, "click", {});
+      const request = pages.request("s1", tab.id, "click", {}, 0);
       await flush();
       timers.advance(NAVIGATION_WAIT_MS / 2);
       inject();
@@ -1159,7 +1159,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (injections === 1) begin(fake, tab.id, NEXT);
         return [{ frameId: 0, result: null }];
       });
-      const request = pages.request("s1", tab.id, "click", { ref: "a1" });
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" }, 0);
       await flush();
       assert.deepEqual(fake.tabMessages, []);
       land(fake, tab.id, NEXT, answering("clicked"));
@@ -1175,7 +1175,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         land(fake, tab.id, NEXT, answering("new page"));
         return { ok: true, site: "https://b.example", result: "clicked" };
       });
-      await rejectsWith(pages.request("s1", tab.id, "type", {}), "page_changed");
+      await rejectsWith(pages.request("s1", tab.id, "type", {}, 0), "page_changed");
       assert.equal(fake.tabMessages.length, 1);
     });
 
@@ -1184,13 +1184,13 @@ describe("page script requests", { timeout: 10000 }, () => {
       fake.setContentScript(tab.id, answering("clicked"));
       const seen: [number, number][] = [];
       const onSend = () => seen.push([fake.injections.length, fake.tabMessages.length]);
-      assert.equal(await pages.request("s1", tab.id, "click", {}, onSend), "clicked");
+      assert.equal(await pages.request("s1", tab.id, "click", {}, 0, onSend), "clicked");
       assert.deepEqual(seen, [[1, 0]]);
       fake.setContentScript(tab.id, async () => {
         begin(fake, tab.id, NEXT);
         return { ok: true, site: SITE, result: "old page" };
       });
-      const request = pages.request("s1", tab.id, "read_page", {}, onSend);
+      const request = pages.request("s1", tab.id, "read_page", {}, 0, onSend);
       await flush();
       land(fake, tab.id, NEXT, answering("new page"));
       assert.equal(await request, "new page");
@@ -1205,7 +1205,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, tab } = await grantedTab();
       let sends = 0;
       begin(fake, tab.id, NEXT);
-      const request = pages.request("s1", tab.id, "click", { ref: "a1" }, () => {
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" }, 0, () => {
         sends += 1;
       });
       await flush();
@@ -1221,7 +1221,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         begin(fake, tab.id, "https://c.example/");
         return { ok: true, site: SITE, result: "old page" };
       });
-      const request = pages.request("s1", tab.id, "read_page", {});
+      const request = pages.request("s1", tab.id, "read_page", {}, 0);
       await flush();
       land(fake, tab.id, "https://c.example/", async () => ({
         ok: true,
@@ -1244,7 +1244,11 @@ describe("page script requests", { timeout: 10000 }, () => {
         ["s2", tab.id, "tab_not_in_group"],
         ["s1", 99, "tab_not_found"],
       ] as const) {
-        await rejectsWith(pages.request(session, tabId, "echo", {}), code, `${session} ${tabId}`);
+        await rejectsWith(
+          pages.request(session, tabId, "echo", {}, 0),
+          code,
+          `${session} ${tabId}`,
+        );
       }
       assertNothingSent(fake);
       assert.equal(timers.pending(), timersBefore);
@@ -1261,7 +1265,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         if (tabId === outside.id) begin(fake, tabId, `${NEXT}/${gets}`);
         return get(tabId);
       });
-      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}, 0), "tab_not_in_group");
       assertNothingSent(fake);
     });
 
@@ -1269,12 +1273,12 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages } = await grantedTab();
       const outside = fake.openTab({ url: `${SITE}/` });
       const get = t.mock.method(fake.browser.tabs, "get");
-      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}, 0), "tab_not_in_group");
       const idle = get.mock.callCount();
       begin(fake, outside.id, NEXT);
       // Counted from here: the update itself may have the page views read the tab.
       const loading = get.mock.callCount();
-      await rejectsWith(pages.request("s1", outside.id, "read_page", {}), "tab_not_in_group");
+      await rejectsWith(pages.request("s1", outside.id, "read_page", {}, 0), "tab_not_in_group");
       assert.equal(get.mock.callCount() - loading, idle);
     });
 
@@ -1282,19 +1286,19 @@ describe("page script requests", { timeout: 10000 }, () => {
       const { fake, pages, navigations, timers, tab } = await grantedTab();
       begin(fake, tab.id, NEXT);
       commit(fake, tab.id, NEXT, answering("parsed so far"));
-      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
       await flush();
       assert.equal(settled(), false);
       timers.advance(NAVIGATION_WAIT_MS);
       assert.equal(await request, "parsed so far");
       assert.equal(navigations.underWay(tab.id), false);
-      assert.equal(await pages.request("s1", tab.id, "echo", {}), "parsed so far");
+      assert.equal(await pages.request("s1", tab.id, "echo", {}, 0), "parsed so far");
     });
 
     it("answers within 50 s in the worst case", async (t) => {
       const { fake, pages, timers, tab } = await grantedTab();
       begin(fake, tab.id, NEXT);
-      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}));
+      const { request, settled } = track(pages.request("s1", tab.id, "read_page", {}, 0));
       await flush();
       timers.advance(NAVIGATION_WAIT_MS - 1);
       // The page lands just before the cutoff and begins another navigation as it answers.
@@ -1352,7 +1356,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         const { fake, pages, tab } = await grantedTab();
         const sends: number[] = [];
         begin(fake, tab.id, NEXT);
-        const request = pages.request("s1", tab.id, type, params, () => sends.push(1));
+        const request = pages.request("s1", tab.id, type, params, 0, () => sends.push(1));
         await flush();
         land(fake, tab.id, NEXT, answering("acted"));
         await assert.rejects(request, unseen(tab.id, type));
@@ -1374,7 +1378,7 @@ describe("page script requests", { timeout: 10000 }, () => {
         return [{ frameId: 0, result: null }];
       });
       await assert.rejects(
-        pages.request("s1", tab.id, "click", { x: 1, y: 2 }),
+        pages.request("s1", tab.id, "click", { x: 1, y: 2 }, 0),
         unseen(tab.id, "click"),
       );
       assert.equal(injections, 2);
@@ -1384,7 +1388,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     it("refuses at once, without a second run", async () => {
       const { fake, pages, tab } = await grantedTab();
       begin(fake, tab.id, NEXT);
-      const request = pages.request("s1", tab.id, "press_key", { key: "a" });
+      const request = pages.request("s1", tab.id, "press_key", { key: "a" }, 0);
       await flush();
       land(fake, tab.id, NEXT, answering("pressed"));
       await rejectsWith(request, "page_unseen");
@@ -1395,12 +1399,12 @@ describe("page script requests", { timeout: 10000 }, () => {
     it("sends a ref act after a navigation wait, and a point act with no navigation", async () => {
       const { fake, pages, tab } = await grantedTab();
       begin(fake, tab.id, NEXT);
-      const request = pages.request("s1", tab.id, "click", { ref: "a1" });
+      const request = pages.request("s1", tab.id, "click", { ref: "a1" }, 0);
       await flush();
       land(fake, tab.id, NEXT, answering("by ref"));
       assert.equal(await request, "by ref");
-      assert.equal(await pages.request("s1", tab.id, "click", { x: 1, y: 2 }), "by ref");
-      assert.equal(await pages.request("s1", tab.id, "press_key", { key: "a" }), "by ref");
+      assert.equal(await pages.request("s1", tab.id, "click", { x: 1, y: 2 }, 0), "by ref");
+      assert.equal(await pages.request("s1", tab.id, "press_key", { key: "a" }, 0), "by ref");
       assert.equal(fake.tabMessages.length, 3);
     });
 
@@ -1408,7 +1412,7 @@ describe("page script requests", { timeout: 10000 }, () => {
       for (const type of ["hover", "scroll"]) {
         const { fake, pages, tab } = await grantedTab();
         begin(fake, tab.id, NEXT);
-        const request = pages.request("s1", tab.id, type, { x: 1, y: 2 });
+        const request = pages.request("s1", tab.id, type, { x: 1, y: 2 }, 0);
         await flush();
         land(fake, tab.id, NEXT, answering(type));
         assert.equal(await request, type);
@@ -1421,10 +1425,80 @@ describe("page script requests", { timeout: 10000 }, () => {
     it("sends page_changes with tag null, and the next request gets the next tag", async () => {
       const { fake, pages, tab } = await grantedTab();
       fake.setContentScript(tab.id, answering("ok"));
-      await pages.request("s1", tab.id, "echo", {});
-      await pages.request("s1", tab.id, "page_changes", { watch: "w" });
-      await pages.request("s1", tab.id, "echo", {});
+      await pages.request("s1", tab.id, "echo", {}, 0);
+      await pages.request("s1", tab.id, "page_changes", { watch: "w" }, 0);
+      await pages.request("s1", tab.id, "echo", {}, 0);
       assert.deepEqual(tagsSent(fake), ["a", null, "b"]);
+    });
+  });
+
+  describe("refuses a request whose session ended while it ran", () => {
+    /** A tab on SITE, allowed always, whose injections end s1 first. */
+    async function endingTab(t: TestContext): Promise<Env & { tab: TabInfo }> {
+      const env = setup();
+      await env.grant(SITE);
+      const tab = await env.open("s1", `${SITE}/`);
+      env.fake.setContentScript(tab.id, contentScript(SITE));
+      const { scripting } = env.fake.browser;
+      const executeScript = scripting.executeScript;
+      t.mock.method(scripting, "executeScript", (...args: Parameters<typeof executeScript>) => {
+        env.access.endSession("s1");
+        return executeScript(...args);
+      });
+      return { ...env, tab };
+    }
+
+    it("sends nothing and calls no onSend once the session ended", async (t) => {
+      const { fake, pages, access, tab } = await endingTab(t);
+      let sends = 0;
+      const request = pages.request(
+        "s1",
+        tab.id,
+        "click",
+        { ref: "a1" },
+        access.generation("s1"),
+        () => {
+          sends += 1;
+        },
+      );
+      await assert.rejects(request, {
+        code: "session_ended",
+        message: "The session ended before Foxleash could finish the request.",
+      });
+      assert.equal(sends, 0);
+      assert.deepEqual(fake.tabMessages, []);
+    });
+
+    it("returns the reply of an act sent before the session ended", async () => {
+      const { fake, pages, access, open, grant } = setup();
+      await grant(SITE);
+      const tab = await open("s1", `${SITE}/`);
+      fake.setContentScript(tab.id, async () => {
+        access.endSession("s1");
+        return { ok: true, site: SITE, result: "clicked" };
+      });
+      assert.equal(await pages.request("s1", tab.id, "click", { ref: "a1" }, 0), "clicked");
+    });
+
+    it("sends no click, upload or read of a tool call, and ends a wait at once", async (t) => {
+      for (const [method, params] of [
+        ["click", { ref: "a1" }],
+        [
+          "upload_file",
+          { ref: "a1", upload: "none", files: [{ name: "e.txt", type: "text/plain", size: 0 }] },
+        ],
+        ["read_page", {}],
+        ["get_page_text", {}],
+        ["wait_for", { text: "Saved" }],
+      ] satisfies [MethodName, Record<string, unknown>][]) {
+        const { fake, call, tab } = await endingTab(t);
+        await rejectsWith(
+          call("s1", method, { tabId: tab.id, ...params }),
+          "session_ended",
+          method,
+        );
+        assert.deepEqual(fake.tabMessages, [], method);
+      }
     });
   });
 });

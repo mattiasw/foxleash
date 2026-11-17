@@ -348,6 +348,80 @@ describe("propose", { timeout: 10000 }, () => {
     assert.deepEqual(connect(fake, tabId).posted, [{ type: "ended" }]);
     assert.equal(fake.tabs.has(tabId), true);
   });
+
+  it("opens nothing and closes the unloaded tab when the session ends while its group is made", async () => {
+    const context = setup();
+    const { fake, recipes } = context;
+    const users = [...fake.tabs.keys()];
+    const created = recordCreates(fake);
+    const ended = endAfterGroup(context);
+    await assert.rejects(recipes.propose("s1", RECIPE), {
+      code: "recipe_prompt_closed",
+      message: ENDED_EARLY,
+    });
+    await ended();
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.deepEqual(fake.windowUpdates, []);
+    assert.deepEqual([...fake.tabs.keys()], users);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    const url = (created as { url: string }[])[0]?.url ?? "";
+    // No page, detached or not, is kept for it.
+    assert.equal(recipes.isBlankPage(url), true);
+  });
+
+  it("closes the session's own window when the session ends while the page's group is made", async () => {
+    const context = setup();
+    const { fake, recipes } = context;
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const users = [...fake.tabs.keys()];
+    const ended = endAfterGroup(context);
+    await assert.rejects(recipes.propose("s1", RECIPE), { code: "recipe_prompt_closed" });
+    await ended();
+    await flush();
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.equal(fake.windowCreations.length, 1);
+    assert.equal(fake.windowRemovals.length, 1);
+    assert.deepEqual([...fake.tabs.keys()], users);
+  });
+
+  it("opens nothing for a session that reconnected with the same id meanwhile", async () => {
+    const context = setup();
+    const { fake, recipes } = context;
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const ended = endAfterGroup(context, true);
+    await assert.rejects(recipes.propose("s1", RECIPE), { code: "recipe_prompt_closed" });
+    await ended();
+    await flush();
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.deepEqual(fake.windowUpdates, []);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    assert.deepEqual(
+      [...fake.tabs.values()].filter(({ url }) => url.includes("propose.html")),
+      [],
+    );
+  });
+
+  it("leaves a page the user opened before the session ended, which can still save", async () => {
+    const context = setup();
+    const { fake, recipes } = context;
+    const release = holdGroups(fake);
+    const ended = endAfterGroup(context);
+    const proposing = recipes.propose("s1", RECIPE);
+    const tabId = await pageTab(fake);
+    const page = connect(fake, tabId);
+    release();
+    assert.deepEqual(await proposing, { tabId });
+    await ended();
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.deepEqual(fake.windowUpdates, []);
+    assert.equal(fake.tabs.has(tabId), true);
+    page.deliver({ type: "ready" });
+    await flush();
+    assert.deepEqual(page.posted.at(-1), { type: "propose", fields: RECIPE });
+    page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: NEW });
+    await flush();
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "saved" });
+  });
 });
 
 describe("the propose page", { timeout: 10000 }, () => {
@@ -2376,6 +2450,33 @@ function holdGroups(fake: FakeBrowser): () => void {
   return () => {
     fake.browser.tabs.group = group;
     held.resolve();
+  };
+}
+
+/**
+ * Admits "s1", as a request's arrival does, and ends it as the background script does right after
+ * the next `tabs.group`; with `reconnect`, admits it again at once. The returned function waits
+ * for the end's turn in the session's groups.
+ */
+function endAfterGroup(
+  { fake, access, groups, recipes }: ReturnType<typeof setup>,
+  reconnect = false,
+): () => Promise<void> {
+  access.admit("s1");
+  let ending: Promise<void> | undefined;
+  const group = fake.browser.tabs.group;
+  fake.browser.tabs.group = async (options) => {
+    fake.browser.tabs.group = group;
+    const grouped = await group(options);
+    access.endSession("s1");
+    recipes.endSession("s1");
+    // Not awaited: it waits its turn behind the grouping.
+    ending = groups.endSession("s1");
+    if (reconnect) access.admit("s1");
+    return grouped;
+  };
+  return async () => {
+    await ending;
   };
 }
 

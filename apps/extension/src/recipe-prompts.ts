@@ -198,6 +198,10 @@ export function createRecipePrompts<Handle>({
       if (!isLive(prompt)) return { tabId: tab.id };
       // The user stopped the session meanwhile: a page they never saw does not open.
       if (access.stopped(session)) throw sessionStopped();
+      // The session ended meanwhile: a page the user opened early stays as it is and can still
+      // save, and one they never saw does not open.
+      if (prompt.committed && generationOf(session) !== generation) return { tabId: tab.id };
+      refuseIfEnded(session, generation);
       // Loaded rather than only selected: a page the user selected before the prompt was
       // recorded loads again and connects.
       shown = await browser.tabs.update(tab.id, { url: pageUrl, active: true, loadReplace: true });

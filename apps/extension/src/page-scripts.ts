@@ -1,7 +1,13 @@
 import { aimsWithoutRef, type MethodName } from "@foxleash/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
-import { allowedPageSite, NAVIGATION_WAIT_MS, pageLoading, ToolError } from "./handlers.ts";
+import {
+  allowedPageSite,
+  NAVIGATION_WAIT_MS,
+  pageLoading,
+  refuseIfEnded,
+  ToolError,
+} from "./handlers.ts";
 import { warn } from "./log.ts";
 import {
   capText,
@@ -53,7 +59,7 @@ const TAGLESS_REQUEST_TYPES: readonly string[] = ["page_changes"];
 export interface PageScriptsDeps<Handle> {
   browser: Pick<BrowserApi, "tabs" | "scripting" | "storage">;
   groups: Pick<SessionGroups, "groupOf">;
-  access: Pick<SiteAccess, "view" | "openPrompt">;
+  access: Pick<SiteAccess, "view" | "openPrompt" | "generation">;
   timers: Timers<Handle>;
   /** The navigations under way in each tab, which a request waits for. */
   navigations: Pick<TabNavigations, "settled" | "underWay" | "begun">;
@@ -66,7 +72,8 @@ export interface PageScripts {
    * first for a navigation under way in the tab, and runs once more after one that began while
    * it ran, unless it is an act already sent. An act that aims at a point or at the focused
    * element is refused, unsent, when the tab began loading another page since the request started
-   * or the request waited for one. `onSend` runs right before each send of the request's message to
+   * or the request waited for one. Refused with `session_ended`, unsent, once the session ended
+   * after `generation` was read. `onSend` runs right before each send of the request's message to
    * the page, after the waits and the gate's checks.
    */
   request(
@@ -74,6 +81,7 @@ export interface PageScripts {
     tabId: number,
     type: string,
     params: Record<string, unknown>,
+    generation: number,
     onSend?: () => void,
   ): Promise<unknown>;
 }
@@ -92,6 +100,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     tabId: number,
     type: string,
     params: Record<string, unknown>,
+    generation: number,
     onSend?: () => void,
   ): Promise<unknown> {
     const started = navigations.begun(tabId);
@@ -100,7 +109,14 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       late = true;
     }, NAVIGATION_WAIT_MS);
     try {
-      return await run(session, tabId, type, params, { started, late: () => late }, onSend);
+      return await run(
+        session,
+        tabId,
+        type,
+        params,
+        { started, late: () => late, generation },
+        onSend,
+      );
     } finally {
       timers.clearTimeout(cutoff);
     }
@@ -117,7 +133,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     tabId: number,
     type: string,
     params: Record<string, unknown>,
-    { started, late }: { started: number; late: () => boolean },
+    { started, late, generation }: { started: number; late: () => boolean; generation: number },
     onSend: (() => void) | undefined,
   ): Promise<unknown> {
     const acting = ACTING_REQUEST_TYPES.includes(type);
@@ -137,6 +153,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
         if (blind && (waited || navigations.begun(tabId) > started)) throw unseenPage(tabId, type);
+        refuseIfEnded(deps.access, session, generation);
         sent = true;
         // Here, not when the request starts: a navigation an act first waits for is not the act's.
         onSend?.();
