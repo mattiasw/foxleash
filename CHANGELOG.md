@@ -31,6 +31,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Stop this session button. After your click Foxleash refuses every tool call of that session,
   also on sites you allowed always, asks you nothing more for it and closes the question it had
   open. Its tabs stay open.
+- The browser says when the Foxleash program on your computer is too old for the add-on, or
+  newer than it, and what to do: on the settings page and the first-run page, and with ! on the
+  Foxleash button in the toolbar.
 
 ### Changed
 

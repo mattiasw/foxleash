@@ -59,7 +59,8 @@ not, it prints the file to open in Firefox. For another MCP client, register the
 `node <path to this checkout>/apps/server/src/main.ts mcp` as a stdio server.
 
 Once the extension is installed, Firefox opens a Foxleash page that shows whether the program on
-this computer is connected; the settings page shows the same.
+this computer is connected; the settings page shows the same. Both pages also say when the program
+is too old for the add-on, or newer than it, and what to do.
 
 Then check that every part is connected:
 
@@ -96,15 +97,16 @@ When the session ends, Foxleash closes its group if the group holds only blank t
 you may still be reading stay open. Subagents started from one agent session share its tab
 group and the sites you approved for it.
 
-The Foxleash button in the toolbar shows ON on the tabs an agent session can use; clicking it
-opens Foxleash's settings.
+The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
+outside an agent session's group when the program is too old for the add-on or newer than it;
+clicking it opens Foxleash's settings.
 
 ### Settings
 
 The extension's settings page, in the Firefox add-ons manager, has:
 
-- the state of the Foxleash program on this computer: connected, or not found, with the command
-  that installs it,
+- the state of the Foxleash program on this computer: connected, not found, with the command
+  that installs it, or too old for the add-on or newer than it, with what to do,
 - the sites you allowed always, each with a Revoke button,
 - each running agent session, numbered in the order it started, with a Stop this session
   button, and the sites you allowed or refused for it and the prompts you closed without an

@@ -39,10 +39,14 @@ export interface FakeBrowser {
   version: string;
   /** How many times `runtime.openOptionsPage` ran. */
   optionsPageOpened: number;
-  /** The per-tab badge text `action.setBadgeText` set; a load clears the tab's entry. */
+  /** The per-tab badge text `action.setBadgeText` set; null or a load deletes the tab's entry. */
   badgeText: Map<number, string>;
-  /** The per-tab title `action.setTitle` set; a load clears the tab's entry. */
+  /** The per-tab title `action.setTitle` set; null or a load deletes the tab's entry. */
   badgeTitle: Map<number, string>;
+  /** The global badge text a call without tabId set; null until one does. */
+  globalBadgeText: string | null;
+  /** The global title a call without tabId set; null until one does. */
+  globalBadgeTitle: string | null;
   /** Every `tabs.update` call, in order. */
   tabUpdates: TabUpdate[];
   /** Every `windows.update` call, in order. */
@@ -437,10 +441,14 @@ export function createFakeBrowser(): FakeBrowser {
     },
     action: {
       setBadgeText: async ({ tabId, text }) => {
-        fake.badgeText.set(tabOf(tabId).id, text);
+        if (tabId === undefined) fake.globalBadgeText = text;
+        else if (text === null) fake.badgeText.delete(tabOf(tabId).id);
+        else fake.badgeText.set(tabOf(tabId).id, text);
       },
       setTitle: async ({ tabId, title }) => {
-        fake.badgeTitle.set(tabOf(tabId).id, title);
+        if (tabId === undefined) fake.globalBadgeTitle = title;
+        else if (title === null) fake.badgeTitle.delete(tabOf(tabId).id);
+        else fake.badgeTitle.set(tabOf(tabId).id, title);
       },
       onClicked,
     },
@@ -711,6 +719,8 @@ export function createFakeBrowser(): FakeBrowser {
     optionsPageOpened: 0,
     badgeText: new Map(),
     badgeTitle: new Map(),
+    globalBadgeText: null,
+    globalBadgeTitle: null,
     tabUpdates: [],
     windowUpdates: [],
     windowSizes: new Map(),

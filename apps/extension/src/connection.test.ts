@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import { OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION, type RequestMessage } from "@foxleash/protocol";
-import { createConnection } from "./connection.ts";
+import { createConnection, type ProgramState } from "./connection.ts";
 import {
   createFakeBrowser,
   createFakeTimers,
@@ -642,15 +642,42 @@ describe("connection program state", { timeout: 10000 }, () => {
     assert.equal(state(), "connected");
   });
 
-  it("is connected after a welcome with another protocol, and still warns", async (t) => {
+  it("is addon_older after a welcome with a newer protocol, and still warns", async (t) => {
     const { state, open, warnings } = setup(t);
     const host = await open();
     host.deliver({ type: "welcome", protocol: PROTOCOL_VERSION + 1, version: "9.0.0" });
-    assert.equal(state(), "connected");
+    assert.equal(state(), "addon_older");
     assert.deepEqual(
       warnings().map((warning) => fieldsOf(warning)?.event),
       ["protocol_mismatch"],
     );
+  });
+
+  it("is too_old after a welcome below the oldest protocol it serves", async (t) => {
+    const { state, openWelcomed, changes } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    assert.equal(state(), "too_old");
+    assert.deepEqual(changes, ["too_old"]);
+  });
+
+  for (const protocol of [OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION]) {
+    it(`is connected after a welcome with protocol ${protocol}, at an end of its window`, async (t) => {
+      const { state, openWelcomed, changes } = setup(t);
+      await openWelcomed(protocol);
+      assert.equal(state(), "connected");
+      assert.deepEqual(changes, ["connected"]);
+    });
+  }
+
+  it("reports missing once while connecting keeps throwing", (t) => {
+    const { fake, timers, start, changes } = setup(t);
+    fake.browser.runtime.connectNative = () => {
+      throw new Error("No such native application foxleash");
+    };
+    start();
+    assert.deepEqual(changes, ["missing"]);
+    timers.advance(500);
+    assert.deepEqual(changes, ["missing"]);
   });
 
   it("is missing when connecting throws", (t) => {
@@ -738,6 +765,139 @@ describe("connection program state", { timeout: 10000 }, () => {
     assert.equal(fake.ports.length, 1);
   });
 
+  for (const page of ["options.html", "welcome.html"]) {
+    it(`opens the port again when ${page} asks while the program is too old`, async (t) => {
+      const { fake, openWelcomed, ask } = setup(t);
+      await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+      assert.deepEqual(await ask(page), { state: "too_old" });
+      assert.equal(port(fake.ports, 0).disconnected, true);
+      assert.equal(fake.ports.length, 2);
+      assert.equal(port(fake.ports, 1).disconnected, false);
+    });
+  }
+
+  it("opens the port again at most once every 10 seconds", async (t) => {
+    const { fake, timers, openWelcomed, ask } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    await ask();
+    assert.equal(fake.ports.length, 2);
+    assert.deepEqual(await ask(), { state: "too_old" });
+    assert.equal(fake.ports.length, 2);
+    timers.advance(10_000 - 1);
+    await ask();
+    assert.equal(fake.ports.length, 2);
+    timers.advance(1);
+    await ask();
+    assert.equal(fake.ports.length, 3);
+    assert.equal(port(fake.ports, 1).disconnected, true);
+  });
+
+  it("does not open the port again in any other state", async (t) => {
+    const checking = setup(t);
+    await checking.open();
+    await checking.ask();
+    assert.equal(checking.fake.ports.length, 1);
+
+    for (const protocol of [PROTOCOL_VERSION, PROTOCOL_VERSION + 1]) {
+      const welcomed = setup(t);
+      await welcomed.openWelcomed(protocol);
+      await welcomed.ask();
+      assert.equal(welcomed.fake.ports.length, 1, `protocol ${protocol}`);
+      assert.equal(port(welcomed.fake.ports, 0).disconnected, false);
+    }
+
+    const missing = setup(t);
+    const host = await missing.open();
+    host.drop();
+    assert.deepEqual(await missing.ask(), { state: "missing" });
+    assert.equal(missing.fake.ports.length, 1);
+  });
+
+  it("stays too_old through a re-check until the new port's welcome", async (t) => {
+    const { fake, state, openWelcomed, ask, changes } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    assert.deepEqual(await ask(), { state: "too_old" });
+    assert.equal(state(), "too_old");
+    await flush();
+    assert.deepEqual(await ask(), { state: "too_old" });
+    assert.deepEqual(changes, ["too_old"]);
+
+    port(fake.ports, 1).deliver({
+      type: "welcome",
+      protocol: OLDEST_SERVED_PROTOCOL - 1,
+      version: "0.1.0",
+    });
+    assert.equal(state(), "too_old");
+    assert.deepEqual(changes, ["too_old"]);
+  });
+
+  it("is connected once the re-check finds an updated program", async (t) => {
+    const { fake, state, openWelcomed, ask, changes } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    await ask();
+    await flush();
+    port(fake.ports, 1).deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.2.0" });
+    assert.equal(state(), "connected");
+    assert.deepEqual(await ask(), { state: "connected" });
+    assert.deepEqual(changes, ["too_old", "connected"]);
+  });
+
+  it("is missing when the re-check cannot connect, and reconnects later", async (t) => {
+    const { fake, timers, state, openWelcomed, ask, changes, warnings } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    let attempts = 0;
+    fake.browser.runtime.connectNative = () => {
+      attempts += 1;
+      throw new Error("No such native application foxleash");
+    };
+    assert.deepEqual(await ask(), { state: "missing" });
+    assert.equal(state(), "missing");
+    assert.deepEqual(changes, ["too_old", "missing"]);
+    assert.equal(attempts, 1);
+    // The closed port's late event schedules no second reconnect.
+    const pending = timers.pending();
+    port(fake.ports, 0).drop("Native host has exited.");
+    assert.equal(timers.pending(), pending);
+    assert.ok(!warnings().some((warning) => fieldsOf(warning)?.event === "disconnected"));
+    timers.advance(499);
+    assert.equal(attempts, 1);
+    timers.advance(1);
+    assert.equal(attempts, 2);
+  });
+
+  it("ignores a late disconnect of the port a re-check replaced", async (t) => {
+    const { fake, timers, state, openWelcomed, ask, changes, warnings } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    await ask();
+    await flush();
+    const pending = timers.pending();
+    port(fake.ports, 0).drop("Native host has exited.");
+    assert.equal(state(), "too_old");
+    assert.deepEqual(changes, ["too_old"]);
+    assert.equal(timers.pending(), pending);
+    assert.ok(!warnings().some((warning) => fieldsOf(warning)?.event === "disconnected"));
+
+    const current = port(fake.ports, 1);
+    current.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.2.0" });
+    current.deliver(request);
+    await flush();
+    assert.deepEqual(current.posted.at(-1), { type: "response", id: "r1", ok: true, result: null });
+  });
+
+  it("ignores a welcome on a port a later re-check replaced", async (t) => {
+    const { fake, timers, state, openWelcomed, ask, changes } = setup(t);
+    await openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    await ask();
+    timers.advance(10_000);
+    await ask();
+    assert.equal(fake.ports.length, 3);
+    port(fake.ports, 1).deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.2.0" });
+    assert.equal(state(), "too_old");
+    assert.deepEqual(changes, ["too_old"]);
+    port(fake.ports, 2).deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.2.0" });
+    assert.equal(state(), "connected");
+  });
+
   it("keeps the backoff when a page asks while a reconnect is pending", async (t) => {
     const { fake, timers, open } = setup(t);
     const host = await open();
@@ -767,9 +927,24 @@ function setup(
     ended.push(session);
     return onEndSession(session);
   };
-  const connection = createConnection({ browser: fake.browser, handleRequest, endSession, timers });
+  const changes: ProgramState[] = [];
+  const connection = createConnection({
+    browser: fake.browser,
+    handleRequest,
+    endSession,
+    timers,
+    onStateChange: (state) => changes.push(state),
+  });
   const start = () => connection.start();
   const state = () => connection.state();
+
+  /** A program_state request from one of the pages that may send it. */
+  function ask(page = "options.html"): Promise<unknown> | undefined {
+    return fake.sendMessage(
+      { type: "program_state" },
+      { id: FAKE_EXTENSION_ID, url: fake.browser.runtime.getURL(page) },
+    );
+  }
 
   async function open(): Promise<FakePort> {
     start();
@@ -787,7 +962,7 @@ function setup(
     return warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
   }
 
-  return { fake, timers, start, state, open, openWelcomed, warnings, ended };
+  return { fake, timers, start, state, open, openWelcomed, ask, warnings, ended, changes };
 }
 
 function noWelcome(id: string) {

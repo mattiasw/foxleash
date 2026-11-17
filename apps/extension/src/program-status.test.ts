@@ -1,16 +1,23 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import { NODE_REQUIREMENT, SETUP_COMMAND } from "@foxleash/protocol";
+import {
+  EXTENSION_UPDATE_COMMAND,
+  NODE_REQUIREMENT,
+  SETUP_COMMAND,
+  UPDATE_COMMAND,
+} from "@foxleash/protocol";
 import { createFakeTimers, flush } from "./fake-browser.ts";
 import { POLL_MS, SENTENCES, watchProgram } from "./program-status.ts";
 
 const CHECKING = "Checking whether the Foxleash program is connected.";
 
 describe("watchProgram", { timeout: 10000 }, () => {
-  it("fills in the command and the requirement, and asks at once", (t) => {
+  it("fills in the commands and the requirement, and asks at once", (t) => {
     const { elements, requests } = setup(t);
     assert.equal(elements.command.textContent, SETUP_COMMAND);
     assert.equal(elements.requirement.textContent, NODE_REQUIREMENT);
+    assert.equal(elements.updateCommand.textContent, UPDATE_COMMAND);
+    assert.equal(elements.addonUpdateCommand.textContent, EXTENSION_UPDATE_COMMAND);
     assert.deepEqual(
       requests.map((request) => request.message),
       [{ type: "program_state" }],
@@ -26,6 +33,30 @@ describe("watchProgram", { timeout: 10000 }, () => {
     await answer(requests, 1, { state: "connected" });
     assert.equal(elements.status.textContent, SENTENCES.connected);
     assert.equal(elements.setup.hidden, true);
+  });
+
+  for (const state of ["missing", "too_old", "addon_older"] as const) {
+    it(`shows only the steps for ${state}, and none once connected`, async (t) => {
+      const { elements, requests, timers } = setup(t);
+      await answer(requests, 0, { state });
+      assert.equal(elements.status.textContent, SENTENCES[state]);
+      assert.deepEqual(visibleBlocks(elements), [state]);
+      timers.advance(POLL_MS);
+      await answer(requests, 1, { state: "connected" });
+      assert.equal(elements.status.textContent, SENTENCES.connected);
+      assert.deepEqual(visibleBlocks(elements), []);
+    });
+  }
+
+  it("moves from one notice's steps to another's", async (t) => {
+    const { elements, requests, timers } = setup(t);
+    const states = ["too_old", "addon_older", "missing", "too_old"] as const;
+    for (const [index, state] of states.entries()) {
+      if (index > 0) timers.advance(POLL_MS);
+      await answer(requests, index, { state });
+      assert.equal(elements.status.textContent, SENTENCES[state]);
+      assert.deepEqual(visibleBlocks(elements), [state]);
+    }
   });
 
   it("keeps the checking sentence while the background is checking", async (t) => {
@@ -51,6 +82,18 @@ describe("watchProgram", { timeout: 10000 }, () => {
     timers.advance(POLL_MS);
     await answer(requests, 1, { state: "missing" });
     assert.equal(elements.status.textContent, "unchanged");
+  });
+
+  it("writes nothing when a too old program stays too old across checking", async (t) => {
+    const { elements, requests, timers } = setup(t);
+    await answer(requests, 0, { state: "too_old" });
+    elements.status.textContent = "unchanged";
+    for (const [index, state] of ["checking", "too_old"].entries()) {
+      timers.advance(POLL_MS);
+      await answer(requests, index + 1, { state });
+    }
+    assert.equal(elements.status.textContent, "unchanged");
+    assert.deepEqual(visibleBlocks(elements), ["too_old"]);
   });
 
   it("asks every second while visible, also when a request never settles", (t) => {
@@ -159,6 +202,10 @@ function setup(t: TestContext, visible = true) {
     setup: { hidden: true },
     command: { textContent: "" },
     requirement: { textContent: "" },
+    update: { hidden: true },
+    updateCommand: { textContent: "" },
+    addonUpdate: { hidden: true },
+    addonUpdateCommand: { textContent: "" },
   };
   const browser = {
     runtime: {
@@ -187,4 +234,18 @@ async function answer(requests: Request[], index: number, reply: unknown): Promi
   assert.ok(request !== undefined, `no request ${index}`);
   request.resolve(reply);
   await flush();
+}
+
+/** The states whose steps the page shows. */
+function visibleBlocks(elements: {
+  setup: { hidden: boolean };
+  update: { hidden: boolean };
+  addonUpdate: { hidden: boolean };
+}): string[] {
+  const blocks = [
+    ["missing", elements.setup],
+    ["too_old", elements.update],
+    ["addon_older", elements.addonUpdate],
+  ] as const;
+  return blocks.filter(([, block]) => !block.hidden).map(([state]) => state);
 }

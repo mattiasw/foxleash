@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { type PartInfo, protocolMismatch, versionsOf } from "./index.ts";
+import {
+  EXTENSION_UPDATE_COMMAND,
+  type PartInfo,
+  protocolMismatch,
+  UPDATE_COMMAND,
+  versionsOf,
+} from "./index.ts";
 
 const UPDATE = "update Foxleash with `git pull && npm ci && npm run setup` if you have not yet";
 
@@ -60,6 +66,22 @@ describe("protocolMismatch", () => {
       }
     });
   }
+});
+
+describe("the update commands", () => {
+  it("are the commands the stale host's and the stale extension's sentences name", () => {
+    const host: PartInfo = { part: "host", protocol: 3, version: "0.9.1" };
+    const extension: PartInfo = { part: "extension", protocol: 3, version: "0.9.1" };
+    const newer = (part: "host" | "extension"): PartInfo => ({
+      part,
+      protocol: 12,
+      version: "1.4.0",
+    });
+    assert.ok(protocolMismatch(host, newer("extension"))?.includes(`\`${UPDATE_COMMAND}\``));
+    assert.ok(
+      protocolMismatch(extension, newer("host"))?.includes(`\`${EXTENSION_UPDATE_COMMAND}\``),
+    );
+  });
 });
 
 describe("protocolMismatch with a window", () => {

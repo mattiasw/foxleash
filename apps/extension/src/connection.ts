@@ -21,9 +21,11 @@ export interface ConnectionDeps<Handle> {
   handleRequest: (request: RequestMessage, protocol: number) => Promise<unknown>;
   endSession: (session: string) => Promise<void>;
   timers: Timers<Handle>;
+  /** Called when the program's state changes, not when it stays the same. */
+  onStateChange?: (state: ProgramState) => void;
 }
 
-export type ProgramState = "checking" | "connected" | "missing";
+export type ProgramState = "checking" | "connected" | "missing" | "too_old" | "addon_older";
 
 export interface Connection {
   /** Connects to the native host, unless a port is open or a reconnect is already pending. */
@@ -43,6 +45,8 @@ const NO_WELCOME =
 
 const FIRST_RECONNECT_DELAY_MS = 500;
 const MAX_RECONNECT_DELAY_MS = 10000;
+// The shortest gap between two re-checks of a program that is too old.
+const RECHECK_INTERVAL_MS = 10000;
 
 /** Keeps a native messaging port to the host open and answers the requests that arrive on it. */
 export function createConnection<Handle>({
@@ -50,6 +54,7 @@ export function createConnection<Handle>({
   handleRequest,
   endSession,
   timers,
+  onStateChange,
 }: ConnectionDeps<Handle>): Connection {
   let port: Port | undefined;
   /** The hellos queued on `port`; each one is posted after the one before it. */
@@ -57,6 +62,7 @@ export function createConnection<Handle>({
   let reconnectTimer: Handle | undefined;
   let delay = FIRST_RECONNECT_DELAY_MS;
   let programState: ProgramState = "checking";
+  let rechecked = false;
   /** Per port, so a new port starts without one and a welcome never affects another port. */
   const verdicts = new WeakMap<Port, Verdict>();
 
@@ -85,8 +91,21 @@ export function createConnection<Handle>({
     ) {
       return undefined;
     }
+    if (programState === "too_old" && !rechecked) recheck();
     start();
     return Promise.resolve({ state: programState });
+  }
+
+  /** Opens the native port again, so a program the user updated is found without a restart. */
+  function recheck(): void {
+    rechecked = true;
+    timers.setTimeout(() => {
+      rechecked = false;
+    }, RECHECK_INTERVAL_MS);
+    const replaced = port;
+    port = undefined;
+    replaced?.disconnect();
+    connect().catch(logError);
   }
 
   async function connect(): Promise<void> {
@@ -105,7 +124,7 @@ export function createConnection<Handle>({
       return browser.runtime.connectNative(NATIVE_HOST_NAME);
     } catch (error) {
       warn({ event: "connect_failed", error: String(error) });
-      programState = "missing";
+      setProgramState("missing");
       scheduleReconnect();
       return undefined;
     }
@@ -209,9 +228,11 @@ export function createConnection<Handle>({
   }
 
   function welcomed(current: Port, welcome: WelcomeMessage): void {
+    // A welcome on a port the extension replaced says nothing about the current one.
+    if (port !== current) return;
     delay = FIRST_RECONNECT_DELAY_MS;
-    programState = "connected";
     const { protocol, version } = welcome;
+    setProgramState(programStateOf(protocol));
     const mismatch = protocolMismatch(
       {
         part: "extension",
@@ -231,10 +252,18 @@ export function createConnection<Handle>({
   }
 
   function disconnected(current: Port): void {
+    // A late event of a port the extension replaced must not drop the new one.
+    if (port !== current) return;
     warn({ event: "disconnected", error: current.error?.message ?? null });
     port = undefined;
-    programState = "missing";
+    setProgramState("missing");
     scheduleReconnect();
+  }
+
+  function setProgramState(next: ProgramState): void {
+    if (next === programState) return;
+    programState = next;
+    onStateChange?.(next);
   }
 
   function scheduleReconnect(): void {
@@ -244,6 +273,13 @@ export function createConnection<Handle>({
     }, delay);
     delay = Math.min(delay * 2, MAX_RECONNECT_DELAY_MS);
   }
+}
+
+/** What a host on `protocol` means for the user: the welcome's verdict, as a state. */
+function programStateOf(protocol: number): ProgramState {
+  if (protocol < OLDEST_SERVED_PROTOCOL) return "too_old";
+  if (protocol > PROTOCOL_VERSION) return "addon_older";
+  return "connected";
 }
 
 function logError(error: unknown): void {

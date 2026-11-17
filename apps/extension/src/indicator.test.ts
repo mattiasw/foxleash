@@ -6,6 +6,10 @@ import { createSessionGroups } from "./session-groups.ts";
 
 const TITLE_ON = "Foxleash: an agent session can use this tab";
 const TITLE_STOPPED = "Foxleash: the agent session of this tab was stopped";
+const TITLE_TOO_OLD =
+  "Foxleash: the program on this computer is too old for this add-on. Open the settings to see what to do.";
+const TITLE_ADDON_OLDER =
+  "Foxleash: this add-on is older than the program on this computer. Open the settings to see what to do.";
 
 describe("indicator", { timeout: 10000 }, () => {
   it("shows ON on a tab added to a session's group", async () => {
@@ -17,12 +21,12 @@ describe("indicator", { timeout: 10000 }, () => {
     assert.equal(fake.badgeTitle.get(tab.id), TITLE_ON);
   });
 
-  it("shows no badge on a tab opened outside any group", async () => {
+  it("leaves a tab opened outside any group to the global badge and title", async () => {
     const { fake } = setup();
     const tab = fake.openTab({ url: "https://example.com/" });
     await flush();
-    assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
+    assert.equal(fake.badgeText.has(tab.id), false);
+    assert.equal(fake.badgeTitle.has(tab.id), false);
   });
 
   it("shows ON again after a navigation cleared it", async () => {
@@ -51,8 +55,8 @@ describe("indicator", { timeout: 10000 }, () => {
     await flush();
     fake.ungroup(tab.id);
     await flush();
-    assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
+    assert.equal(fake.badgeText.has(tab.id), false);
+    assert.equal(fake.badgeTitle.has(tab.id), false);
     assert.equal(fake.groups.has(groupId), false);
   });
 
@@ -63,8 +67,8 @@ describe("indicator", { timeout: 10000 }, () => {
     await fake.browser.tabGroups.update(groupId, { title: "Foxleash", color: "orange" });
     await flush();
     assert.equal(fake.tabs.get(tab.id)?.groupId, groupId);
-    assert.equal(fake.badgeText.get(tab.id), "");
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
+    assert.equal(fake.badgeText.has(tab.id), false);
+    assert.equal(fake.badgeTitle.has(tab.id), false);
   });
 
   it("shows ON on a tab created in a session's group", async () => {
@@ -146,7 +150,7 @@ describe("indicator", { timeout: 10000 }, () => {
     const groupId = await groups.ensureGroup("s1", fake.openTab({ url: "https://example.com/" }));
     const tab = fake.openTab({ url: "https://user.example/" });
     await flush();
-    assert.equal(fake.badgeText.get(tab.id), "");
+    assert.equal(fake.badgeText.has(tab.id), false);
     await fake.browser.tabs.group({ groupId, tabIds: [tab.id] });
     await flush();
     assert.equal(fake.badgeText.get(tab.id), "ON");
@@ -200,7 +204,7 @@ describe("indicator", { timeout: 10000 }, () => {
     await indicator.refreshSession("s1");
     await indicator.refreshSession("never-started");
     assert.equal(queried, false);
-    assert.equal(fake.badgeTitle.get(tab.id), "Foxleash");
+    assert.equal(fake.badgeTitle.has(tab.id), false);
     assert.deepEqual(warnings(), []);
   });
 
@@ -235,6 +239,45 @@ describe("indicator", { timeout: 10000 }, () => {
       { event: "indicator_failed", session: "s1", error: "Error: no tabs" },
     ]);
     assert.equal(fake.badgeText.get(tab.id), "ON");
+  });
+
+  for (const [state, title] of [
+    ["too_old", TITLE_TOO_OLD],
+    ["addon_older", TITLE_ADDON_OLDER],
+  ] as const) {
+    it(`shows ! and names the program's state ${state} on the whole button`, async () => {
+      const { fake, groups, indicator } = setup();
+      const tab = fake.openTab({ url: "https://example.com/" });
+      await groups.ensureGroup("s1", tab);
+      await flush();
+      await indicator.showProgram(state);
+      assert.equal(fake.globalBadgeText, "!");
+      assert.equal(fake.globalBadgeTitle, title);
+      assert.equal(fake.badgeText.get(tab.id), "ON");
+      assert.equal(fake.badgeTitle.get(tab.id), TITLE_ON);
+    });
+  }
+
+  for (const state of ["connected", "missing", "checking"] as const) {
+    it(`clears the button's notice when the program is ${state}`, async () => {
+      const { fake, indicator } = setup();
+      await indicator.showProgram("too_old");
+      await indicator.showProgram(state);
+      assert.equal(fake.globalBadgeText, "");
+      assert.equal(fake.globalBadgeTitle, null);
+    });
+  }
+
+  it("logs a failed notice on the button instead of rejecting", async (t) => {
+    const { fake, indicator } = setup();
+    const warnings = captureWarnings(t);
+    fake.browser.action.setBadgeText = async () => {
+      throw new Error("no badge");
+    };
+    await indicator.showProgram("too_old");
+    assert.deepEqual(warnings(), [
+      { event: "indicator_failed", state: "too_old", error: "Error: no badge" },
+    ]);
   });
 });
 

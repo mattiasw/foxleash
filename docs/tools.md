@@ -27,8 +27,13 @@ tabs in that group, including tabs you move into it and tabs that a page in the 
 also after your own click. When the agent session ends, Foxleash closes its group if the group
 holds only blank tabs, so pages you may still be reading stay open.
 
-The Foxleash button in the toolbar shows ON on the tabs an agent session can use; clicking it
-opens Foxleash's settings.
+The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
+outside an agent session's group when the program is too old for the add-on or newer than it;
+clicking it opens Foxleash's settings. The button's title names which of the two it is, and the
+settings page says what to do. While the program is too old, a visible settings or first-run page
+checks again at most every 10 seconds, and each check restarts the program Firefox runs, which
+ends the agent's connection to it (the program refuses every request anyway). After updating the
+program, restart the app the agent runs in.
 
 ### A window for each session
 

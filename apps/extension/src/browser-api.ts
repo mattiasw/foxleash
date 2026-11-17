@@ -18,8 +18,8 @@ export interface BrowserApi {
     sendMessage(message: unknown): Promise<unknown>;
   };
   action: {
-    setBadgeText(details: { tabId: number; text: string }): Promise<void>;
-    setTitle(details: { tabId: number; title: string }): Promise<void>;
+    setBadgeText(details: { tabId?: number; text: string | null }): Promise<void>;
+    setTitle(details: { tabId?: number; title: string | null }): Promise<void>;
     onClicked: BrowserEvent<(tab: Tab) => void>;
   };
   permissions: {

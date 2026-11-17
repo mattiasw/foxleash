@@ -108,6 +108,7 @@ const connection = createConnection({
     return groups.endSession(session);
   },
   timers,
+  onStateChange: (state) => void indicator.showProgram(state),
 });
 
 connection.start();

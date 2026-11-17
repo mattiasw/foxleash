@@ -30,7 +30,13 @@ export function versionsOf(part: PartInfo): string {
   return `${versions}, which works with protocol ${part.oldest} and later`;
 }
 
-const UPDATE = "update Foxleash with `git pull && npm ci && npm run setup` if you have not yet";
+/** The command that updates Foxleash installed from a checkout, the program and the add-on. */
+export const UPDATE_COMMAND = "git pull && npm ci && npm run setup";
+
+/** The command that installs the add-on matching the program. */
+export const EXTENSION_UPDATE_COMMAND = "npm run setup";
+
+const UPDATE = `update Foxleash with \`${UPDATE_COMMAND}\` if you have not yet`;
 
 const NAME: Record<Part, string> = {
   extension: "Foxleash extension",
@@ -39,8 +45,7 @@ const NAME: Record<Part, string> = {
 };
 
 const FIX: Record<Part, string> = {
-  extension:
-    "run `npm run setup` in your Foxleash folder and confirm the extension update in Firefox",
+  extension: `run \`${EXTENSION_UPDATE_COMMAND}\` in your Foxleash folder and confirm the extension update in Firefox`,
   host: `Firefox is still running the old native host, so ${UPDATE} and then restart Firefox`,
   mcp: `your MCP client is still running the old MCP server, so ${UPDATE} and then restart your MCP client`,
 };
