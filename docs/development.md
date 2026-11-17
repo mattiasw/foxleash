@@ -3,7 +3,7 @@
 ## Requirements
 
 - Linux, Node.js 24 or later (the version in `.nvmrc`), npm 11, and `jq` for the unit tests
-- Firefox 142 or later for running the extension
+- Firefox 153 or later for running the extension
 
 ## Setup
 
@@ -73,7 +73,9 @@ sha256 of `linux-x86_64/en-US/firefox-<version>.tar.xz` from Mozilla's
 `bin/firefox-esr-version.json` the same way, under its `<version>esr` name: for example
 `releases/153.8.0esr/SHA256SUMS` and `firefox-153.8.0esr.tar.xz`. When Mozilla's current ESR
 (`FIREFOX_ESR` in `https://product-details.mozilla.org/1.0/firefox_versions.json`) moves to
-the next ESR major, the ESR pin moves to it. Each raise is a change of its own (see ADR 0003
+the next ESR major, the ESR pin moves to it, and a unit test in `bin/install-firefox.test.ts`
+then requires the extension's minimum Firefox version (`strict_min_version` in
+`apps/extension/manifest.json`) to move to the same major version (ADR 0077). Each raise is a change of its own (see ADR 0003
 and ADR 0076), and also updates the exact version and sha256 in that pin's test in
 `bin/install-firefox.test.ts`, "ships a pin that validates" or "ships an ESR pin that
 validates".
@@ -164,7 +166,7 @@ fails on any error or warning.
 and the pages (`src/*.html` and `src/*.css`) once at start, so restart it after changing them.
 Firefox uses a persistent profile in `$XDG_CACHE_HOME/foxleash/dev-profile` (by default
 `~/.cache/foxleash/dev-profile`), so what you set up there, such as logins, stays between
-runs. It needs a desktop with Firefox 142 or later.
+runs. It needs a desktop with Firefox 153 or later.
 
 ## AMO source archive
 

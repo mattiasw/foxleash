@@ -21,7 +21,7 @@ export const esbuildOptions: BuildOptions = {
   format: "iife",
   // Mozilla's reviewers read the output.
   minify: false,
-  target: "firefox142",
+  target: "firefox153",
 };
 
 /** Writes the extension into `dist/`, starting from an empty folder. */

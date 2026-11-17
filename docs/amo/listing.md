@@ -80,7 +80,7 @@ Foxleash asks before it opens a page on a site you have not approved, and it ref
 
 Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (writing to the clipboard, entering fullscreen, opening a file picker, and opening pop-up windows and new tabs unless you allow pop-ups for the site) do not work, and neither do sites that ignore simulated events.
 
-Foxleash runs on Linux only, with Firefox desktop 142 or later. It does not work on Firefox for Android.
+Foxleash runs on Linux only, with Firefox desktop 153 or later. It does not work on Firefox for Android.
 
 About the name: the agent works in your Firefox on a leash that you hold, and a leash is also an old collective noun for foxes, as in a leash of foxes.
 
@@ -139,7 +139,7 @@ The extension keeps your settings, such as the sites you approved and the blockl
 
 ## Compatibility
 
-Foxleash works on Firefox desktop 142 or later (`gecko.strict_min_version` `142.0`), on Linux:
+Foxleash works on Firefox desktop 153 or later (`gecko.strict_min_version` `153.0`), on Linux:
 the local program runs on Linux only.
 
 It does not work on Firefox for Android. Firefox for Android has no `nativeMessaging` or
@@ -151,7 +151,7 @@ object of the AMO v5 API, which `web-ext sign` passes through `--amo-metadata`. 
 AMO's default for an API submission that names no compatibility.
 
 addons-linter still checks `data_collection_permissions` against Firefox for Android. When
-`gecko_android` is absent it falls back to `gecko.strict_min_version` (142) for its Firefox
+`gecko_android` is absent it falls back to `gecko.strict_min_version` (153) for its Firefox
 for Android checks, and Firefox for Android supports the key from 142, so the linter reports
 no warning. The extension build fails on any linter error or warning.
 

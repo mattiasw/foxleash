@@ -160,6 +160,21 @@ describe("bin/firefox-version.json and the pin checks", () => {
     assert.ok(readPin(PIN_PATHS.esr).version.endsWith("esr"));
   });
 
+  // ADR 0077: moving the ESR pin to another major also decides whether the minimum follows.
+  test("pins the ESR of the extension's minimum Firefox version", () => {
+    const manifestPath = join(import.meta.dirname, "..", "apps", "extension", "manifest.json");
+    const manifest: unknown = JSON.parse(readFileSync(manifestPath, "utf8"));
+    assert.ok(typeof manifest === "object" && manifest !== null);
+    assert.ok("browser_specific_settings" in manifest);
+    const settings = manifest.browser_specific_settings;
+    assert.ok(typeof settings === "object" && settings !== null && "gecko" in settings);
+    const gecko = settings.gecko;
+    assert.ok(typeof gecko === "object" && gecko !== null && "strict_min_version" in gecko);
+    const minimum = gecko.strict_min_version;
+    assert.ok(typeof minimum === "string");
+    assert.equal(readPin(PIN_PATHS.esr).version.split(".")[0], minimum.split(".")[0]);
+  });
+
   test("accepts two- and three-part release numbers", () => {
     assert.deepEqual(validatePin({ version: "157.0", sha256: ANY_SHA }), {
       version: "157.0",

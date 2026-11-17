@@ -13,6 +13,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   United States, the Nordic countries and the United Kingdom: a site that is not on it is not
   blocked until you add it.
 
+### Removed
+
+- Support for Firefox 142 to 152, which Mozilla no longer updates. Foxleash now requires
+  Firefox 153 or later, the current Firefox ESR. On Firefox 142 to 151 screenshots did not
+  work. Firefox 142 to 152 cannot install this or a later version of the add-on and keeps
+  Foxleash 0.5.0: update Firefox before you update Foxleash.
+
 ### Fixed
 
 - The browser now says that a Foxleash program of version 0.4.0 or 0.4.1 is too old for the

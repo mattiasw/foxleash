@@ -1,6 +1,6 @@
 # 0034: Firefox 142 is the minimum version
 
-**Status:** Accepted, 2026-10-30.
+**Status:** Accepted, 2026-10-30. Its minimum version of 142 is superseded by [0077](0077-firefox-153-is-the-minimum-version.md), 2026-11-17.
 
 ## Context
 

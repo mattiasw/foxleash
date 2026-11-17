@@ -266,12 +266,12 @@ describe("manifest.json", () => {
     assert.equal(Object.hasOwn(settings, "gecko_android"), false);
   });
 
-  // Without gecko_android, addons-linter checks Firefox for Android against
-  // strict_min_version, and Firefox for Android supports data_collection_permissions from 142.
-  test("requires Firefox 142 or later", async () => {
+  // The current ESR; on 142 to 151 tabs.captureTab is not a function. Without gecko_android the
+  // linter checks Firefox for Android, which has data_collection_permissions from 142, against it.
+  test("requires Firefox 153 or later", async () => {
     const gecko = await geckoSettings();
     assert.ok("strict_min_version" in gecko);
-    assert.equal(gecko.strict_min_version, "142.0");
+    assert.equal(gecko.strict_min_version, "153.0");
   });
 
   test("builds for the minimum Firefox version", async () => {
