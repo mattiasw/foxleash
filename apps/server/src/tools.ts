@@ -1231,10 +1231,9 @@ function readPageParams({
 
 /**
  * Whether two read_page steps can run as one request that walks the page once: both with find or
- * role, in one tab, with the same filter, depth and ref. A run whose first step has find takes only
- * steps with find: an extension from before role-only reads refuses a finds entry without find,
- * which would fail the first step. A step whose find or role is only spaces runs alone, so it fails
- * with its own message, and so does one whose find, role or ref is very long.
+ * role, in one tab, with the same filter, depth and ref. A step whose find or role is only spaces
+ * runs alone, so it fails with its own message, and so does one whose find, role or ref is very
+ * long.
  */
 function findsJoin(first: Record<string, unknown>, next: Record<string, unknown>): boolean {
   const one = findStepOf(first);
@@ -1246,7 +1245,6 @@ function findsJoin(first: Record<string, unknown>, next: Record<string, unknown>
     one.filter === two.filter &&
     one.depth === two.depth &&
     one.ref === two.ref &&
-    (one.find === undefined || two.find !== undefined) &&
     joinable(one) &&
     joinable(two)
   );

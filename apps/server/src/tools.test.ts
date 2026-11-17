@@ -4806,8 +4806,6 @@ describe("batch of read_page finds", () => {
       ],
       [{ find: "a" }, {}],
       [{}, { find: "a" }],
-      [{ find: "a" }, { role: "link" }],
-      [{ find: "a", role: "link" }, { role: "heading" }],
       [{ role: "a" }, { role: " " }],
       [{ role: "\n" }, { find: "a" }],
       [{ role: long }, { role: "a" }],
@@ -4870,6 +4868,49 @@ describe("batch of read_page finds", () => {
           "5 matching lines are not shown. Add find, or read one element with ref.",
         ),
       );
+    },
+  );
+
+  it(
+    "reads role-only steps after a find with one request, each as it reads alone",
+    LIMIT,
+    async () => {
+      const batches = [
+        {
+          steps: [{ find: "a" }, { role: "link" }, { find: "many" }, { role: "none" }],
+          params: {
+            tabId: 3,
+            find: "a",
+            finds: [{ role: "link" }, { find: "many" }, { role: "none" }],
+          },
+          keys: [["role"], ["find"], ["role"]],
+        },
+        {
+          steps: [{ find: "many", role: "link" }, { role: "many" }],
+          params: { tabId: 3, find: "many", role: "link", finds: [{ role: "many" }] },
+          keys: [["role"]],
+        },
+      ];
+      for (const { steps, params, keys } of batches) {
+        const { client, calls } = await start(page(true));
+        const output = await client.callTool({
+          name: "batch",
+          arguments: { steps: steps.map(step) },
+        });
+        assert.equal(output.isError, undefined);
+        assert.deepEqual(calls, [{ method: "read_page", params }]);
+        const finds = record(calls[0]?.params).finds;
+        assert.ok(Array.isArray(finds));
+        assert.deepEqual(finds.map(Object.keys), keys);
+        const expected: string[] = [];
+        for (const [index, args] of steps.entries()) {
+          expected.push(
+            `Step ${index + 1} of ${steps.length}, read_page: ok`,
+            ...(await alone(args)),
+          );
+        }
+        assert.deepEqual(sameIds(output), expected);
+      }
     },
   );
 

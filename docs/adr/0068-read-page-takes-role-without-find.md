@@ -3,7 +3,9 @@
 **Status:** Accepted, 2026-11-16. Supersedes the rule of
 [0043](0043-read-page-finds-lines-by-the-text-it-shows.md) that read_page takes role only together
 with find, and the rules of [0056](0056-a-batch-reads-consecutive-finds-in-one-walk.md) that only
-steps with find join and that finds comes only together with find.
+steps with find join and that finds comes only together with find. Its rule that a run whose first
+step has `find` takes only steps with `find` is superseded by
+[0079](0079-a-batch-joins-a-role-only-read-page-step-after-a-find.md), 2026-11-18.
 
 ## Context
 

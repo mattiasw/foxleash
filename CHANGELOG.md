@@ -12,6 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The settings page says that the built-in blocklist is short and names mostly sites in the
   United States, the Nordic countries and the United Kingdom: a site that is not on it is not
   blocked until you add it.
+- A `batch` that reads a page with `read_page` and `role` alone right after a `read_page` with
+  `find` on the same tab now reads the page once for both, as it already did with the role
+  first, so it answers faster.
 
 ### Removed
 
