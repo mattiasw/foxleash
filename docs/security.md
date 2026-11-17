@@ -204,16 +204,21 @@ Text results never return the values of these fields, only whether they are fill
   them.
 
 Firefox fills saved passwords into login pages when they load, and a page you approved could
-otherwise hand yours to the agent. A field that is none of these still shows its value. The text
-of a network response that `read_network` returns, and a file that `download` saves, can still
-contain such a value when the site sends it back (see [Response bodies](#response-bodies) and
-[Downloads](#downloads)).
+otherwise hand yours to the agent. A field that is none of these still shows its value. A drop-down
+that Firefox filled in from your saved addresses or cards, such as a card's expiry month or a
+country, also shows the option Firefox chose. The text of a network response that `read_network`
+returns, and a file that `download` saves, can still contain a protected field's value when the site
+sends it back (see [Response bodies](#response-bodies) and [Downloads](#downloads)).
 
 ### A password field that the page changes
 
 In `read_page`, a password field that the page turns into another kind of field stays protected
 only if the agent read the page, took a screenshot of it or acted in it while it was still a
 password field, and a text field that the page puts in its place shows its value.
+
+So a page's Show password control that puts a text field in the password field's place shows the
+password, also one Firefox filled in, in the result of the agent's click on that control and in
+later reads and screenshots of the page.
 
 ### Reloading and going back or forward
 
@@ -234,19 +239,28 @@ also does not hold when the page holds a frame a form sent with POST, when it or
 sends a form with POST before Foxleash loads it again, or when it does not finish loading within
 30 seconds.
 
+It does not hold either in the other cases of going back or forward that the next section lists.
+
 ### When a field Firefox filled in shows its value again
 
 A text field Firefox filled in shows its value again once Firefox no longer highlights it as
 filled in:
 
 - after you edit it;
-- after the page's own scripts report a change to it, reload the page or go back or forward;
+- after the page's own scripts report a change to it or go back or forward;
+- after the page reloads itself, with its own scripts or without them, such as with a
+  `<meta http-equiv="refresh">` tag;
+- after you duplicate its tab, in the new tab;
+- after you reopen its tab after closing it;
+- after the agent goes back or forward and the page delays that by more than a second;
 - after the agent goes back or forward to:
   - a page that a form sent with POST,
   - a page that takes more than 30 seconds to arrive,
   - a page whose script stops Foxleash's load of its address,
   - a page whose server takes more than 20 seconds to answer Foxleash's load of its address,
     until it answers,
+  - a page whose server answers Foxleash's load of its address with no page, such as a 204 No
+    Content answer,
   - a page whose address has a fragment (a part after `#`), which the page can give itself, and
     that holds a frame a form sent with POST, sends a form with POST itself or from a frame
     before Foxleash loads it again, or does not finish loading within 30 seconds,
@@ -257,15 +271,14 @@ filled in:
 
 Possibly also:
 
-- after you reopen a tab or window you closed;
-- after the agent goes back or forward and the page delays that, or Firefox delays telling
-  Foxleash about the page's request, by more than a second, or the computer's clock is set back
-  meanwhile;
+- after you reopen a window you closed;
+- after the agent goes back or forward and Firefox delays telling Foxleash about the page's
+  request by more than a second, or the computer's clock is set back meanwhile;
 - after the agent goes back or forward to a page that starts another load after it arrived, if
   Firefox tells Foxleash about that load before the page's arrival or within the same
   millisecond, or from a page that starts another load while the agent leaves it;
 - after the agent goes back or forward to a page whose server answers Foxleash's load of its
-  address with no page, such as a 204 No Content answer or a download;
+  address with a download;
 - to another tool call that reads the page while the agent goes back or forward to it.
 
 ### Screenshots
@@ -283,6 +296,13 @@ it, such as a PDF in a frame. There are two exceptions:
 When the page turns a password field into another kind of field after the agent read the page,
 took a screenshot of it or acted in it while it was a password field, a screenshot hides the
 text of every input element in the page, input buttons included, outside its frames.
+
+In a frame, a password field that the frame turns into another kind of field shows its text in
+screenshots, also when the agent read the page, took a screenshot of it or acted in it while it was
+a password field.
+
+A screenshot shows the highlight of text selected in a protected field, so it shows how long that
+text is, though not the text.
 
 ### Request bodies
 
