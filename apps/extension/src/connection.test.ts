@@ -306,12 +306,15 @@ describe("connection served protocols", { timeout: 10000 }, () => {
     host.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL - 1, version: "0.2.0" });
     host.deliver(request);
     await flush();
+    const clause =
+      OLDEST_SERVED_PROTOCOL < PROTOCOL_VERSION
+        ? `, which works with protocol ${OLDEST_SERVED_PROTOCOL} and later`
+        : "";
     const sentence =
       `The Foxleash native host (version 0.2.0, protocol ${OLDEST_SERVED_PROTOCOL - 1}) is ` +
-      `older than the Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}, which ` +
-      `works with protocol ${OLDEST_SERVED_PROTOCOL} and later): Firefox is still running the ` +
-      "old native host, so update Foxleash with `git pull && npm ci && npm run setup` if you " +
-      "have not yet and then restart Firefox.";
+      `older than the Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}${clause}): ` +
+      "Firefox is still running the old native host, so update Foxleash with " +
+      "`git pull && npm ci && npm run setup` if you have not yet and then restart Firefox.";
     assert.deepEqual(seen, []);
     assert.deepEqual(host.posted.slice(1), [
       {
@@ -660,7 +663,34 @@ describe("connection program state", { timeout: 10000 }, () => {
     assert.deepEqual(changes, ["too_old"]);
   });
 
-  for (const protocol of [OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION]) {
+  // A program at protocol 3 to 5 checks the protocol exactly and refuses a newer add-on (ADR 0072).
+  it("is too_old after a welcome from a program of 0.4.1, and refuses its requests", async (t) => {
+    const seen: RequestMessage[] = [];
+    const { state, open, changes, warnings } = setup(t, async (received) => {
+      seen.push(received);
+      return null;
+    });
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: 3, version: "0.4.1" });
+    host.deliver(request);
+    await flush();
+    assert.equal(state(), "too_old");
+    assert.deepEqual(changes, ["too_old"]);
+    assert.deepEqual(seen, []);
+    assert.deepEqual(host.posted.slice(1), [
+      {
+        type: "response",
+        id: "r1",
+        ok: false,
+        error: { code: "protocol_mismatch", message: fieldsOf(warnings()[0])?.message },
+      },
+    ]);
+  });
+
+  const ends = [OLDEST_SERVED_PROTOCOL, PROTOCOL_VERSION].filter(
+    (protocol, index, all) => all.indexOf(protocol) === index,
+  );
+  for (const protocol of ends) {
     it(`is connected after a welcome with protocol ${protocol}, at an end of its window`, async (t) => {
       const { state, openWelcomed, changes } = setup(t);
       await openWelcomed(protocol);

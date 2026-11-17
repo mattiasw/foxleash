@@ -1,5 +1,4 @@
 import type { RequestMessage } from "@foxleash/protocol";
-import { ownField } from "./page-messages.ts";
 
 /** What differs between protocol `from` and `from + 1`, seen from a host of protocol `from`. */
 export interface Step {
@@ -11,35 +10,7 @@ export interface Step {
 }
 
 /** One step per protocol from `OLDEST_SERVED_PROTOCOL` up to the one before `PROTOCOL_VERSION`. */
-export const STEPS: readonly Step[] = [
-  {
-    from: 3,
-    // Protocol 4 gave read_network the params types, failed and headers, and leaves the header
-    // lists out unless headers is true; a protocol 3 server sends only these three and needs both
-    // lists on every request. Left as it is: since ADR 0066 read_network and read_console can
-    // record a page already open from its approval on, which a protocol 3 server describes as
-    // recorded since its load.
-    request: (request) => {
-      if (request.method !== "read_network") return request;
-      const params: Record<string, unknown> = {};
-      for (const key of ["tabId", "pattern", "limit"]) {
-        const value = ownField(request.params, key);
-        if (value !== undefined) params[key] = value;
-      }
-      return { ...request, params: { ...params, headers: true } };
-    },
-  },
-  {
-    from: 4,
-    // Protocol 5 added body to read_network, off unless true, and requestBody to its result only
-    // then: a request of 4 gets a result of 4.
-  },
-  {
-    from: 5,
-    // Protocol 6 added responseBody to read_network, off unless true, and responseBody to its
-    // result only then: a request of 5 gets a result of 5.
-  },
-];
+export const STEPS: readonly Step[] = [];
 
 /**
  * Answers `request`, sent by a host of `protocol`, with `handle`, which speaks the current

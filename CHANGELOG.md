@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The browser now says that a Foxleash program of version 0.4.0 or 0.4.1 is too old for the
+  add-on, instead of showing it as connected while it refuses every tool call.
+
 ## [0.5.0] - 2026-11-17
 
 ### Added

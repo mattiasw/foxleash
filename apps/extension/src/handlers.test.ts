@@ -50,7 +50,7 @@ import {
   VIEW_READ_MS,
   VIEW_START_LIMIT_MS,
 } from "./handlers.ts";
-import { createNetworkLog, type NetworkReadOptions, REDACTED } from "./network-log.ts";
+import { createNetworkLog, type NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
 import { createPageViews } from "./page-view.ts";
@@ -6827,7 +6827,7 @@ describe("read_network", { timeout: 10000 }, () => {
     assert.deepEqual(context.networkReads, []);
   });
 
-  describe("from a server of an older protocol, with the real network log", () => {
+  describe("from a server of a served protocol, with the real network log", () => {
     const sent = [
       { name: "Cookie", value: "session=secret-1" },
       { name: "Accept", value: "*/*" },
@@ -6872,10 +6872,10 @@ describe("read_network", { timeout: 10000 }, () => {
       return tab;
     }
 
-    it("answers protocol 3 with the redacted headers of every request", async () => {
+    it(`answers protocol ${PROTOCOL_VERSION} without headers unless it asks for them`, async () => {
       const context = setup({ networkLog: true });
       const tab = await recordedTab(context);
-      const result = await context.callAs(3, "s1", "read_network", {
+      const result = await context.callAs(PROTOCOL_VERSION, "s1", "read_network", {
         tabId: tab.id,
         pattern: "/api",
         limit: 10,
@@ -6883,40 +6883,10 @@ describe("read_network", { timeout: 10000 }, () => {
       assert.deepEqual(result, {
         recording: true,
         since: 1,
-        requests: [
-          {
-            ...request,
-            requestHeaders: [
-              { name: "Cookie", value: REDACTED },
-              { name: "Accept", value: "*/*" },
-            ],
-            responseHeaders: [
-              { name: "Set-Cookie", value: REDACTED },
-              { name: "Content-Type", value: "text/plain" },
-            ],
-          },
-        ],
+        requests: [request],
         truncated: false,
       });
     });
-
-    for (const protocol of [4, 5, PROTOCOL_VERSION]) {
-      it(`answers protocol ${protocol} without headers unless it asks for them`, async () => {
-        const context = setup({ networkLog: true });
-        const tab = await recordedTab(context);
-        const result = await context.callAs(protocol, "s1", "read_network", {
-          tabId: tab.id,
-          pattern: "/api",
-          limit: 10,
-        });
-        assert.deepEqual(result, {
-          recording: true,
-          since: 1,
-          requests: [request],
-          truncated: false,
-        });
-      });
-    }
   });
 });
 
