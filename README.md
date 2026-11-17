@@ -166,7 +166,9 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - It acts on a site only after you approved that site in the browser. The approval can only
   come from your click, not from the agent.
 - The settings list each running agent session with a Stop this session button: after your
-  click Foxleash refuses every tool call of that session, also on sites you allowed always.
+  click Foxleash refuses every tool call of that session, also on sites you allowed always. A
+  new agent session is not stopped, and an agent that can run programs on your computer can
+  start one itself.
 - It refuses clicks on links and form buttons that lead to another site or out of the browser.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title.
@@ -195,6 +197,14 @@ the tab to another site. The agent then sees only that site's address.
 
 Your agent's own permission settings still apply on top of this, but do not rely on them
 alone: many people run agents with prompts turned off.
+
+An agent that can run programs on your computer, for example through a shell tool with its
+prompts turned off, can also connect to Foxleash's native host itself. It then gets a new
+session that can use every site you allowed always, and the upload rules, the saved screenshots
+folder and the untrusted marking do not apply to it. Site approval, the blocklist, the hiding of
+other sites' tabs, protected fields, the click refusals and the download rules still hold for
+what it sends through Foxleash; [docs/security.md](docs/security.md#the-risk) says where they
+end and how to cut such an agent off.
 
 Avoid using Foxleash on sites where a mistake is costly (banking, health records, admin
 panels with destructive actions), and stay nearby while it works.

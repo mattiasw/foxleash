@@ -24,6 +24,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `gpg --export-secret-keys` writes it by default, and files named like a PGP secret keyring
   (`secring.gpg`). Once the add-on has updated, it refuses uploads from an older Foxleash
   program, whose check misses such keys, until you update the program.
+- The input probe, which `foxleash probe` and any other program that talks to Foxleash's native
+  host directly can run, no longer types into a text field Firefox filled in from your saved
+  logins, addresses or cards. Typing there ended the field's protection, so the agent could read
+  its value.
 
 ## [0.5.0] - 2026-11-17
 

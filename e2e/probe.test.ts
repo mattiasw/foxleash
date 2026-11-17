@@ -1,18 +1,28 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { promisify } from "node:util";
 import type { ProbeCheck } from "@foxleash/protocol";
-import type { Firefox } from "./firefox.ts";
-import { type FixtureServer, PROBE_SECRET, startFixtureServer } from "./fixture-server.ts";
-import { CHECKOUT, createHarness, EXTENSION_DIST, type Harness } from "./harness.ts";
+import { Bridge } from "../apps/server/src/bridge.ts";
+import { resolveSocketDir } from "../apps/server/src/socket-dir.ts";
+import { SERVER_VERSION } from "../apps/server/src/version.ts";
+import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import {
+  AUTOFILL_LOGIN,
+  type FixtureServer,
+  PROBE_SECRET,
+  startFixtureServer,
+} from "./fixture-server.ts";
+import { CHECKOUT, createHarness, EXTENSION_DIST, type Harness, tabOf } from "./harness.ts";
 
 const run = promisify(execFile);
 const MAIN = join(CHECKOUT, "apps", "server", "src", "main.ts");
 // The probe takes about 20 s per page at most; this bounds a run that hangs.
 const PROBE_KILL_MS = 90_000;
+const AUTOFILLED = 'document.getElementById("login-name").matches(":autofill")';
 
 // One Firefox for the file: the probe runs once, and the tests read its report and the page.
 describe("foxleash probe, in real Firefox", () => {
@@ -136,6 +146,99 @@ describe("foxleash probe, in real Firefox", () => {
     assert.equal(json.includes(PROBE_SECRET), false);
     assert.equal(markdown.includes(PROBE_SECRET), false);
   });
+
+  test("the probe skips a field Firefox filled in, which stays filled in", {
+    timeout: 120_000,
+  }, async () => {
+    const probed = await probeFilledIn("/autofill");
+    // It typed into the page's other field, so it did not skip every field.
+    const typed = probed.find(
+      (entry) =>
+        isRecord(entry) &&
+        entry.check === "type_input" &&
+        entry.target === "site" &&
+        entry.strategy === "native_setter",
+    );
+    assert.ok(
+      isRecord(typed) && typed.outcome === "worked",
+      `no working type_input site native_setter in ${JSON.stringify(probed)}`,
+    );
+  });
+
+  test("the probe skips an editable area that is a field Firefox filled in", {
+    timeout: 120_000,
+  }, async () => {
+    const probed = await probeFilledIn(
+      "/autofill?editable",
+      'document.getElementById("login-name").contentEditable = "true"',
+    );
+    const editable = probed.filter(
+      (entry) =>
+        isRecord(entry) && entry.check === "type_contenteditable" && entry.target === "site",
+    );
+    assert.equal(editable.length, 3, JSON.stringify(probed));
+    for (const entry of editable) {
+      assert.ok(
+        isRecord(entry) &&
+          entry.outcome === "error" &&
+          entry.detail === "skipped: filled in by Firefox",
+        JSON.stringify(entry),
+      );
+    }
+  });
+
+  /**
+   * Runs probe_input from a session of its own on the autofill page at `path`, once Firefox filled
+   * in the login name and `prepare` ran in the page; checks that the field stays filled in and
+   * returns the probe's checks.
+   */
+  async function probeFilledIn(path: string, prepare?: string): Promise<unknown[]> {
+    await firefox.saveLogin(fixtures.site, AUTOFILL_LOGIN.username, AUTOFILL_LOGIN.password);
+    try {
+      const uid = process.getuid?.();
+      assert.ok(uid !== undefined);
+      // A client of the native host's socket in a session of its own, as any program can be.
+      const bridge = new Bridge({
+        socketDir: resolveSocketDir(harness.env, uid).dir,
+        uid,
+        version: SERVER_VERSION,
+        session: randomUUID(),
+        log: () => {},
+      });
+      try {
+        // tab_open makes the tab active: login autofill waits for a visible document.
+        const tabId = tabOf(await bridge.call("tab_open", {})).id;
+        await bridge.call("navigate", { tabId, url: fixtures.url(path) });
+        // An exact match: an earlier test's autofill page is still open.
+        const page = (await firefox.contexts()).find(({ url }) => url === fixtures.url(path));
+        assert.ok(page !== undefined, `${path} has no tab`);
+        const context = page.context;
+        await pollUntil(
+          async () => ((await firefox.evaluate(context, AUTOFILLED)) === true ? true : undefined),
+          PAGE_TIMEOUT_MS,
+          "Firefox to fill the saved login",
+        );
+        if (prepare !== undefined) {
+          await firefox.evaluate(context, prepare);
+          assert.equal(await firefox.evaluate(context, AUTOFILLED), true, "prepare ended the mark");
+        }
+        const result = await bridge.call("probe_input", { tabId });
+        assert.equal(await firefox.evaluate(context, AUTOFILLED), true);
+        assert.equal(
+          await firefox.evaluate(context, `document.getElementById("login-name").value`),
+          AUTOFILL_LOGIN.username,
+        );
+        assert.equal(JSON.stringify(result).includes(AUTOFILL_LOGIN.username), false);
+        assert.equal(fixtures.hits("/autofill-done"), 0);
+        assert.ok(isRecord(result) && Array.isArray(result.checks), JSON.stringify(result));
+        return result.checks;
+      } finally {
+        bridge.close();
+      }
+    } finally {
+      await firefox.removeLogins();
+    }
+  }
 
   function find(check: string, target: string, strategy: string): ProbeCheck {
     const found = checks.find(

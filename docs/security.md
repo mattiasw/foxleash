@@ -13,6 +13,33 @@ can do, as the sections below describe.
 Your agent's own permission settings still apply on top of this, but do not rely on them alone:
 many people run agents with prompts turned off.
 
+Some safeguards do not hold against an agent that can run programs on your computer, for example
+through a shell tool with its prompts turned off. Such an agent can connect to Foxleash's native
+host itself instead of going through the MCP server and its tools, and then:
+
+- It gets a new agent session of its own, which a stop of another session does not reach. Sites
+  you refused and prompts you closed in another session do not carry over, and it gets its own
+  three refused or closed prompts before it stops asking.
+- It can use every site you allowed always without asking you.
+- The checks the MCP server makes do not apply to it: the [upload folders](#uploads) and the
+  refusal of dotfiles and key files, the folder for [saved screenshots](#saved-screenshots) and
+  the [untrusted marking](#untrusted-page-content) of page content.
+
+It still gets no other session's tabs or answers, and the extension still enforces, on every
+request that reaches it: [site approval](#site-approval) and the refusal of clicks that lead to
+another site, [the blocklist](#the-blocklist), the hiding of
+[tabs on other sites](#tabs-on-other-sites), [protected fields](#protected-fields) and the limits
+on [downloads](#downloads). That holds for what reaches Firefox through Foxleash, not for what
+such an agent does outside it: it can also change Foxleash's settings and files and your Firefox
+profile, or press keys on your desktop, which can answer a Foxleash prompt as your own key
+presses would.
+
+Revoking the sites you allowed always and stopping its running sessions, both on the settings
+page, makes such an agent ask you again before it opens a site. Disabling the Foxleash add-on in
+Firefox's add-ons manager cuts it off from Foxleash while the add-on stays disabled. If you rely
+on stopping a session or on the upload rules, keep your agent's own prompts on for running
+programs.
+
 Avoid using Foxleash on sites where a mistake is costly (banking, health records, admin panels
 with destructive actions), and stay nearby while it works.
 
@@ -80,6 +107,9 @@ An upload takes at most 100 files and 10 MB.
 Once the extension has updated, it refuses uploads from an older Foxleash program, whose checks
 miss some keys, until you update the program.
 
+An agent that can run programs on your computer can upload a file without these checks (see
+[The risk](#the-risk)).
+
 ## Recipes and site requests
 
 - A recipe is saved only by your click on Foxleash's page in Firefox, after you read it: nothing
@@ -118,7 +148,10 @@ Exceptions:
 - The stop is kept in memory. A Firefox restart, or an update or reload of the extension, forgets
   it, as it forgets the session answers; a session that connects again afterwards has what a new
   session has, such as the sites you allowed always.
-- A new agent session is not stopped.
+- A new agent session is not stopped. An agent that can run programs on your computer can start
+  one itself, which can use every site you allowed always. Revoking those sites makes its new
+  sessions ask you again, and disabling the Foxleash add-on cuts it off while the add-on stays
+  disabled (see [The risk](#the-risk)).
 - Closing the session's tab group does not stop the session: the next tab it opens makes a new
   group.
 - A session whose program went away without telling Firefox stays listed as running until Firefox
@@ -127,7 +160,8 @@ Exceptions:
 ## Untrusted page content
 
 Tool results mark page content as untrusted, and the agent is told not to follow instructions
-found in pages.
+found in pages. An agent that can run programs on your computer can get page content without
+this marking (see [The risk](#the-risk)).
 
 ## Protected fields
 
@@ -294,7 +328,8 @@ Exceptions and limits:
 ## Saved screenshots
 
 Saved screenshots go only into the agent's working folder, as new files, and never over an
-existing file.
+existing file. An agent that can run programs on your computer can get a screenshot without this
+rule (see [The risk](#the-risk)).
 
 ## Downloads
 

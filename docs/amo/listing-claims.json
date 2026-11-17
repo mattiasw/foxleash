@@ -290,7 +290,9 @@
           "contains": "notePasswordFields: () => notePasswordFields({ passwordFields })"
         },
         { "file": "apps/extension/src/handlers.ts", "contains": "function watchHistoryLoad(" },
-        { "file": "apps/extension/src/handlers.ts", "contains": "function reloadHistoryLoad(" }
+        { "file": "apps/extension/src/handlers.ts", "contains": "function reloadHistoryLoad(" },
+        { "file": "apps/extension/src/probe-page.ts", "contains": "el.matches(\":autofill\")" },
+        { "file": "apps/extension/src/probe-page.ts", "contains": "field?.matches(\":autofill\")" }
       ]
     },
     {

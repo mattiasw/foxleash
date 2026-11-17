@@ -335,6 +335,11 @@ export async function probePage(site: string, cutoff: number): Promise<ProbeResu
       await attempt(check, target, el, editor, strategy, async () => {
         const marker = markerOf(strategy);
         const field = textField(el);
+        // Typing ends Firefox's autofill mark, and with it the field's protection. An editable
+        // area or rich editor can be such a field too: an input can carry contenteditable.
+        if (target === "site" && field?.matches(":autofill")) {
+          return { outcome: "error", delivered: false, detail: "skipped: filled in by Firefox" };
+        }
         const original = field?.value;
         if (target === "probe") clear(el);
         const hadFocus = el.ownerDocument.activeElement === el;
@@ -635,7 +640,15 @@ export async function probePage(site: string, cutoff: number): Promise<ProbeResu
 
   function siteInput(): HTMLInputElement | HTMLTextAreaElement | undefined {
     for (const el of document.querySelectorAll("input, textarea")) {
-      if (inContainer(el) || !visible(el) || el.matches(":disabled") || isCredential(el)) continue;
+      if (
+        inContainer(el) ||
+        !visible(el) ||
+        el.matches(":disabled") ||
+        el.matches(":autofill") ||
+        isCredential(el)
+      ) {
+        continue;
+      }
       if (el instanceof HTMLTextAreaElement && !el.readOnly) return el;
       if (el instanceof HTMLInputElement && !el.readOnly && TEXT_TYPES.includes(el.type)) {
         return el;

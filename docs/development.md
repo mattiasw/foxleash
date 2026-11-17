@@ -411,11 +411,11 @@ relative `--out` path are the Foxleash folder.
 What the probe does in a page:
 
 - It types short markers such as `fxsetter` into the first text field (never a password field,
-  nor one marked for a password or a one-time code), the first editable area and the first
-  rich editor (such as Gmail's compose window or a Google Docs document) it finds. It restores
-  a text field's value afterwards, but not an editor's text, so run it on a scratch document or
-  a draft. The page reacts to the markers as it would to your typing, for example by searching
-  for them.
+  nor one marked for a password or a one-time code, nor one Firefox filled in), the first
+  editable area and the first rich editor (such as Gmail's compose window or a Google Docs
+  document) it finds. It restores a text field's value afterwards, but not an editor's text, so
+  run it on a scratch document or a draft. The page reacts to the markers as it would to your
+  typing, for example by searching for them.
 - It clicks only an expand or collapse toggle, and then clicks it back, and a link to a
   place on the same page.
 - It never submits a form itself, never presses Enter or Tab in the page's own elements, and
