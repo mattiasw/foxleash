@@ -42,6 +42,7 @@ describe("acts wait for the page to settle in real Firefox", () => {
   let firefox: Firefox;
   let session: Session;
   let opened = 0;
+  let warmUpMs: number;
 
   before(
     async () => {
@@ -54,6 +55,13 @@ describe("acts wait for the page to settle in real Firefox", () => {
       });
       session = await harness.connect();
       await harness.waitUntilReady(session);
+      // An act in the first second or so after Firefox starts is slower: bound only later acts.
+      const warmUp = await settlePage(false);
+      const ref = refOf(warmUp.tree, 'button "Quiet"');
+      warmUpMs = (
+        await timed(() => harness.ok(session, "click", { tabId: warmUp.tabId, ref, view: false }))
+      ).ms;
+      await harness.ok(session, "tab_close", { tabId: warmUp.tabId });
     },
     { timeout: 120_000 },
   );
@@ -73,6 +81,7 @@ describe("acts wait for the page to settle in real Firefox", () => {
     const where = hidden ? "in a tab that is not selected" : "in the selected tab";
 
     test(`a click that changes nothing answers unchanged quickly, ${where}`, async (t) => {
+      if (!hidden) t.diagnostic(`first act, untimed warm-up: ${warmUpMs} ms`);
       const page = await settlePage(hidden);
       const ref = refOf(page.tree, 'button "Quiet"');
       const { value, ms } = await timed(() =>
