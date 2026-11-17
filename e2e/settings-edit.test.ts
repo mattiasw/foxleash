@@ -21,6 +21,8 @@ const ANSWER = {
 const SITE_A = "https://a.example";
 // Sorts between the seeded fixture site and SITE_A (":" before "s").
 const SITE_B = "http://b.example";
+// Added during a press; sorts between SITE_B and SITE_A.
+const SITE_C = "http://c.example";
 const BLOCKLIST_TEXT = "Foxleash's blocklist";
 
 // The answers section: its rows, whether the list and the empty state are visible, the live
@@ -72,6 +74,11 @@ const SELECTION = `(() => {
   const area = document.getElementById("blocklist");
   return JSON.stringify([document.activeElement === area, area.selectionStart, area.selectionEnd]);
 })()`;
+
+// The session labels the background reports, which only the settings page may ask for.
+const ANSWER_LABELS = `browser.runtime
+  .sendMessage({ type: "session_answers" })
+  .then((reply) => JSON.stringify(reply.map((entry) => entry.label)))`;
 
 const STORED_BLOCKLIST =
   'browser.storage.local.get("blocklist").then((items) => JSON.stringify(items))';
@@ -184,7 +191,7 @@ describe("editing the settings, in real Firefox", () => {
     assert.ok(closed.includes("was closed without an answer"), closed);
   });
 
-  test("a Forget click keeps its row when the answers refresh between press and release", async (t) => {
+  test("a Forget click lands when the answers change between press and release", async (t) => {
     const session = await connected();
     t.after(() => session.close());
     const existing = await promptContexts();
@@ -213,14 +220,15 @@ describe("editing the settings, in real Firefox", () => {
     try {
       // Closing a background tab changes the label and leaves the settings page selected.
       await harness.ok(session, "tab_close", { tabId: second.id });
-      await firefox.evaluate(page, 'dispatchEvent(new Event("focus"))');
-      const one = `${third.site}: allowed this session (session 3 with 1 tab)`;
-      await waitForAnswers(page, {
-        rows: ["Agent session 3 with 1 tab", one],
+      await waitForLabels(page, ["session 3 with 1 tab"]);
+      await refreshAnswers(page);
+      // The press holds the update.
+      assert.deepEqual(JSON.parse(String(await firefox.evaluate(page, ANSWERS_STATE))), {
+        rows: ["Agent session 3 with 2 tabs", two],
         list: true,
         empty: false,
         status: "",
-        focus: `Forget ${one}`,
+        focus: `Forget ${two}`,
       });
     } finally {
       await firefox.release(page);
@@ -321,6 +329,49 @@ describe("editing the settings, in real Firefox", () => {
     assert.equal(unseeded.hits("/a"), hits);
   });
 
+  test("a Forget click lands when a session listed above it ends between press and release", async (t) => {
+    const older = await connected();
+    t.after(() => older.close());
+    const newer = await connected();
+    t.after(() => newer.close());
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(newer, "tab_open", { url: third.url("/a") }));
+    const allowing = await harness.promptContext(existing);
+    await harness.waitForArmed(allowing);
+    await firefox.click(allowing, ANSWER.once);
+    await opening;
+
+    const page = await harness.settingsPage();
+    t.after(() => firefox.closeContext(page));
+    const allowed = `${third.site}: allowed this session (session 7 with 1 tab)`;
+    await waitForAnswers(page, {
+      rows: ["Agent session 6 with no tabs", "Agent session 7 with 1 tab", allowed],
+      list: true,
+      empty: false,
+      status: "",
+      focus: null,
+    });
+
+    // Focusing the button also scrolls it into view, which the press needs.
+    const button = `button[aria-label="Forget ${allowed}"]`;
+    await firefox.evaluate(page, `document.querySelector(${JSON.stringify(button)}).focus()`);
+    await firefox.press(page, button);
+    try {
+      await older.close();
+      await waitForLabels(page, ["session 7 with 1 tab"]);
+      await refreshAnswers(page);
+    } finally {
+      await firefox.release(page);
+    }
+    await waitForAnswers(page, {
+      rows: ["Agent session 7 with 1 tab"],
+      list: true,
+      empty: false,
+      status: `Forgot ${third.site} for this session`,
+      focus: "heading",
+    });
+  });
+
   test("a site added elsewhere keeps focus on the same Revoke button", async (t) => {
     const page = await harness.settingsPage();
     t.after(() => firefox.closeContext(page));
@@ -347,6 +398,47 @@ describe("editing the settings, in real Firefox", () => {
       `JSON.stringify({ sites: ${sites}, focus: document.activeElement?.dataset?.site ?? null })`,
       JSON.stringify({ sites: [seeded.site, SITE_B, SITE_A], focus: SITE_A }),
       "the new site with focus kept",
+    );
+  });
+
+  test("a Revoke click lands when a site is added above it between press and release", async (t) => {
+    const page = await harness.settingsPage();
+    t.after(() => firefox.closeContext(page));
+    const sites = `[...document.querySelectorAll("#sites button")].map((button) => button.dataset.site)`;
+    await waitFor(
+      page,
+      `JSON.stringify(${sites})`,
+      JSON.stringify([seeded.site, SITE_B, SITE_A]),
+      "the allowed sites",
+    );
+    // Focus is elsewhere, so the press moves it.
+    const button = `button[aria-label="Revoke ${SITE_A}"]`;
+    await firefox.evaluate(
+      page,
+      `document.querySelector(${JSON.stringify(button)}).scrollIntoView({ block: "center" });
+      document.getElementById("sites-heading").focus({ preventScroll: true })`,
+    );
+    await firefox.press(page, button);
+    try {
+      await storeDuringPress(page, {
+        [`site:${SITE_C}`]: { grantedAt: new Date().toISOString() },
+      });
+    } finally {
+      await firefox.release(page);
+    }
+    await waitFor(
+      page,
+      `JSON.stringify({
+        sites: ${sites},
+        status: document.getElementById("status").textContent,
+        focus: document.activeElement?.dataset?.site ?? null,
+      })`,
+      JSON.stringify({
+        sites: [seeded.site, SITE_B, SITE_C],
+        status: `Revoked ${SITE_A}`,
+        focus: SITE_C,
+      }),
+      "the pressed site revoked",
     );
   });
 
@@ -432,6 +524,48 @@ describe("editing the settings, in real Firefox", () => {
 
   async function waitForAnswers(page: string, expected: AnswersState): Promise<void> {
     await waitFor(page, ANSWERS_STATE, JSON.stringify(expected), "the session answers");
+  }
+
+  async function waitForLabels(page: string, labels: string[]): Promise<void> {
+    await waitFor(page, ANSWER_LABELS, JSON.stringify(labels), "the background's session labels");
+  }
+
+  /**
+   * Makes the page read the answers again, and returns once it has handled the reply: the
+   * background answers in the order it was asked, so its reply to a later request comes after.
+   */
+  async function refreshAnswers(page: string): Promise<void> {
+    const read = await firefox.evaluate(
+      page,
+      `(() => {
+        dispatchEvent(new Event("focus"));
+        return browser.runtime.sendMessage({ type: "session_answers" }).then(() => true);
+      })()`,
+    );
+    assert.equal(read, true);
+  }
+
+  /**
+   * Stores `entries` and returns once the page has handled the reads the change started: its own
+   * storage listener runs first, and reads finish in the order they started.
+   */
+  async function storeDuringPress(page: string, entries: Record<string, unknown>): Promise<void> {
+    const stored = await firefox.evaluate(
+      page,
+      `new Promise((resolve, reject) => {
+        const seen = (changes, area) => {
+          if (area !== "local") return;
+          browser.storage.onChanged.removeListener(seen);
+          browser.storage.local.get(null).then(() => resolve(true), reject);
+        };
+        browser.storage.onChanged.addListener(seen);
+        browser.storage.local.set(${JSON.stringify(entries)}).catch((error) => {
+          browser.storage.onChanged.removeListener(seen);
+          reject(error);
+        });
+      })`,
+    );
+    assert.equal(stored, true);
   }
 
   async function setBlocklist(page: string, text: string): Promise<void> {

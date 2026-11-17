@@ -48,6 +48,7 @@ apps/extension/src/page-ui.ts
 apps/extension/src/page-upload.ts
 apps/extension/src/page-view.ts
 apps/extension/src/pages.css
+apps/extension/src/press-hold.ts
 apps/extension/src/probe-page.ts
 apps/extension/src/program-status.ts
 apps/extension/src/prompt-arming.ts

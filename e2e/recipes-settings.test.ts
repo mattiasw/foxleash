@@ -360,6 +360,30 @@ describe("recipes on the settings page, in real Firefox", () => {
     assert.deepEqual(await storedRecipes(page), { "recipe:Alpha": elsewhere });
   });
 
+  test("an Edit click lands when a recipe is added above it between press and release", async (t) => {
+    const page = await openWith(t, [recipe("Beta", "Second"), recipe("Gamma", "Third")]);
+    // Focus is elsewhere, so the press moves it.
+    await firefox.evaluate(
+      page,
+      `document.querySelector('button[aria-label="Edit Gamma"]').scrollIntoView({ block: "center" });
+      document.getElementById("recipes-heading").focus({ preventScroll: true })`,
+    );
+    await firefox.press(page, 'button[aria-label="Edit Gamma"]');
+    try {
+      await storeDuringPress(page, { "recipe:Alpha": recipe("Alpha", "First") });
+    } finally {
+      await firefox.release(page);
+    }
+    await waitForRecipes(page, {
+      rows: ["Alpha: First", "Beta: Second", "Gamma: Third"],
+      status: "",
+      editor: true,
+      undo: false,
+      focus: "recipe-editor-heading",
+    });
+    assert.equal((await editorState(page)).heading, "Edit Gamma");
+  });
+
   /**
    * Stores exactly `recipes`, then opens a settings page once it lists them. The writes run in
    * another page first: each storage change re-renders the list, and a render arriving after the
@@ -410,6 +434,29 @@ describe("recipes on the settings page, in real Firefox", () => {
     const stored = await firefox.evaluate(
       page,
       `browser.storage.local.set(${JSON.stringify(entries)}).then(() => true)`,
+    );
+    assert.equal(stored, true);
+  }
+
+  /**
+   * Stores `entries` and returns once the page has handled the reads the change started: its own
+   * storage listener runs first, and reads finish in the order they started.
+   */
+  async function storeDuringPress(page: string, entries: Record<string, unknown>): Promise<void> {
+    const stored = await firefox.evaluate(
+      page,
+      `new Promise((resolve, reject) => {
+        const seen = (changes, area) => {
+          if (area !== "local") return;
+          browser.storage.onChanged.removeListener(seen);
+          browser.storage.local.get(null).then(() => resolve(true), reject);
+        };
+        browser.storage.onChanged.addListener(seen);
+        browser.storage.local.set(${JSON.stringify(entries)}).catch((error) => {
+          browser.storage.onChanged.removeListener(seen);
+          reject(error);
+        });
+      })`,
     );
     assert.equal(stored, true);
   }

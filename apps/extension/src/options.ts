@@ -1,5 +1,5 @@
 import { MAX_RECIPES, type Recipe, type RecipeFields } from "@foxleash/protocol";
-import type { BrowserApi } from "./browser-api.ts";
+import type { BrowserApi, Timers } from "./browser-api.ts";
 import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
 import {
   announce,
@@ -11,6 +11,7 @@ import {
   showProblems,
   type TextField,
 } from "./page-ui.ts";
+import { createPressHold } from "./press-hold.ts";
 import { watchProgram } from "./program-status.ts";
 import {
   checkRecipe,
@@ -110,6 +111,13 @@ let saving = false;
 let pendingFocus: { key: string; action: string } | undefined;
 // The recipe the last delete removed, which Undo saves again.
 let undoable: RecipeFields | undefined;
+// Wrapped: Firefox's setTimeout throws when called on anything but the window.
+const timers: Timers<ReturnType<typeof setTimeout>> = {
+  setTimeout: (callback, delay) => setTimeout(callback, delay),
+  clearTimeout: (handle) => clearTimeout(handle),
+};
+// A list update that moves or replaces the pressed button before the release loses its click.
+const hold = createPressHold(window, timers);
 
 onSettingsChanged(browser, render);
 render();
@@ -127,11 +135,7 @@ watchProgram({
   },
   browser,
   page: document,
-  // Wrapped: Firefox's setTimeout throws when called on anything but the window.
-  timers: {
-    setTimeout: (callback, delay) => setTimeout(callback, delay),
-    clearTimeout: (handle) => clearTimeout(handle),
-  },
+  timers,
 });
 // The background has no event for changed answers; coming back to the page reads them again.
 window.addEventListener("focus", refreshAnswers);
@@ -174,25 +178,38 @@ function input(id: string): HTMLInputElement {
 function render(): void {
   renders += 1;
   const current = renders;
+  // Checked on arrival, so a superseded result never replaces a newer held one, and again when a
+  // held update runs, since a newer render can start while it is held.
   readSettings(browser).then(
     (settings) => {
       if (current !== renders) return;
-      show(settings.sites);
+      // Not held: the checkbox moves no button, and a held value would undo a click on it.
       sessionWindow.checked = settings.sessionWindow;
+      hold.run("sites", () => {
+        if (current === renders) show(settings.sites);
+      });
     },
     () => {
-      if (current === renders) announce(status, READ_FAILED);
+      if (current !== renders) return;
+      hold.run("sites", () => {
+        if (current === renders) announce(status, READ_FAILED);
+      });
     },
   );
   readRecipes(browser).then(
     (recipes) => {
-      if (current === renders) showRecipes(recipes);
+      if (current !== renders) return;
+      hold.run("recipes", () => {
+        if (current === renders) showRecipes(recipes);
+      });
     },
     () => {
       if (current !== renders) return;
       // A later render must not move focus out of an editor the user has gone on to type in.
       pendingFocus = undefined;
-      announce(recipesStatus, RECIPES_READ_FAILED);
+      hold.run("recipes", () => {
+        if (current === renders) announce(recipesStatus, RECIPES_READ_FAILED);
+      });
     },
   );
 }
@@ -362,15 +379,22 @@ function rowButton(rows: HTMLElement, key: string, action: string): HTMLButtonEl
 function refreshAnswers(): void {
   answerReads += 1;
   const current = answerReads;
+  // Checked on arrival and when a held update runs, as in render().
   browser.runtime.sendMessage({ type: "session_answers" }).then(
     (reply) => {
       if (current !== answerReads) return;
-      const held = answersOf(reply);
-      if (held === undefined) announce(answersStatus, ANSWERS_FAILED);
-      else showAnswers(held);
+      hold.run("answers", () => {
+        if (current !== answerReads) return;
+        const held = answersOf(reply);
+        if (held === undefined) announce(answersStatus, ANSWERS_FAILED);
+        else showAnswers(held);
+      });
     },
     () => {
-      if (current === answerReads) announce(answersStatus, ANSWERS_FAILED);
+      if (current !== answerReads) return;
+      hold.run("answers", () => {
+        if (current === answerReads) announce(answersStatus, ANSWERS_FAILED);
+      });
     },
   );
 }
@@ -501,8 +525,8 @@ function forget(session: string, site: string, what: string): void {
 }
 
 /**
- * Updates the answer rows in place by key, so a press on a row's button survives a change of its
- * text: a new button under the release would get no click.
+ * Updates the answer rows in place by key, so a focused button stays the same element when its
+ * text changes: keyboard focus, and a Space press on it, stay on it.
  */
 function updateAnswerRows(rows: AnswerRow[]): void {
   const wanted = new Set(rows.map(({ key }) => key));

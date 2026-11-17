@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   for it, including those that a link from another site would not carry.
 - A long recipe name without spaces no longer runs off the page where you update a recipe, the
   page that runs one, or the settings page, in its recipe editor heading and its status lines.
+- On the settings page, a click is no longer lost when a list on the page changes while the mouse
+  button is down, such as when an agent session ends or a recipe is saved in another tab.
 
 ### Security
 
