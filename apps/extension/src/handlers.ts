@@ -75,7 +75,7 @@ import {
 } from "./screenshot.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
-import { siteOf, withoutFragment } from "./site.ts";
+import { hasPlainHost, siteOf, withoutFragment } from "./site.ts";
 import {
   type Approval,
   approvalPending,
@@ -2115,17 +2115,12 @@ function uploadFiles(value: unknown): { name: string; type: string; size: number
   });
 }
 
-const HOST_LABEL = /^[a-z0-9_-]{1,63}$/;
-
 /** A request_sites entry's site, or why it is refused. */
 function requestedSite(entry: unknown): string | { problem: string } {
   const site = siteOfEntry(entry);
   if (site === undefined) return { problem: "this entry is blank." };
   if (typeof site !== "string") return site;
-  // The page shows each host as it is: punctuation that no domain name has would let the agent
-  // write sentences there. The URL parser writes an IPv6 host in brackets.
-  const host = URL.parse(site)?.hostname ?? "";
-  if (!host.startsWith("[") && !host.split(".").every((label) => HOST_LABEL.test(label))) {
+  if (!hasPlainHost(site)) {
     return { problem: "this address's host is not a domain name or an IP address." };
   }
   return site;

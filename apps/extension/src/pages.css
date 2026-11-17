@@ -126,7 +126,12 @@ li .actions {
   cursor: not-allowed;
 }
 
-#target {
+h1,
+h2,
+h3,
+#recipe,
+#target,
+[role="status"] {
   overflow-wrap: anywhere;
 }
 

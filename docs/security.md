@@ -48,6 +48,10 @@ with destructive actions), and stay nearby while it works.
 Foxleash acts on a site only after you approved that site in the browser, and asks before it
 opens a page there. The approval can only come from your click, not from the agent.
 
+The prompt shows the whole site it asks about, on more lines when it is long, and it asks only
+about a site whose host is a domain name of at most 253 characters or an IP address, so
+punctuation in a host cannot make the question name another site.
+
 Content a page on an approved site embeds from other sites, blocklisted ones included, can show
 up in what the agent reads, for example in a screenshot. This can include a page on your own
 network, shown in a frame.

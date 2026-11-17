@@ -102,6 +102,9 @@ address.
 - A tab returned while it still loads has an empty title.
 - Going back or forward, or reloading the page the tab already shows, waits until the whole page
   has loaded.
+- Before asking about a site you have not approved, `tab_open` and `navigate` refuse an address
+  whose host is not a domain name or an IP address, such as one with parentheses or commas, or is
+  longer than 253 characters, as `request_sites` does, because the prompt shows the site as it is.
 
 ### While a tab is loading another page
 

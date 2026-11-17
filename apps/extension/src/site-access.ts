@@ -4,7 +4,7 @@ import { ToolError } from "./handlers.ts";
 import { capText } from "./page-messages.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { effectiveBlocklist, grantSite, readSettings } from "./settings.ts";
-import { hostOf, matchesDomain, redactedUrl, siteOf } from "./site.ts";
+import { hasPlainHost, hostOf, MAX_SITE_HOST, matchesDomain, redactedUrl, siteOf } from "./site.ts";
 
 /** Per MCP session, its answers and refusals. A Map: `__proto__` is a valid id. Never stored. */
 export type SessionMemory = Map<string, SessionState>;
@@ -341,6 +341,7 @@ export function createSiteAccess<Handle>({
     const current = await view(session);
     if (current.blocked(url)) throw siteBlocked(site);
     if (current.allowed(url)) return { decision: "allowed" };
+    refuseIfNotPlain(site);
     refuseIfAnswered(session, site);
     refuseBesideOtherPrompt(session);
     const prompt = prompts.get(session);
@@ -370,6 +371,7 @@ export function createSiteAccess<Handle>({
     // Before the approved check: Foxleash must not navigate away from its own live prompt.
     if (open?.tabId === tabId) return join(joinable(open, site), tabId);
     if (current.allowed(url)) return { answer: Promise.resolve(), promptInTab: false };
+    refuseIfNotPlain(site);
     refuseIfAnswered(session, site);
     refuseBesideOtherPrompt(session);
     if (open !== undefined) return join(joinable(open, site), tabId);
@@ -559,6 +561,14 @@ export function createSiteAccess<Handle>({
       throw new ToolError("invalid_url", "Foxleash acts only on http and https URLs.");
     }
     return site;
+  }
+
+  function refuseIfNotPlain(site: string): void {
+    if (hasPlainHost(site)) return;
+    throw new ToolError(
+      "invalid_url",
+      `Foxleash asks only about a site whose host is a domain name or an IP address, at most ${MAX_SITE_HOST} characters long.`,
+    );
   }
 
   function refuseIfAnswered(session: string, site: string): void {

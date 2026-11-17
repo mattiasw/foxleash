@@ -41,6 +41,20 @@ export function matchesDomain(host: string, pattern: string): boolean {
   return host === pattern || host.endsWith(`.${pattern}`);
 }
 
+/** The most a DNS name has; siteOf gives the host in its ASCII form. */
+export const MAX_SITE_HOST = 253;
+
+/**
+ * Whether a page may show the site's host as it is: at most MAX_SITE_HOST characters, and a
+ * domain name or an IP address. Punctuation that no domain name has would let an agent write
+ * sentences there, or make the host read as another site.
+ */
+export function hasPlainHost(site: string): boolean {
+  const host = URL.parse(site)?.hostname ?? "";
+  if (host.length > MAX_SITE_HOST) return false;
+  return IPV6_HOST.test(host) || host.split(".").every((label) => HOST_LABEL.test(label));
+}
+
 /**
  * The blocklist the user typed, one domain per line: its patterns, or the lines that are not
  * domains, numbered from 1 with blank lines counted.
@@ -86,6 +100,9 @@ export function normalizeDomain(line: string): { host: string } | { error: strin
 
 const IPV4_MAPPED = /^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/;
 const HOSTNAME = /^[a-z0-9_-]+(?:\.[a-z0-9_-]+)*$/;
+// The URL parser writes an IPv6 host in brackets, in hexadecimal.
+const IPV6_HOST = /^\[[0-9a-f:]+\]$/;
+const HOST_LABEL = /^[a-z0-9_-]{1,63}$/;
 
 const EMPTY = "The line is empty.";
 const NOT_A_DOMAIN = "This is not a domain; write one such as example.com.";

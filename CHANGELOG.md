@@ -38,6 +38,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   request from that site's own page would, and that when an address the agent opens or
   downloads answers with a redirect to another site, Firefox sends that site all your cookies
   for it, including those that a link from another site would not carry.
+- A long recipe name without spaces no longer runs off the page where you update a recipe, the
+  page that runs one, or the settings page, in its recipe editor heading and its status lines.
 
 ### Security
 
@@ -49,6 +51,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   host directly can run, no longer types into a text field Firefox filled in from your saved
   logins, addresses or cards. Typing there ended the field's protection, so the agent could read
   its value.
+- The prompt that asks whether to allow a site now wraps a long site onto more lines, so the whole
+  site it asks about is visible, and `tab_open` and `navigate` refuse, before asking, an address
+  whose host is not a domain name or an IP address, such as one with parentheses or commas, or is
+  longer than 253 characters.
 
 ## [0.5.0] - 2026-11-17
 

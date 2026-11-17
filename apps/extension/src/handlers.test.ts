@@ -3809,6 +3809,15 @@ describe("a load that commits nothing into a tab Firefox unloaded", { timeout: 1
   });
 });
 
+// Hosts the site prompt refuses to show as they are; request_sites refuses them too.
+const NOT_PLAIN_URLS = [
+  "https://accounts.google.com(verified-by-foxleash).evil.example/",
+  "https://accounts.google.com,evil.example/",
+  `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}/`,
+];
+const NOT_PLAIN =
+  "Foxleash asks only about a site whose host is a domain name or an IP address, at most 253 characters long.";
+
 describe("approval", { timeout: 10000 }, () => {
   it("creates the prompt's tab unloaded on the prompt, groups it, then loads the prompt and the page in its place", async () => {
     const { fake, call, page, promptOf } = setup();
@@ -3846,6 +3855,81 @@ describe("approval", { timeout: 10000 }, () => {
       { tabId, url: "https://a.example/x", loadReplace: true },
     ]);
     assert.deepEqual(tab.history, ["https://a.example/x"]);
+  });
+
+  it("refuses tab_open of a site whose host the prompt cannot show as it is, creating no tab", async () => {
+    const { fake, access, call } = setup();
+    const creates = recordCreates(fake);
+    for (const url of NOT_PLAIN_URLS) {
+      await assert.rejects(
+        call("s1", "tab_open", { url }),
+        { code: "invalid_url", message: NOT_PLAIN },
+        url,
+      );
+    }
+    assert.deepEqual(creates, []);
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.equal(access.openPrompt("s1"), undefined);
+  });
+
+  it("refuses navigate to such a site by URL, path or reload, leaving the tab as it was", async () => {
+    const { fake, access, call, open, grant } = setup();
+    const site = "https://accounts.google.com(verified-by-foxleash).evil.example";
+    await grant("https://a.example");
+    await grant(site);
+    const tab = await open("s1", "https://a.example/");
+    const other = await open("s1", `${site}/x`);
+    await revokeSite(fake.browser, site);
+    const updates = fake.tabUpdates.length;
+    for (const url of NOT_PLAIN_URLS) {
+      await assert.rejects(
+        call("s1", "navigate", { tabId: tab.id, url }),
+        { code: "invalid_url", message: NOT_PLAIN },
+        url,
+      );
+    }
+    for (const params of [{ url: "/y" }, { action: "reload" }]) {
+      await assert.rejects(
+        call("s1", "navigate", { tabId: other.id, ...params }),
+        { code: "invalid_url", message: NOT_PLAIN },
+        JSON.stringify(params),
+      );
+    }
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/");
+    assert.equal(fake.tabs.get(other.id)?.url, `${site}/x`);
+    assert.equal(access.openPrompt("s1"), undefined);
+  });
+
+  it("refuses navigate to such a site on the tab of a prompt the user answered, opening no prompt", async () => {
+    const { fake, access, call, open, grant, timeOut } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const first = assert.rejects(
+      call("s1", "navigate", { tabId: tab.id, url: "https://b.example/x" }),
+      { code: "approval_timeout" },
+    );
+    const shown = await timeOut("s1");
+    await first;
+    shown.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.equal(access.openPrompt("s1"), undefined);
+    const promptUrl = fake.tabs.get(tab.id)?.url;
+    assert.match(promptUrl ?? "", PROMPT_URL);
+    const updates = fake.tabUpdates.length;
+    for (const url of NOT_PLAIN_URLS) {
+      const refused = assert.rejects(
+        call("s1", "navigate", { tabId: tab.id, url }),
+        { code: "invalid_url", message: NOT_PLAIN },
+        url,
+      );
+      await flush();
+      // Checked before awaiting the call, so a new prompt fails the test instead of hanging it.
+      assert.equal(access.openPrompt("s1"), undefined, url);
+      await refused;
+    }
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(fake.tabs.get(tab.id)?.url, promptUrl);
   });
 
   it("does not select the prompt's tab again when the user selected another tab after answering", async () => {

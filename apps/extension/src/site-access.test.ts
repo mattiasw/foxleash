@@ -284,6 +284,15 @@ describe("blocked", () => {
   });
 });
 
+// Hosts the site prompt refuses to show; request_sites refuses them too.
+const PARENTHESES_SITE = "https://accounts.google.com(verified-by-foxleash).evil.example";
+const COMMA_SITE = "https://accounts.google.com,evil.example";
+// A host of 254 characters, one over the DNS limit.
+const OVERLONG_SITE = `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}`;
+const NOT_PLAIN_SITES = [PARENTHESES_SITE, COMMA_SITE, OVERLONG_SITE];
+const NOT_PLAIN =
+  "Foxleash asks only about a site whose host is a domain name or an IP address, at most 253 characters long.";
+
 describe("check", () => {
   it("refuses a blocked site, naming it and the blocklist", async () => {
     const { access } = setup();
@@ -314,6 +323,31 @@ describe("check", () => {
     });
     assert.deepEqual(await access.check("s1", "https://other.example/a"), { decision: "ask" });
     assert.deepEqual(await access.check("s2", "https://session.example/a"), { decision: "ask" });
+  });
+
+  it("refuses a site whose host is not a domain name or an IP address, or is too long", async () => {
+    const { access } = setup();
+    for (const site of NOT_PLAIN_SITES) {
+      await assert.rejects(
+        access.check("s1", `${site}/login`),
+        { code: "invalid_url", message: NOT_PLAIN },
+        site,
+      );
+    }
+  });
+
+  it("still reports such a site as blocked, and allows it when stored or granted", async () => {
+    const { fake, access, sessions } = setup();
+    sessions.set("s1", state([OVERLONG_SITE]));
+    await rejectsWith(
+      access.check("s1", "https://accounts.google.com(x).paypal.com/"),
+      "site_blocked",
+    );
+    await grantSite(fake.browser, PARENTHESES_SITE);
+    assert.deepEqual(await access.check("s1", `${PARENTHESES_SITE}/a`), { decision: "allowed" });
+    assert.deepEqual(await access.allowForSession("s1", [COMMA_SITE], () => true), [COMMA_SITE]);
+    assert.deepEqual(await access.check("s1", `${COMMA_SITE}/a`), { decision: "allowed" });
+    assert.deepEqual(await access.check("s1", `${OVERLONG_SITE}/a`), { decision: "allowed" });
   });
 
   it("refuses a URL with no site without reading storage", async (t) => {
@@ -751,6 +785,30 @@ describe("ask", () => {
     await groups.ensureGroup("s1", tab);
     return { tab, promptUrl };
   }
+
+  it("refuses a site whose host is not a domain name or an IP address, showing nothing", async () => {
+    const { fake, access, sessions, ask } = setup();
+    for (const site of NOT_PLAIN_SITES) {
+      await assert.rejects(
+        ask("s1", `${site}/login`),
+        { code: "invalid_url", message: NOT_PLAIN },
+        site,
+      );
+    }
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.deepEqual(fake.windowUpdates, []);
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(sessions.get("s1"), undefined);
+  });
+
+  it("loads such a site with no prompt when it is stored", async () => {
+    const { fake, access, ask } = setup();
+    await grantSite(fake.browser, PARENTHESES_SITE);
+    const { approval } = await ask("s1", `${PARENTHESES_SITE}/a`);
+    assert.equal(approval.promptInTab, false);
+    assert.deepEqual(fake.tabUpdates, []);
+    assert.equal(access.openPrompt("s1"), undefined);
+  });
 
   it("rejects and keeps no prompt when the prompt page cannot be loaded", async () => {
     const { fake, access, timers, tab } = setup();

@@ -91,6 +91,15 @@ const SITES_FIT = `JSON.stringify({
   page: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
 })`;
 
+// Whether the element, and the page, fit their width without scrolling sideways.
+const widthFit = (selector: string): string => `(() => {
+  const element = document.querySelector(${JSON.stringify(selector)});
+  return JSON.stringify({
+    element: element.scrollWidth <= element.clientWidth,
+    page: document.documentElement.scrollWidth <= document.documentElement.clientWidth,
+  });
+})()`;
+
 // The session answers the settings page lists.
 const ANSWER_ROWS = `JSON.stringify(
   [...document.querySelectorAll("#answers li span")].map((span) => span.textContent)
@@ -649,6 +658,48 @@ describe("recipes the agent proposes, in real Firefox", () => {
       PAGE_TIMEOUT_MS,
       "the name and description fields to follow the narrower page",
     );
+  });
+
+  test("a long recipe name wraps on the pages that update and run the recipe", async (t) => {
+    const key = `recipe:${WIDE_NAME}`;
+    await harness.seedSettings({ [key]: storedRecipe(WIDE_NAME, "Open it.") });
+    t.after(() => removeStored([key]));
+    const session = await connected(t);
+
+    const existing = await runContexts();
+    const starting = pending(harness.call(session, "start_recipe", { name: WIDE_NAME }));
+    const run = await harness.pageContext(RUN_PAGE, existing);
+    await waitFor(
+      run,
+      RUN_STATE,
+      JSON.stringify({
+        heading: "Allow Foxleash on these sites for this session?",
+        title: "Allow Foxleash on these sites for this session?",
+        recipe: `Recipe ${WIDE_NAME}: Download the latest receipt.`,
+        sites: ["https://shop.example: will be allowed for this session"],
+        status: "",
+        after: false,
+      }),
+    );
+    assert.deepEqual(JSON.parse(String(await firefox.evaluate(run, widthFit("#recipe")))), {
+      element: true,
+      page: true,
+    });
+    await harness.waitForArmed(run, 2);
+    await firefox.click(run, NO);
+    assert.equal((await starting).isError, true);
+    await firefox.closeContext(run);
+
+    const { page } = await propose(session, proposal(WIDE_NAME));
+    await waitFor(
+      page,
+      "document.getElementById('heading').textContent",
+      `Update the recipe ${WIDE_NAME}?`,
+    );
+    assert.deepEqual(JSON.parse(String(await firefox.evaluate(page, widthFit("h1")))), {
+      element: true,
+      page: true,
+    });
   });
 
   test("Enter adds no line break to the name or description, and a pasted line break becomes a space", async (t) => {

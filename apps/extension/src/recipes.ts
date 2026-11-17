@@ -9,7 +9,7 @@ import {
 } from "@foxleash/protocol";
 import { warn } from "./log.ts";
 import { isRecord, RECIPE_KEY_PREFIX, type SettingsBrowser } from "./settings.ts";
-import { siteOf } from "./site.ts";
+import { MAX_SITE_HOST, siteOf } from "./site.ts";
 
 /** One thing to fix in a recipe, as one sentence the settings page shows verbatim. */
 export type RecipeProblem = {
@@ -40,8 +40,6 @@ const MISPLACED =
   /(?<!\p{Emoji})[\ufe0e\ufe0f]|(?<!\p{Ideographic})[\ufe00-\ufe0d\u{e0100}-\u{e01ef}]|(?<![\p{L}\p{M}\p{Emoji}]|\ufe0f)(?:\u200c|\u200d)|(?:\u200c|\u200d)(?![\p{L}\p{M}\p{Emoji}])/u;
 // What two names that look the same can differ by.
 const INVISIBLE_IN_NAME = /\u200c|\u200d|[\ufe00-\ufe0f\u{e0100}-\u{e01ef}]/gu;
-// The most a DNS name has; siteOf gives the host in its ASCII form.
-const MAX_SITE_HOST = 253;
 const MAX_PROBLEMS = 10;
 const NOT_AN_ADDRESS = "this is not an http or https address.";
 

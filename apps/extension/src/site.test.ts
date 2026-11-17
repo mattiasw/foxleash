@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { DEFAULT_BLOCKLIST } from "./default-blocklist.ts";
 import {
+  hasPlainHost,
   hostOf,
+  MAX_SITE_HOST,
   matchesDomain,
   normalizeDomain,
   parseBlocklist,
@@ -135,6 +137,50 @@ describe("matchesDomain", () => {
   });
 });
 
+// A host of 253 characters, the DNS limit.
+const LONGEST_HOST = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+
+describe("hasPlainHost", () => {
+  const plain = [
+    "https://example.com",
+    "https://xn--bcher-kva.de",
+    "https://my_host.example",
+    "http://localhost:3000",
+    "http://127.0.0.1:8080",
+    "http://[::1]:3000",
+    "http://[::ffff:1.2.3.4]",
+    `https://${"a".repeat(63)}.example`,
+    `https://${LONGEST_HOST}`,
+  ];
+  for (const url of plain) {
+    it(`takes ${url}`, () => {
+      assert.equal(hasPlainHost(webSite(url)), true);
+    });
+  }
+
+  const refused = [
+    "https://accounts.google.com(verified-by-foxleash).evil.example",
+    "https://accounts.google.com,evil.example",
+    `https://${LONGEST_HOST}d`,
+    `https://${"a".repeat(64)}.example`,
+    "http://a..b",
+  ];
+  for (const url of refused) {
+    it(`refuses ${url}`, () => {
+      assert.equal(hasPlainHost(webSite(url)), false);
+    });
+  }
+
+  it("refuses a string that is not a URL", () => {
+    assert.equal(hasPlainHost(""), false);
+  });
+
+  it("measures the host's length against the DNS limit", () => {
+    assert.equal(MAX_SITE_HOST, 253);
+    assert.equal(LONGEST_HOST.length, MAX_SITE_HOST);
+  });
+});
+
 const EMPTY = "The line is empty.";
 const NOT_A_DOMAIN = "This is not a domain; write one such as example.com.";
 const SUBDOMAINS =
@@ -245,3 +291,10 @@ describe("DEFAULT_BLOCKLIST", () => {
     assert.deepEqual(DEFAULT_BLOCKLIST, [...DEFAULT_BLOCKLIST].sort());
   });
 });
+
+/** The site of an http(s) URL, which the test needs to have one. */
+function webSite(url: string): string {
+  const site = siteOf(url);
+  assert.ok(site !== undefined, url);
+  return site;
+}

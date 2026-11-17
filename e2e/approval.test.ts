@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { after, afterEach, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { ARMING_DELAY_MS, HOLD_JOIN_MS } from "../apps/extension/src/prompt-arming.ts";
-import { type Firefox, KEY, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type Firefox, isRecord, KEY, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -43,6 +43,25 @@ const CHORDED_RIGHT_PRESS =
   'document.getElementById("heading").dispatchEvent(new MouseEvent("mousedown", { button: 2, bubbles: true }))';
 // Well under the one-second arming delay.
 const TYPING_GAP_MS = 300;
+// A host of 253 characters, the DNS limit; never loaded.
+const LONG_HOST = `${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(61)}`;
+// Where the host starts in the question, how many lines it takes, whether each of them is inside
+// the window, and whether the page fits its width without scrolling sideways.
+const HOST_FIT = `(() => {
+  const text = document.getElementById("heading").firstChild;
+  const start = text.data.indexOf(${JSON.stringify(LONG_HOST)});
+  const range = document.createRange();
+  range.setStart(text, Math.max(start, 0));
+  range.setEnd(text, Math.max(start, 0) + ${LONG_HOST.length});
+  const rects = [...range.getClientRects()];
+  const width = document.documentElement.clientWidth;
+  return JSON.stringify({
+    start,
+    lines: rects.length,
+    inside: rects.every((rect) => rect.left >= 0 && rect.right <= width),
+    page: document.documentElement.scrollWidth <= width,
+  });
+})()`;
 
 // One Firefox for the file. Neither fixture site is seeded, so every session is asked for both.
 // The second site is the only one allowed always, and that test revokes it again.
@@ -275,6 +294,30 @@ describe("the approval prompt, in real Firefox", () => {
     await firefox.closeContext(again);
     assert.ok((await asked).includes("was closed without an answer"));
     assert.equal(site.hits("/a"), hits);
+    await session.close();
+  });
+
+  test("the question wraps a long site so the whole of it fits the window", async () => {
+    const session = await connected();
+    const existing = await promptContexts();
+    const opening = pending(harness.refused(session, "tab_open", { url: `https://${LONG_HOST}/` }));
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, `https://${LONG_HOST}`);
+    const fit: unknown = JSON.parse(String(await firefox.evaluate(prompt, HOST_FIT)));
+    assert.ok(isRecord(fit), String(fit));
+    assert.deepEqual(
+      {
+        found: typeof fit.start === "number" && fit.start >= 0,
+        wraps: typeof fit.lines === "number" && fit.lines > 1,
+        inside: fit.inside,
+        page: fit.page,
+      },
+      { found: true, wraps: true, inside: true, page: true },
+      JSON.stringify(fit),
+    );
+    await firefox.closeContext(prompt);
+    const text = await opening;
+    assert.ok(text.includes("was closed without an answer"), text);
     await session.close();
   });
 
