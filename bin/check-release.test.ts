@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
@@ -11,6 +21,7 @@ import {
   breakingChangeEntries,
   CommandError,
   checkArtifacts,
+  checkBuilt,
   checkChangelog,
   checkListing,
   checkPostBump,
@@ -134,6 +145,19 @@ const tagList = (tag: string): string => key("git", "tag", "--list", tag);
 const revTag = (tag: string): string => key("git", "rev-parse", `refs/tags/${tag}`);
 const catFile = (tag: string): string => key("git", "cat-file", "-t", `refs/tags/${tag}`);
 const unzipManifest = (xpi: string): string => key("unzip", "-UU", "-p", xpi, "manifest.json");
+const unzipEntry = (archive: string, name: string): string =>
+  key("unzip", "-UU", "-p", archive, name);
+const catBlob = (sha: string, file: string): string =>
+  key("git", "cat-file", "blob", `${sha}:${file}`);
+const lsTree = (sha: string, nameOnly: boolean): string =>
+  key("git", "ls-tree", "-r", "-z", ...(nameOnly ? ["--name-only"] : []), "--full-tree", sha);
+const SOURCE_TEMPLATE = "bin/amo-source-readme.md";
+const SOURCE_ZIP = "artifacts/foxleash-source-0.2.0.zip";
+const SOURCE_FILES: Record<string, string> = {
+  ".nvmrc": "24\n",
+  "apps/extension/manifest.json": json({ manifest_version: 3 }),
+  "apps/extension/src/background.ts": "start();\n",
+};
 
 const INTRO = "# Changelog\n\nAll notable changes to this project are documented here.";
 const ENTRIES = [
@@ -203,25 +227,26 @@ const FIXTURE_CLAIMS = {
   safeguards: [
     {
       listing: "The approval can only come from your click",
-      evidence: [{ file: "src/approval.ts", contains: "approvedByClick" }],
+      evidence: [{ file: "apps/extension/src/approval.ts", contains: "approvedByClick" }],
     },
     {
       listing: "Tool results mark page content as untrusted",
       evidence: [
-        { file: "src/tools.ts", contains: "untrusted" },
+        { file: "apps/extension/src/tools.ts", contains: "untrusted" },
         { file: MANIFEST, lacks: "userScripts" },
       ],
     },
     {
       listing: "acts only on tabs in its group",
-      evidence: [{ file: "src/tools.ts", contains: "group" }],
+      evidence: [{ file: "apps/extension/src/tools.ts", contains: "group" }],
     },
   ],
 };
 const FIXTURE_TOOLS = ["navigate", "read_page", "tabs_list"];
 const EVIDENCE_FILES: Record<string, string> = {
-  "src/approval.ts": "export const approvedByClick = true;\n",
-  "src/tools.ts": "// Marks page content as untrusted, in the session's group only.\n",
+  "apps/extension/src/approval.ts": "export const approvedByClick = true;\n",
+  "apps/extension/src/tools.ts":
+    "// Marks page content as untrusted, in the session's group only.\n",
 };
 const stagedEntry = (file: string, mode = "100644"): string =>
   `${mode} ${"d".repeat(40)} 0\t${file}\0`;
@@ -443,6 +468,7 @@ function prePushTree(release: "first" | "second"): Tree {
     [catFile(tag)]: "tag",
     [lsRemote(tag)]: "",
     [unzipManifest(xpi)]: Buffer.from(json({ manifest_version: 3, version })),
+    ...sourceCommands(version, SOURCE_FILES),
     [DIFF_TREE]:
       release === "first" ? "CHANGELOG.md" : ["CHANGELOG.md", ...VERSION_FILES].join("\n"),
   });
@@ -455,6 +481,37 @@ function prePushTree(release: "first" | "second"): Tree {
     }
   }
   return tree;
+}
+
+/**
+ * The replies of the source archive comparison when `artifacts/` holds the archive of `files`,
+ * the files HEAD ships, tagged `v<version>`.
+ */
+function sourceCommands(version: string, files: Record<string, string>): Tree["commands"] {
+  const source = `artifacts/foxleash-source-${version}.zip`;
+  const tracked = [".gitignore", ...Object.keys(files), "CHANGELOG.md", SOURCE_TEMPLATE];
+  const commands: Tree["commands"] = {
+    [key("git", "rev-parse", `refs/tags/v${version}^{commit}`)]: HEAD,
+    [lsTree(HEAD, true)]: tracked.map((file) => `${file}\0`).join(""),
+    [lsTree(HEAD, false)]: tracked
+      .map((file) => `100644 blob ${"d".repeat(40)}\t${file}\0`)
+      .join(""),
+    [key("unzip", "-Z1", "-UU", source)]: [
+      ".nvmrc",
+      "README.md",
+      "apps/",
+      "apps/extension/",
+      ...Object.keys(files).filter((file) => file !== ".nvmrc"),
+    ].join("\n"),
+    [catBlob(HEAD, SOURCE_TEMPLATE)]: "Node {{node}}, npm {{npm}}\n",
+    [catBlob(HEAD, AMO_SOURCES)]: `${[...Object.keys(files), "README.md"].sort().join("\n")}\n`,
+    [unzipEntry(source, "README.md")]: "Node 24.11.0, npm 11.6.2\n",
+  };
+  for (const [file, content] of Object.entries(files)) {
+    commands[unzipEntry(source, file)] = content;
+    commands[catBlob(HEAD, file)] = content;
+  }
+  return commands;
 }
 
 type Advisory = { name: string; severity: string; title: string; url: string };
@@ -1815,10 +1872,10 @@ describe("listing", () => {
           {
             listing: 3,
             evidence: [
-              { file: "src/tools.ts", contain: "untrusted" },
+              { file: "apps/extension/src/tools.ts", contain: "untrusted" },
               { file: "/etc/passwd", contains: "root" },
               { file: "src/../../secret", contains: "x" },
-              { file: "src/tools.ts", contains: "a", lacks: "b" },
+              { file: "apps/extension/src/tools.ts", contains: "a", lacks: "b" },
               { file: "", lacks: 5 },
               null,
             ],
@@ -1896,14 +1953,14 @@ describe("listing", () => {
         {
           listing: "Tool results mark page content as untrusted",
           evidence: [
-            { file: "src/tools.ts", contains: "trusted data" },
-            { file: "src/tools.ts", lacks: "session's group" },
+            { file: "apps/extension/src/tools.ts", contains: "trusted data" },
+            { file: "apps/extension/src/tools.ts", lacks: "session's group" },
             { file: "src/new.ts", contains: "x" },
             { file: "src/link.ts", contains: "x" },
             { file: "src/gone.ts", contains: "x" },
             { file: "src/other.ts", contains: "x" },
             { file: "src/conflict.ts", contains: "x" },
-            { file: "src/approval.ts", lacks: "eval" },
+            { file: "apps/extension/src/approval.ts", lacks: "eval" },
           ],
         },
       ],
@@ -1925,8 +1982,8 @@ describe("listing", () => {
     const name = 'safeguard "Tool results mark page content as untrusted"';
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       'safeguard "The approval can only come from your click" has no evidence in the build yet',
-      `${name}: src/tools.ts does not contain "trusted data"`,
-      `${name}: src/tools.ts contains "session's group", which it must not`,
+      `${name}: apps/extension/src/tools.ts does not contain "trusted data"`,
+      `${name}: apps/extension/src/tools.ts contains "session's group", which it must not`,
       `${name}: src/new.ts is not a tracked regular file`,
       `${name}: src/link.ts is not a tracked regular file`,
       `${name}: src/gone.ts is not a tracked regular file`,
@@ -1937,14 +1994,20 @@ describe("listing", () => {
 
   test("a tracked executable file and a SHA-256 entry count as evidence", () => {
     const tree = firstReleaseTree();
-    tree.commands[lsStaged("src/approval.ts")] = `100755 ${"e".repeat(64)} 0\tsrc/approval.ts\0`;
-    tree.commands[lsStaged("src/tools.ts")] = `100644 ${"e".repeat(64)} 0\tsrc/tools.ts\0`;
+    tree.commands[lsStaged("apps/extension/src/approval.ts")] =
+      `100755 ${"e".repeat(64)} 0\tapps/extension/src/approval.ts\0`;
+    tree.commands[lsStaged("apps/extension/src/tools.ts")] =
+      `100644 ${"e".repeat(64)} 0\tapps/extension/src/tools.ts\0`;
     assertClean(listing(tree));
   });
 
   test("a failing git ls-files is a FAIL naming the safeguard", () => {
     const tree = firstReleaseTree();
-    tree.commands[lsStaged("src/approval.ts")] = new CommandError("git ls-files", 128, "fatal: x");
+    tree.commands[lsStaged("apps/extension/src/approval.ts")] = new CommandError(
+      "git ls-files",
+      128,
+      "fatal: x",
+    );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       'safeguard "The approval can only come from your click": `git ls-files` failed (status 128): fatal: x',
     ]);
@@ -2816,6 +2879,72 @@ describe("pre-push", () => {
       /^artifacts\/foxleash-0\.2\.0\.xpi manifest\.json has version "0\.1\.0", expected 0\.2\.0$/,
     ],
     [
+      "a source archive entry that differs from the tag",
+      (t) => (t.commands[unzipEntry(SOURCE_ZIP, "apps/extension/src/background.ts")] = "evil();\n"),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: apps\/extension\/src\/background\.ts differs from v0\.2\.0 \(a{12}\)$/,
+    ],
+    [
+      "a tag that does not resolve to a commit",
+      (t) =>
+        (t.commands[key("git", "rev-parse", "refs/tags/v0.2.0^{commit}")] = new CommandError(
+          "git rev-parse",
+          128,
+          "fatal: bad",
+        )),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: `git rev-parse` failed \(status 128\): fatal: bad$/,
+    ],
+    [
+      "a source archive README.md with a line added",
+      (t) =>
+        (t.commands[unzipEntry(SOURCE_ZIP, "README.md")] =
+          "Node 24.11.0, npm 11.6.2\nRun npm ci --ignore-scripts=false.\n"),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: README\.md is not the README of v0\.2\.0 \(a{12}\) with a Node and an npm version filled in$/,
+    ],
+    [
+      "a source archive without README.md",
+      (t) =>
+        (t.commands[key("unzip", "-Z1", "-UU", SOURCE_ZIP)] = Object.keys(SOURCE_FILES).join("\n")),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip lacks README\.md$/,
+    ],
+    [
+      "a source archive that lacks a shipped file",
+      (t) =>
+        (t.commands[key("unzip", "-Z1", "-UU", SOURCE_ZIP)] =
+          ".nvmrc\nREADME.md\napps/extension/manifest.json"),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip lacks apps\/extension\/src\/background\.ts, which v0\.2\.0 \(a{12}\) ships$/,
+    ],
+    [
+      "a source archive entry the tag does not ship",
+      (t) =>
+        (t.commands[key("unzip", "-Z1", "-UU", SOURCE_ZIP)] =
+          `${t.commands[key("unzip", "-Z1", "-UU", SOURCE_ZIP)]}\nCHANGELOG.md`),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: CHANGELOG\.md is not a file v0\.2\.0 \(a{12}\) ships$/,
+    ],
+    [
+      "an unreadable README template at the tag",
+      (t) => delete t.commands[catBlob(HEAD, SOURCE_TEMPLATE)],
+      /^bin\/amo-source-readme\.md at v0\.2\.0 \(a{12}\): `git cat-file blob a+:bin\/amo-source-readme\.md` failed/,
+    ],
+    [
+      "a list at the tag naming a file the ship rules do not ship",
+      (t) =>
+        (t.commands[catBlob(HEAD, AMO_SOURCES)] =
+          `${t.commands[catBlob(HEAD, AMO_SOURCES)]}apps/extension/src/a.test.ts\n`),
+      /^bin\/amo-source-files\.txt at v0\.2\.0 \(a{12}\) lists apps\/extension\/src\/a\.test\.ts, which the ship rules of this checkout do not ship$/,
+    ],
+    [
+      "a list at the tag lacking a file the ship rules ship",
+      (t) =>
+        (t.commands[catBlob(HEAD, AMO_SOURCES)] =
+          ".nvmrc\nREADME.md\napps/extension/manifest.json\n"),
+      /^bin\/amo-source-files\.txt at v0\.2\.0 \(a{12}\) does not list apps\/extension\/src\/background\.ts, which the ship rules of this checkout ship$/,
+    ],
+    [
+      "an unreadable list at the tag",
+      (t) => delete t.commands[catBlob(HEAD, AMO_SOURCES)],
+      /^bin\/amo-source-files\.txt at v0\.2\.0 \(a{12}\): `git cat-file blob a+:bin\/amo-source-files\.txt` failed/,
+    ],
+    [
       "entries left in Unreleased",
       (t) =>
         (t.files["CHANGELOG.md"] = changelog(
@@ -3028,7 +3157,7 @@ describe("pre-push", () => {
     tree.commands[POINTS_AT] = "v0.1.0";
     const env = fakeEnv(tree);
     checkPrePush(env);
-    assert.ok(!env.calls.some((call) => call.includes("cat-file")));
+    assert.ok(!env.calls.some((call) => call.includes("cat-file") && call.includes("-t")));
   });
 });
 
@@ -3939,11 +4068,26 @@ describe("real git", () => {
     assert.match(env.today(), /^\d{4}-\d{2}-\d{2}$/);
   });
 
+  // What releaseFiles' tree ships, listed here rather than computed by the code under test.
+  const RELEASE_SHIPS = [
+    "apps/extension/manifest.json",
+    "apps/extension/package.json",
+    "apps/extension/src/approval.ts",
+    "apps/extension/src/tools.ts",
+    "package-lock.json",
+    "package.json",
+    "packages/protocol/package.json",
+    "packages/protocol/src/index.ts",
+    "packages/tsconfig/package.json",
+  ];
+
   function releaseFiles(version: string, log: string): Record<string, string> {
     return {
       ...packageFiles(version),
       ...listingFiles(),
       [PROTOCOL]: protocolSource(6, 3),
+      [SOURCE_TEMPLATE]: "Node {{node}}, npm {{npm}}\n",
+      [AMO_SOURCES]: `${["README.md", ...RELEASE_SHIPS].join("\n")}\n`,
       ".gitignore": "artifacts/\n",
       "CHANGELOG.md": log,
     };
@@ -4018,12 +4162,137 @@ describe("real git", () => {
     execFileSync("zip", ["-rqX", path.join(dir, "artifacts/foxleash-0.2.0.xpi"), "."], {
       cwd: staging,
     });
-    writeFileSync(path.join(dir, "artifacts/foxleash-source-0.2.0.zip"), "zip");
+    zipSource(dir);
     return dir;
+  }
+
+  /**
+   * Zips the files the fixture's v0.2.0 ships, as the working tree holds them, and a README.md,
+   * into `<dir>/artifacts`; `changes` adds or replaces entries, and drops one given null.
+   */
+  function zipSource(dir: string, changes: Record<string, string | null> = {}): void {
+    const staging = path.join(base, `source-${counter++}`);
+    for (const file of RELEASE_SHIPS) {
+      mkdirSync(path.dirname(path.join(staging, file)), { recursive: true });
+      copyFileSync(path.join(dir, file), path.join(staging, file));
+    }
+    writeFileSync(path.join(staging, "README.md"), "Node 24.11.0, npm 11.6.2\n");
+    for (const [file, content] of Object.entries(changes)) {
+      if (content === null) {
+        rmSync(path.join(staging, file));
+      } else {
+        mkdirSync(path.dirname(path.join(staging, file)), { recursive: true });
+        writeFileSync(path.join(staging, file), content);
+      }
+    }
+    const archive = path.join(dir, SOURCE_ZIP);
+    // zip would update an existing archive in place.
+    rmSync(archive, { force: true });
+    execFileSync("zip", ["-rqXy", archive, "."], { cwd: staging });
   }
 
   test("pre-push passes a second release against a local origin", () => {
     assertClean(checkPrePush(github(secondRelease())));
+  });
+
+  test("pre-push fails on a source archive built from an edit that is no longer there", () => {
+    const dir = secondRelease();
+    const file = path.join(dir, "apps/extension/src/tools.ts");
+    const saved = readFileSync(file);
+    writeFileSync(file, "export const exfiltrate = true;\n");
+    zipSource(dir);
+    writeFileSync(file, saved);
+    assert.equal(git(dir, "status", "--porcelain", "--untracked-files=all"), "");
+    assertOnlyFail(
+      checkPrePush(github(dir)),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: apps\/extension\/src\/tools\.ts differs from v0\.2\.0 \([0-9a-f]{12}\)$/,
+    );
+  });
+
+  test("pre-push fails on a source archive that lacks a shipped file", () => {
+    const dir = secondRelease();
+    zipSource(dir, { "apps/extension/src/approval.ts": null });
+    assertOnlyFail(
+      checkPrePush(github(dir)),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip lacks apps\/extension\/src\/approval\.ts, which v0\.2\.0 \([0-9a-f]{12}\) ships$/,
+    );
+  });
+
+  test("pre-push fails on each source archive entry the tag does not ship", () => {
+    const dir = secondRelease();
+    zipSource(dir, {
+      "apps/extension/src/extra.ts": "extra();\n",
+      "CHANGELOG.md": "# Changelog\n",
+    });
+    const at = `v0.2.0 (${git(dir, "rev-parse", "HEAD").slice(0, 12)})`;
+    assert.deepEqual(texts(checkPrePush(github(dir)), "FAIL"), [
+      `${SOURCE_ZIP}: CHANGELOG.md is not a file ${at} ships`,
+      `${SOURCE_ZIP}: apps/extension/src/extra.ts is not a file ${at} ships`,
+    ]);
+  });
+
+  test("pre-push takes any versions in the README.md, and nothing else", () => {
+    const dir = secondRelease();
+    zipSource(dir, { "README.md": "Node 26.0.1, npm 12.10.0\n" });
+    assertClean(checkPrePush(github(dir)));
+    zipSource(dir, {
+      "README.md": "Node 26.0.1, npm 12.10.0\nRun npm ci --ignore-scripts=false.\n",
+    });
+    assertOnlyFail(
+      checkPrePush(github(dir)),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: README\.md is not the README of v0\.2\.0 \([0-9a-f]{12}\) with a Node and an npm version filled in$/,
+    );
+    zipSource(dir, { "README.md": null });
+    assertOnlyFail(
+      checkPrePush(github(dir)),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip lacks README\.md$/,
+    );
+  });
+
+  test("built checks the artifacts in artifacts/ or in --dir against the tag", () => {
+    const dir = secondRelease();
+    assertClean(checkBuilt(realEnv(dir), "0.2.0", undefined));
+    const elsewhere = path.join(base, `elsewhere-${counter++}`);
+    renameSync(path.join(dir, "artifacts"), elsewhere);
+    const env = realEnv(dir);
+    assertClean(checkBuilt(env, "0.2.0", elsewhere));
+    assertClean(checkBuilt(env, "0.2.0", path.relative(dir, elsewhere)));
+    assert.deepEqual(texts(checkBuilt(env, "0.2.0", undefined), "FAIL"), [
+      "artifacts/foxleash-source-0.2.0.zip is missing; run npm run build:amo",
+      "artifacts/foxleash-0.2.0.xpi is missing; run npm run build:amo",
+    ]);
+  });
+
+  test("built fails when the tag does not exist", () => {
+    const dir = secondRelease();
+    const out: string[] = [];
+    const io = {
+      out: (line: string) => out.push(line),
+      err: () => assert.fail("printed to stderr"),
+    };
+    assert.equal(runCli(["built", "0.2.0"], realEnv(dir), io), 0);
+    assert.equal(out.at(-1), "check-release: built ok");
+    git(dir, "tag", "-d", "v0.2.0");
+    assertOnlyFail(
+      checkBuilt(realEnv(dir), "0.2.0", undefined),
+      /^artifacts\/foxleash-source-0\.2\.0\.zip: `git rev-parse refs\/tags\/v0\.2\.0\^\{commit\}` failed/,
+    );
+    assert.equal(runCli(["built", "0.2.0"], realEnv(dir), io), 1);
+    assert.equal(out.at(-1), "check-release: built failed");
+  });
+
+  test("built fails when the tag's list ships a file the ship rules of the checkout do not", () => {
+    // The tag's own rules shipped a.test.ts; an archive built by newer rules lacks it.
+    const dir = secondRelease();
+    commit(dir, "Ship a test file", {
+      "apps/extension/src/a.test.ts": "test();\n",
+      [AMO_SOURCES]: `${["README.md", ...RELEASE_SHIPS, "apps/extension/src/a.test.ts"].join("\n")}\n`,
+    });
+    git(dir, "tag", "-f", "-a", "v0.2.0", "-m", "v0.2.0");
+    assertOnlyFail(
+      checkBuilt(realEnv(dir), "0.2.0", undefined),
+      /^bin\/amo-source-files\.txt at v0\.2\.0 \([0-9a-f]{12}\) lists apps\/extension\/src\/a\.test\.ts, which the ship rules of this checkout do not ship$/,
+    );
   });
 
   test("pre-push fails when the release commits are on main", () => {
@@ -4262,12 +4531,15 @@ describe("real git", () => {
 
   test("a committed symlink is not evidence", () => {
     const dir = listingRepo();
-    symlinkSync("tools.ts", path.join(dir, "src/link.ts"));
+    symlinkSync("tools.ts", path.join(dir, "apps/extension/src/link.ts"));
     const claims = structuredClone(FIXTURE_CLAIMS);
-    claims.safeguards[0]?.evidence.push({ file: "src/link.ts", contains: "untrusted" });
+    claims.safeguards[0]?.evidence.push({
+      file: "apps/extension/src/link.ts",
+      contains: "untrusted",
+    });
     commit(dir, "Link", { [CLAIMS]: json(claims) });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'safeguard "The approval can only come from your click": src/link.ts is not a tracked regular file',
+      'safeguard "The approval can only come from your click": apps/extension/src/link.ts is not a tracked regular file',
     ]);
   });
 
@@ -4456,6 +4728,15 @@ describe("runCli", () => {
     [["artifacts", "1.0.0", "--unsigned", ""], "--unsigned needs a path"],
     [["artifacts", "1.0.0", "--unsigned", "a", "--unsigned", "b"], "--unsigned is given twice"],
     [["post-roll", "1.0.0", "--unsigned", "a"], 'unknown option "--unsigned" for post-roll'],
+    [["built"], "built needs a <version>"],
+    [["built", "1.0"], 'malformed version "1.0": expected x.y.z'],
+    [["built", "1.0.0", "2.0.0"], 'unexpected argument "2.0.0"'],
+    [["built", "1.0.0", "--dir"], "--dir needs a path"],
+    [["built", "1.0.0", "--dir", ""], "--dir needs a path"],
+    [["built", "1.0.0", "--dir", "a", "--dir", "b"], "--dir is given twice"],
+    [["built", "1.0.0", "--unsigned", "a"], 'unknown option "--unsigned" for built'],
+    [["pre-push", "--dir", "a"], 'unknown option "--dir" for pre-push'],
+    [["artifacts", "1.0.0", "--dir", "a"], 'unknown option "--dir" for artifacts'],
     [["bogus\u001b[2K"], 'unknown subcommand "bogus\\u001b[2K"'],
   ];
   for (const [argv, problem] of usage) {
@@ -4482,6 +4763,7 @@ describe("runCli", () => {
       "post-roll",
       "post-bump",
       "pre-push",
+      "built",
       "artifacts",
     ];
     for (const argv of [["bogus"], ["--help"]]) {
@@ -4496,6 +4778,11 @@ describe("runCli", () => {
       assert.ok(
         err.includes(
           "  protocol                                 the extension serves the latest release's server",
+        ),
+      );
+      assert.ok(
+        err.includes(
+          "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI has <version>",
         ),
       );
     }
@@ -4526,6 +4813,16 @@ describe("runCli", () => {
     assert.deepEqual(parseArgs(["post-roll", "0.2.0"]), { name: "post-roll", version: "0.2.0" });
     assert.deepEqual(parseArgs(["post-bump", "0.2.0"]), { name: "post-bump", version: "0.2.0" });
     assert.deepEqual(parseArgs(["pre-push"]), { name: "pre-push" });
+    assert.deepEqual(parseArgs(["built", "1.0.0"]), {
+      name: "built",
+      version: "1.0.0",
+      dir: undefined,
+    });
+    assert.deepEqual(parseArgs(["built", "--dir", "x", "1.0.0"]), {
+      name: "built",
+      version: "1.0.0",
+      dir: "x",
+    });
     assert.deepEqual(parseArgs(["listing"]), { name: "listing" });
     assert.deepEqual(parseArgs(["protocol"]), { name: "protocol" });
     assert.deepEqual(parseArgs(["artifacts", "1.0.0", "--unsigned", "x.xpi"]), {

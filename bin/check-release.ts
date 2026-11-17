@@ -3,7 +3,14 @@ import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { childEnv } from "./build-amo.ts";
+import {
+  childEnv,
+  DOT_OR_EMPTY_SEGMENT,
+  README_TEMPLATE,
+  readmePattern,
+  SHIPPED_NAME,
+  selectShippedFiles,
+} from "./build-amo.ts";
 
 export type Level = "INFO" | "WARNING" | "FAIL";
 export type Finding = { level: Level; text: string };
@@ -35,6 +42,7 @@ export type Command =
   | { name: "post-roll"; version: string }
   | { name: "post-bump"; version: string }
   | { name: "pre-push" }
+  | { name: "built"; version: string; dir: string | undefined }
   | { name: "artifacts"; version: string; unsigned: string | undefined };
 export type Usage = { usage: string };
 export type CheckResult = Usage | { findings: Finding[] };
@@ -75,6 +83,7 @@ const SUBCOMMANDS = [
   "post-roll",
   "post-bump",
   "pre-push",
+  "built",
   "artifacts",
 ];
 const BUMPS: readonly string[] = ["patch", "minor", "major"];
@@ -96,8 +105,6 @@ const SLUG_URL =
 const SLUG_PART = /^[\w.-]+$/;
 const GH_WORD = /^[a-z_]+$/;
 const ENTRY_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
-// `META-INF/../x` would otherwise escape the comparison as a signature file.
-const DOT_OR_EMPTY_SEGMENT = /(?:^|\/)\.\.?(?:\/|$)|\/\//;
 const ARCHIVE_WILDCARD = /[*?[\\]/;
 const BREAKING = /breaking[\s-]+changes?/gi;
 const NEGATION = /(?:\bno|\bnot a|\bnon-?)\s*$/i;
@@ -126,6 +133,7 @@ const CLAIMS = "docs/amo/listing-claims.json";
 const MANIFEST = "apps/extension/manifest.json";
 const PROTOCOL = "packages/protocol/src/index.ts";
 const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
+const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
 const PERMISSIONS_HEADING = "## Permissions";
@@ -164,6 +172,7 @@ const USAGE = [
   "  post-roll <version>                      the Unreleased entries moved to <version>",
   "  post-bump <version>                      every version field is <version>",
   "  pre-push                                 the release commits, the tag and the artifacts",
+  "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI has <version>",
   "  artifacts <version> [--unsigned <path>]  the signed XPI holds the unsigned XPI's files",
   "exit status: 0 ok, 1 a check failed, 2 usage error, 3 a warning needs confirmation",
 ];
@@ -189,6 +198,7 @@ export function parseArgs(argv: readonly string[]): Command | Usage {
   if (!SUBCOMMANDS.includes(name)) return { usage: `unknown subcommand ${JSON.stringify(name)}` };
   let bump: Bump | undefined;
   let unsigned: string | undefined;
+  let dir: string | undefined;
   const positionals: string[] = [];
   const queue = [...rest];
   for (let arg = queue.shift(); arg !== undefined; arg = queue.shift()) {
@@ -204,19 +214,25 @@ export function parseArgs(argv: readonly string[]): Command | Usage {
       const value = queue.shift();
       if (value === undefined || value === "") return { usage: "--unsigned needs a path" };
       unsigned = value;
+    } else if (name === "built" && arg === "--dir") {
+      if (dir !== undefined) return { usage: "--dir is given twice" };
+      const value = queue.shift();
+      if (value === undefined || value === "") return { usage: "--dir needs a path" };
+      dir = value;
     } else if (arg.startsWith("-")) {
       return { usage: `unknown option ${JSON.stringify(arg)} for ${name}` };
     } else {
       positionals.push(arg);
     }
   }
-  if (name === "post-roll" || name === "post-bump" || name === "artifacts") {
+  if (name === "post-roll" || name === "post-bump" || name === "built" || name === "artifacts") {
     const [version, extra] = positionals;
     if (version === undefined) return { usage: `${name} needs a <version>` };
     if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
     if (!VERSION.test(version)) {
       return { usage: `malformed version ${JSON.stringify(version)}: expected x.y.z` };
     }
+    if (name === "built") return { name, version, dir };
     if (name === "artifacts") return { name, version, unsigned };
     return { name, version };
   }
@@ -255,6 +271,8 @@ function runCommand(command: Command, env: Env): CheckResult {
       return { findings: checkPostBump(env, command.version) };
     case "pre-push":
       return { findings: checkPrePush(env) };
+    case "built":
+      return { findings: checkBuilt(env, command.version, command.dir) };
     case "artifacts":
       return { findings: checkArtifacts(env, command.version, command.unsigned) };
   }
@@ -1046,7 +1064,7 @@ export function checkPrePush(env: Env): Finding[] {
   }
   attempt(findings, "working tree", () => checkClean(env, findings));
   if (version !== undefined) {
-    attempt(findings, "artifacts", () => checkBuiltArtifacts(env, version, findings));
+    attempt(findings, "artifacts", () => checkBuiltArtifacts(env, version, "artifacts", findings));
   }
   // The release commits are not built by CI before the push: the commit below them must be green.
   const base = attempt(findings, "origin/main sha", () => commitSha(env, ORIGIN_MAIN));
@@ -1054,6 +1072,14 @@ export function checkPrePush(env: Env): Finding[] {
     attempt(findings, "CI", () => checkCi(env, slug, base, findings));
   }
   attempt(findings, "npm audit", () => checkAudit(env, findings));
+  return findings;
+}
+
+/** The artifact checks of `pre-push` alone, for the files in `dir` (default `artifacts`). */
+export function checkBuilt(env: Env, version: string, dir: string | undefined): Finding[] {
+  const findings: Finding[] = [];
+  const folder = dir === undefined ? "artifacts" : path.resolve(env.root, dir);
+  attempt(findings, "artifacts", () => checkBuiltArtifacts(env, version, folder, findings));
   return findings;
 }
 
@@ -2120,16 +2146,121 @@ function checkReleaseTag(env: Env, tag: string, findings: Finding[]): void {
   }
 }
 
-function checkBuiltArtifacts(env: Env, version: string, findings: Finding[]): void {
-  const xpi = `artifacts/foxleash-${version}.xpi`;
-  const source = `artifacts/foxleash-source-${version}.zip`;
-  if (!env.exists(source)) findings.push(fail(`${source} is missing; run npm run build:amo`));
-  if (!env.exists(xpi)) {
-    findings.push(fail(`${xpi} is missing; run npm run build:amo`));
-    return;
+function checkBuiltArtifacts(env: Env, version: string, dir: string, findings: Finding[]): void {
+  const source = path.join(dir, `foxleash-source-${version}.zip`);
+  const xpi = path.join(dir, `foxleash-${version}.xpi`);
+  const [sourcePresent, xpiPresent] = [source, xpi].map((file) => {
+    const present = env.exists(file);
+    if (!present) findings.push(fail(`${file} is missing; run npm run build:amo`));
+    return present;
+  });
+  if (xpiPresent && archiveUsable(env, xpi, findings)) {
+    attempt(findings, `${xpi} manifest.json`, () => {
+      const manifest = env.shBytes("unzip", ["-UU", "-p", xpi, "manifest.json"]);
+      checkManifestVersion(manifest, `${xpi} manifest.json`, version, findings);
+    });
   }
-  const manifest = env.shBytes("unzip", ["-UU", "-p", xpi, "manifest.json"]);
-  checkManifestVersion(manifest, `${xpi} manifest.json`, version, findings);
+  if (sourcePresent && archiveUsable(env, source, findings)) {
+    attempt(findings, source, () => compareSourceWithTag(env, source, version, findings));
+  }
+}
+
+/**
+ * The source archive holds exactly the files the tag's commit ships, byte for byte, and a
+ * README.md rendered from the commit's template; only its Node and npm versions are free.
+ */
+function compareSourceWithTag(
+  env: Env,
+  source: string,
+  version: string,
+  findings: Finding[],
+): void {
+  const tag = `v${version}`;
+  const sha = commitSha(env, `refs/tags/${tag}^{commit}`);
+  const at = `${tag} (${sha.slice(0, 12)})`;
+  const shipped = selectShippedFiles(
+    env.sh("git", ["ls-tree", "-r", "-z", "--name-only", "--full-tree", sha]),
+    env.sh("git", ["ls-tree", "-r", "-z", "--full-tree", sha]),
+  );
+  attempt(findings, `${AMO_SOURCE_FILES} at ${at}`, () =>
+    compareRulesWithList(env, sha, at, shipped, findings),
+  );
+  const archive = listArchive(env, source, findings, SHIPPED_NAME);
+  const archived = new Set(archive.files);
+  const expected = new Set(shipped);
+  for (const name of archive.files
+    .filter((each) => each !== README && !expected.has(each))
+    .sort()) {
+    findings.push(fail(`${source}: ${name} is not a file ${at} ships`));
+  }
+  if (!archive.skipped.has(README)) {
+    if (archived.has(README)) {
+      const readme = readEntries(env, source, [README], findings).get(README);
+      const template = attempt(findings, `${README_TEMPLATE} at ${at}`, () =>
+        env.shBytes("git", ["cat-file", "blob", `${sha}:${README_TEMPLATE}`]).toString("utf8"),
+      );
+      if (
+        readme !== undefined &&
+        template !== undefined &&
+        !readmePattern(template).test(readme.toString("utf8"))
+      ) {
+        findings.push(
+          fail(
+            `${source}: ${README} is not the README of ${at} with a Node and an npm version filled in`,
+          ),
+        );
+      }
+    } else {
+      findings.push(fail(`${source} lacks ${README}`));
+    }
+  }
+  for (const name of shipped) {
+    if (!archived.has(name) && !archive.skipped.has(name)) {
+      findings.push(fail(`${source} lacks ${name}, which ${at} ships`));
+    }
+  }
+  const present = shipped.filter((name) => archived.has(name));
+  for (const [name, bytes] of readEntries(env, source, present, findings)) {
+    const committed = attempt(findings, `${name} at ${at}`, () =>
+      env.shBytes("git", ["cat-file", "blob", `${sha}:${name}`]),
+    );
+    if (committed !== undefined && !bytes.equals(committed)) {
+      findings.push(fail(`${source}: ${name} differs from ${at}`));
+    }
+  }
+}
+
+/**
+ * `build:amo` made the tag's archive match the tag's list, so a list that disagrees with this
+ * checkout's ship rules means the rules changed since the tag and cannot judge its archive.
+ */
+function compareRulesWithList(
+  env: Env,
+  sha: string,
+  at: string,
+  shipped: readonly string[],
+  findings: Finding[],
+): void {
+  const text = env.shBytes("git", ["cat-file", "blob", `${sha}:${AMO_SOURCE_FILES}`]);
+  // Parsed as build:amo parses it: one name per line, the last line ending in a newline.
+  const names = text.toString("utf8").split("\n");
+  if (names.at(-1) === "") names.pop();
+  const listed = new Set(names);
+  const expected = new Set([...shipped, README]);
+  for (const name of [...listed].filter((each) => !expected.has(each)).sort()) {
+    findings.push(
+      fail(
+        `${AMO_SOURCE_FILES} at ${at} lists ${name}, which the ship rules of this checkout do not ship`,
+      ),
+    );
+  }
+  for (const name of [...expected].filter((each) => !listed.has(each)).sort()) {
+    findings.push(
+      fail(
+        `${AMO_SOURCE_FILES} at ${at} does not list ${name}, which the ship rules of this checkout ship`,
+      ),
+    );
+  }
 }
 
 function checkManifestVersion(
@@ -2162,13 +2293,14 @@ function archiveUsable(env: Env, file: string, findings: Finding[]): boolean {
  * `.`, `..` or empty segment, or that is listed twice, is a FAIL and skipped, so it never
  * becomes an argument.
  */
-function listArchive(env: Env, file: string, findings: Finding[]): Archive {
+function listArchive(env: Env, file: string, findings: Finding[], rule = ENTRY_NAME): Archive {
   // -UU: the raw entry names, as Firefox reads them, not an Info-ZIP Unicode Path field.
   const names = lines(env.sh("unzip", ["-Z1", "-UU", file]));
   const skipped = new Set<string>();
   const seen = new Set<string>();
   for (const name of names) {
-    if (!ENTRY_NAME.test(name) || DOT_OR_EMPTY_SEGMENT.test(name)) {
+    // `META-INF/../x` would otherwise escape the comparison as a signature file.
+    if (!rule.test(name) || DOT_OR_EMPTY_SEGMENT.test(name)) {
       findings.push(fail(`${file}: unsafe entry name ${JSON.stringify(name)}`));
       skipped.add(name);
     } else if (seen.has(name)) {

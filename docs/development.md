@@ -155,30 +155,36 @@ runs. It needs a desktop with Firefox 142 or later.
 ## AMO source archive
 
 Mozilla reviewers rebuild the extension from a source archive. `npm run build:amo` builds
-`artifacts/foxleash-source-<version>.zip`, then extracts it into a temporary directory and
-runs `npm ci && npm run build` there, as a reviewer would. The archive ships `.npmrc`, so that
-`npm ci` runs no install scripts. From that clean copy it builds
-`artifacts/foxleash-<version>.xpi`. It fails unless:
+`artifacts/foxleash-source-<version>.zip` from HEAD's commit: it copies the shipped files and
+the README template from that commit, not from the working tree or the git index, so
+uncommitted changes, staged or not, are not in the archive. It then extracts the archive into
+a temporary directory and runs `npm ci && npm run build` there, as a reviewer would. The
+archive ships `.npmrc`, so that `npm ci` runs no install scripts. From that clean copy it
+builds `artifacts/foxleash-<version>.xpi`. It fails unless:
 
-- every tracked file matches a ship or exclude rule in `bin/build-amo.ts`;
-- the archive's files are exactly the ones in `bin/amo-source-files.txt`, read from the git
-  index;
-- no tracked symlink or submodule sits at or above a shipped path, and no shipped file is
-  reached through a symlink in the working tree;
+- every file in the commit matches a ship or exclude rule in `bin/build-amo.ts`;
+- every shipped path is a plain relative name: letters, digits, `.`, `_`, `-` and `/`, with
+  no `.`, `..` or empty segment;
+- the archive's files are exactly the ones in `bin/amo-source-files.txt`, read from the same
+  commit;
+- no symlink or submodule in the commit sits at or above a shipped path;
 - no `node_modules` folder sits above the temporary directory, where the clean build could
   load packages a reviewer does not have;
-- the clean rebuild is identical to the normal build in `apps/extension/dist/`.
+- the clean rebuild is identical to the normal build in `apps/extension/dist/`, which builds
+  the working tree: a working tree that builds differently from HEAD fails here.
 
-The two files appear in `artifacts/` only when every check passes.
+The two files appear in `artifacts/` only when every check passes, and they are moved there
+together, so a second run at the same time cannot leave one run's archive beside the other's
+XPI.
 
 The archive ships `bin/amo-source-readme.md` as its `README.md`, with the exact Node and npm
 versions of the build filled in. The command needs `git`, `zip`, `unzip`, `diff` and network
 access for `npm ci`.
 
 When you add, move or delete a file that the extension build reads, edit
-`bin/amo-source-files.txt` in the same commit, one path per line in `LC_ALL=C sort` order,
-and `git add` it: the check reads the staged list. When the command reports a tracked file
-it cannot classify, add a ship or exclude rule for it in `bin/build-amo.ts`.
+`bin/amo-source-files.txt` and commit it in the same commit, one path per line in
+`LC_ALL=C sort` order. When the command reports a tracked file it cannot classify, add a ship
+or exclude rule for it in `bin/build-amo.ts`.
 
 ## Release checks
 
@@ -230,7 +236,18 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   and the version fields, by at least the bump origin's Unreleased entries need; HEAD
   carries exactly the annotated tag `v<version>`, which origin does not have yet; the
   working tree is clean; and `npm run build:amo` has built the XPI and source archive of
-  that version.
+  that version. The XPI's manifest has `<version>`, and the source archive holds exactly the
+  files the tagged commit ships (by the rules of `bin/build-amo.ts`, which must agree with
+  the tag's `bin/amo-source-files.txt`), byte for byte, and a `README.md` that is the tag's
+  `bin/amo-source-readme.md` with some Node and npm versions filled in.
+- `built <version> [--dir <path>]`: the artifact checks of `pre-push` alone, for
+  `foxleash-<version>.xpi` and `foxleash-source-<version>.zip` in `<path>` (default
+  `artifacts`, relative to the repository root), against the commit of the tag
+  `v<version>`, which must exist. The XPI's bytes are not compared, only its manifest
+  version: the `build:amo` run that wrote both files binds the XPI to the archive, so keep
+  the two files together. It judges the tag's tree by the ship rules of the checkout it runs
+  in and fails where they disagree with the tag's `bin/amo-source-files.txt`, so a checkout
+  whose rules changed since the tag fails rather than passes.
 - `artifacts <version> [--unsigned <path>]`: the signed XPI in `web-ext-artifacts/` holds the
   signature files and exactly the files of the unsigned XPI (default
   `artifacts/foxleash-<version>.xpi`), byte for byte except `manifest.json`, which may differ
@@ -283,10 +300,15 @@ so its program is made available only once its add-on version can be installed.
 
 A release starts from `main`; its commits are made on a `release/x.y.z` branch and reach
 `main` only through the push. It runs the release checks in this order: `pre-roll`,
-`post-roll <version>`, `post-bump <version>`, `pre-push`, `artifacts <version>`. What each
-one verifies is in [Release checks](#release-checks), as are the version fields: the root
-and workspace `package.json` files and `package-lock.json`, with the extension's manifest
-taking its version from `apps/extension/package.json`.
+`post-roll <version>`, `post-bump <version>`, `pre-push`, `built <version>`,
+`artifacts <version>`. What each one verifies is in [Release checks](#release-checks), as are
+the version fields: the root and workspace `package.json` files and `package-lock.json`, with
+the extension's manifest taking its version from `apps/extension/package.json`.
+
+The signed add-on and the source archive are the bytes of the tagged commit. `build:amo`
+copies the shipped files from HEAD's commit and builds the XPI from that archive, failing
+when the checkout's build differs, and `pre-push` and `built` compare the archive with the
+tagged commit (ADR 0075).
 
 1. Run `npm run check:release -- pre-roll --bump=<patch|minor|major>`. It prints the next
    version, `x.y.z` below. The first release, 0.1.0, runs `pre-roll` without `--bump`.
@@ -300,7 +322,8 @@ taking its version from `apps/extension/package.json`.
    run `npm run check:release -- post-bump x.y.z` and commit the six version files as
    `Bump version to x.y.z`. The first release has no bump and no such commit.
 4. Run `npm run lint`, `npx turbo run typecheck test --force` and `npm run build:amo`, which
-   builds `artifacts/foxleash-source-x.y.z.zip` and `artifacts/foxleash-x.y.z.xpi`.
+   builds `artifacts/foxleash-source-x.y.z.zip` and `artifacts/foxleash-x.y.z.xpi` from
+   HEAD's commit, so commit everything first.
 5. Create the annotated tag with `git tag -a vx.y.z -m "vx.y.z"` and run
    `npm run check:release -- pre-push`. Then check that every entry of
    `artifacts/foxleash-x.y.z.xpi` survives the trip to `web-ext sign`: none that web-ext's
@@ -313,11 +336,13 @@ taking its version from `apps/extension/package.json`.
    Then move local `main` to the pushed commit with `git switch main`,
    `git merge --ff-only release/x.y.z` and `git branch -d release/x.y.z`.
 6. Once CI has passed on the pushed commit, sign the XPI from the clean copy,
-   `artifacts/foxleash-x.y.z.xpi`, as an unlisted version on addons.mozilla.org.
+   `artifacts/foxleash-x.y.z.xpi`, as an unlisted version on addons.mozilla.org. First run
+   `npm run check:release -- built x.y.z` (with `--dir <path>` when you sign copies kept
+   elsewhere, and then take both files below from that folder) and stop on a failure.
    `web-ext sign` takes a directory, so extract the XPI and pass that directory as
-   `--source-dir`. Before extracting, check the entry names again as in step 5. Then
-   extract it, stop on any unzip warning, and check that the folder holds exactly the XPI's
-   files, as regular files (web-ext follows a symbolic link).
+   `--source-dir`. Before extracting, check the entry names again as in step 5. Then extract
+   it, stop on any unzip warning, and check that the folder holds exactly the XPI's files, as
+   regular files (web-ext follows a symbolic link).
    Run `web-ext sign` with `--channel unlisted`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
    attached by `--upload-source-code artifacts/foxleash-source-x.y.z.zip`, and with
