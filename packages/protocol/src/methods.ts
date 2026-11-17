@@ -270,6 +270,8 @@ export interface NetworkRequest {
   responseHeaders: NetworkHeader[];
   /** The shape of what the request sent; absent when it sent no body. */
   requestBody?: NetworkBody;
+  /** The text of a fetch or XMLHttpRequest response as it arrived; absent when none was kept. */
+  responseBody?: NetworkResponseBody;
 }
 
 /** A request as read_network returns it: the headers only when the read asked for them. */
@@ -337,6 +339,16 @@ export const MAX_NETWORK_URL = 2_000;
 export const MAX_NETWORK_HEADER = 1_000;
 /** The most headers kept in each direction of a request. */
 export const MAX_NETWORK_HEADERS = 100;
+/** The most bytes of a response body Foxleash copies; the rest reaches the page uncopied. */
+export const MAX_NETWORK_RESPONSE_BYTES = 65_536;
+/** A response body's stored text is cut to this many UTF-16 units. */
+export const MAX_NETWORK_RESPONSE_TEXT = 32_768;
+
+/** A response's text, with token values redacted; `truncated` only when a cap cut it. */
+export interface NetworkResponseBody {
+  text: string;
+  truncated?: boolean;
+}
 
 /** wait_for's wait when the request gives none. */
 export const DEFAULT_WAIT_FOR_MS = 10_000;
@@ -610,6 +622,7 @@ export interface Methods {
       failed?: boolean;
       headers?: boolean;
       body?: boolean;
+      responseBody?: boolean;
       limit?: number;
     };
     result: {

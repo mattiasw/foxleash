@@ -189,6 +189,64 @@
       ]
     },
     {
+      "listing": "keeps only for requests to sites you approved that are not on the blocklist",
+      "evidence": [
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "details.type === \"xmlhttprequest\" &&"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "viewOf(log.live.session)?.allowed(details.url) === true"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "return view.allowed(record.url) ? \"yes\" : \"no\";"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "onSettingsChanged(browser, clearViews);"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "dropRefusedBodies(session, view);"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "const bodies = responseBody && viewOf(session) !== undefined;"
+        }
+      ]
+    },
+    {
+      "listing": "passes every byte of each response on to the page unchanged",
+      "evidence": [
+        { "file": "apps/extension/src/response-body.ts", "contains": "filter.write(event.data);" },
+        { "file": "apps/extension/src/response-body.ts", "contains": "filter.disconnect();" },
+        { "file": "apps/extension/src/response-body.ts", "contains": "filter.close();" },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "const hold = (): undefined => undefined;"
+        }
+      ]
+    },
+    {
+      "listing": "with access, refresh and ID tokens and JWTs redacted as a best effort",
+      "evidence": [
+        {
+          "file": "apps/extension/src/response-body.ts",
+          "contains": "(?:access|refresh)[_-]?token|id[_-]?token"
+        },
+        {
+          "file": "apps/extension/src/response-body.ts",
+          "contains": "const JWT = new RegExp(String.raw`${JWT_START}"
+        },
+        {
+          "file": "apps/extension/src/response-body.ts",
+          "contains": "capText(redactTokens(text), MAX_NETWORK_RESPONSE_TEXT)"
+        }
+      ]
+    },
+    {
       "listing": "never gives it the values of password fields, of one-time code and card number fields that the page marks as such for autofill, or of text fields that Firefox filled in from your saved logins, addresses or cards, until you edit them",
       "evidence": [
         { "file": "apps/extension/src/page-tree.ts", "contains": "isProtectedField" },

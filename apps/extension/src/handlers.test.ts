@@ -6608,7 +6608,7 @@ describe("read_network", { timeout: 10000 }, () => {
       pattern: undefined,
       limit: undefined,
     });
-    const unset = { failed: false, headers: false, body: false };
+    const unset = { failed: false, headers: false, body: false, responseBody: false };
     assert.deepEqual(context.networkReads, [
       {
         session: "s1",
@@ -6666,10 +6666,10 @@ describe("read_network", { timeout: 10000 }, () => {
     assert.deepEqual(context.networkReads, []);
   });
 
-  it("refuses failed, headers and body that are not true or false", async () => {
+  it("refuses failed, headers, body and responseBody that are not true or false", async () => {
     const context = setup();
     const tab = await approvedTab(context);
-    for (const key of ["failed", "headers", "body"]) {
+    for (const key of ["failed", "headers", "body", "responseBody"]) {
       for (const value of ["true", 1, 0, null]) {
         await assert.rejects(context.call("s1", "read_network", { tabId: tab.id, [key]: value }), {
           code: "invalid_params",
@@ -6680,7 +6680,7 @@ describe("read_network", { timeout: 10000 }, () => {
     assert.deepEqual(context.networkReads, []);
   });
 
-  it("passes types, failed, headers and body through when given", async () => {
+  it("passes types, failed, headers, body and responseBody through when given", async () => {
     const context = setup();
     const tab = await approvedTab(context);
     context.networkWith(recorded);
@@ -6696,24 +6696,29 @@ describe("read_network", { timeout: 10000 }, () => {
       limit: 3,
       headers: true,
       body: true,
+      responseBody: true,
     });
     await context.call("s1", "read_network", {
       tabId: tab.id,
       failed: false,
       headers: false,
       body: false,
+      responseBody: false,
     });
     await context.call("s1", "read_network", { tabId: tab.id, types: most });
     await context.call("s1", "read_network", { tabId: tab.id, headers: true });
     await context.call("s1", "read_network", { tabId: tab.id, types: ["a"] });
     await context.call("s1", "read_network", { tabId: tab.id, body: true });
-    const [all, unset, longest, withHeaders, shortest, withBody] = context.networkReads;
+    await context.call("s1", "read_network", { tabId: tab.id, responseBody: true });
+    const [all, unset, longest, withHeaders, shortest, withBody, withResponseBody] =
+      context.networkReads;
     assert.deepEqual(all?.options, {
       pattern: "/api",
       types,
       failed: true,
       headers: true,
       body: true,
+      responseBody: true,
       limit: 3,
     });
     assert.notEqual(all?.options.types, types);
@@ -6721,6 +6726,7 @@ describe("read_network", { timeout: 10000 }, () => {
       failed: false,
       headers: false,
       body: false,
+      responseBody: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(longest?.options, {
@@ -6728,12 +6734,14 @@ describe("read_network", { timeout: 10000 }, () => {
       failed: false,
       headers: false,
       body: false,
+      responseBody: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(withHeaders?.options, {
       failed: false,
       headers: true,
       body: false,
+      responseBody: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(shortest?.options, {
@@ -6741,12 +6749,21 @@ describe("read_network", { timeout: 10000 }, () => {
       failed: false,
       headers: false,
       body: false,
+      responseBody: false,
       limit: DEFAULT_NETWORK_LIMIT,
     });
     assert.deepEqual(withBody?.options, {
       failed: false,
       headers: false,
       body: true,
+      responseBody: false,
+      limit: DEFAULT_NETWORK_LIMIT,
+    });
+    assert.deepEqual(withResponseBody?.options, {
+      failed: false,
+      headers: false,
+      body: false,
+      responseBody: true,
       limit: DEFAULT_NETWORK_LIMIT,
     });
   });
@@ -6761,6 +6778,7 @@ describe("read_network", { timeout: 10000 }, () => {
       failed: true,
       headers: true,
       body: true,
+      responseBody: true,
     };
     const params = Object.assign(Object.create(inherited), { tabId: tab.id });
     await context.call("s1", "read_network", params);
@@ -6769,7 +6787,13 @@ describe("read_network", { timeout: 10000 }, () => {
         session: "s1",
         tabId: tab.id,
         site: SITE,
-        options: { failed: false, headers: false, body: false, limit: DEFAULT_NETWORK_LIMIT },
+        options: {
+          failed: false,
+          headers: false,
+          body: false,
+          responseBody: false,
+          limit: DEFAULT_NETWORK_LIMIT,
+        },
       },
     ]);
   });

@@ -1,9 +1,16 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import type { NetworkHeader, NetworkRequestRead } from "@foxleash/protocol";
+import {
+  MAX_NETWORK_RESPONSE_TEXT,
+  type NetworkHeader,
+  type NetworkRequestRead,
+} from "@foxleash/protocol";
+import type { Firefox } from "./firefox.ts";
 import {
   type FixtureServer,
+  NETWORK_BODIES,
   NETWORK_SECRETS,
   startFixtureServer,
   TITLES,
@@ -35,6 +42,7 @@ const REDACTED = "[redacted]";
 describe("read_network in real Firefox", () => {
   let harness: Harness;
   let fixtures: FixtureServer;
+  let firefox: Firefox;
   let session: Session;
   let networkTab: number;
 
@@ -43,7 +51,7 @@ describe("read_network in real Firefox", () => {
       harness = createHarness();
       harness.install();
       fixtures = await startFixtureServer();
-      await harness.startFirefox(EXTENSION_DIST);
+      firefox = await harness.startFirefox(EXTENSION_DIST);
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
@@ -304,37 +312,297 @@ describe("read_network in real Firefox", () => {
     assert.ok(text.includes("is not in this session's tab group"), text);
   });
 
-  async function readNetwork(
-    tabId: number,
-    args: Record<string, unknown> = {},
-  ): Promise<NetworkRead> {
-    const result = await harness.call(session, "read_network", { tabId, ...args });
-    assert.equal(result.isError, false, result.text);
-    return { ...networkReadOf(parseResult(result.text)), text: result.text };
+  test("returns a fetch POST's error body as it arrived, without sending it again", async () => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const received = await firefox.evaluate(
+      page.context,
+      `fetch("/api/body/error", { method: "POST", body: "token=single-use" }).then((r) => r.text())`,
+    );
+    assert.equal(received, NETWORK_BODIES.error);
+    const read = await readUntil(
+      page.tab,
+      (requests) => requestTo(requests, "/api/body/error")?.responseBody !== undefined,
+      { responseBody: true, failed: true },
+    );
+    const post = requestTo(read.requests, "/api/body/error");
+    assert.equal(post?.status, 500);
+    assert.equal(post?.method, "POST");
+    assert.deepEqual(post?.responseBody, { text: NETWORK_BODIES.error });
+    assert.equal(fixtures.hits("/api/body/error"), 1);
+    const without = await readNetwork(page.tab, { failed: true });
+    const plain = requestTo(without.requests, "/api/body/error");
+    assert.ok(plain !== undefined, without.text);
+    assert.equal(Object.hasOwn(plain, "responseBody"), false, without.text);
+  });
+
+  test("the page gets exactly the bytes the server sent: large, compressed or streamed", async (t) => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const sent: [string, string][] = [
+      ["/api/body/large", NETWORK_BODIES.large],
+      ["/api/body/gzip", NETWORK_BODIES.gzip],
+      ["/api/body/stream", NETWORK_BODIES.stream.join("")],
+    ];
+    for (const [path, body] of sent) {
+      const started = Date.now();
+      assert.equal(await firefox.evaluate(page.context, digestScript(path)), sha256(body), path);
+      t.diagnostic(`${path}: ${Date.now() - started} ms in the page, captured`);
+    }
+    const read = await readUntil(
+      page.tab,
+      (requests) => sent.every(([path]) => requestTo(requests, path)?.responseBody !== undefined),
+      { responseBody: true },
+    );
+    assert.deepEqual(requestTo(read.requests, "/api/body/large")?.responseBody, {
+      text: NETWORK_BODIES.large.slice(0, MAX_NETWORK_RESPONSE_TEXT),
+      truncated: true,
+    });
+    assert.deepEqual(requestTo(read.requests, "/api/body/gzip")?.responseBody, {
+      text: NETWORK_BODIES.gzip,
+    });
+    assert.deepEqual(requestTo(read.requests, "/api/body/stream")?.responseBody, {
+      text: NETWORK_BODIES.stream.join(""),
+    });
+  });
+
+  test("captures no response from another site, whether the page or its frame asked", async () => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const other = `http://localhost:${fixtures.port}`;
+    const urls = {
+      pageOther: `${other}/api/body/other?by=page`,
+      frameOther: `${other}/api/body/other?by=frame`,
+      pageOwn: fixtures.url("/api/body/other?by=page"),
+      frameOwn: fixtures.url("/api/body/other?by=frame"),
+    };
+    // The other site's requests first: once the last request's body is in, theirs would be too.
+    for (const [context, url] of [
+      [page.context, urls.pageOther],
+      [page.frame, urls.frameOther],
+      [page.context, urls.pageOwn],
+      [page.frame, urls.frameOwn],
+    ] as const) {
+      assert.equal(await firefox.evaluate(context, textScript(url)), NETWORK_BODIES.other, url);
+    }
+    const read = await readUntil(
+      page.tab,
+      (requests) =>
+        requestWithUrl(requests, urls.pageOwn)?.responseBody !== undefined &&
+        requestWithUrl(requests, urls.frameOwn)?.responseBody !== undefined &&
+        requestWithUrl(requests, urls.pageOther)?.durationMs !== undefined &&
+        requestWithUrl(requests, urls.frameOther)?.durationMs !== undefined,
+      { responseBody: true },
+    );
+    for (const url of [urls.pageOther, urls.frameOther]) {
+      const request = requestWithUrl(read.requests, url);
+      assert.equal(request?.status, 200, read.text);
+      assert.equal(request?.responseBody, undefined, read.text);
+    }
+  });
+
+  // Last: it blocks the fixture site for a moment, which ends every recording of it.
+  test("a capture abandoned while the response arrives leaves the page's response whole", async () => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    await firefox.evaluate(page.context, `(window.held = ${digestScript("/api/body/held")}, 0)`);
+    await waitFor(
+      async () => fixtures.hits("/api/body/held") === 1,
+      "the server to get the held request",
+    );
+    await readUntil(page.tab, (requests) => requestTo(requests, "/api/body/held") !== undefined);
+    // Recording of the page ends: its site is blocked.
+    await harness.seedSettings({ blocklist: ["localhost", "127.0.0.1"] });
+    await waitFor(async () => {
+      const result = await harness.call(session, "read_network", { tabId: page.tab });
+      return result.isError;
+    }, "read_network to refuse the blocked page");
+    fixtures.releaseBody();
+    assert.equal(
+      await firefox.evaluate(page.context, "window.held"),
+      sha256(NETWORK_BODIES.held.join("")),
+    );
+    await harness.seedSettings({ blocklist: ["blocked.example"] });
+    await waitFor(async () => {
+      const result = await harness.call(session, "read_network", { tabId: page.tab });
+      return !result.isError && networkReadOf(parseResult(result.text)).recording;
+    }, "recording to start again");
+    const read = await readNetwork(page.tab, { responseBody: true });
+    assert.equal(requestTo(read.requests, "/api/body/held"), undefined, read.text);
+  });
+
+  function readNetwork(tabId: number, args: Record<string, unknown> = {}): Promise<NetworkRead> {
+    return readNetworkOf(harness, session, tabId, args);
   }
 
-  /** Reads until `done` holds for the requests of a recorded page, for at most POLL_LIMIT_MS. */
-  async function readUntil(
+  function readUntil(
     tabId: number,
     done: (requests: readonly NetworkRequestRead[]) => boolean,
     args: Record<string, unknown> = {},
   ): Promise<NetworkRead> {
-    const deadline = Date.now() + POLL_LIMIT_MS;
-    for (;;) {
-      const read = await readNetwork(tabId, args);
-      if (read.recording && done(read.requests)) return read;
-      if (Date.now() > deadline) assert.fail(`not the requests expected: ${read.text}`);
-      await sleep(POLL_MS);
-    }
+    return readUntilOf(harness, session, tabId, done, args);
   }
 
-  async function waitForTitle(tabId: number, title: string): Promise<void> {
-    await waitFor(async () => {
-      const listed = tabsOf(await harness.ok(session, "tabs_list")).find(({ id }) => id === tabId);
-      return listed?.title === title;
-    }, `tab ${tabId} to show ${title}`);
+  function waitForTitle(tabId: number, title: string): Promise<void> {
+    return waitForTitleOf(harness, session, tabId, title);
   }
 });
+
+// A Firefox of its own, with the other site approved and blocklisted.
+describe("read_network response bodies and the blocklist, in real Firefox", () => {
+  let harness: Harness;
+  let fixtures: FixtureServer;
+  let firefox: Firefox;
+  let session: Session;
+
+  before(
+    async () => {
+      harness = createHarness();
+      harness.install();
+      fixtures = await startFixtureServer();
+      firefox = await harness.startFirefox(EXTENSION_DIST);
+      await harness.seedSettings({
+        [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
+        [`site:http://localhost:${fixtures.port}`]: { grantedAt: new Date().toISOString() },
+        blocklist: ["localhost"],
+      });
+      session = await harness.connect();
+      await harness.waitUntilReady(session);
+    },
+    { timeout: 120_000 },
+  );
+
+  after(
+    async () => {
+      try {
+        await harness?.close();
+      } finally {
+        await fixtures?.close();
+      }
+    },
+    { timeout: 60_000 },
+  );
+
+  test("captures no response from a blocklisted site, nor from a redirect to one", async () => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const blocked = `http://localhost:${fixtures.port}`;
+    const urls = {
+      pageBlocked: `${blocked}/api/body/other?by=page`,
+      frameBlocked: `${blocked}/api/body/other?by=frame`,
+      redirect: fixtures.url("/api/body/redirect"),
+      redirected: `${blocked}/api/body/other?by=redirect`,
+      pageOwn: fixtures.url("/api/body/other?by=page"),
+      frameOwn: fixtures.url("/api/body/other?by=frame"),
+    };
+    for (const [context, url] of [
+      [page.context, urls.pageBlocked],
+      [page.frame, urls.frameBlocked],
+      [page.context, urls.redirect],
+      [page.context, urls.pageOwn],
+      [page.frame, urls.frameOwn],
+    ] as const) {
+      assert.equal(await firefox.evaluate(context, textScript(url)), NETWORK_BODIES.other, url);
+    }
+    const read = await readUntilOf(
+      harness,
+      session,
+      page.tab,
+      (requests) =>
+        requestWithUrl(requests, urls.pageOwn)?.responseBody !== undefined &&
+        requestWithUrl(requests, urls.frameOwn)?.responseBody !== undefined &&
+        [urls.pageBlocked, urls.frameBlocked, urls.redirect, urls.redirected].every(
+          (url) => requestWithUrl(requests, url)?.durationMs !== undefined,
+        ),
+      { responseBody: true },
+    );
+    assert.equal(requestWithUrl(read.requests, urls.redirect)?.status, 302, read.text);
+    for (const url of [urls.pageBlocked, urls.frameBlocked, urls.redirect, urls.redirected]) {
+      assert.equal(requestWithUrl(read.requests, url)?.responseBody, undefined, url);
+    }
+  });
+});
+
+async function readNetworkOf(
+  harness: Harness,
+  session: Session,
+  tabId: number,
+  args: Record<string, unknown> = {},
+): Promise<NetworkRead> {
+  const result = await harness.call(session, "read_network", { tabId, ...args });
+  assert.equal(result.isError, false, result.text);
+  return { ...networkReadOf(parseResult(result.text)), text: result.text };
+}
+
+/** Reads until `done` holds for the requests of a recorded page, for at most POLL_LIMIT_MS. */
+async function readUntilOf(
+  harness: Harness,
+  session: Session,
+  tabId: number,
+  done: (requests: readonly NetworkRequestRead[]) => boolean,
+  args: Record<string, unknown> = {},
+): Promise<NetworkRead> {
+  const deadline = Date.now() + POLL_LIMIT_MS;
+  for (;;) {
+    const read = await readNetworkOf(harness, session, tabId, args);
+    if (read.recording && done(read.requests)) return read;
+    if (Date.now() > deadline) assert.fail(`not the requests expected: ${read.text}`);
+    await sleep(POLL_MS);
+  }
+}
+
+async function waitForTitleOf(
+  harness: Harness,
+  session: Session,
+  tabId: number,
+  title: string,
+): Promise<void> {
+  await waitFor(async () => {
+    const listed = tabsOf(await harness.ok(session, "tabs_list")).find(({ id }) => id === tabId);
+    return listed?.title === title;
+  }, `tab ${tabId} to show ${title}`);
+}
+
+/** Opens the response-body page in a new tab; its tab id and the contexts of the page and frame. */
+async function openBodiesPage(
+  harness: Harness,
+  session: Session,
+  firefox: Firefox,
+  fixtures: FixtureServer,
+): Promise<{ tab: number; context: string; frame: string }> {
+  const url = fixtures.url(`/network-bodies?tab=${fixtures.hits("/network-bodies") + 1}`);
+  const tab = tabOf(await harness.ok(session, "tab_open", { url })).id;
+  await waitForTitleOf(harness, session, tab, TITLES.networkBodies);
+  const page = (await firefox.contexts()).find((context) => context.url === url);
+  assert.ok(page !== undefined, `no tab shows ${url}`);
+  let frame: string | undefined;
+  await waitFor(async () => {
+    frame = (await firefox.frames(page.context)).find((context) =>
+      context.url.endsWith("/network-bodies-frame"),
+    )?.context;
+    return frame !== undefined;
+  }, `the frame of ${url}`);
+  assert.ok(frame !== undefined);
+  return { tab, context: page.context, frame };
+}
+
+/** A page script that fetches `path` and gives the SHA-256 of what it received, in hex. */
+function digestScript(path: string): string {
+  return `fetch(${JSON.stringify(path)})
+    .then((response) => response.arrayBuffer())
+    .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
+    .then((digest) => Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""))`;
+}
+
+function textScript(url: string): string {
+  return `fetch(${JSON.stringify(url)}).then((response) => response.text())`;
+}
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function requestWithUrl(
+  requests: readonly NetworkRequestRead[],
+  url: string,
+): NetworkRequestRead | undefined {
+  return requests.find((request) => request.url === url);
+}
 
 async function waitFor(check: () => Promise<boolean>, what: string): Promise<void> {
   const deadline = Date.now() + POLL_LIMIT_MS;

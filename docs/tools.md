@@ -229,8 +229,7 @@ the cache.
   (`headers`). Foxleash still records them, so a later read can ask for the headers of requests
   an earlier one left them out of.
 - The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers,
-  and of a request's `Content-Length` header, are replaced with `[redacted]`. Response bodies are
-  not included.
+  and of a request's `Content-Length` header, are replaced with `[redacted]`.
 - With `body`, each request that sent a body includes `requestBody`: its shape, never a value, a
   length or a size. Its `kind` is `form`, `json` or `other`. A form lists each field name once,
   filled by its first value. A JSON object or array lists its keys, at most 4 deep, and of an
@@ -252,6 +251,35 @@ the cache.
   request bodies (16,777,216 bytes by default), or one that is not JSON in strict UTF-8, which
   says whether it is filled. When Firefox gives a file instead of the body's bytes, `other` does
   not say whether it is filled.
+- With `responseBody`, each fetch or XMLHttpRequest request whose response Foxleash captured
+  includes `responseBody`: the response's text as it arrived in the page, so the agent can read
+  what a form's POST got back without sending it again. Foxleash captures the responses to
+  requests whose own URL is on a site you approved for the session and not on the blocklist,
+  whether the page or one of its frames made them, and only with a text content type: `text/*`
+  (not `text/event-stream`), JSON, XML, JavaScript and form data, also as `+json` and `+xml`
+  types.
+- A body keeps the first 65,536 bytes of the response, decoded with the charset its
+  `Content-Type` names, or as UTF-8 when it names none or one Firefox does not know; bytes that do
+  not decode show as U+FFFD. The text is cut to 32,768 characters, and `truncated` in
+  `responseBody` says either cut took something.
+- As a best effort, the values of `access_token`, `refresh_token` and `id_token` fields (also with
+  a prefix such as `oauth_access_token`, in camelCase such as `accessToken`, or with a hyphen) in
+  JSON, JavaScript, XML elements and form or query text, and every JWT-shaped string, are replaced
+  with `[redacted]`, also when the text ends inside one. Other secrets are not: a field named
+  `token` or `apiKey`, a key written with escapes, a value that is not a string, a body encoded
+  another way, or a response that repeats what a request sent.
+- A request has no `responseBody` when the agent does not ask for it; when it is not a fetch or
+  XMLHttpRequest; when its URL is on another site or on the blocklist, also as a redirect's next
+  hop; when its site stopped being approved or was blocklisted after it was captured; when its
+  response has no `Content-Type`, more than one, a type that is not text, a charset in which ASCII
+  bytes can decode to other characters (UTF-16, ISO-2022-JP, Shift_JIS, GBK, gb18030, Big5,
+  EUC-KR), or text Foxleash cannot redact reliably; when a service worker answered it; while its
+  response is still arriving; when it ended in an error such as a refused connection (a response
+  with an error status, such as 500, keeps its body); when it was redirected; when it started
+  before recording began, or recording stopped and started again while it arrived; when it
+  started in the moment after recording began, before Foxleash could capture; when part of it
+  arrived, or the agent reads, just as your approvals or blocklist changed; when 64 responses of
+  the page were being captured already; and when its body was dropped to make room.
 - Requests made by the page's frames are included.
 - Foxleash records a page's requests from when it starts loading in a tab of the agent's group
   on a site you approved, and loading a new page in the tab starts a new list, beginning with that
@@ -264,8 +292,9 @@ the cache.
 - The result gives `since`, the time from which the page has been recorded, when it is
   recording: requests that started earlier are missing. After a page load, `since` is the time the
   page was committed, and the page's own request, which starts just before it, is listed.
-- Foxleash keeps the newest 500 requests of a page, fewer when their headers or body shapes are
-  long.
+- Foxleash keeps the newest 500 requests of a page, fewer when their headers, body shapes or
+  response bodies are long. While response bodies take more than half of the page's 4,000,000
+  characters, the oldest bodies are dropped first, keeping their requests.
 - The agent can ask for the requests whose URL contains a piece of plain text (`pattern`).
 - It can ask for the requests of up to 20 resource types (`types`), such as `main_frame` for the
   page itself, `script`, `stylesheet`, `image`, `font` or `xmlhttprequest` for fetch and

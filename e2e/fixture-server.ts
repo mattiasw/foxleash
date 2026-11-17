@@ -1,5 +1,6 @@
 import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
+import { gzipSync } from "node:zlib";
 
 export const TITLES = {
   a: "Fixture page A",
@@ -64,6 +65,8 @@ export const TITLES = {
   networkLoginDone: "Fixture network login done",
   networkLarge: "Fixture network large",
   networkLargeDone: "Fixture network large done",
+  networkBodies: "Fixture network bodies",
+  networkBodiesFrame: "Fixture network bodies frame",
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
   downloadLogin: "Fixture download login",
@@ -153,6 +156,24 @@ export const NETWORK_SECRETS = {
   loginUser: "network-login-user-Kd7Fp2",
   loginPassword: "network-login-password-Rm4Wx9",
 } as const;
+
+/**
+ * What the /api/body/ routes answer, as the server sends it before any compression: `stream` in
+ * chunks some time apart, `held` its first chunk and then the rest once `releaseBody()` runs.
+ */
+export const NETWORK_BODIES = {
+  /** 36 bytes, answered with status 500 to a POST. */
+  error: '{"error":"reCAPTCHA token invalid."}',
+  large: "0123456789abcdef".repeat(12_500),
+  gzip: JSON.stringify({
+    items: Array.from({ length: 300 }, (_, index) => ({ id: index, name: `item-${index}` })),
+  }),
+  stream: Array.from({ length: 6 }, (_, index) => `chunk ${index} ${"s".repeat(100)}\n`),
+  held: ["first\n", "h".repeat(100_000)],
+  other: '{"other":true}',
+} as const;
+/** How long /api/body/stream waits between its chunks. */
+export const NETWORK_STREAM_GAP_MS = 150;
 
 /** The cookie /download/login sets, without which /download/private.txt answers 403. */
 export const DOWNLOAD_COOKIE = { name: "download_session", value: "download-cookie-Pq4Rt7" };
@@ -506,6 +527,8 @@ export interface FixtureServer {
    * /autofill-framed-held, which answers the held ones; the server's close ends any still held.
    */
   holdImage(): void;
+  /** Sends the rest of each /api/body/held response that has only its first chunk; `close` does too. */
+  releaseBody(): void;
   close(): Promise<void>;
 }
 
@@ -518,6 +541,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
   const downloadHeaders: IncomingHttpHeaders[] = [];
   const heldImages = new Set<ServerResponse>();
   let holdingImages = false;
+  const heldBodies = new Set<ServerResponse>();
 
   const server = createServer((request, response) => {
     const path = new URL(request.url ?? "/", "http://127.0.0.1").pathname;
@@ -780,6 +804,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       request.resume();
       response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       response.end("ok");
+    } else if (path === "/network-bodies") {
+      // The frame from another site is the same server under localhost.
+      sendHtml(response, networkBodiesPage(request.socket.localPort ?? 0));
+    } else if (path === "/network-bodies-frame") {
+      sendPage(response, TITLES.networkBodiesFrame);
+    } else if (path.startsWith("/api/body/")) {
+      request.resume();
+      sendBody(path, response, request.socket.localPort ?? 0);
     } else if (path === "/api/fetch") {
       response.writeHead(200, {
         "Content-Type": "application/json",
@@ -873,7 +905,9 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     holdImage: () => {
       holdingImages = true;
     },
+    releaseBody,
     close: async () => {
+      releaseBody();
       for (const response of heldImages) {
         if (!response.destroyed && !response.writableEnded) response.end();
       }
@@ -887,6 +921,65 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       await closed.promise;
     },
   };
+
+  /** Answers an /api/body/ request, from either site; every answer may be read by another site. */
+  function sendBody(path: string, response: ServerResponse, port: number): void {
+    const headers = { "Cache-Control": "no-store", "Access-Control-Allow-Origin": "*" };
+    if (path === "/api/body/error") {
+      response.writeHead(500, { ...headers, "Content-Type": "application/json" });
+      response.end(NETWORK_BODIES.error);
+    } else if (path === "/api/body/large") {
+      response.writeHead(200, { ...headers, "Content-Type": "text/plain; charset=utf-8" });
+      response.end(NETWORK_BODIES.large);
+    } else if (path === "/api/body/gzip") {
+      response.writeHead(200, {
+        ...headers,
+        "Content-Type": "application/json",
+        "Content-Encoding": "gzip",
+      });
+      response.end(gzipSync(NETWORK_BODIES.gzip));
+    } else if (path === "/api/body/stream") {
+      response.writeHead(200, { ...headers, "Content-Type": "text/plain; charset=utf-8" });
+      const chunks = [...NETWORK_BODIES.stream];
+      const next = (): void => {
+        const chunk = chunks.shift();
+        if (chunk === undefined || response.destroyed) {
+          response.end();
+          return;
+        }
+        response.write(chunk);
+        const timer = setTimeout(() => {
+          timers.delete(timer);
+          next();
+        }, NETWORK_STREAM_GAP_MS);
+        timers.add(timer);
+      };
+      next();
+    } else if (path === "/api/body/held") {
+      response.writeHead(200, { ...headers, "Content-Type": "text/plain; charset=utf-8" });
+      response.write(NETWORK_BODIES.held[0]);
+      heldBodies.add(response);
+    } else if (path === "/api/body/other") {
+      response.writeHead(200, { ...headers, "Content-Type": "application/json" });
+      response.end(NETWORK_BODIES.other);
+    } else if (path === "/api/body/redirect") {
+      response.writeHead(302, {
+        ...headers,
+        Location: `http://localhost:${port}/api/body/other?by=redirect`,
+      });
+      response.end();
+    } else {
+      response.writeHead(404, headers);
+      response.end();
+    }
+  }
+
+  function releaseBody(): void {
+    for (const response of heldBodies) {
+      if (!response.destroyed && !response.writableEnded) response.end(NETWORK_BODIES.held[1]);
+    }
+    heldBodies.clear();
+  }
 }
 
 /** Answers a /held-image.gif request with the pixel; a response already closed is left alone. */
@@ -3167,6 +3260,17 @@ window.addEventListener("load", async () => {
   document.title = "${TITLES.networkDone}";
 });
 </script>
+</body></html>
+`;
+}
+
+// Its fetches run when a test evaluates them. The frame is on the other site (the same server
+// under localhost).
+function networkBodiesPage(port: number): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkBodies}</title></head>
+<body><h1>${TITLES.networkBodies}</h1>
+<iframe title="Other site" src="http://localhost:${port}/network-bodies-frame"></iframe>
 </body></html>
 `;
 }

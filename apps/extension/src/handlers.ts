@@ -2166,8 +2166,8 @@ function masksFor(
 }
 
 /**
- * read_network's options: pattern and types only when given, failed, headers and body false
- * unless true, the limit's default filled in.
+ * read_network's options: pattern and types only when given, failed, headers, body and
+ * responseBody false unless true, the limit's default filled in.
  */
 function networkOptions(params: Params): NetworkReadOptions {
   const pattern = own(params, "pattern");
@@ -2197,7 +2197,8 @@ function networkOptions(params: Params): NetworkReadOptions {
   }
   const headers = flagParam(params, "read_network", "headers", false);
   const body = flagParam(params, "read_network", "body", false);
-  const options: NetworkReadOptions = { failed, headers, body, limit };
+  const responseBody = flagParam(params, "read_network", "responseBody", false);
+  const options: NetworkReadOptions = { failed, headers, body, responseBody, limit };
   if (pattern !== undefined) options.pattern = pattern;
   if (types !== undefined) options.types = types;
   return options;

@@ -9,11 +9,23 @@ import {
   type NetworkRequestRead,
   type Result,
 } from "@foxleash/protocol";
-import type { HttpHeader, RequestDetails } from "./browser-api.ts";
-import { createFakeBrowser, createFakeTimers, type FakeTab, flush } from "./fake-browser.ts";
+import type {
+  HeadersReceivedDetails,
+  HttpHeader,
+  RedirectDetails,
+  RequestDetails,
+} from "./browser-api.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  type FakeStreamFilter,
+  type FakeTab,
+  flush,
+} from "./fake-browser.ts";
 import {
   createNetworkLog,
   MAX_LOG_CHARS,
+  MAX_OPEN_CAPTURES,
   type NetworkReadOptions,
   REDACTED,
   REDACTED_HEADERS,
@@ -21,7 +33,7 @@ import {
   redactHeaders,
 } from "./network-log.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite, revokeSite } from "./settings.ts";
+import { grantSite, revokeSite, saveBlocklist } from "./settings.ts";
 import { createSiteAccess, PROMPT_PAGE, type SessionMemory } from "./site-access.ts";
 
 const SITE = "https://a.example";
@@ -32,6 +44,7 @@ const ALL: NetworkReadOptions = {
   failed: false,
   headers: true,
   body: true,
+  responseBody: true,
   limit: MAX_NETWORK_REQUESTS,
 };
 
@@ -1893,6 +1906,753 @@ describe("network log", { timeout: 10000 }, () => {
     assert.deepEqual(read(tab.id), before);
   });
 });
+
+describe("network log response bodies", { timeout: 10000 }, () => {
+  it("copies an approved fetch's response and returns it only with responseBody true", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`, { method: "POST" });
+    const other = request(tab.id, `${SITE}/other`);
+    assert.equal(fake.streamFilters.length, 2);
+    respond(fake, tab.id, id, '{"error":"invalid token"}', 500);
+    assert.deepEqual(filterFor(fake, id)?.writtenText(), '{"error":"invalid token"}');
+    const [first, second] = read(tab.id).requests;
+    assert.deepEqual(first?.responseBody, { text: '{"error":"invalid token"}' });
+    assert.equal(first?.status, 500);
+    assert.equal(second?.responseBody, undefined);
+    assert.equal(
+      read(tab.id, { ...ALL, responseBody: false }).requests[0]?.responseBody,
+      undefined,
+    );
+    assert.deepEqual(
+      read(tab.id, { ...ALL, pattern: "/api" }).requests.map((entry) => entry.responseBody),
+      [{ text: '{"error":"invalid token"}' }],
+    );
+    respond(fake, tab.id, other, "plain", 200, "text/plain");
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "/other" }).requests[0]?.responseBody, {
+      text: "plain",
+    });
+  });
+
+  it("returns a copy of a body that a caller cannot change the log through", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    respond(fake, tab.id, request(tab.id, `${SITE}/api`), "{}");
+    const body = read(tab.id).requests[0]?.responseBody;
+    assert.ok(body !== undefined);
+    body.text = "changed";
+    body.truncated = true;
+    assert.deepEqual(read(tab.id).requests[0]?.responseBody, { text: "{}" });
+  });
+
+  it("attaches a filter only to the fetches of the page and its frames to approved sites", async () => {
+    const { fake, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const frame = {
+      frameId: 3,
+      documentUrl: `${OTHER}/frame`,
+      frameAncestors: [{ url: URL_A, frameId: 0 }],
+    };
+    const refused = [
+      request(tab.id, `${OTHER}/api`),
+      request(tab.id, `${OTHER}/api`, frame),
+      request(tab.id, `${SITE}/script.js`, { type: "script" }),
+      request(tab.id, `${SITE}/image.png`, { type: "image" }),
+      request(tab.id, `${SITE}/sub`, { type: "sub_frame" }),
+    ];
+    const allowed = [request(tab.id, `${SITE}/api`), request(tab.id, `${SITE}/api`, frame)];
+    assert.deepEqual(
+      fake.streamFilters.map((filter) => filter.requestId),
+      allowed,
+    );
+    for (const id of refused) assert.equal(filterFor(fake, id), undefined);
+  });
+
+  it("attaches no filter to a request to a blocklisted site, approved or not", async () => {
+    const { fake, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    await grantSite(fake.browser, OTHER);
+    await flush();
+    const before = request(tab.id, `${OTHER}/api`);
+    await saveBlocklist(fake.browser, ["b.example"]);
+    await flush();
+    const after = request(tab.id, `${OTHER}/api`);
+    const frame = request(tab.id, `${OTHER}/api`, {
+      frameId: 3,
+      documentUrl: `${OTHER}/frame`,
+      frameAncestors: [{ url: URL_A, frameId: 0 }],
+    });
+    const own = request(tab.id, `${SITE}/api`);
+    assert.deepEqual(
+      fake.streamFilters.map((filter) => filter.requestId),
+      [before, own],
+    );
+    assert.equal(filterFor(fake, after), undefined);
+    assert.equal(filterFor(fake, frame), undefined);
+  });
+
+  it("attaches no filter before the log started, while its page is checked, or outside a session", async (t) => {
+    const { fake, request, tabIn, commit } = setup();
+    const tab = await liveTab(tabIn);
+    request(tab.id, `${SITE}/early`, { timeStamp: 0 });
+    const hold = holdTabsGet(t, fake);
+    const release = hold();
+    commit(tab.id, `${SITE}/next`, 2000);
+    request(tab.id, `${SITE}/checking`, { documentUrl: `${SITE}/next`, timeStamp: 2001 });
+    assert.equal(fake.streamFilters.length, 0);
+    release();
+    await flush();
+    await flush();
+    const later = request(tab.id, `${SITE}/later`, {
+      documentUrl: `${SITE}/next`,
+      timeStamp: 2002,
+    });
+    assert.deepEqual(
+      fake.streamFilters.map((filter) => filter.requestId),
+      [later],
+    );
+    const outside = fake.openTab();
+    fake.navigateByUser(outside.id, URL_A);
+    await flush();
+    request(outside.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, 1);
+  });
+
+  it("attaches no filter when Firefox refuses one", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    fake.failFilterResponseData = true;
+    request(tab.id, `${SITE}/api`);
+    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/api`]);
+    fake.failFilterResponseData = false;
+    request(tab.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, 1);
+  });
+
+  it("forgets the site check at once on a settings change, a grant, a withdrawal and a stop", async (t) => {
+    const { fake, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    const hold = holdViews(t, access);
+    const changes: [string, () => unknown][] = [
+      ["settings", () => grantSite(fake.browser, "https://c.example")],
+      ["grant", () => access.allowForSession("s1", ["https://d.example"], () => true)],
+      ["withdrawal", () => access.forget("s1", OTHER)],
+    ];
+    for (const [name, change] of changes) {
+      await flush();
+      const release = hold();
+      const before = fake.streamFilters.length;
+      await change();
+      request(tab.id, `${SITE}/miss`);
+      assert.equal(fake.streamFilters.length, before, name);
+      release();
+      await flush();
+      request(tab.id, `${SITE}/hit`);
+      assert.equal(fake.streamFilters.length, before + 1, name);
+    }
+    hold();
+    access.stop("s1");
+    request(tab.id, `${SITE}/stopped`);
+    assert.equal(fake.streamFilters.length, 3);
+  });
+
+  it("throws away a site check that started before access changed", async (t) => {
+    const { fake, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", {
+      allowed: new Set([OTHER, "https://c.example"]),
+      refused: new Set(),
+      closed: 0,
+    });
+    const hold = holdViews(t, access);
+    const first = hold();
+    const second = hold();
+    access.forget("s1", OTHER);
+    access.forget("s1", "https://c.example");
+    first();
+    await flush();
+    request(tab.id, `${SITE}/stale`);
+    assert.equal(fake.streamFilters.length, 0);
+    second();
+    await flush();
+    request(tab.id, `${SITE}/fresh`);
+    assert.equal(fake.streamFilters.length, 1);
+  });
+
+  it("stores nothing once the request's own site is withdrawn or blocklisted", async () => {
+    const { fake, read, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    await grantSite(fake.browser, "https://c.example");
+    await flush();
+    const granted = request(tab.id, `${OTHER}/api`);
+    const stored = request(tab.id, "https://c.example/api");
+    const own = request(tab.id, `${SITE}/api`);
+    for (const id of [granted, stored, own]) {
+      fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id));
+      filterFor(fake, id)?.data("{");
+    }
+    access.forget("s1", OTHER);
+    await flush();
+    assert.equal(filterFor(fake, granted)?.status, "disconnected");
+    assert.equal(filterFor(fake, stored)?.status, "transferringdata");
+    await saveBlocklist(fake.browser, ["c.example"]);
+    await flush();
+    assert.equal(filterFor(fake, stored)?.status, "disconnected");
+    for (const id of [granted, stored, own]) filterFor(fake, id)?.data("}");
+    filterFor(fake, own)?.stop();
+    assert.deepEqual(
+      read(tab.id).requests.map((entry) => entry.responseBody),
+      [undefined, undefined, { text: "{}" }],
+    );
+    assert.equal(filterFor(fake, granted)?.writtenText(), "{");
+  });
+
+  it("forgets the stored bodies of a site once it is withdrawn or blocklisted", async (t) => {
+    const { fake, read, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    await grantSite(fake.browser, "https://c.example");
+    await flush();
+    for (const url of [`${OTHER}/api`, "https://c.example/api", `${SITE}/api`]) {
+      respond(fake, tab.id, request(tab.id, url), "{}");
+    }
+    const bodies = () => read(tab.id).requests.map((entry) => entry.responseBody?.text);
+    assert.deepEqual(bodies(), ["{}", "{}", "{}"]);
+    const release = holdViews(t, access)();
+    access.forget("s1", OTHER);
+    // While the site check is read again, no body is given.
+    assert.deepEqual(bodies(), [undefined, undefined, undefined]);
+    release();
+    await flush();
+    assert.deepEqual(bodies(), [undefined, "{}", "{}"]);
+    await saveBlocklist(fake.browser, ["c.example"]);
+    await flush();
+    assert.deepEqual(bodies(), [undefined, undefined, "{}"]);
+    await access.allowForSession("s1", [OTHER], () => true);
+    await saveBlocklist(fake.browser, []);
+    await flush();
+    assert.deepEqual(bodies(), [undefined, undefined, "{}"]);
+    const budget = read(tab.id, { ...ALL, responseBody: false }).requests;
+    assert.equal(budget.length, 3);
+  });
+
+  it("keeps nothing that arrived while the site check was being read again", async (t) => {
+    const { fake, read, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    // A settings change reads the session's site check again, with OTHER granted.
+    await grantSite(fake.browser, "https://c.example");
+    await flush();
+    const id = request(tab.id, `${OTHER}/api`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id));
+    filterFor(fake, id)?.data("{");
+    const release = holdViews(t, access)();
+    access.forget("s1", OTHER);
+    filterFor(fake, id)?.data('"while":"withdrawn"');
+    await access.allowForSession("s1", [OTHER], () => true);
+    await flush();
+    filterFor(fake, id)?.data("}");
+    filterFor(fake, id)?.stop();
+    release();
+    await flush();
+    assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.equal(filterFor(fake, id)?.writtenText(), '{"while":"withdrawn"');
+  });
+
+  it("waits for the site check at the stop, then stores", async (t) => {
+    const { fake, read, request, tabIn, access } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id));
+    filterFor(fake, id)?.data("{}");
+    const release = holdViews(t, access)();
+    await grantSite(fake.browser, "https://c.example");
+    filterFor(fake, id)?.stop();
+    assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
+    release();
+    await flush();
+    assert.deepEqual(read(tab.id).requests[0]?.responseBody, { text: "{}" });
+  });
+
+  it("releases the session's captures when a site check fails, with a warning", async (t) => {
+    const warnings = t.mock.method(console, "warn", () => {});
+    const { fake, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    const id = request(tab.id, `${SITE}/api`);
+    filterFor(fake, id)?.data("{");
+    t.mock.method(access, "view", async () => {
+      throw new Error("storage failed");
+    });
+    // A withdrawal of a site no tab shows: only the network log reads the view.
+    access.forget("s1", OTHER);
+    await flush();
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.deepEqual(
+      warnings.mock.calls.map((call) => JSON.parse(String(call.arguments[0]))),
+      [{ event: "network_recording_failed", error: "Error: storage failed" }],
+    );
+  });
+
+  it("reads a session's site check once at a time, and again after one failed", async (t) => {
+    quiet(t);
+    const { fake, request, tabIn, access, sessions } = setup();
+    const tab = await liveTab(tabIn);
+    sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
+    const view = access.view;
+    const { promise, resolve } = Promise.withResolvers<void>();
+    let fails = 1;
+    const reads = t.mock.method(access, "view", async (session: string) => {
+      await promise;
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("storage failed");
+      }
+      return view(session);
+    });
+    access.forget("s1", OTHER);
+    request(tab.id, `${SITE}/a`);
+    request(tab.id, `${SITE}/b`);
+    assert.equal(reads.mock.callCount(), 1);
+    resolve();
+    await flush();
+    request(tab.id, `${SITE}/c`);
+    assert.equal(reads.mock.callCount(), 2);
+    await flush();
+    request(tab.id, `${SITE}/d`);
+    assert.equal(fake.streamFilters.length, 1);
+  });
+
+  it("reads the type from onCompleted when no headers came before", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`);
+    filterFor(fake, id)?.data("{}");
+    filterFor(fake, id)?.stop();
+    assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
+    fake.emitWebRequest("onCompleted", {
+      requestId: id,
+      tabId: tab.id,
+      timeStamp: 1200,
+      statusCode: 200,
+      fromCache: true,
+      responseHeaders: [{ name: "Content-Type", value: "application/json" }],
+    });
+    assert.deepEqual(read(tab.id).requests[0]?.responseBody, { text: "{}" });
+  });
+
+  it("forgets the log of a page whose check refuses it", async () => {
+    const { fake, network, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    fake.navigateByUser(tab.id, "https://refused.example/");
+    await flush();
+    request(tab.id, "https://refused.example/api", {
+      documentUrl: "https://refused.example/",
+      timeStamp: 9e12,
+    });
+    assert.deepEqual(network.requestsSince(tab.id, 0), { begun: 0, open: 0 });
+  });
+
+  it("releases the captures of a log that new access to its page replaced before it was dropped", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn, access, sessions, clock } = setup();
+    sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`);
+    filterFor(fake, id)?.data("{");
+    clock.now = 3000;
+    // The log's own site check waits, so nothing reads the tab's log before access starts again.
+    const release = holdViews(t, access)();
+    access.forget("s1", SITE);
+    await flush();
+    await flush();
+    assert.equal(holdsOf(fake).length, 1);
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    release();
+    await flush();
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 3000,
+      requests: [],
+      truncated: false,
+    });
+  });
+
+  it("releases quietly when a stopped session's site check refuses", async (t) => {
+    const warnings = t.mock.method(console, "warn", () => {});
+    const { fake, request, tabIn, access } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`);
+    filterFor(fake, id)?.data("{");
+    access.stop("s1");
+    await flush();
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.deepEqual(
+      warnings.mock.calls.filter((call) => String(call.arguments[0]).includes("stopped")),
+      [],
+    );
+  });
+
+  it("holds the recorded tab's fetches with a blocking listener that returns at once", async (t) => {
+    quiet(t);
+    const { fake, request, tabIn, commit } = setup();
+    const outside = fake.openTab();
+    fake.navigateByUser(outside.id, URL_A);
+    await flush();
+    const tab = await liveTab(tabIn);
+    assert.deepEqual(holdsOf(fake), [
+      {
+        event: "onBeforeRequest",
+        filter: { urls: ["<all_urls>"], types: ["xmlhttprequest"], tabId: tab.id },
+        extraInfoSpec: ["blocking"],
+      },
+    ]);
+    const details: RequestDetails = {
+      requestId: "held",
+      tabId: tab.id,
+      timeStamp: 1000,
+      frameId: 0,
+      url: `${SITE}/api`,
+      method: "GET",
+      type: "xmlhttprequest",
+      documentUrl: URL_A,
+    };
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", details), [undefined, undefined]);
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", { ...details, requestId: "out", tabId: outside.id }),
+      [undefined],
+    );
+    // A commit drops it until the new page is live.
+    const hold = holdTabsGet(t, fake);
+    const release = hold();
+    commit(tab.id, `${SITE}/next`, 2000);
+    assert.deepEqual(holdsOf(fake), []);
+    release();
+    await flush();
+    await flush();
+    assert.equal(holdsOf(fake).length, 1);
+    // A refused page has none.
+    fake.navigateByUser(tab.id, "https://refused.example/");
+    await flush();
+    assert.deepEqual(holdsOf(fake), []);
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    assert.equal(holdsOf(fake).length, 1);
+    fake.removeTab(tab.id);
+    assert.deepEqual(holdsOf(fake), []);
+    request(tab.id, `${SITE}/closed`);
+    assert.equal(fake.streamFilters.length, 1);
+  });
+
+  it("drops the hold and the captures with a log that stopped being live", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    // Keeps the group open while the tab is out of it.
+    await tabIn("s1");
+    const id = request(tab.id, `${SITE}/api`);
+    fake.ungroup(tab.id);
+    assert.equal(holdsOf(fake).length, 1);
+    assert.deepEqual(read(tab.id), NONE);
+    assert.deepEqual(holdsOf(fake), []);
+    assert.equal(filterFor(fake, id)?.status, "uninitialized");
+    filterFor(fake, id)?.start();
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+  });
+
+  it("keeps one hold when access to the page starts again and releases the old captures", async (t) => {
+    quiet(t);
+    const { fake, read, request, tabIn, access, sessions, clock } = setup();
+    sessions.set("s1", { allowed: new Set([SITE]), refused: new Set(), closed: 0 });
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/api`);
+    filterFor(fake, id)?.data("{");
+    clock.now = 3000;
+    // The stored approval still allows the site: access starts again, empty.
+    access.forget("s1", SITE);
+    await flush();
+    await flush();
+    assert.equal(holdsOf(fake).length, 1);
+    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    assert.deepEqual(read(tab.id), {
+      recording: true,
+      since: 3000,
+      requests: [],
+      truncated: false,
+    });
+    const next = request(tab.id, `${SITE}/next`, { timeStamp: 3000 });
+    respond(fake, tab.id, next, "{}");
+    assert.deepEqual(read(tab.id).requests[0]?.responseBody, { text: "{}" });
+  });
+
+  it("releases a capture at a redirect, and the next hop decides on its own URL", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    await saveBlocklist(fake.browser, ["b.example"]);
+    await flush();
+    const id = request(tab.id, `${SITE}/a`);
+    const first = filterFor(fake, id);
+    first?.data("{");
+    fake.emitWebRequest("onBeforeRedirect", redirectOf(tab.id, id, `${OTHER}/b`));
+    assert.equal(first?.status, "disconnected");
+    request(tab.id, `${OTHER}/b`, { requestId: id });
+    assert.equal(fake.streamFilters.length, 1);
+    const hop = request(tab.id, `${SITE}/c`);
+    fake.emitWebRequest("onBeforeRedirect", redirectOf(tab.id, hop, `${SITE}/d`));
+    const old = filterFor(fake, hop);
+    request(tab.id, `${SITE}/d`, { requestId: hop });
+    const next = filterFor(fake, hop);
+    assert.ok(next !== undefined && next !== old);
+    // The first hop's filter errors after the next hop attached.
+    old?.fail("Channel redirected");
+    respond(fake, tab.id, hop, "{}");
+    assert.deepEqual(
+      read(tab.id).requests.map((entry) => entry.responseBody),
+      [undefined, undefined, undefined, { text: "{}" }],
+    );
+  });
+
+  it("releases a hop that did not end when the same request starts again", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/a`);
+    const first = filterFor(fake, id);
+    first?.data("{");
+    request(tab.id, `${SITE}/a`, { requestId: id });
+    assert.equal(first?.status, "disconnected");
+    respond(fake, tab.id, id, "{}");
+    assert.deepEqual(
+      read(tab.id).requests.map((entry) => entry.responseBody),
+      [undefined, { text: "{}" }],
+    );
+  });
+
+  it("releases a capture on a failure, a new page and the tab closing", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const failed = request(tab.id, `${SITE}/failed`);
+    filterFor(fake, failed)?.data("{");
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: failed,
+      tabId: tab.id,
+      timeStamp: 1100,
+      error: "NS_ERROR_NET_RESET",
+    });
+    assert.equal(filterFor(fake, failed)?.status, "disconnected");
+    const replaced = request(tab.id, `${SITE}/replaced`);
+    filterFor(fake, replaced)?.data("{");
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    assert.equal(filterFor(fake, replaced)?.status, "disconnected");
+    await flush();
+    const closed = request(tab.id, `${SITE}/closed`, {
+      documentUrl: `${SITE}/next`,
+      timeStamp: 9e12,
+    });
+    filterFor(fake, closed)?.data("{");
+    fake.removeTab(tab.id);
+    assert.equal(filterFor(fake, closed)?.status, "disconnected");
+    assert.deepEqual(read(tab.id), NONE);
+  });
+
+  it(`copies at most ${MAX_OPEN_CAPTURES} responses of a page at once`, async () => {
+    const { fake, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const ids = Array.from({ length: MAX_OPEN_CAPTURES + 1 }, () => request(tab.id, `${SITE}/api`));
+    assert.equal(fake.streamFilters.length, MAX_OPEN_CAPTURES);
+    assert.equal(filterFor(fake, ids.at(-1) ?? ""), undefined);
+    respond(fake, tab.id, ids[0] ?? "", "{}");
+    request(tab.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, MAX_OPEN_CAPTURES + 1);
+    request(tab.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, MAX_OPEN_CAPTURES + 1);
+    filterFor(fake, ids[1] ?? "")?.fail("Invalid request ID");
+    request(tab.id, `${SITE}/api`);
+    assert.equal(fake.streamFilters.length, MAX_OPEN_CAPTURES + 2);
+  });
+
+  it("counts bodies in the page's bound, dropping the oldest bodies first while they take most", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const body = "b".repeat(32_768);
+    // 411 small requests, then about 1,900,000 characters of headers in 19: with 70 bodies, the
+    // page holds exactly 500 requests.
+    for (let index = 0; index < 411; index += 1) {
+      request(tab.id, `${SITE}/image`, { type: "image" });
+    }
+    for (let index = 0; index < 19; index += 1) headersRequest(fake, request, tab.id, "/headers");
+    for (let index = 0; index < 70; index += 1) {
+      respond(fake, tab.id, request(tab.id, `${SITE}/body`), body);
+    }
+    const result = read(tab.id);
+    assert.equal(result.truncated, false);
+    assert.equal(result.requests.length, MAX_NETWORK_REQUESTS);
+    const kept = result.requests.filter((entry) => entry.responseBody !== undefined);
+    assert.ok(kept.length > MAX_LOG_CHARS / 2 / body.length && kept.length < 70);
+    // The newest bodies are the ones kept.
+    assert.equal(
+      result.requests.findIndex((entry) => entry.responseBody !== undefined),
+      MAX_NETWORK_REQUESTS - kept.length,
+    );
+    assert.ok(charsIn(result) <= MAX_LOG_CHARS);
+    // Bodies go until they take half or less, then the oldest requests, the body-less ones too.
+    for (let index = 0; index < 25; index += 1) headersRequest(fake, request, tab.id, "/more");
+    const later = read(tab.id);
+    assert.equal(later.truncated, true);
+    assert.equal(later.requests.filter((entry) => entry.url === `${SITE}/more`).length, 25);
+    assert.equal(later.requests[0]?.responseBody?.text, body);
+    assert.ok(charsIn(later) <= MAX_LOG_CHARS);
+    assert.ok(charsIn(later) > MAX_LOG_CHARS - body.length - 100);
+  });
+
+  it("drops requests, not bodies, once the bodies left take half the bound or less", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const body = "o".repeat(32_768);
+    // 61 bodies take just under half the bound.
+    for (let index = 0; index < 61; index += 1) {
+      respond(fake, tab.id, request(tab.id, `${SITE}/old?n=${index}`), body);
+    }
+    // The 20th pushes the page over the bound: the oldest request goes, with its body.
+    for (let index = 0; index < 20; index += 1) headersRequest(fake, request, tab.id, "/headers");
+    assert.equal(read(tab.id).requests[0]?.url, `${SITE}/old?n=1`);
+    // Back at 61 bodies, over the bound again: the oldest request goes, not just its body.
+    respond(fake, tab.id, request(tab.id, `${SITE}/new`), body);
+    const result = read(tab.id);
+    assert.equal(result.requests[0]?.url, `${SITE}/old?n=2`);
+    assert.equal(result.requests[0]?.responseBody?.text, body);
+    assert.equal(result.requests.length, 59 + 20 + 1);
+  });
+
+  it("releases the capture of a request the count bound drops", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const open = request(tab.id, `${SITE}/open`);
+    filterFor(fake, open)?.data("{");
+    for (let index = 0; index < MAX_NETWORK_REQUESTS - 1; index += 1) {
+      request(tab.id, `${SITE}/image`, { type: "image" });
+    }
+    assert.equal(filterFor(fake, open)?.status, "transferringdata");
+    assert.equal(read(tab.id).requests[0]?.url, `${SITE}/open`);
+    request(tab.id, `${SITE}/image`, { type: "image" });
+    assert.equal(filterFor(fake, open)?.status, "disconnected");
+  });
+});
+
+/** Starts a fetch of the tab whose request headers take about 100,500 characters. */
+function headersRequest(
+  fake: Context["fake"],
+  request: Context["request"],
+  tabId: number,
+  path: string,
+): void {
+  const requestId = request(tabId, `${SITE}${path}`);
+  fake.emitWebRequest("onSendHeaders", {
+    requestId,
+    tabId,
+    timeStamp: 1001,
+    requestHeaders: bigHeaders(100),
+  });
+}
+
+/** The characters of every string of the requests, as the page's bound counts them. */
+function charsIn(result: Result<"read_network">): number {
+  let chars = 0;
+  for (const request of result.requests) {
+    chars += request.url.length + request.method.length + request.type.length;
+    chars += (request.redirectUrl?.length ?? 0) + (request.error?.length ?? 0);
+    for (const { name, value } of [
+      ...(request.requestHeaders ?? []),
+      ...(request.responseHeaders ?? []),
+    ]) {
+      chars += name.length + value.length;
+    }
+    chars += request.responseBody?.text.length ?? 0;
+  }
+  return chars;
+}
+
+/** A tab of s1 whose page on A is live, with the session's site check read. */
+async function liveTab(tabIn: Context["tabIn"]): Promise<FakeTab> {
+  const tab = await tabIn("s1", URL_A);
+  await flush();
+  return tab;
+}
+
+/** The latest filter made for the request. */
+function filterFor(fake: Context["fake"], requestId: string): FakeStreamFilter | undefined {
+  return fake.streamFilters.findLast((filter) => filter.requestId === requestId);
+}
+
+/** The holds currently added: the blocking listeners. */
+function holdsOf(fake: Context["fake"]): Context["fake"]["webRequestRegistrations"] {
+  return fake
+    .activeWebRequestRegistrations()
+    .filter((registration) => registration.extraInfoSpec?.includes("blocking") === true);
+}
+
+function headersOf(
+  tabId: number,
+  requestId: string,
+  statusCode = 200,
+  contentType = "application/json",
+): HeadersReceivedDetails {
+  return {
+    requestId,
+    tabId,
+    timeStamp: 1100,
+    statusCode,
+    responseHeaders: [{ name: "Content-Type", value: contentType }],
+  };
+}
+
+function redirectOf(tabId: number, requestId: string, redirectUrl: string): RedirectDetails {
+  return { requestId, tabId, timeStamp: 1050, statusCode: 302, redirectUrl, fromCache: false };
+}
+
+/** The response arrives whole through the request's filter: headers, the text, the end. */
+function respond(
+  fake: Context["fake"],
+  tabId: number,
+  requestId: string,
+  text: string,
+  statusCode = 200,
+  contentType = "application/json",
+): void {
+  fake.emitWebRequest("onHeadersReceived", headersOf(tabId, requestId, statusCode, contentType));
+  const filter = filterFor(fake, requestId);
+  filter?.data(text);
+  // Firefox can report the end before the filter's stop; then only the stored body trims the log.
+  fake.emitWebRequest("onCompleted", {
+    requestId,
+    tabId,
+    timeStamp: 1200,
+    statusCode,
+    fromCache: false,
+  });
+  filter?.stop();
+}
+
+/**
+ * Makes `access.view` wait, call by call, for the holds taken: each `hold()` returns the release
+ * of the next call not yet held.
+ */
+function holdViews(t: TestContext, access: Context["access"]): () => () => void {
+  const holds: Promise<void>[] = [];
+  const view = access.view;
+  t.mock.method(access, "view", async (session: string) => {
+    const hold = holds.shift();
+    if (hold !== undefined) await hold;
+    return view(session);
+  });
+  return () => {
+    const { promise, resolve } = Promise.withResolvers<void>();
+    holds.push(promise);
+    return () => resolve();
+  };
+}
 
 function bytesOf(text: string): ArrayBuffer {
   const bytes = new TextEncoder().encode(text);

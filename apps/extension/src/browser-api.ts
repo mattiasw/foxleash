@@ -127,7 +127,11 @@ export interface BrowserApi {
     /** A frame's document finished parsing. */
     onDOMContentLoaded: BrowserEvent<(details: DocumentDetails) => void>;
   };
-  /** Non-blocking listeners only: Foxleash watches requests and never blocks or changes one. */
+  /**
+   * Listeners never block or change a request. A recorded tab's hold is registered "blocking"
+   * only so Firefox lets Foxleash filter that tab's fetch and XHR responses, and returns at once
+   * (ADR 0071).
+   */
   webRequest: {
     onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
     onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>;
@@ -135,6 +139,8 @@ export interface BrowserApi {
     onBeforeRedirect: WebRequestEvent<(details: RedirectDetails) => void>;
     onCompleted: WebRequestEvent<(details: CompletedDetails) => void>;
     onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>;
+    /** Throws when Firefox refuses to filter the request. */
+    filterResponseData(requestId: string): StreamFilter;
   };
   downloads: {
     /** Resolves to the new download's id; rejects when Firefox refuses the options. */
@@ -168,10 +174,26 @@ export interface DownloadDelta {
 export interface WebRequestEvent<Listener> {
   addListener(
     listener: Listener,
-    filter: { urls: string[] },
-    extraInfoSpec?: ("requestHeaders" | "responseHeaders" | "requestBody")[],
+    filter: { urls: string[]; types?: string[]; tabId?: number },
+    extraInfoSpec?: ("requestHeaders" | "responseHeaders" | "requestBody" | "blocking")[],
   ): void;
   removeListener(listener: Listener): void;
+}
+
+/**
+ * Firefox's webRequest StreamFilter: once attached, the page gets only what `write` passes on,
+ * until `close` or `disconnect`. `disconnect` hands the rest of the response back to Firefox; it
+ * throws before the filter started.
+ */
+export interface StreamFilter {
+  onstart: (() => void) | null;
+  ondata: ((event: { data: ArrayBuffer }) => void) | null;
+  onstop: (() => void) | null;
+  onerror: (() => void) | null;
+  write(data: ArrayBuffer | Uint8Array): void;
+  close(): void;
+  disconnect(): void;
+  readonly error: string;
 }
 
 /** What every `webRequest` event carries, as far as the extension reads it. */

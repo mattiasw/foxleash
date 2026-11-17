@@ -133,7 +133,9 @@ Text results never return the values of these fields, only whether they are fill
   them.
 
 Firefox fills saved passwords into login pages when they load, and a page you approved could
-otherwise hand yours to the agent. A field that is none of these still shows its value.
+otherwise hand yours to the agent. A field that is none of these still shows its value. The text
+of a network response that `read_network` returns can still contain such a value when the site
+sends it back (see [Response bodies](#response-bodies)).
 
 ### A password field that the page changes
 
@@ -235,6 +237,52 @@ Exceptions and limits:
   turns from `json` to `other`. An agent that can make the page send about 16 MiB in another
   field of the same body can find the body's exact length from where it turns.
 - Requests of frames from other sites show the shapes of their bodies too.
+- A response body can repeat what a request sent (see [Response bodies](#response-bodies)).
+
+### Response bodies
+
+With `responseBody`, `read_network` returns the text of the responses to a page's fetch and
+XMLHttpRequest requests, as they arrived (ADR 0071):
+
+- Only responses to requests whose own URL is on a site the session may act on: approved and not
+  on the blocklist. This is stricter than the request list, which includes the requests of frames
+  from other sites, blocklisted ones included. Foxleash checks it when the request starts and
+  again before it keeps the body, against a copy of your approvals and blocklist that it forgets
+  at once whenever they change; without a current copy it captures nothing and gives no body.
+  When a site stops being approved or is blocklisted, Foxleash forgets the bodies it kept from it.
+- Only fetch and XMLHttpRequest, never page loads, scripts, images or other resources, and only
+  text content types.
+- At most 65,536 bytes are copied of each response, and the text is cut to 32,768 characters. At
+  most 64 responses of a page are copied at once, and bodies count toward the page's 4,000,000
+  characters.
+- As a best effort, the values of access, refresh and ID token fields and JWT-shaped strings are
+  replaced with `[redacted]` before the text is cut, also when the text ends inside one. A
+  response whose charset can decode ASCII bytes to other characters (UTF-16, ISO-2022-JP,
+  Shift_JIS, GBK, gb18030, Big5, EUC-KR) is not kept, since it could hide a token from the
+  redaction.
+- Foxleash writes each chunk of the response on to the page before it copies anything, and never
+  changes one. It disconnects from the response at the copy limit and on any fault, redirect,
+  error or end of recording, so the page gets the rest from Firefox; when Foxleash's background
+  stops in the middle of a response, the page still gets all of it.
+- Nothing from before recording began, and nothing from a gap: a response still arriving when
+  recording stops is never kept.
+- Firefox lets an add-on read a response only for a request one of its blocking listeners saw. So
+  while a tab of the agent's group is being recorded, Foxleash keeps one blocking listener for
+  that tab's fetch and XMLHttpRequest requests, which returns at once. Those requests wait for
+  Foxleash's background to answer it: a fraction of a millisecond on average when it is running,
+  tens to hundreds of milliseconds when Firefox had suspended it. Other tabs are never held.
+
+Exceptions and limits:
+
+- A response can repeat what a request sent, protected values included, such as a save that
+  echoes a form Firefox filled in, or a page fragment with a value the server put into a field.
+- A frame from another site that fetches from an approved site has that response captured,
+  because the rule is the request's own URL.
+- A response the page itself cannot read, such as a `no-cors` fetch or one that fails its CORS
+  check, is captured when its URL is on an approved site.
+- The redaction misses other names (`token`, `session`, `apiKey`), keys written with escapes or
+  inside a JSON string that holds JSON (unless the value is a JWT), a token value that is not a
+  string, an XML element with attributes, and a body encoded another way, such as base64.
 
 ## Saved screenshots
 

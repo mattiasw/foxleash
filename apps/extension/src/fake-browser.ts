@@ -16,6 +16,7 @@ import type {
   Port,
   RuntimePort,
   StorageChange,
+  StreamFilter,
   Tab,
   TabChangeInfo,
   TabGroup,
@@ -185,11 +186,20 @@ export interface FakeBrowser {
   listenerCount(): number;
   /** Every `webRequest` listener added, in order, with the filter and extra info it was given. */
   webRequestRegistrations: WebRequestRegistration[];
-  /** Fires a `webRequest` event; returns what each listener returned, in order. */
+  /** The `webRequest` listeners still added, in the order added. */
+  activeWebRequestRegistrations(): WebRequestRegistration[];
+  /**
+   * Fires a `webRequest` event at each listener whose filter's tabId and types match it; returns
+   * what each returned, in order.
+   */
   emitWebRequest<E extends WebRequestEventName>(
     event: E,
     details: WebRequestDetailsOf<E>,
   ): unknown[];
+  /** Every filter `webRequest.filterResponseData` made, in order. */
+  streamFilters: FakeStreamFilter[];
+  /** Makes every later `webRequest.filterResponseData` throw while true. */
+  failFilterResponseData: boolean;
   /** Every `downloads.download` call, in order. */
   downloadCalls: DownloadCall[];
   /** The downloads Firefox knows, by id, as `downloads.search` answers for them. */
@@ -227,7 +237,7 @@ export interface DownloadCall {
 export const FAKE_DOWNLOAD_FOLDER = "/home/user/Downloads";
 
 type WebRequestEvents = BrowserApi["webRequest"];
-export type WebRequestEventName = keyof WebRequestEvents;
+export type WebRequestEventName = Exclude<keyof WebRequestEvents, "filterResponseData">;
 type WebRequestListenerOf<E extends WebRequestEventName> = Parameters<
   WebRequestEvents[E]["addListener"]
 >[0];
@@ -237,8 +247,36 @@ export type WebRequestDetailsOf<E extends WebRequestEventName> = Parameters<
 
 export interface WebRequestRegistration {
   event: WebRequestEventName;
-  filter: { urls: string[] };
+  filter: { urls: string[]; types?: string[]; tabId?: number };
   extraInfoSpec?: string[];
+}
+
+/**
+ * A StreamFilter a test drives: its events fire only from `start`, `data`, `stop` and `fail`, and
+ * none after a disconnect, a close or an error. As in Firefox, `disconnect` throws before the start.
+ */
+export interface FakeStreamFilter extends StreamFilter {
+  requestId: string;
+  status:
+    | "uninitialized"
+    | "transferringdata"
+    | "finishedtransferringdata"
+    | "closed"
+    | "disconnected"
+    | "failed";
+  /** A copy of each chunk `write` passed on, in order. */
+  written: Uint8Array[];
+  closes: number;
+  disconnects: number;
+  /** Makes every later `write` throw while true. */
+  failWrite: boolean;
+  start(): void;
+  /** Starts the filter first when it has not started. */
+  data(chunk: Uint8Array | string): void;
+  stop(): void;
+  fail(message: string): void;
+  /** What `write` passed on, decoded as UTF-8. */
+  writtenText(): string;
 }
 
 export interface FakeTab {
@@ -368,7 +406,10 @@ export function createFakeBrowser(): FakeBrowser {
     number,
     { handler: ContentScript; pending: Set<(error: Error) => void> }
   >();
-  const webRequestListeners = new Map<WebRequestEventName, Set<(details: never) => void>>();
+  const webRequestListeners = new Map<
+    WebRequestEventName,
+    Map<(details: never) => unknown, WebRequestRegistration>
+  >();
   const onDownloadChanged = createEvent<(delta: DownloadDelta) => void>();
   let downloadFailure: { error: unknown } | undefined;
   let cancelFailure: { error: unknown } | undefined;
@@ -621,6 +662,12 @@ export function createFakeBrowser(): FakeBrowser {
       onBeforeRedirect: createWebRequestEvent("onBeforeRedirect"),
       onCompleted: createWebRequestEvent("onCompleted"),
       onErrorOccurred: createWebRequestEvent("onErrorOccurred"),
+      filterResponseData: (requestId) => {
+        if (fake.failFilterResponseData) throw new Error("Invalid request ID");
+        const filter = createFakeStreamFilter(requestId);
+        fake.streamFilters.push(filter);
+        return filter;
+      },
     },
     downloads: {
       download: async (options) => {
@@ -838,12 +885,25 @@ export function createFakeBrowser(): FakeBrowser {
     },
     listenerCount: () => updatedListeners.length,
     webRequestRegistrations: [],
+    activeWebRequestRegistrations: () => {
+      const active = new Set(
+        [...webRequestListeners.values()].flatMap((listeners) => [...listeners.values()]),
+      );
+      return fake.webRequestRegistrations.filter((registration) => active.has(registration));
+    },
     emitWebRequest: (event, details) => {
       latestTimeStamp = Math.max(latestTimeStamp, details.timeStamp);
-      return [...(webRequestListeners.get(event) ?? [])].map(
-        (listener: (details: never) => unknown) => listener(details as never),
-      );
+      const type = "type" in details ? details.type : undefined;
+      return [...(webRequestListeners.get(event) ?? [])]
+        .filter(
+          ([, { filter }]) =>
+            (filter.tabId === undefined || filter.tabId === details.tabId) &&
+            (filter.types === undefined || type === undefined || filter.types.includes(type)),
+        )
+        .map(([listener]) => listener(details as never));
     },
+    streamFilters: [],
+    failFilterResponseData: false,
     downloadCalls: [],
     downloads: new Map(),
     downloadState: "complete",
@@ -883,14 +943,14 @@ export function createFakeBrowser(): FakeBrowser {
   function createWebRequestEvent<E extends WebRequestEventName>(
     event: E,
   ): WebRequestEvent<WebRequestListenerOf<E>> {
-    const listeners = new Set<(details: never) => void>();
+    const listeners = new Map<(details: never) => unknown, WebRequestRegistration>();
     webRequestListeners.set(event, listeners);
     return {
       addListener: (listener, filter, extraInfoSpec) => {
         const registration: WebRequestRegistration = { event, filter: structuredClone(filter) };
         if (extraInfoSpec !== undefined) registration.extraInfoSpec = [...extraInfoSpec];
         fake.webRequestRegistrations.push(registration);
-        listeners.add(listener);
+        listeners.set(listener, registration);
       },
       removeListener: (listener) => listeners.delete(listener),
     };
@@ -1133,6 +1193,70 @@ function frameOf(tabId: number, frameId: number): FrameDetails {
     documentId: `document-${tabId}-${frameId}`,
     parentFrameId: frameId === 0 ? -1 : 0,
   };
+}
+
+function createFakeStreamFilter(requestId: string): FakeStreamFilter {
+  const filter: FakeStreamFilter = {
+    requestId,
+    status: "uninitialized",
+    error: "",
+    written: [],
+    closes: 0,
+    disconnects: 0,
+    failWrite: false,
+    onstart: null,
+    ondata: null,
+    onstop: null,
+    onerror: null,
+    write: (data) => {
+      if (filter.failWrite || !transferring()) throw new Error("NS_ERROR_FAILURE");
+      filter.written.push(new Uint8Array(data instanceof Uint8Array ? data : data.slice(0)));
+    },
+    close: () => {
+      if (!transferring()) throw new Error("NS_ERROR_FAILURE");
+      filter.closes += 1;
+      filter.status = "closed";
+    },
+    disconnect: () => {
+      if (!transferring()) throw new Error("NS_ERROR_FAILURE");
+      filter.disconnects += 1;
+      filter.status = "disconnected";
+    },
+    start: () => {
+      if (filter.status !== "uninitialized") return;
+      filter.status = "transferringdata";
+      filter.onstart?.();
+    },
+    data: (chunk) => {
+      filter.start();
+      if (filter.status !== "transferringdata") return;
+      const bytes = typeof chunk === "string" ? new TextEncoder().encode(chunk) : chunk;
+      const data = new ArrayBuffer(bytes.byteLength);
+      new Uint8Array(data).set(bytes);
+      filter.ondata?.({ data });
+    },
+    stop: () => {
+      filter.start();
+      if (filter.status !== "transferringdata") return;
+      filter.status = "finishedtransferringdata";
+      filter.onstop?.();
+    },
+    fail: (message) => {
+      if (!["uninitialized", "transferringdata"].includes(filter.status)) return;
+      filter.status = "failed";
+      Object.assign(filter, { error: message });
+      filter.onerror?.();
+    },
+    writtenText: () => {
+      const decoder = new TextDecoder();
+      return filter.written.map((chunk) => decoder.decode(chunk, { stream: true })).join("");
+    },
+  };
+  return filter;
+
+  function transferring(): boolean {
+    return filter.status === "transferringdata" || filter.status === "finishedtransferringdata";
+  }
 }
 
 function createEvent<Listener>(): BrowserEvent<Listener> & { listeners: Set<Listener> } {

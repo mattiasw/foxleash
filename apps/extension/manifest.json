@@ -31,6 +31,8 @@
     "tabGroups",
     "scripting",
     "webRequest",
+    "webRequestBlocking",
+    "webRequestFilterResponse",
     "webNavigation",
     "storage",
     "downloads"

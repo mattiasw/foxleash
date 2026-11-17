@@ -1,5 +1,5 @@
 /** Bump when a message shape or method contract changes incompatibly. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 
 /** The native messaging host name, as registered with Firefox. */
 export const NATIVE_HOST_NAME = "foxleash";
