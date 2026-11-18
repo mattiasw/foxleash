@@ -110,6 +110,14 @@
         },
         {
           "file": "apps/extension/src/file-guard.ts",
+          "contains": "browser.webNavigation.onCreatedNavigationTarget.addListener(tie);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "const tie = await entry.tie;"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
           "contains": "if (view.allowed(details.url)) return undefined;"
         },
         { "file": "apps/extension/src/file-guard.ts", "contains": "return { cancel: true };" },

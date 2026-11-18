@@ -539,16 +539,19 @@ whose answer is a file. A page on a site you approved could use that to get a fi
 have not approved, or that is on the blocklist, saved into your download folder, which is an
 upload folder by default: with a link that redirects there, or with its own scripts.
 
-So in the tabs of an agent's tab group, Foxleash stops a page or frame load whose answer comes
-from a site that session may not act on (not approved, or on the blocklist) and is anything other
-than a web page: a file Firefox would save, or a PDF, an image, plain text or another document
-that it would show. Nothing of it is saved or shown, and the tab keeps the page it had (ADR 0081).
+So in the tabs of an agent's tab group, and in a window or tab that a page in them opens,
+Foxleash stops a page or frame load whose answer comes from a site that session may not act on
+(not approved, or on the blocklist) and is anything other than a web page: a file Firefox would
+save, or a PDF, an image, plain text or another document that it would show. Nothing of it is
+saved or shown, and the tab keeps the page it had (ADR 0081). A window that a page in the agent's
+tabs opens, or that a page in such a window opens, is covered like those tabs until it closes,
+though the agent cannot reach it (ADR 0089).
 
 What the agent learns:
 
 - The result of an action (`click`, `type`, `press_key` and the others) lists the site in
-  `refusedFiles` when the load was stopped during the action or its wait, in the tab or in a tab
-  the action opened.
+  `refusedFiles` when the load was stopped during the action or its wait, in the tab, in a tab
+  the action opened, or in a window opened from the tab, by its page or by you.
 - `tab_open`, and `navigate` with a URL, a reload or a step back or forward that Foxleash loads
   again, fail at once when the tab's own load is stopped, saying that a file from that site was
   stopped and that the site must be approved first. So does a call whose page loaded and then
@@ -569,12 +572,18 @@ Exceptions and limits:
 
 - The request still reaches that site, with the cookies Firefox sends for it. Only its answer is
   stopped.
-- Foxleash sees only answers that come from the network or from Firefox's cache to a tab of the
-  group. Still saved are: an answer that such a site's own service worker gives; a file that a
-  page of such a site builds itself, when the tab or a frame shows that page; and a file loaded in
-  a window, not a tab, that a page opens, which Firefox allows only where you allowed pop-ups for
-  the page's site.
-- Tabs outside every agent's tab group are not covered: files load in them as before.
+- Foxleash sees only answers that come from the network or from Firefox's cache. Still saved are:
+  an answer that such a site's own service worker gives, and a file that a page of such a site
+  builds itself, when the tab or a frame shows that page.
+- A window that a page in those tabs opens is not covered when the tab that opened it closes
+  before Foxleash has looked that tab up, a matter of milliseconds, unless another tab of the
+  group opened that tab. A page may be able to close its own tab that fast while the tab has
+  shown only that page.
+- A window or tab you open from one of those tabs yourself, such as with Open Link in New Window,
+  is covered too until it closes, so a file from a site the session may not act on is stopped
+  there as well. Possibly not the first address it loads: Foxleash may hear of such a window only
+  after that load began.
+- Other tabs outside every agent's tab group are not covered: files load in them as before.
 - A page or frame from such a site that is not HTML, such as a PDF or an image opened as a page,
   is no longer shown in the group's tabs. Images and other parts that a page embeds are not
   affected, and neither is a PDF or another document in an `<object>` or `<embed>` element.
@@ -582,12 +591,13 @@ Exceptions and limits:
   also from sites you approved.
 - When a session ended, the tabs left in its group stay covered, judged by the sites you allowed
   always: a file from a site you allowed only for that session no longer loads there. Moving the
-  tab out of the group ends that.
-- A new tab that a page opened for such a file stays open, blank.
+  tab out of the group ends that, unless another tab of the group opened it.
+- A new tab or window that a page opened for such a file stays open, blank.
 - Foxleash knows an agent's tab group only in its background's memory. After a Firefox restart,
-  or an update or reload of the extension, the tabs of a group from before are no longer covered.
+  or an update or reload of the extension, the tabs of a group from before, and windows opened
+  from them, are no longer covered.
 - From the first agent session until Firefox restarts or the extension is updated or reloaded,
   Foxleash's blocking listener sees the answer to every page and frame load in every tab. It
   answers at once for a web page and for the two kinds of answer it lets through. For any other
-  answer it first looks up the tab, and for a tab of an agent's group reads your settings, before
-  the answer goes on or is stopped.
+  answer it first looks up the tab and the tabs that opened it, one after the other, and for a
+  tab it covers reads your settings, before the answer goes on or is stopped.

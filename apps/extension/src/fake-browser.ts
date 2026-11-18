@@ -3,6 +3,7 @@ import type {
   BrowserEvent,
   BrowserWindow,
   CaptureOptions,
+  CreatedNavigationTargetDetails,
   CssInjection,
   DocumentDetails,
   DownloadDelta,
@@ -119,6 +120,9 @@ export interface FakeBrowser {
    */
   emitCommitted(details: Omit<NavigationDetails, "timeStamp"> & { timeStamp?: number }): void;
   committedListenerCount(): number;
+  /** Fires `webNavigation.onCreatedNavigationTarget`. */
+  emitCreatedNavigationTarget(details: CreatedNavigationTargetDetails): void;
+  createdNavigationTargetListenerCount(): number;
   /**
    * Whether `tabs.create` fires `webNavigation.onCommitted` for the created tab's top frame and
    * URL, as Firefox's own load of it does; true by default. `openTab` and a `discarded` create,
@@ -400,6 +404,8 @@ export function createFakeBrowser(): FakeBrowser {
   const onNavigationCompleted = createEvent<(details: NavigationDetails) => void>();
   const onHistoryStateUpdated = createEvent<(details: NavigationDetails) => void>();
   const onDOMContentLoaded = createEvent<(details: DocumentDetails) => void>();
+  const onCreatedNavigationTarget =
+    createEvent<(details: CreatedNavigationTargetDetails) => void>();
   // The latest timeStamp a commit or a webRequest event carried.
   let latestTimeStamp = 0;
   let keptInMemory: ((url: string) => boolean) | undefined;
@@ -662,6 +668,7 @@ export function createFakeBrowser(): FakeBrowser {
       onCompleted: onNavigationCompleted,
       onHistoryStateUpdated,
       onDOMContentLoaded,
+      onCreatedNavigationTarget,
     },
     webRequest: {
       onBeforeRequest: createWebRequestEvent("onBeforeRequest"),
@@ -786,6 +793,10 @@ export function createFakeBrowser(): FakeBrowser {
     beforeNavigateListenerCount: () => onBeforeNavigate.listeners.size,
     emitCommitted: (details) => emitNavigation(onCommitted, details),
     committedListenerCount: () => onCommitted.listeners.size,
+    emitCreatedNavigationTarget: (details) => {
+      for (const listener of [...onCreatedNavigationTarget.listeners]) listener({ ...details });
+    },
+    createdNavigationTargetListenerCount: () => onCreatedNavigationTarget.listeners.size,
     commitOnCreate: true,
     modelDocuments: (kept) => {
       keptInMemory = kept;

@@ -95,6 +95,8 @@ export const TITLES = {
   foreignLinks: "Fixture foreign links",
   foreignScript: "Fixture foreign script",
   foreignFrame: "Fixture foreign frame",
+  foreignWindows: "Fixture foreign windows",
+  foreignWindowScript: "Fixture foreign window script",
   foreignPage: "Fixture foreign page",
   foreignWarmed: "Fixture foreign warmed",
 } as const;
@@ -1115,6 +1117,10 @@ function sendForeign(path: string, request: IncomingMessage, response: ServerRes
     sendHtml(response, foreignScriptPage(other));
   } else if (path === "/foreign/frame") {
     sendHtml(response, foreignFramePage(other));
+  } else if (path === "/foreign/windows") {
+    sendHtml(response, FOREIGN_WINDOWS_PAGE);
+  } else if (path === "/foreign/window-script") {
+    sendHtml(response, foreignWindowScriptPage(other));
   } else if (path.startsWith(FOREIGN_GO)) {
     // From the approved site to the same path's end on the other site.
     response.writeHead(302, { Location: `${other}/foreign/${path.slice(FOREIGN_GO.length)}` });
@@ -2787,6 +2793,27 @@ statement.addEventListener("change", async () => {
 </body></html>
 `;
 
+// On the approved site: buttons that open a pop-up window, one on the redirect to the other site's
+// export and one on a file of the approved site itself. The page keeps the window in window.popup.
+const FOREIGN_WINDOWS_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignWindows}</title></head>
+<body>
+<main>
+<button id="export" type="button">Export in a window</button>
+<button id="own" type="button">Own file in a window</button>
+</main>
+<script>
+const FEATURES = "popup,width=400,height=300";
+document.getElementById("export").addEventListener("click", () => {
+  window.popup = window.open(${JSON.stringify(`${FOREIGN_GO}export.csv`)}, "_blank", FEATURES);
+});
+document.getElementById("own").addEventListener("click", () => {
+  window.popup = window.open("/download/data.bin", "_blank", FEATURES);
+});
+</script>
+</body></html>
+`;
+
 // On the other site, in a tab of the user's own: fetches the address in its query, so Firefox's
 // cache holds the answer, then says so in its title.
 const FOREIGN_WARM_PAGE = `<!doctype html>
@@ -2813,6 +2840,28 @@ addEventListener("load", () => {
   setTimeout(() => {
     location.href = ${JSON.stringify(`${other}/foreign/export.csv`)};
   }, ${FOREIGN_SCRIPT_MS});
+});
+</script>
+</body></html>
+`;
+}
+
+/**
+ * On the approved site: opens a pop-up window on the other site's export by itself, on its load.
+ * The page keeps the window in window.popup.
+ */
+function foreignWindowScriptPage(other: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignWindowScript}</title></head>
+<body>
+<p>Opening a window</p>
+<script>
+addEventListener("load", () => {
+  window.popup = window.open(
+    ${JSON.stringify(`${other}/foreign/export.csv`)},
+    "_blank",
+    "popup,width=400,height=300",
+  );
 });
 </script>
 </body></html>

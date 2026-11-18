@@ -102,12 +102,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refuses the action, and the agent asks you to send the form.
 - A page on a site you approved can no longer get Firefox to save a file from a site you have not
   approved or have blocked into your download folder, from where `upload_file` could hand it to
-  that page. In the tabs of an agent's tab group, Foxleash now stops a page or frame load whose
-  answer comes from such a site and is anything other than a web page; the agent's action says
-  that the file was stopped, and `tab_open` and `navigate` fail at once saying that the site must
-  be approved first. The request still reaches that site, and a file that such a site's own
-  service worker or page produces, or that loads in a pop-up window or in a tab left in a group
-  from before Firefox restarted or Foxleash was updated, is still saved.
+  that page. In the tabs of an agent's tab group, and in a window or tab opened from them by a
+  page or by you, until it closes, Foxleash now stops a page or frame load whose answer comes
+  from such a site and is anything other than a web page; the agent's action says that the file
+  was stopped, and `tab_open` and `navigate` fail at once saying that the site must be approved
+  first. The request still reaches that site, and a file that such a site's own service worker
+  or page produces, or that loads in a tab left in a group from before Firefox restarted or
+  Foxleash was updated, is still saved.
 - The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an

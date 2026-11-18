@@ -1,7 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { HeadersReceivedDetails, HttpHeader } from "./browser-api.ts";
-import { createFakeBrowser, createFakeTimers, type FakeTab } from "./fake-browser.ts";
+import {
+  createFakeBrowser,
+  createFakeTimers,
+  type FakeBrowser,
+  type FakeTab,
+  flush,
+} from "./fake-browser.ts";
 import { createFileGuard, MAX_REFUSAL_TABS, MAX_REFUSALS } from "./file-guard.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite, saveBlocklist } from "./settings.ts";
@@ -11,6 +17,8 @@ import { createSiteAccess, type SessionMemory } from "./site-access.ts";
 const A = "https://a.example";
 /** Never approved unless a test does it. */
 const B = "https://b.example";
+/** A third site, never approved. */
+const C = "https://c.example";
 const HTML: HttpHeader[] = [{ name: "Content-Type", value: "text/html" }];
 const ATTACHMENT: HttpHeader[] = [
   { name: "Content-Type", value: "text/csv" },
@@ -39,6 +47,15 @@ describe("the file guard's listener", { timeout: 10000 }, () => {
     // A session that runs again adds no second one.
     access.admit("s1");
     assert.deepEqual(fake.webRequestRegistrations, [registration]);
+  });
+
+  it("hears of the tabs that tabs open from the first running session on, once", async () => {
+    const { fake, tabIn } = setup();
+    assert.equal(fake.createdNavigationTargetListenerCount(), 0);
+    await tabIn("s1");
+    assert.equal(fake.createdNavigationTargetListenerCount(), 1);
+    await tabIn("s2");
+    assert.equal(fake.createdNavigationTargetListenerCount(), 1);
   });
 
   it("hears no response before a session ran", () => {
@@ -239,6 +256,173 @@ describe("a file the guard lets through after its lookup", { timeout: 10000 }, (
   });
 });
 
+describe("a tab or window opened from another tab", { timeout: 10000 }, () => {
+  it("is judged as the session of its opener's group, its refusal listed for both", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    assert.equal(await verdict(respond({ tabId: window.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+  });
+
+  it("lets a file of a site the session may act on load", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    assert.equal(await verdict(respond({ tabId: window.id, url: `${A}/export` })), "passed");
+    assert.deepEqual(guard.refusedSince(window.id, 0), []);
+    assert.deepEqual(guard.refusedSince(opener.id, 0), []);
+  });
+
+  it("is judged by the tab in a group that a chain of them began in", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const first = fake.openTab({ url: "about:blank" });
+    const second = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, first);
+    await flush();
+    opens(fake, first, second);
+    assert.equal(await verdict(respond({ tabId: second.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(first.id, 0), []);
+    assert.deepEqual(guard.refusedSince(second.id, 0), [B]);
+  });
+
+  it("is no session's when its opener is no session's", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, own, window);
+    assert.equal(await verdict(respond({ tabId: window.id })), "passed");
+    assert.deepEqual(guard.refusedSince(window.id, 0), []);
+    assert.deepEqual(guard.refusedSince(own.id, 0), []);
+  });
+
+  it("is no session's when its opener is gone, and leaves no rejection unhandled", async () => {
+    const { fake, tabIn, respond } = setup();
+    await tabIn("s1");
+    const gone = fake.openTab({ url: `${A}/page` });
+    fake.removeTab(gone.id);
+    const window = fake.openTab({ url: "about:blank" });
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", collect);
+    try {
+      opens(fake, gone, window);
+      await flush();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", collect);
+    }
+    assert.equal(await verdict(respond({ tabId: window.id })), "passed");
+  });
+
+  it("takes its opener's own tie when the opener is gone by the time it is looked up", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const first = fake.openTab({ url: "about:blank" });
+    const second = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, first);
+    await flush();
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = (tabId) =>
+      tabId === first.id ? Promise.reject(new Error("No tab.")) : get(tabId);
+    opens(fake, first, second);
+    assert.equal(await verdict(respond({ tabId: second.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+  });
+
+  it("is tied when its opener closes while the opener is looked up", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const first = fake.openTab({ url: "about:blank" });
+    const second = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, first);
+    await flush();
+    opens(fake, first, second);
+    fake.removeTab(first.id);
+    assert.equal(await verdict(respond({ tabId: second.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+  });
+
+  it("passes on no tie once it closed", async () => {
+    const { fake, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    await flush();
+    fake.removeTab(window.id);
+    const next = fake.openTab({ url: "about:blank" });
+    opens(fake, window, next);
+    assert.equal(await verdict(respond({ tabId: next.id })), "passed");
+  });
+
+  it("is still refused a file when it closes while that file is judged", async () => {
+    const { fake, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    await flush();
+    const answer = respond({ tabId: window.id });
+    fake.removeTab(window.id);
+    assert.deepEqual(await answer, { cancel: true });
+  });
+
+  it("is judged as the session of a group it joins, and its refusal there is not the opener's", async () => {
+    const { fake, access, groups, sessions, guard, respond, tabIn } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    assert.equal(await verdict(respond({ tabId: window.id, timeStamp: 1000 })), "cancelled");
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+    access.admit("s2");
+    await groups.ensureGroup("s2", window);
+    sessions.set("s2", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    assert.equal(await verdict(respond({ tabId: window.id, timeStamp: 2000 })), "passed");
+    const third = { tabId: window.id, url: `${C}/export`, timeStamp: 3000 };
+    assert.equal(await verdict(respond(third)), "cancelled");
+    assert.deepEqual(guard.refusedSince(window.id, 3000), [C]);
+    assert.deepEqual(guard.refusedSince(opener.id, 3000), []);
+  });
+
+  it("is judged as the session its opener joined after opening it", async () => {
+    const { fake, groups, guard, tabIn, respond } = setup();
+    await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, own, window);
+    await flush();
+    await groups.ensureGroup("s1", own);
+    assert.equal(await verdict(respond({ tabId: window.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(own.id, 0), [B]);
+  });
+
+  it("is refused under its own id only to the refusal listeners", async () => {
+    const { fake, guard, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    opens(fake, opener, window);
+    assert.equal(await verdict(respond({ tabId: window.id })), "cancelled");
+    assert.deepEqual(heard, [[window.id, B, 0]]);
+  });
+
+  it("is refused a file that arrives before its opener was looked up", async () => {
+    const { fake, tabIn, respond } = setup();
+    const opener = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    const answer = respond({ tabId: window.id });
+    assert.deepEqual(await answer, { cancel: true });
+  });
+});
+
 describe("what counts as a file", { timeout: 10000 }, () => {
   const files: [string, Overrides][] = [
     ["an attachment that is HTML", page("text/html", "attachment")],
@@ -427,6 +611,17 @@ describe("onRefused", { timeout: 10000 }, () => {
     assert.deepEqual(heard, ["once", "each", "each"]);
   });
 });
+
+/** Fires what Firefox reports when a page in `source` opens `target`, a new tab or window. */
+function opens(fake: FakeBrowser, source: FakeTab, target: FakeTab): void {
+  fake.emitCreatedNavigationTarget({
+    sourceTabId: source.id,
+    sourceFrameId: 0,
+    tabId: target.id,
+    url: target.url,
+    timeStamp: 500,
+  });
+}
 
 /** How the guard answered: at once with nothing, or after its lookup. */
 async function verdict(answer: unknown): Promise<"passed at once" | "passed" | "cancelled"> {

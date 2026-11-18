@@ -407,7 +407,8 @@ onto the element.
   submit is not refused.
 - Firefox's pop-up blocker stops a link or form button that opens a new tab unless you allow
   pop-ups for the site; a new tab that does open joins the agent's tab group, while a new window
-  is out of the agent's reach.
+  is out of the agent's reach. Foxleash still stops a file there from a site the session may not
+  act on, as in its tabs.
 
 ### `type`
 
@@ -485,9 +486,10 @@ shows it), is still loading one, the page changed, nothing changed, the page was
 at 2 seconds, or the tab closed. It also lists tabs that opened in the agent's group and counts
 the requests the page began after the action.
 
-When the action led the tab, a frame in it or a tab it opened to load something other than a web
-page from a site the session may not act on, such as a link that redirects to another site's
-file, Foxleash stops that load and the result's `refusedFiles` lists the site. Nothing of the
+When the action led the tab, a frame in it, a tab it opened or a window opened from the tab to
+load something other than a web page from a site the session may not act on, such as a link that
+redirects to another site's file, Foxleash stops that load and the result's `refusedFiles` lists
+the site. Nothing of the
 file was saved, and it loads only once you approved its site, which `tab_open` or `navigate` to
 that site asks you for, unless the site is on the blocklist. The list holds what was stopped
 during the action and its wait, at most 20 sites; a load stopped later is in no result

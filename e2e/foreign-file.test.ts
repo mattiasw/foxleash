@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readdirSync } from "node:fs";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -179,6 +179,82 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       }
     });
 
+    test("a click that opens a window on the other site's file saves nothing, and its result says so", async () => {
+      await firefox.allowPopups(fixtures.site);
+      try {
+        const page = await openPage("/foreign/windows");
+        const files = listed();
+        const hits = fixtures.hits(EXPORT);
+        const tabs = await tabIds();
+        const result = await click(page, 'button "Export in a window"');
+        await answered(EXPORT, hits);
+        await assertNothingSaved(files, stoppedIn(result));
+        assert.deepEqual(result.refusedFiles, [other]);
+        // The window is out of the agent's reach.
+        assert.equal("openedTabs" in result, false, JSON.stringify(result));
+        assert.deepEqual(await tabIds(), tabs);
+        await closeWindow(page.context);
+        await close(page);
+      } finally {
+        await firefox.resetPopups(fixtures.site);
+      }
+    });
+
+    test("a page that opens a window on the other site's file by itself saves nothing", async () => {
+      await firefox.allowPopups(fixtures.site);
+      try {
+        const files = listed();
+        const hits = fixtures.hits(EXPORT);
+        const url = fixtures.url("/foreign/window-script");
+        const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+        await answered(EXPORT, hits);
+        // No act and no load waits here, so no result reports the stop.
+        await assertNothingSaved(files, false);
+        const found = (await firefox.contexts()).find((context) => context.url === url);
+        assert.ok(found !== undefined, `no tab shows ${url}`);
+        // A page the other site sent, such as its answer to a request without the cookie, would
+        // have taken the window to that site, where the opener cannot read its address.
+        assert.equal(
+          await firefox.evaluate(found.context, "window.popup.location.href"),
+          "about:blank",
+        );
+        await closeWindow(found.context);
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+      } finally {
+        await firefox.resetPopups(fixtures.site);
+      }
+    });
+
+    test("a window on a file of the approved site itself still saves it", async () => {
+      await firefox.allowPopups(fixtures.site);
+      try {
+        const page = await openPage("/foreign/windows");
+        const before = listed();
+        const result = await click(page, 'button "Own file in a window"');
+        const saved = await pollUntil(
+          async () => {
+            const files = listed();
+            if (files.some((name) => name.endsWith(".part"))) return undefined;
+            const name = files.find((entry) => !before.includes(entry));
+            // Firefox reserves the name with an empty file before it writes the .part one.
+            if (name === undefined) return undefined;
+            return readFileSync(join(harness.downloads, name), "utf8") === "data"
+              ? name
+              : undefined;
+          },
+          PAGE_TIMEOUT_MS,
+          "a new file in the download folder",
+        );
+        assert.equal("refusedFiles" in result, false, JSON.stringify(result));
+        // The folder's last check counts on the file a later test saves.
+        rmSync(join(harness.downloads, saved));
+        await closeWindow(page.context);
+        await close(page);
+      } finally {
+        await firefox.resetPopups(fixtures.site);
+      }
+    });
+
     test("a link to a file of the approved site itself still saves it", async () => {
       const page = await openLinks();
       const result = await click(page, 'link "Own file"');
@@ -288,8 +364,13 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
 
   /** A tab of the session on the approved site's page of links, with the page as read_page shows it. */
   async function openLinks(): Promise<Page> {
+    return openPage("/foreign/links");
+  }
+
+  /** A tab of the session on that page of the approved site, with the page as read_page shows it. */
+  async function openPage(path: string): Promise<Page> {
     opened += 1;
-    const url = fixtures.url(`/foreign/links?tab=${opened}`);
+    const url = fixtures.url(`${path}?tab=${opened}`);
     const tab = tabOf(await harness.ok(session, "tab_open", { url }));
     const found = (await firefox.contexts()).find((context) => context.url === url);
     assert.ok(found !== undefined, `no tab shows ${url}`);
@@ -341,6 +422,21 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     });
     assert.ok(text.includes("does not exist."), text);
     assert.equal(await firefox.evaluate(page.context, "JSON.stringify(window.received)"), "[]");
+  }
+
+  /**
+   * Closes the window that the page in `context` opened and keeps in window.popup. A window whose
+   * load was stopped stays open on a blank page; one whose load became a download may have closed
+   * itself.
+   */
+  async function closeWindow(context: string): Promise<void> {
+    await firefox.evaluate(context, "window.popup.close(); true");
+    await pollUntil(
+      async () =>
+        (await firefox.evaluate(context, "window.popup.closed")) === true ? true : undefined,
+      PAGE_TIMEOUT_MS,
+      "the window to close",
+    );
   }
 
   async function close(page: Page): Promise<void> {

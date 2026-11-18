@@ -471,9 +471,9 @@ export interface ActAfter {
   /** Tabs that opened in the session's group during the act or the wait. */
   openedTabs?: number[];
   /**
-   * Sites this session may not act on whose answer to a page or frame load, in the tab or in a tab
-   * the act opened, Foxleash stopped during the act or the wait because it was a file and not a
-   * page; absent when none.
+   * Sites this session may not act on whose answer to a page or frame load, in the tab, in a tab
+   * the act opened or in a window opened from the tab, Foxleash stopped during the act or the wait
+   * because it was a file and not a page; absent when none.
    */
   refusedFiles?: string[];
   /**

@@ -126,13 +126,15 @@ export interface BrowserApi {
     onHistoryStateUpdated: BrowserEvent<(details: NavigationDetails) => void>;
     /** A frame's document finished parsing. */
     onDOMContentLoaded: BrowserEvent<(details: DocumentDetails) => void>;
+    /** A tab's frame, by its page or by the user, opened a new tab or window. */
+    onCreatedNavigationTarget: BrowserEvent<(details: CreatedNavigationTargetDetails) => void>;
   };
   /**
    * Listeners never change a request, and block in two places only. A recorded tab's hold is
    * registered "blocking" so Firefox lets Foxleash filter that tab's fetch and XHR responses, and
    * returns at once (ADR 0071). The file guard's `onHeadersReceived` listener cancels a page or
-   * frame load, in a tab of a session's group, that is not a web page and comes from a site the
-   * session may not act on (ADR 0081).
+   * frame load, in a tab of a session's group or in a tab or window opened from one, that is not a
+   * web page and comes from a site the session may not act on (ADR 0081).
    */
   webRequest: {
     onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
@@ -318,6 +320,18 @@ export interface NavigationDetails {
   timeStamp: number;
   /** Firefox's id of the frame's document, where Firefox gives one. */
   documentId?: string;
+}
+
+/** The details of `webNavigation.onCreatedNavigationTarget`. */
+export interface CreatedNavigationTargetDetails {
+  /** The tab whose frame opened the target. */
+  sourceTabId: number;
+  sourceFrameId: number;
+  /** The new tab, in a new window or not. */
+  tabId: number;
+  url: string;
+  /** ms since the epoch, the clock of `webRequest`'s `timeStamp`. */
+  timeStamp: number;
 }
 
 /** The options of `tabs.captureTab` that the extension uses. */

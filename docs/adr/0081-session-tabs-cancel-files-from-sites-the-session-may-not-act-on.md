@@ -4,6 +4,9 @@
 [0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md) and "it never
 blocks or changes a request" of
 [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md) for this one case.
+Amended by [0089](0089-file-guard-ties-windows-to-the-tab-that-opened-them.md), 2026-11-18: a
+window or tab that a page in a session's tab opens is judged as that session's, so a file loaded
+there is no longer saved.
 
 ## Context
 
