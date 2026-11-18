@@ -86,7 +86,9 @@ to, and leave the others alone.
   never closes the last tab of a window.
 - `resize_window` resizes the whole window that holds the agent's group, your own tabs in it
   included, and first returns a maximized, minimized or full-screen window to its normal state.
-  With each session in its own window, that is the session's window, not yours.
+  With each session in its own window, that is the session's window, not yours. It returns the
+  size Firefox reports once the window has taken its new size, waiting up to a second for that.
+  That size can differ from the one asked for, for example on a smaller screen.
 
 While Foxleash is asking you something in a tab of the agent's group (whether to allow a site,
 to save or run a recipe, or to allow the sites a task needs), the agent cannot switch to another

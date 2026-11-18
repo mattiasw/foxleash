@@ -14,6 +14,7 @@ import {
 import { createActSettle, MIN_SETTLE_MS } from "./act-settle.ts";
 import type {
   BrowserApi,
+  BrowserWindow,
   FrameDetails,
   RequestDetails,
   Tab,
@@ -28,6 +29,7 @@ import {
   type FakeBrowser,
   type FakePort,
   type FakeTab,
+  type FakeTimers,
   flush,
   ONE_PIXEL_PNG,
   type WindowUpdate,
@@ -47,6 +49,8 @@ import {
   PROBE_CUTOFF_MS,
   PROBE_TIMEOUT_MS,
   READ_CONSOLE_TIMEOUT_MS,
+  RESIZE_POLL_MS,
+  RESIZE_WAIT_MS,
   refuseIfEnded,
   SCREENSHOT_TIMEOUT_MS,
   ToolError,
@@ -5810,7 +5814,7 @@ describe("resize_window", { timeout: 10000 }, () => {
   });
 
   it("sizes the group's window in its normal state and returns the size Firefox reports", async () => {
-    const { fake, call, open } = setup();
+    const { fake, timers, call, open } = setup();
     fake.currentWindowId = 3;
     await open("s1");
     assert.deepEqual(await call("s1", "resize_window", { width: 100, height: 10_000 }), {
@@ -5820,25 +5824,203 @@ describe("resize_window", { timeout: 10000 }, () => {
     assert.deepEqual(fake.windowUpdates, [
       { windowId: 3, state: "normal", width: 100, height: 10_000 },
     ]);
-    fake.browser.windows.get = async (windowId) => ({ id: windowId, width: 880, height: 650 });
-    assert.deepEqual(await call("s1", "resize_window", { width: 900, height: 700 }), {
-      width: 880,
-      height: 650,
-    });
+    reportAfterUpdate(fake, [{ width: 880, height: 650 }]);
+    const resize = track(timers, () => call("s1", "resize_window", { width: 900, height: 700 }));
+    assert.equal(await resize.run(), "waiting");
+    timers.advance(RESIZE_POLL_MS);
+    assert.equal(await resize.run(), "settled");
+    assert.deepEqual(await resize.started, { width: 880, height: 650 });
   });
 
   it("fails with Firefox's error when it does not resize the window", async () => {
     const { fake, call, open } = setup();
     await open("s1");
     const refusal = new Error("Invalid window state");
-    fake.browser.windows.update = () => Promise.reject(refusal);
+    let refused = false;
+    fake.browser.windows.update = () => {
+      refused = true;
+      return Promise.reject(refusal);
+    };
     let asked = false;
     fake.browser.windows.get = async (windowId) => {
-      asked = true;
+      if (refused) asked = true;
       return { id: windowId, width: 900, height: 700 };
     };
     await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), refusal);
+    assert.equal(refused, true);
     assert.equal(asked, false);
+  });
+
+  it("reads the size once and waits for nothing when the window takes the size at once", async () => {
+    const { fake, timers, call, open } = setup();
+    await open("s1");
+    const { get, update } = fake.browser.windows;
+    let updated = false;
+    let reads = 0;
+    fake.browser.windows.update = async (windowId, info) => {
+      await update(windowId, info);
+      updated = true;
+    };
+    fake.browser.windows.get = async (windowId) => {
+      if (updated) reads += 1;
+      return get(windowId);
+    };
+    const baseline = timers.pending();
+    assert.deepEqual(await call("s1", "resize_window", { width: 900, height: 700 }), {
+      width: 900,
+      height: 700,
+    });
+    assert.equal(reads, 1);
+    assert.equal(timers.pending(), baseline);
+    assert.equal(timers.now(), 0);
+  });
+
+  it("waits for the window to take the size while Firefox still reports the old one", async () => {
+    const { fake, timers, call, open } = setup();
+    fake.currentWindowId = 3;
+    await open("s1");
+    fake.windowSizes.set(3, { width: 1280, height: 1271 });
+    reportAfterUpdate(fake, [
+      { width: 1280, height: 1271 },
+      { width: 1280, height: 1271 },
+      { width: 1000, height: 700 },
+    ]);
+    const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+    assert.equal(await resize.run(), "waiting");
+    timers.advance(RESIZE_POLL_MS);
+    assert.equal(await resize.run(), "waiting");
+    timers.advance(RESIZE_POLL_MS);
+    assert.equal(await resize.run(), "settled");
+    assert.deepEqual(await resize.started, { width: 1000, height: 700 });
+    assert.equal(timers.now(), 2 * RESIZE_POLL_MS);
+    assert.equal(timers.pending(), resize.baseline);
+  });
+
+  it("waits while only one of the window's width and height has changed", async () => {
+    for (const halfway of [
+      { width: 1000, height: 1271 },
+      { width: 1280, height: 700 },
+    ]) {
+      const { fake, timers, call, open } = setup();
+      fake.currentWindowId = 3;
+      await open("s1");
+      fake.windowSizes.set(3, { width: 1280, height: 1271 });
+      reportAfterUpdate(fake, [halfway, halfway, { width: 1000, height: 700 }]);
+      const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+      assert.equal(await resize.run(), "waiting");
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "waiting", JSON.stringify(halfway));
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "settled", JSON.stringify(halfway));
+      assert.deepEqual(await resize.started, { width: 1000, height: 700 });
+    }
+  });
+
+  it("waits while the size Firefox reports is still changing", async () => {
+    for (const { first, last } of [
+      { first: { width: 1200, height: 700 }, last: { width: 1100, height: 700 } },
+      { first: { width: 1000, height: 800 }, last: { width: 1000, height: 750 } },
+    ]) {
+      const { fake, timers, call, open } = setup();
+      fake.currentWindowId = 3;
+      await open("s1");
+      fake.windowSizes.set(3, { width: 1280, height: 1271 });
+      reportAfterUpdate(fake, [first, last]);
+      const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+      assert.equal(await resize.run(), "waiting");
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "waiting", JSON.stringify(last));
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "settled", JSON.stringify(last));
+      assert.deepEqual(await resize.started, last);
+    }
+  });
+
+  it("returns a size that differs from the one asked for once it has held for one poll", async () => {
+    const cases = [
+      {
+        before: { width: 1280, height: 800 },
+        asked: { width: 1000, height: 700 },
+        took: { width: 1200, height: 700 },
+      },
+      {
+        before: { width: 1280, height: 1271 },
+        asked: { width: 1280, height: 700 },
+        took: { width: 1280, height: 900 },
+      },
+    ];
+    for (const { before, asked, took } of cases) {
+      const { fake, timers, call, open } = setup();
+      fake.currentWindowId = 3;
+      await open("s1");
+      fake.windowSizes.set(3, before);
+      reportAfterUpdate(fake, [before, took]);
+      const resize = track(timers, () => call("s1", "resize_window", asked));
+      assert.equal(await resize.run(), "waiting");
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "waiting", JSON.stringify(asked));
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "settled", JSON.stringify(asked));
+      assert.deepEqual(await resize.started, took);
+      assert.equal(timers.pending(), resize.baseline);
+    }
+  });
+
+  it("returns the size Firefox reports once it has waited RESIZE_WAIT_MS", async () => {
+    const { fake, timers, call, open } = setup();
+    fake.currentWindowId = 3;
+    await open("s1");
+    fake.windowSizes.set(3, { width: 1280, height: 1271 });
+    reportAfterUpdate(fake, [{ width: 1280, height: 1271 }]);
+    const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+    for (let poll = 1; poll < RESIZE_WAIT_MS / RESIZE_POLL_MS; poll += 1) {
+      assert.equal(await resize.run(), "waiting", `poll ${poll}`);
+      timers.advance(RESIZE_POLL_MS);
+    }
+    assert.equal(await resize.run(), "waiting");
+    timers.advance(RESIZE_POLL_MS);
+    assert.equal(await resize.run(), "settled");
+    assert.deepEqual(await resize.started, { width: 1280, height: 1271 });
+    assert.equal(timers.now(), RESIZE_WAIT_MS);
+    assert.equal(timers.pending(), resize.baseline);
+  });
+
+  it("fails when Firefox reports no width or height while the window takes its size", async () => {
+    for (const reported of [{ height: 700 }, { width: 1000 }]) {
+      const { fake, timers, call, open } = setup();
+      await open("s1");
+      reportAfterUpdate(fake, [{ width: 1280, height: 800 }, reported]);
+      const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+      assert.equal(await resize.run(), "waiting");
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "settled");
+      await assert.rejects(resize.started, {
+        code: "resize_failed",
+        message: "Firefox did not report the window's new size.",
+      });
+      assert.equal(timers.pending(), resize.baseline);
+    }
+  });
+
+  it("returns a size that held for one poll when Firefox did not report the size before", async () => {
+    const unknown: ((windowId: number) => Promise<BrowserWindow>)[] = [
+      () => Promise.reject(new Error("No window")),
+      async (windowId) => ({ id: windowId }),
+    ];
+    for (const [index, before] of unknown.entries()) {
+      const { fake, timers, call, open } = setup();
+      await open("s1");
+      let reads = 0;
+      fake.browser.windows.get = async (windowId) => {
+        reads += 1;
+        return reads === 1 ? before(windowId) : { id: windowId, width: 1200, height: 700 };
+      };
+      const resize = track(timers, () => call("s1", "resize_window", { width: 1000, height: 700 }));
+      assert.equal(await resize.run(), "waiting", `case ${index}`);
+      timers.advance(RESIZE_POLL_MS);
+      assert.equal(await resize.run(), "settled", `case ${index}`);
+      assert.deepEqual(await resize.started, { width: 1200, height: 700 });
+    }
   });
 
   it("fails when Firefox reports no width or height", async () => {
@@ -5911,6 +6093,29 @@ describe("resize_window", { timeout: 10000 }, () => {
     assert.deepEqual(resizes(fake), []);
   });
 
+  it("refuses when the prompt was shown while the window's size was being read", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const other = await open("s1");
+    const get = fake.browser.windows.get;
+    let armed = true;
+    fake.browser.windows.get = async (windowId) => {
+      if (armed) {
+        armed = false;
+        const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+        void asking.catch(() => {});
+        await promptOf("s1");
+      }
+      return get(windowId);
+    };
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+      code: "approval_pending",
+    });
+    assert.equal(armed, false);
+    assert.deepEqual(resizes(fake), []);
+  });
+
   it("resizes again once the prompt is answered or its tab closed", async () => {
     for (const ending of ["answered", "closed"]) {
       const { fake, call, open, grant, page, promptOf } = setup();
@@ -5957,6 +6162,52 @@ describe("resize_window", { timeout: 10000 }, () => {
   // Showing a question draws attention to its window; only an update with a size resizes it.
   function resizes(fake: FakeBrowser): WindowUpdate[] {
     return fake.windowUpdates.filter((update) => update.width !== undefined);
+  }
+
+  /** After windows.update, windows.get answers these sizes in turn, then the last one again. */
+  function reportAfterUpdate(
+    fake: FakeBrowser,
+    sizes: { width?: number; height?: number }[],
+  ): void {
+    const { get, update } = fake.browser.windows;
+    let updated = false;
+    let reads = 0;
+    fake.browser.windows.update = async (windowId, info) => {
+      await update(windowId, info);
+      updated = true;
+    };
+    fake.browser.windows.get = async (windowId) => {
+      if (!updated) return get(windowId);
+      const size = sizes[Math.min(reads, sizes.length - 1)];
+      reads += 1;
+      return { id: windowId, ...size };
+    };
+  }
+
+  /** Starts a call, and runs it until it waits on a timer or settles. */
+  function track<T>(timers: FakeTimers, start: () => Promise<T>) {
+    const baseline = timers.pending();
+    let settled = false;
+    const started = start();
+    void started.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    return {
+      started,
+      baseline,
+      async run(): Promise<"settled" | "waiting" | "stuck"> {
+        for (let turn = 0; turn < 50 && !settled && timers.pending() === baseline; turn += 1) {
+          await flush();
+        }
+        if (settled) return "settled";
+        return timers.pending() > baseline ? "waiting" : "stuck";
+      },
+    };
   }
 });
 
@@ -11556,6 +11807,19 @@ describe("a request whose session ends while it runs", { timeout: 10000 }, () =>
     fake.browser.tabGroups.get = async (groupId) => {
       access.endSession("s1");
       return get(groupId);
+    };
+    await rejectsWith(call("s1", "resize_window", { width: 900, height: 700 }), "session_ended");
+    assert.deepEqual(fake.windowUpdates.slice(updates), []);
+  });
+
+  it("resizes no window when the session ends while resize_window reads the window's size", async () => {
+    const { fake, access, call, open } = setup();
+    await open("s1");
+    const updates = fake.windowUpdates.length;
+    const get = fake.browser.windows.get;
+    fake.browser.windows.get = async (windowId) => {
+      access.endSession("s1");
+      return get(windowId);
     };
     await rejectsWith(call("s1", "resize_window", { width: 900, height: 700 }), "session_ended");
     assert.deepEqual(fake.windowUpdates.slice(updates), []);

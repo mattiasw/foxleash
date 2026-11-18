@@ -74,6 +74,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Firefox for what requests send. In a tab outside an agent's tab group it no longer reads it. In
   an agent's tabs it reads it only while it has time to spare, and `read_network` shows `other`
   for the rest.
+- `resize_window` could report the window's size from before the resize, seen on Wayland when
+  making a large window smaller. It now waits up to a second for the window to take its new size
+  and reports that.
 
 ### Security
 

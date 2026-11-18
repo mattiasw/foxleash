@@ -25,6 +25,7 @@ import {
 import type { ActSettle } from "./act-settle.ts";
 import type {
   BrowserApi,
+  BrowserWindow,
   CaptureArea,
   CssInjection,
   FrameDetails,
@@ -265,6 +266,10 @@ export const CLOSE_CONFIRM_TIMEOUT_MS = 5_000;
 export const VIEW_START_LIMIT_MS = 50_000;
 /** Bounds the read of a result's view; see VIEW_START_LIMIT_MS. */
 export const VIEW_READ_MS = 5_000;
+/** How often resize_window reads the window's size again while it waits for the new one. */
+export const RESIZE_POLL_MS = 50;
+/** How long resize_window waits, after Firefox resized the window, for its new size to show. */
+export const RESIZE_WAIT_MS = 1000;
 
 const UNREADABLE_VIEW: PageView = { kind: "none", reason: "unreadable" };
 
@@ -992,8 +997,9 @@ export function createHandlers<Handle>({
 
   /**
    * Resizes the window that holds the session's group, out of a maximized, minimized or full-screen
-   * state first, and returns the size Firefox reports for it. Refused while the session's site
-   * prompt or recipe page is open, wherever it is shown: a resize moves the question's buttons.
+   * state first, and returns the size Firefox reports for it once the window has taken it. Refused
+   * while the session's site prompt or recipe page is open, wherever it is shown: a resize moves
+   * the question's buttons.
    */
   async function resizeWindow(
     session: string,
@@ -1009,15 +1015,48 @@ export function createHandlers<Handle>({
         "This session has no tab group yet; open a tab with tab_open first.",
       );
     }
+    // Unknown when Firefox cannot say, so a window closed meanwhile fails at the update, as before.
+    const before = await browser.windows.get(group.windowId).then(sizeOfWindow, () => undefined);
     refuseIfEnded(access, session, generation);
     keepPromptInView(session);
     // A maximized or full-screen window ignores a size; the normal state combines with one.
     await browser.windows.update(group.windowId, { state: "normal", width, height });
-    const resized = await browser.windows.get(group.windowId);
-    if (typeof resized.width !== "number" || typeof resized.height !== "number") {
+    return await settledSize(group.windowId, { width, height }, before);
+  }
+
+  /**
+   * The size Firefox reports for the window: at once when it is the size asked for, else once a
+   * size whose width and height have each left `before` (or are the ones asked for) has held for
+   * one RESIZE_POLL_MS, else the last one after RESIZE_WAIT_MS. The window manager can apply a
+   * size after windows.update resolved.
+   */
+  async function settledSize(
+    windowId: number,
+    asked: Result<"resize_window">,
+    before: Result<"resize_window"> | undefined,
+  ): Promise<Result<"resize_window">> {
+    let size = await reportedSize(windowId);
+    for (let waits = 0; waits < RESIZE_WAIT_MS / RESIZE_POLL_MS; waits += 1) {
+      if (size.width === asked.width && size.height === asked.height) return size;
+      await new Promise<void>((resolve) => timers.setTimeout(resolve, RESIZE_POLL_MS));
+      const next = await reportedSize(windowId);
+      const held = next.width === size.width && next.height === size.height;
+      const taken =
+        before === undefined ||
+        (tookValue(next.width, asked.width, before.width) &&
+          tookValue(next.height, asked.height, before.height));
+      if (held && taken) return next;
+      size = next;
+    }
+    return size;
+  }
+
+  async function reportedSize(windowId: number): Promise<Result<"resize_window">> {
+    const size = sizeOfWindow(await browser.windows.get(windowId));
+    if (size === undefined) {
       throw new ToolError("resize_failed", "Firefox did not report the window's new size.");
     }
-    return { width: resized.width, height: resized.height };
+    return size;
   }
 
   /** The tab, when it exists and is in the session's group. */
@@ -2221,6 +2260,17 @@ function windowSize(value: unknown): number {
     );
   }
   return value;
+}
+
+/** The window's width and height, when Firefox reports both. */
+function sizeOfWindow(window: BrowserWindow): Result<"resize_window"> | undefined {
+  const { width, height } = window;
+  return typeof width === "number" && typeof height === "number" ? { width, height } : undefined;
+}
+
+/** Whether a reported width or height is the one asked for, or no longer the one before. */
+function tookValue(reported: number, asked: number, before: number): boolean {
+  return reported === asked || reported !== before;
 }
 
 /** upload_file's file list, read own field by own field. */
