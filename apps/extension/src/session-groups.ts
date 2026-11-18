@@ -11,10 +11,16 @@ export interface SessionGroups {
    * Creates the session's new tab as `tabs.create` does: in its group's window; in the session's
    * own window once it has one; with neither and the setting on, in a new window made for the
    * session, whose own blank tab a blank tab request takes; otherwise where Firefox puts it.
+   * `check` runs right before each `tabs.create` and `windows.create`, and right before the
+   * window's own first tab is handed back, with no await in between, and may throw to refuse; it
+   * runs again once Firefox made a tab in a window made in this call. A throw makes `createTab`
+   * reject with that error and create nothing; a window made in this call for the tab is removed
+   * again, with the tab.
    */
   createTab(
     session: string,
     properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+    check: () => void,
   ): Promise<Tab>;
   /** Closes the session's group when it holds only blank tabs; otherwise leaves it. */
   endSession(session: string): Promise<void>;
@@ -40,9 +46,11 @@ export interface SessionGroups {
   sessionOf(groupId: number | undefined): string | undefined;
   /**
    * Brings the session's own window to the front when `windowId` is that window, restoring it when
-   * minimized; otherwise draws attention to `windowId`. Never rejects.
+   * minimized; otherwise draws attention to `windowId`. `wanted` runs right before each
+   * `windows.update`, with no await in between, and the update is skipped when it returns false.
+   * Never rejects.
    */
-  showPromptWindow(session: string, windowId: number): Promise<void>;
+  showPromptWindow(session: string, windowId: number, wanted: () => boolean): Promise<void>;
 }
 
 /**
@@ -107,11 +115,13 @@ export function createSessionGroups(
   async function createTab(
     session: string,
     properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+    check: () => void,
   ): Promise<Tab> {
     const group = await groupOf(session);
     const own = ownWindows.get(session);
     if (own === undefined || (group !== undefined && group.windowId !== own.id)) {
       if (group !== undefined) {
+        check();
         return browser.tabs.create({ ...properties, windowId: group.windowId });
       }
       // A failed read opens the tab as with the setting off.
@@ -119,9 +129,12 @@ export function createSessionGroups(
         (settings) => settings.sessionWindow,
         () => false,
       );
-      if (!on) return browser.tabs.create(properties);
+      if (!on) {
+        check();
+        return browser.tabs.create(properties);
+      }
     }
-    return serialize(session, () => createInOwnWindow(session, properties));
+    return serialize(session, () => createInOwnWindow(session, properties, check));
   }
 
   function endSession(session: string): Promise<void> {
@@ -170,9 +183,14 @@ export function createSessionGroups(
     return [...groups].find(([, id]) => id === groupId)?.[0];
   }
 
-  async function showPromptWindow(session: string, windowId: number): Promise<void> {
+  async function showPromptWindow(
+    session: string,
+    windowId: number,
+    wanted: () => boolean,
+  ): Promise<void> {
     try {
       if (ownWindows.get(session)?.id !== windowId) {
+        if (!wanted()) return;
         await browser.windows.update(windowId, { drawAttention: true });
         return;
       }
@@ -180,6 +198,7 @@ export function createSessionGroups(
         (window) => window.state,
         () => undefined,
       );
+      if (!wanted()) return;
       // Only for a minimized window: "normal" would also un-maximize one or leave full screen.
       await browser.windows.update(
         windowId,
@@ -235,27 +254,41 @@ export function createSessionGroups(
   async function createInOwnWindow(
     session: string,
     properties: Omit<Parameters<BrowserApi["tabs"]["create"]>[0], "windowId">,
+    check: () => void,
   ): Promise<Tab> {
     const group = await groupOf(session);
     let own = ownWindows.get(session);
     if (group !== undefined && group.windowId !== own?.id) {
+      check();
       return browser.tabs.create({ ...properties, windowId: group.windowId });
     }
     const made = own === undefined;
-    if (own === undefined) own = await openOwnWindow(session);
-    if (properties.url === "about:blank" && own.firstPending) {
-      own.firstPending = false;
-      const first = await browser.tabs.get(own.first).catch(() => undefined);
-      if (first !== undefined && first.windowId === own.id && isFirstTabUnused(first)) return first;
+    if (own === undefined) {
+      check();
+      own = await openOwnWindow(session);
     }
+    const going = [own.first];
     try {
-      return await browser.tabs.create({ ...properties, windowId: own.id });
+      if (properties.url === "about:blank" && own.firstPending) {
+        own.firstPending = false;
+        const first = await browser.tabs.get(own.first).catch(() => undefined);
+        if (first !== undefined && first.windowId === own.id && isFirstTabUnused(first)) {
+          check();
+          return first;
+        }
+      }
+      check();
+      const tab = await browser.tabs.create({ ...properties, windowId: own.id });
+      going.push(tab.id);
+      // Refused while Firefox made the tab: the window made for it goes too, with the tab.
+      if (made) check();
+      return tab;
     } catch (error) {
       if (made) {
         if (ownWindows.get(session) === own) ownWindows.delete(session);
         // Counted as going, so a session ending meanwhile does not close the last window.
         const windowId = own.id;
-        removeTabs([own.first], () => browser.windows.remove(windowId));
+        removeTabs(going, () => browser.windows.remove(windowId));
       }
       throw error;
     }

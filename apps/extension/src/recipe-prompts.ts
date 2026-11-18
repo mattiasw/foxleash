@@ -169,7 +169,11 @@ export function createRecipePrompts<Handle>({
     refuseOpening(session);
     const pageUrl = `${browser.runtime.getURL(PROPOSE_PAGE)}?id=${crypto.randomUUID()}`;
     // Unloaded, the page cannot connect before its prompt is recorded.
-    const tab = await groups.createTab(session, { url: pageUrl, active: false, discarded: true });
+    const tab = await groups.createTab(
+      session,
+      { url: pageUrl, active: false, discarded: true },
+      () => refuseIfEnded(session, generation),
+    );
     // No await from here until the prompt is recorded, so parallel requests see one prompt.
     try {
       refuseIfEnded(session, generation);
@@ -218,7 +222,11 @@ export function createRecipePrompts<Handle>({
       if (isLive(prompt)) abandon(prompt);
       throw sessionStopped();
     }
-    await groups.showPromptWindow(session, shown.windowId);
+    await groups.showPromptWindow(
+      session,
+      shown.windowId,
+      () => !access.stopped(session) && generationOf(session) === generation,
+    );
     return { tabId: tab.id };
   }
 
@@ -254,10 +262,14 @@ export function createRecipePrompts<Handle>({
     const askable = sites.filter((site) => states.get(site) === "askable");
     if (askable.length === 0) return resultOf(states, false);
     const joined = pageToJoin(session, key);
-    if (joined !== undefined) return join(joined);
+    if (joined !== undefined) return join(joined, generation);
     const pageUrl = `${browser.runtime.getURL(RUN_PAGE)}?id=${crypto.randomUUID()}`;
     // Unloaded, the page cannot connect before its prompt is recorded.
-    const tab = await groups.createTab(session, { url: pageUrl, active: false, discarded: true });
+    const tab = await groups.createTab(
+      session,
+      { url: pageUrl, active: false, discarded: true },
+      () => refuseIfEnded(session, generation),
+    );
     // No await from here until the prompt is recorded or joined, so parallel requests of one
     // recipe or one set of sites end with one page.
     let again: RunPrompt<Handle> | undefined;
@@ -269,7 +281,7 @@ export function createRecipePrompts<Handle>({
       throw error;
     }
     if (again !== undefined) {
-      const answer = join(again);
+      const answer = join(again, generation);
       // The page can be answered while the tab closes; the caller gets the rejection after.
       answer.catch(() => {});
       await closeNewTab(tab.id);
@@ -308,7 +320,11 @@ export function createRecipePrompts<Handle>({
     }
     // Stopped while the page loaded: no window comes to the front for it.
     if (access.stopped(session)) return answer;
-    await groups.showPromptWindow(session, shown.windowId);
+    await groups.showPromptWindow(
+      session,
+      shown.windowId,
+      () => !access.stopped(session) && generationOf(session) === generation,
+    );
     return answer;
   }
 
@@ -358,12 +374,17 @@ export function createRecipePrompts<Handle>({
   }
 
   /** Waits on an open run page, drawing attention to its window. */
-  async function join(prompt: RunPrompt<Handle>): Promise<Result<"recipe_run">> {
+  async function join(
+    prompt: RunPrompt<Handle>,
+    generation: number,
+  ): Promise<Result<"recipe_run">> {
     const answer = wait(prompt);
     // Only attention: activating the tab would move the page's buttons under the cursor.
     try {
       const tab = await browser.tabs.get(prompt.tabId);
-      await browser.windows.update(tab.windowId, { drawAttention: true });
+      if (generationOf(prompt.session) === generation) {
+        await browser.windows.update(tab.windowId, { drawAttention: true });
+      }
     } catch {}
     return answer;
   }

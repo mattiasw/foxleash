@@ -1159,6 +1159,9 @@ describe("run", { timeout: 10000 }, () => {
     const pages = [...fake.tabs.values()].filter(({ url }) => url.includes("run.html"));
     assert.equal(pages.length, 1);
     assert.deepEqual(recipes.openPrompt("s1"), { tabId: pages[0]?.id, question: ALLOWING });
+    // One for the page shown, one for the call that joined it.
+    const attention = { windowId: pages[0]?.windowId, drawAttention: true };
+    assert.deepEqual(fake.windowUpdates, [attention, attention]);
     connect(fake, pages[0]?.id ?? 0).deliver({ type: "answer", answer: "allow" });
     await flush();
     assert.equal(first.state, "resolved");
@@ -2002,6 +2005,94 @@ describe("ending a run page", { timeout: 10000 }, () => {
     assertRejected(answer, "recipe_prompt_closed");
     assert.equal(sessions.has("s1"), false);
     assert.deepEqual(page.posted.at(-1), { type: "ended" });
+  });
+});
+
+describe("a page asked for while its session ends", { timeout: 10000 }, () => {
+  /** propose, run and request, each asking for its page in session s1. */
+  const ASKS: [string, (recipes: Recipes) => Promise<unknown>][] = [
+    ["propose", (recipes) => recipes.propose("s1", RECIPE)],
+    ["run", (recipes) => recipes.run("s1", TRIP.name)],
+    ["request", (recipes) => recipes.request("s1", SITES)],
+  ];
+
+  it("creates no tab when the session ends while the session's group is read", async () => {
+    for (const [name, ask] of ASKS) {
+      const context = setup();
+      const { fake, access, groups, recipes } = context;
+      await seed(fake, TRIP);
+      await groups.ensureGroup("s1", fake.openTab({ url: "https://user2.example/" }));
+      const created = recordCreates(fake);
+      const get = fake.browser.tabGroups.get;
+      fake.browser.tabGroups.get = (groupId) => {
+        fake.browser.tabGroups.get = get;
+        access.endSession("s1");
+        recipes.endSession("s1");
+        return get(groupId);
+      };
+      await assert.rejects(
+        ask(recipes),
+        { code: "recipe_prompt_closed", message: ENDED_EARLY },
+        name,
+      );
+      assert.deepEqual(created, [], name);
+      assert.equal(recipes.openPrompt("s1"), undefined, name);
+    }
+  });
+
+  it("brings no window to the front when the session ends while the page loads", async () => {
+    for (const [name, ask] of ASKS) {
+      for (const own of [false, true]) {
+        const label = `${name}, own window ${own}`;
+        const { fake, access, recipes } = setup();
+        await seed(fake, TRIP);
+        if (own) await fake.browser.storage.local.set({ sessionWindow: true });
+        const update = fake.browser.tabs.update;
+        fake.browser.tabs.update = async (tabId, properties) => {
+          const tab = await update(tabId, properties);
+          access.endSession("s1");
+          recipes.endSession("s1");
+          return tab;
+        };
+        await ask(recipes).catch(() => {});
+        await flush();
+        assert.equal(fake.tabUpdates.length, 1, label);
+        assert.deepEqual(fake.windowUpdates, [], label);
+      }
+    }
+  });
+
+  it("brings no window to the front when the user stops the session while the window is read", async () => {
+    for (const [name, ask] of ASKS) {
+      const { fake, access, recipes } = setup();
+      await seed(fake, TRIP);
+      await fake.browser.storage.local.set({ sessionWindow: true });
+      const get = fake.browser.windows.get;
+      fake.browser.windows.get = (windowId) => {
+        access.stop("s1");
+        return get(windowId);
+      };
+      track(ask(recipes));
+      for (let turn = 0; turn < 10; turn += 1) await flush();
+      assert.equal(fake.tabUpdates.length, 1, name);
+      assert.deepEqual(fake.windowUpdates, [], name);
+    }
+  });
+
+  it("draws no attention for a joining call whose session ended while the page's tab was read", async () => {
+    const { fake, access, recipes } = setup();
+    await seed(fake, TRIP);
+    await openRun(fake, recipes);
+    const updates = fake.windowUpdates.length;
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = (tabId) => {
+      fake.browser.tabs.get = get;
+      access.endSession("s1");
+      recipes.endSession("s1");
+      return get(tabId);
+    };
+    await assert.rejects(recipes.run("s1", TRIP.name), { code: "recipe_prompt_closed" });
+    assert.deepEqual(fake.windowUpdates.slice(updates), []);
   });
 });
 

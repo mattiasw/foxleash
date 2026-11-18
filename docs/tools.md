@@ -32,11 +32,12 @@ agent still running then goes on as the same session, with its answers forgotten
 again for the sites you allowed only for that session, it may ask again about sites you refused,
 and it again has three refused or closed prompts before it stops asking. A tool call still
 running when the agent session ends stops before its next step in the browser: it sends no more
-input or files to the page, opens, selects or closes no tab, starts loading no page, resizes no
-window, takes no screenshot and saves no file. A blank tab it was opening right then is closed
-again. A step it took before the session ended, such as a click already sent or a page that
-already began loading, is not undone: a tab whose page began loading stays open, and Foxleash
-does not select it once the session has ended.
+input or files to the page, opens no tab or window, selects or closes no tab, starts loading no
+page, resizes no window, brings no window with a Foxleash prompt to the front and makes none
+ask for your attention, takes no screenshot and saves no file. A tab or window it was opening
+right then is closed again. A step it took before the session ended, such as a click already sent
+or a page that already began loading, is not undone: a tab whose page began loading stays open,
+and Foxleash does not select it once the session has ended.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
 outside an agent session's group when the program is too old for the add-on or newer than it;

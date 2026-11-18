@@ -44,8 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   500 characters and its address to 2,000, each ending with `…` when cut.
 - Pages loaded in the tabs of an agent session that has ended are no longer recorded, also on
   sites you allowed always, and a tool call still running when its session ended no longer acts
-  in the browser: no clicks, typing, uploads or form submits, no new or selected tab, no page
-  loaded, no download saved, no window resized or tab closed.
+  in the browser: no clicks, typing, uploads or form submits, no new tab or window, no selected
+  tab, no page loaded, no download saved, no window resized or tab closed, and no window with a
+  Foxleash prompt brought to the front or asking for your attention.
 - The add-on listing and the docs said that a download's request carries your cookies as
   following the link would. They now say that it carries all your cookies for the site, as a
   request from that site's own page would, and that when an address the agent opens or

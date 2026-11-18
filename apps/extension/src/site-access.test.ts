@@ -386,6 +386,8 @@ describe("check", () => {
   });
 });
 
+/** A createTab check that never refuses. */
+const PASS = () => {};
 const PROMPT_URL =
   /^moz-extension:\/\/[0-9a-f-]+\/approve\.html\?id=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const REFUSED = "The user did not allow Foxleash on https://a.example in this session.";
@@ -746,7 +748,7 @@ describe("ask", () => {
     });
     connect(fake, tab.id);
     timers.advance(APPROVAL_WAIT_MS);
-    const other = await groups.createTab("s1", { url: "about:blank", active: false });
+    const other = await groups.createTab("s1", { url: "about:blank", active: false }, PASS);
     const updates = fake.tabUpdates.length;
     const joined = await access.ask("s1", "https://a.example/other", other.id, {
       generation: access.generation("s1"),
@@ -772,6 +774,63 @@ describe("ask", () => {
     assert.equal(access.openPrompt("s1")?.waiting, true);
   });
 
+  it("brings no window to the front for a session that ended while the prompt loaded", async () => {
+    for (const own of [false, true]) {
+      const { fake, access, groups, tab: userTab } = setup();
+      const { tab, ...options } = own
+        ? await ownWindowPrompt(fake, access, groups)
+        : { tab: userTab };
+      const update = fake.browser.tabs.update;
+      fake.browser.tabs.update = (tabId, properties) => {
+        access.endSession("s1");
+        return update(tabId, properties);
+      };
+      await access.ask("s1", "https://a.example/page", tab.id, {
+        ...options,
+        generation: access.generation("s1"),
+      });
+      await flush();
+      assert.deepEqual(fake.windowUpdates, [], `own window ${own}`);
+    }
+  });
+
+  it("draws no attention for a joining request whose session ended while the prompt's tab was read", async () => {
+    const { fake, access, timers, tab, ask } = setup();
+    await ask();
+    connect(fake, tab.id);
+    timers.advance(APPROVAL_WAIT_MS);
+    const other = fake.openTab({ windowId: 2, active: true });
+    fake.windowUpdates.length = 0;
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = (tabId) => {
+      access.endSession("s1");
+      return get(tabId);
+    };
+    await access.ask("s1", "https://a.example/other", other.id, {
+      generation: access.generation("s1"),
+    });
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
+  it("draws no attention for a joining request whose session was stopped while the prompt's tab was read", async () => {
+    const { fake, access, timers, tab, ask } = setup();
+    await ask();
+    connect(fake, tab.id);
+    timers.advance(APPROVAL_WAIT_MS);
+    const other = fake.openTab({ windowId: 2, active: true });
+    fake.windowUpdates.length = 0;
+    const get = fake.browser.tabs.get;
+    fake.browser.tabs.get = (tabId) => {
+      access.stop("s1");
+      return get(tabId);
+    };
+    const joined = await access.ask("s1", "https://a.example/other", other.id, {
+      generation: access.generation("s1"),
+    });
+    await assert.rejects(joined.answer, { code: "session_stopped" });
+    assert.deepEqual(fake.windowUpdates, []);
+  });
+
   /** A prompt tab made as tab_open makes it, with the session's window on. */
   async function ownWindowPrompt(
     fake: FakeBrowser,
@@ -780,7 +839,11 @@ describe("ask", () => {
   ): Promise<{ tab: Tab; promptUrl: string }> {
     await fake.browser.storage.local.set({ sessionWindow: true });
     const promptUrl = access.newPromptUrl();
-    const tab = await groups.createTab("s1", { url: promptUrl, active: false, discarded: true });
+    const tab = await groups.createTab(
+      "s1",
+      { url: promptUrl, active: false, discarded: true },
+      PASS,
+    );
     await groups.ensureGroup("s1", tab);
     return { tab, promptUrl };
   }
@@ -1686,7 +1749,7 @@ describe("endSession", () => {
       url: "https://a.example/page",
       waiting: false,
     });
-    const other = await groups.createTab("s1", { url: "about:blank", active: false });
+    const other = await groups.createTab("s1", { url: "about:blank", active: false }, PASS);
     const updates = fake.tabUpdates.length;
     fake.windowUpdates.length = 0;
     const closed = {

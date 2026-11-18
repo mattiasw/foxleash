@@ -369,13 +369,13 @@ export function createSiteAccess<Handle>({
     if (current.blocked(url)) throw siteBlocked(site);
     const open = prompts.get(session);
     // Before the approved check: Foxleash must not navigate away from its own live prompt.
-    if (open?.tabId === tabId) return join(joinable(open, site), tabId);
+    if (open?.tabId === tabId) return join(joinable(open, site), tabId, options.generation);
     if (current.allowed(url)) return { answer: Promise.resolve(), promptInTab: false };
     refuseIfNotPlain(site);
     refuseIfAnswered(session, site);
     refuseBesideOtherPrompt(session);
-    if (open !== undefined) return join(joinable(open, site), tabId);
-    return show(session, site, url, tabId, options.promptUrl);
+    if (open !== undefined) return join(joinable(open, site), tabId, options.generation);
+    return show(session, site, url, tabId, options.promptUrl, options.generation);
   }
 
   function openPrompt(session: string): OpenPrompt | undefined {
@@ -613,12 +613,18 @@ export function createSiteAccess<Handle>({
     return prompt;
   }
 
-  async function join(prompt: Prompt<Handle>, tabId: number): Promise<Approval> {
+  async function join(
+    prompt: Prompt<Handle>,
+    tabId: number,
+    generation: number,
+  ): Promise<Approval> {
     const answer = wait(prompt, tabId);
     // Only attention: activating the tab would move the prompt's buttons under the cursor.
     try {
       const tab = await browser.tabs.get(prompt.tabId);
-      await browser.windows.update(tab.windowId, { drawAttention: true });
+      if (!stoppedSessions.has(prompt.session) && generationOf(prompt.session) === generation) {
+        await browser.windows.update(tab.windowId, { drawAttention: true });
+      }
     } catch {}
     return { answer, promptInTab: prompt.tabId === tabId };
   }
@@ -629,6 +635,7 @@ export function createSiteAccess<Handle>({
     url: string,
     tabId: number,
     promptUrl: string | undefined,
+    generation: number,
   ): Promise<Approval> {
     const prompt: Prompt<Handle> = {
       session,
@@ -661,8 +668,12 @@ export function createSiteAccess<Handle>({
       }
       throw error;
     }
-    // Stopped while the page loaded: no window comes to the front for it.
-    if (!stoppedSessions.has(session)) await groups.showPromptWindow(session, tab.windowId);
+    // Stopped or ended while the page loaded: no window comes to the front for it.
+    await groups.showPromptWindow(
+      session,
+      tab.windowId,
+      () => !stoppedSessions.has(session) && generationOf(session) === generation,
+    );
     return { answer, promptInTab: true };
   }
 

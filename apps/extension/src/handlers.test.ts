@@ -10660,6 +10660,7 @@ function setup({
     timers,
     sessions,
     access,
+    groups,
     recipes,
     probe,
     uploads,
@@ -11405,6 +11406,122 @@ describe("a request whose session ends while it runs", { timeout: 10000 }, () =>
     assert.deepEqual(creates, []);
     assert.deepEqual(fake.windowCreations, []);
     assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  /**
+   * Ends the session in tab_open's next read of the session's group or of the settings, once the
+   * gate check of `url`, when it has one, answered: inside `createTab`, before it calls Firefox.
+   */
+  function endInCreate(
+    context: ReturnType<typeof setup>,
+    read: "group" | "settings",
+    url: string | undefined,
+  ): void {
+    const { fake, access } = context;
+    let armed = url === undefined;
+    const check = access.check;
+    access.check = async (checked, checkedUrl) => {
+      const decision = await check(checked, checkedUrl);
+      armed = true;
+      return decision;
+    };
+    const end = () => {
+      if (!armed) return;
+      armed = false;
+      access.endSession("s1");
+    };
+    if (read === "group") {
+      const get = fake.browser.tabGroups.get;
+      fake.browser.tabGroups.get = (groupId) => {
+        end();
+        return get(groupId);
+      };
+    } else {
+      const get = fake.browser.storage.local.get;
+      fake.browser.storage.local.get = (keys) => {
+        end();
+        return get(keys);
+      };
+    }
+  }
+
+  /** tab_open's three ways to a new tab: blank, on an allowed page, on a site prompt. */
+  const OPENED = [undefined, "https://a.example/", "https://b.example/"];
+
+  it("opens no tab when the session ends while tab_open reads the session's group", async () => {
+    for (const url of OPENED) {
+      const context = setup();
+      const { fake, call, open, grant } = context;
+      await grant("https://a.example");
+      await open("s1");
+      const creates = recordCreates(fake);
+      endInCreate(context, "group", url);
+      await rejectsWith(
+        call("s1", "tab_open", url === undefined ? {} : { url }),
+        "session_ended",
+        String(url),
+      );
+      assert.deepEqual(creates, [], String(url));
+    }
+  });
+
+  it("opens no tab or window when the session ends while tab_open reads the settings", async () => {
+    for (const url of OPENED) {
+      const context = setup();
+      const { fake, call, grant } = context;
+      await grant("https://a.example");
+      await fake.browser.storage.local.set({ sessionWindow: true });
+      const user = fake.openTab({ url: "https://user.example/" });
+      const creates = recordCreates(fake);
+      endInCreate(context, "settings", url);
+      await rejectsWith(
+        call("s1", "tab_open", url === undefined ? {} : { url }),
+        "session_ended",
+        String(url),
+      );
+      assert.deepEqual(creates, [], String(url));
+      assert.deepEqual(fake.windowCreations, [], String(url));
+      assert.deepEqual([...fake.tabs.keys()], [user.id], String(url));
+    }
+  });
+
+  it("closes the session's own window when the session ends while Firefox opens it for tab_open", async () => {
+    const { fake, access, groups, call } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ url: "https://user.example/", active: true });
+    const create = fake.browser.windows.create;
+    fake.browser.windows.create = async (createData) => {
+      const window = await create(createData);
+      // As the background script ends a session.
+      access.endSession("s1");
+      groups.endSession("s1").catch(() => {});
+      return window;
+    };
+    await rejectsWith(call("s1", "tab_open"), "session_ended");
+    await flush();
+    assert.equal(fake.windowCreations.length, 1);
+    assert.equal(fake.windowRemovals.length, 1);
+    assert.deepEqual([...fake.tabs.keys()], [user.id]);
+  });
+
+  it("closes the session's own window when the session ends while Firefox makes tab_open's tab in it", async () => {
+    const { fake, access, groups, call, grant } = setup();
+    await grant("https://a.example");
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    const user = fake.openTab({ url: "https://user.example/", active: true });
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async (properties) => {
+      const tab = await create(properties);
+      // As the background script ends a session.
+      access.endSession("s1");
+      groups.endSession("s1").catch(() => {});
+      return tab;
+    };
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/" }), "session_ended");
+    await flush();
+    assert.equal(fake.windowCreations.length, 1);
+    assert.equal(fake.windowRemovals.length, 1);
     assert.deepEqual([...fake.tabs.keys()], [user.id]);
   });
 

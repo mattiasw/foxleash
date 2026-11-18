@@ -386,7 +386,9 @@ export function createHandlers<Handle>({
       return { tab: await openOnPage(session, url, generation) };
     }
     if (url !== undefined) return { tab: await openOnPrompt(session, url, generation) };
-    const tab = await groups.createTab(session, { url: "about:blank", active: false });
+    const tab = await groups.createTab(session, { url: "about:blank", active: false }, () =>
+      refuseIfEnded(access, session, generation),
+    );
     await groups.ensureGroup(session, tab);
     try {
       refuseIfEnded(access, session, generation);
@@ -411,7 +413,9 @@ export function createHandlers<Handle>({
    */
   async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
     refuseIfEnded(access, session, generation);
-    const tab = await groups.createTab(session, { url, active: false, discarded: true });
+    const tab = await groups.createTab(session, { url, active: false, discarded: true }, () =>
+      refuseIfEnded(access, session, generation),
+    );
     try {
       await groups.ensureGroup(session, tab);
     } catch (error) {
@@ -451,11 +455,11 @@ export function createHandlers<Handle>({
   async function openOnPrompt(session: string, url: string, generation: number): Promise<TabInfo> {
     refuseIfEnded(access, session, generation);
     const promptUrl = access.newPromptUrl();
-    const tab = await groups.createTab(session, {
-      url: promptUrl,
-      active: false,
-      discarded: true,
-    });
+    const tab = await groups.createTab(
+      session,
+      { url: promptUrl, active: false, discarded: true },
+      () => refuseIfEnded(access, session, generation),
+    );
     let approval: Approval;
     try {
       await groups.ensureGroup(session, tab);
