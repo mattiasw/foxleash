@@ -304,7 +304,15 @@ the cache.
   or holds only white space. So does a body that Firefox cut because it is over its limit for
   request bodies (16,777,216 bytes by default), or one that is not JSON in strict UTF-8, which
   says whether it is filled. When Firefox gives a file instead of the body's bytes, `other` does
-  not say whether it is filled.
+  not say whether it is filled. A body sent as a urlencoded form that Firefox cannot decode as
+  one, such as JSON holding a stray `%`, or a form that a page in a legacy encoding sends with a
+  letter like `é`, shows as it would with another content type: as `json` with its keys or as
+  `other` that says whether it is filled. A form body, or any body sent as a urlencoded form,
+  shows as `other` once it is 1,048,576 bytes (1 MiB) or more, since Firefox then gives Foxleash
+  none of its fields: a multipart body's `other` says whether it is filled, a urlencoded one's
+  does not. A file chosen from the computer may not count toward that size. An empty form body
+  also shows as `other` that does not say whether it is filled, since Firefox gives the same for
+  it.
 - Foxleash reads what a request sent only in the tabs of a running agent session's group. A body
   shows as `other`, with nothing more, when its request was sent before its tab was in such a
   group, or right after Foxleash spent a quarter of a second or more reading large bodies: it then

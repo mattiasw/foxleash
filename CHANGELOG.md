@@ -77,6 +77,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `resize_window` could report the window's size from before the resize, seen on Wayland when
   making a large window smaller. It now waits up to a second for the window to take its new size
   and reports that.
+- `read_network` showed a urlencoded form body of 1 MiB or more as a form with no fields, as if
+  the form had sent nothing. It now shows it as `other`, since Firefox gives Foxleash none of its
+  fields. An empty form body now shows as `other` too.
 
 ### Security
 

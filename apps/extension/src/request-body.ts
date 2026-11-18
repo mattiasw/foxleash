@@ -37,6 +37,9 @@ export function bodyShape(body: RequestBody | null | undefined): NetworkBody | u
 }
 
 function formShape(formData: Record<string, (string | undefined)[]>): NetworkBody {
+  // No name at all: Firefox read none of the body, as for a urlencoded one of 1 MiB or more
+  // (ADR 0090), or the body was empty.
+  if (Object.keys(formData).length === 0) return { kind: "other" };
   const entries: [string, string[]][] = [];
   for (const [name, values] of Object.entries(formData)) {
     // Firefox's trace of an empty part, as a leading `&` or `&&` leaves.

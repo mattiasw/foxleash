@@ -442,6 +442,18 @@ Exceptions and limits:
 - A JSON body that Firefox cuts at its limit for request bodies (16,777,216 bytes by default)
   turns from `json` to `other`. An agent that can make the page send about 16 MiB in another
   field of the same body can find the body's exact length from where it turns.
+- A form body, or any body sent as a urlencoded form, turns to `other` once it is 1,048,576
+  bytes (1 MiB) or more, because Firefox then gives Foxleash none of its fields: a form from
+  `form` with its fields, and a body Firefox cannot read as a form, such as JSON holding a stray
+  `%`, from `json` with its keys or from `other` that says whether it is filled. An agent that
+  can make the page send about 1 MiB in another field of the same body, with 2 to 7 `type` calls
+  in one `batch` depending on how the form is encoded, or with a file it uploads into the same
+  form, can find the body's exact length from where it turns (ADR 0090).
+- Below that size, a body sent as a urlencoded form shows as `form` only when Firefox can decode
+  all of it. When a value holds a stray `%`, or a letter like `é` that a page in a legacy encoding
+  such as windows-1252 sends, Firefox gives its bytes instead: the body shows as `other` that says
+  whether it is filled, or, when it is JSON, as `json` with its keys instead of `other`. So the
+  shape shows whether a value, a protected one included, holds such a character.
 - Requests of frames from other sites show the shapes of their bodies too.
 - Foxleash asks Firefox for request bodies only while an agent session runs that you have not
   stopped, and reads one only when its request comes from a tab in the group of such a session.

@@ -308,6 +308,36 @@ describe("read_network in real Firefox", () => {
     });
   });
 
+  test("a form body shows its field names up to Firefox's edge for form bodies, other past it or empty", async () => {
+    const tab = tabOf(
+      await harness.ok(session, "tab_open", { url: fixtures.url("/network-large-form") }),
+    ).id;
+    await waitForTitle(tab, TITLES.networkLargeFormDone);
+    const paths = [
+      "/api/form-at-edge",
+      "/api/form-over-edge",
+      "/api/form-empty",
+      "/api/multipart-at-edge",
+      "/api/multipart-over-edge",
+    ];
+    const read = await readUntil(
+      tab,
+      (requests) => paths.every((path) => requestTo(requests, path)?.status !== undefined),
+      { body: true },
+    );
+    const named = { kind: "form", fields: [{ name: "a", depth: 1, kind: "text", filled: true }] };
+    assert.deepEqual(requestTo(read.requests, "/api/form-at-edge")?.requestBody, named);
+    assert.deepEqual(requestTo(read.requests, "/api/form-over-edge")?.requestBody, {
+      kind: "other",
+    });
+    assert.deepEqual(requestTo(read.requests, "/api/form-empty")?.requestBody, { kind: "other" });
+    assert.deepEqual(requestTo(read.requests, "/api/multipart-at-edge")?.requestBody, named);
+    assert.deepEqual(requestTo(read.requests, "/api/multipart-over-edge")?.requestBody, {
+      kind: "other",
+      filled: true,
+    });
+  });
+
   test("another session's read of the tab is refused", async () => {
     const other = await harness.connect();
     const text = await harness.refused(other, "read_network", { tabId: networkTab });

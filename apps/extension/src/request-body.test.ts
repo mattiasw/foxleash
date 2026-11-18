@@ -175,6 +175,10 @@ describe("bodyShape", () => {
     });
   });
 
+  it("gives a form body Firefox gave no names of as other, not a form with no fields", () => {
+    assert.deepEqual(shapeOf({ formData: {} }, []), { kind: "other" });
+  });
+
   it("lists at most 100 form fields, marking the shape truncated only when more were left out", () => {
     const names = (count: number) =>
       Object.fromEntries(Array.from({ length: count }, (_, index) => [`f${index}`, ["v", "w"]]));

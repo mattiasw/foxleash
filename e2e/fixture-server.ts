@@ -70,6 +70,8 @@ export const TITLES = {
   networkLoginDone: "Fixture network login done",
   networkLarge: "Fixture network large",
   networkLargeDone: "Fixture network large done",
+  networkLargeForm: "Fixture network large form",
+  networkLargeFormDone: "Fixture network large form done",
   networkBodies: "Fixture network bodies",
   networkBodiesFrame: "Fixture network bodies frame",
   networkBurst: "Fixture network burst",
@@ -877,11 +879,18 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendPage(response, TITLES.networkLoginDone);
     } else if (path === "/network-large") {
       sendHtml(response, NETWORK_LARGE_PAGE);
+    } else if (path === "/network-large-form") {
+      sendHtml(response, NETWORK_LARGE_FORM_PAGE);
     } else if (
       path === "/api/json" ||
       path === "/api/form-json" ||
       path === "/api/json-at-limit" ||
-      path === "/api/json-over-limit"
+      path === "/api/json-over-limit" ||
+      path === "/api/form-at-edge" ||
+      path === "/api/form-over-edge" ||
+      path === "/api/form-empty" ||
+      path === "/api/multipart-at-edge" ||
+      path === "/api/multipart-over-edge"
     ) {
       request.resume();
       response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
@@ -3867,6 +3876,39 @@ window.addEventListener("load", async () => {
     });
   }
   document.title = "${TITLES.networkLargeDone}";
+});
+</script>
+</body></html>
+`;
+
+// The longest form body, in bytes, whose fields Firefox gives an extension; of a longer one it
+// gives none (ADR 0090).
+const FIREFOX_FORM_BODY_EDGE = 1_048_575;
+
+// On load: fetch POSTs of a urlencoded and of a multipart form body exactly as long as Firefox's
+// edge for form bodies, each followed by one a byte longer, and an empty urlencoded one; the title
+// says when all finished.
+const NETWORK_LARGE_FORM_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkLargeForm}</title></head>
+<body><h1>${TITLES.networkLargeForm}</h1>
+<script>
+const URLENCODED = "application/x-www-form-urlencoded";
+const MULTIPART = "multipart/form-data; boundary=b0undary";
+const head = '--b0undary\\r\\nContent-Disposition: form-data; name="a"\\r\\n\\r\\n';
+const tail = "\\r\\n--b0undary--\\r\\n";
+const urlencoded = (bytes) => "a=" + "x".repeat(bytes - 2);
+const multipart = (bytes) => head + "x".repeat(bytes - head.length - tail.length) + tail;
+window.addEventListener("load", async () => {
+  for (const [path, type, body] of [
+    ["/api/form-at-edge", URLENCODED, urlencoded(${FIREFOX_FORM_BODY_EDGE})],
+    ["/api/form-over-edge", URLENCODED, urlencoded(${FIREFOX_FORM_BODY_EDGE + 1})],
+    ["/api/form-empty", URLENCODED, ""],
+    ["/api/multipart-at-edge", MULTIPART, multipart(${FIREFOX_FORM_BODY_EDGE})],
+    ["/api/multipart-over-edge", MULTIPART, multipart(${FIREFOX_FORM_BODY_EDGE + 1})],
+  ]) {
+    await fetch(path, { method: "POST", headers: { "Content-Type": type }, body });
+  }
+  document.title = "${TITLES.networkLargeFormDone}";
 });
 </script>
 </body></html>
