@@ -411,7 +411,7 @@
       ]
     },
     {
-      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and tabs Foxleash opens for it meanwhile are not selected",
+      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and Foxleash does not select the tabs it opens for the agent meanwhile. Firefox itself may still select a tab to show a page's sign-in dialog or to ask whether you want to leave a page, and a page may select a tab it opens, also after the agent's click",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "function keepPromptInView(" },
         {
@@ -422,6 +422,16 @@
         {
           "file": "apps/extension/src/handlers.ts",
           "contains": "url: \"about:blank\", active: false"
+        },
+        { "file": "apps/extension/src/wait-for-load.ts", "contains": "SIGN_IN_GRACE_MS" },
+        {
+          "file": "apps/extension/src/wait-for-load.ts",
+          "contains": "statusCode === 401 ? \"www-authenticate\""
+        },
+        { "file": "apps/extension/src/wait-for-load.ts", "contains": "\"sign_in_needed\"" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "error.code === \"sign_in_needed\""
         }
       ]
     }

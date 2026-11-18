@@ -174,6 +174,9 @@ describe("tab_close with a beforeunload prompt in real Firefox", () => {
   });
 });
 
+// The extension's load wait would fail only after 30 s.
+const SIGN_IN_ANSWER_MS = 10_000;
+
 describe("leave prompts beside an open question in real Firefox", () => {
   let harness: Harness;
   let firefox: Firefox;
@@ -345,6 +348,50 @@ describe("leave prompts beside an open question in real Firefox", () => {
     assert.deepEqual(whileAsked, [page.tabId], "selected while the leave prompt is open");
     await waitForUrl(page.tabId, allowed.url("/a?case=forward"));
     assert.deepEqual(await selected(), [page.tabId], "selected after the user left the page");
+  });
+
+  test("tab_open of a 401 page without a sign-in challenge loads it, also beside an open question", async () => {
+    await showQuestion();
+    const tab = tabOf(
+      await harness.ok(session, "tab_open", { url: allowed.url("/sign-in-none"), view: false }),
+    );
+    assert.equal(tab.active, false, "the tab opened beside the question is not selected");
+    assert.deepEqual(await selected(), [question], "the question's tab is still selected");
+    await harness.ok(session, "tab_close", { tabId: tab.id });
+    await showQuestion();
+  });
+
+  test("Firefox selects a tab tab_open opens to show its sign-in dialog, also beside an open question, and tab_open answers within seconds", async () => {
+    await showQuestion();
+    const started = Date.now();
+    const text = await harness.refused(session, "tab_open", {
+      url: allowed.url("/sign-in"),
+      view: false,
+    });
+    const elapsed = Date.now() - started;
+    const match = /Tab (\d+) waits for the user to answer Firefox's sign-in dialog/.exec(text);
+    assert.ok(match !== null, text);
+    const tabId = Number(match[1]);
+    assert.ok(elapsed < SIGN_IN_ANSWER_MS, `tab_open answered after ${elapsed} ms`);
+    // Firefox's own select, to show its dialog (ADR 0082): a Firefox that stops making it fails
+    // here when the pinned version moves.
+    await pollUntil(
+      async () => {
+        const shown = await selected();
+        if (shown.length === 1 && shown[0] === tabId) return true;
+        throw new Error(`selected: ${JSON.stringify(shown)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${tabId} to be selected for the sign-in dialog`,
+    );
+    assert.match(
+      await harness.refused(session, "tab_select", { tabId }),
+      new RegExp(`waiting for the user to answer in tab ${question} `),
+    );
+    const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
+    assert.ok(ids.includes(tabId), `tabs_list lists ${JSON.stringify(ids)}`);
+    await harness.ok(session, "tab_close", { tabId });
+    await showQuestion();
   });
 
   /** The ids of the session's selected tabs; all of them are in its group's window. */

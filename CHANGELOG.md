@@ -46,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page that runs one, or the settings page, in its recipe editor heading and its status lines.
 - On the settings page, a click is no longer lost when a list on the page changes while the mouse
   button is down, such as when an agent session ends or a recipe is saved in another tab.
+- `tab_open` and `navigate` to an address now answer about 2 seconds after the page asks you to
+  sign in with Firefox's own sign-in dialog, instead of failing after 30 seconds, when `tab_open`
+  also closed the tab; the tab now stays open with the dialog. The add-on listing and the docs now
+  say that Firefox itself may select a tab to show such a dialog, or to ask whether you want to
+  leave a page, while Foxleash is asking you something, and that a page may select a tab it opens.
 
 ### Security
 

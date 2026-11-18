@@ -1,5 +1,6 @@
 import type {
   BrowserApi,
+  HeadersReceivedDetails,
   NavigationDetails,
   Tab,
   TabUpdatedListener,
@@ -24,6 +25,13 @@ export const LOAD_TIMEOUT_MS = 30000;
  * How long a URL load whose document is ready may take to finish before the tab is returned as it is.
  */
 export const LOAD_AFTER_READY_MS = 400;
+/**
+ * How long after a sign-in challenge for the tab's page a URL load may take to commit a document,
+ * or to get a response that is no challenge, before the wait fails with `sign_in_needed`. Either
+ * in this time means Firefox showed no dialog: it signed in by itself, another add-on answered, or
+ * it shows the response as the page.
+ */
+export const SIGN_IN_GRACE_MS = 2000;
 
 /**
  * Runs `navigate` and resolves with the tab once its load completes. `url` is the web URL the
@@ -44,7 +52,14 @@ export const LOAD_AFTER_READY_MS = 400;
  * tab as it is. With `files`, every kind of wait fails at once with `file_refused` when the file
  * guard refuses a response in the tab's top frame while it runs: such a load commits no document,
  * so nothing else would tell the wait. That holds after the tab arrived too: a page that moves on
- * to such a file before the wait ends is reported, since no later result would say so.
+ * to such a file before the wait ends is reported, since no later result would say so. With a URL,
+ * the wait also fails with `sign_in_needed` `SIGN_IN_GRACE_MS` after a response to a top-level
+ * request of the tab is a sign-in challenge (a 401 with WWW-Authenticate, a 407 with
+ * Proxy-Authenticate) when no top-frame document commits, no new top-frame navigation starts and
+ * no other top-level response comes meanwhile: Firefox then holds the load in its sign-in dialog
+ * until the user answers, and nothing else would end the wait before the timeout, which also fails
+ * with `sign_in_needed` while such a challenge is in its grace. The response is heard without
+ * blocking, so Firefox still shows its dialog. That too holds after the tab arrived.
  */
 export function waitForLoad<Handle>(
   browser: BrowserApi,
@@ -88,6 +103,7 @@ export function waitForLoad<Handle>(
     // a navigation leaves it.
     let readyAsk: object | undefined;
     let readyTimer: Handle | undefined;
+    let signInTimer: Handle | undefined;
 
     // Removed when the wait settles, so it never sees a settled wait.
     const listener: TabUpdatedListener = (_tabId, changeInfo, tab) => {
@@ -108,6 +124,8 @@ export function waitForLoad<Handle>(
     const onCommitted = (details: NavigationDetails) => {
       // Firefox's error page commits the URL that failed; a new tab's own about:blank is not the page.
       if (details.tabId !== tabId || details.frameId !== 0 || details.url === "about:blank") return;
+      // A document is shown, so no sign-in dialog holds the load.
+      clearSignIn();
       if (restoring) return;
       // Before any loading, a commit of the URL can be a restore's, not this navigation's: it counts
       // only if loading comes next. With `commit`, the navigation began after the wait did, so its
@@ -130,16 +148,34 @@ export function waitForLoad<Handle>(
       committedBeforeLoad = false;
       // A load of about:blank in the tab is not the requested navigation; its restore may follow.
       if (details.url === "about:blank") return;
+      // A new navigation ends the load a sign-in dialog held, and the dialog with it.
+      clearSignIn();
       restoring = false;
       // The page leaves the document it arrived at, as a client redirect does: the next commit asks
       // again.
       forgetReady();
     };
 
+    // Firefox calls no non-blocking onAuthRequired listener for a top-level load, so the challenge
+    // is read from the response. Returns nothing: the request goes on.
+    const onHeadersReceived = (details: HeadersReceivedDetails) => {
+      // While a dialog holds the load, no other top-level response comes in the tab: one that is
+      // no challenge answers the repeated request, or a new navigation's.
+      clearSignIn();
+      if (signInChallenge(details)) signInTimer = timers.setTimeout(signInNeeded, SIGN_IN_GRACE_MS);
+    };
+
     browser.tabs.onUpdated.addListener(listener, { tabId, properties: ["status"] });
     if (url !== undefined || commit) {
       browser.webNavigation.onBeforeNavigate.addListener(onBeforeNavigate);
       browser.webNavigation.onCommitted.addListener(onCommitted);
+    }
+    if (url !== undefined) {
+      browser.webRequest.onHeadersReceived.addListener(
+        onHeadersReceived,
+        { urls: ["<all_urls>"], types: ["main_frame"], tabId },
+        ["responseHeaders"],
+      );
     }
     const stopHearingRefusals = files?.onRefused((refusedTabId, site, frameId) => {
       if (refusedTabId !== tabId || frameId !== 0) return;
@@ -165,7 +201,10 @@ export function waitForLoad<Handle>(
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) return;
       timeoutTimer = timers.setTimeout(() => {
-        if (url !== undefined && !arrived) {
+        // A challenge within the grace still holds the load in the dialog: closing its tab would
+        // close the dialog the user is answering.
+        if (signInTimer !== undefined) signInNeeded();
+        else if (url !== undefined && !arrived) {
           fail(
             new ToolError(
               "navigation_timeout",
@@ -198,6 +237,20 @@ export function waitForLoad<Handle>(
       readyTimer = timers.setTimeout(() => {
         currentTab().then(finish, fail);
       }, LOAD_AFTER_READY_MS);
+    }
+
+    function clearSignIn(): void {
+      if (signInTimer !== undefined) timers.clearTimeout(signInTimer);
+      signInTimer = undefined;
+    }
+
+    function signInNeeded(): void {
+      fail(
+        new ToolError(
+          "sign_in_needed",
+          `Tab ${tabId} waits for the user to answer Firefox's sign-in dialog. Firefox shows the page once the user signs in or cancels; read the tab after that.`,
+        ),
+      );
     }
 
     function restart(): void {
@@ -242,12 +295,24 @@ export function waitForLoad<Handle>(
       browser.tabs.onUpdated.removeListener(listener);
       browser.webNavigation.onBeforeNavigate.removeListener(onBeforeNavigate);
       browser.webNavigation.onCommitted.removeListener(onCommitted);
+      browser.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
       stopHearingRefusals?.();
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
       if (readyTimer !== undefined) timers.clearTimeout(readyTimer);
+      clearSignIn();
     }
   });
+}
+
+/**
+ * Whether the response asks for a sign-in: a server's 401 with WWW-Authenticate or a proxy's 407
+ * with Proxy-Authenticate. Header names are case-insensitive; HTTP/2 sends them lowercase.
+ */
+function signInChallenge({ statusCode, responseHeaders = [] }: HeadersReceivedDetails): boolean {
+  const header =
+    statusCode === 401 ? "www-authenticate" : statusCode === 407 ? "proxy-authenticate" : undefined;
+  return header !== undefined && responseHeaders.some(({ name }) => name.toLowerCase() === header);
 }
 
 /**

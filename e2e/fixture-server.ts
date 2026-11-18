@@ -942,6 +942,21 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end();
     } else if (path === "/before-unload") {
       sendHtml(response, BEFORE_UNLOAD_PAGE);
+    } else if (path === "/sign-in") {
+      // Firefox holds the load in its sign-in dialog until the user answers.
+      response.writeHead(401, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        "WWW-Authenticate": 'Basic realm="Foxleash fixture"',
+      });
+      response.end(SIGN_IN_PAGE);
+    } else if (path === "/sign-in-none") {
+      // No challenge, so Firefox shows the page.
+      response.writeHead(401, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+      });
+      response.end(SIGN_IN_PAGE);
     } else if (path === "/counter") {
       counter += 1;
       sendPage(response, counterTitle(counter));
@@ -1306,6 +1321,8 @@ window.onbeforeunload = (event) => {
 </script>
 </body></html>
 `;
+
+const SIGN_IN_PAGE = "<!doctype html><title>Sign in</title><p>This page needs a sign-in.</p>";
 
 // The timers keep the uncaught error and the rejection after the console calls, in that order.
 const CONSOLE_PAGE = `<!doctype html>

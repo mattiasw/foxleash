@@ -86,7 +86,8 @@ to, and leave the others alone.
 While Foxleash is asking you something in a tab of the agent's group (whether to allow a site,
 to save or run a recipe, or to allow the sites a task needs), the agent cannot switch to another
 tab, and a tab it opens with `tab_open` meanwhile is not selected, though Firefox may still
-select a tab a page opens, also after the agent's click.
+select a tab a page opens, also after the agent's click, or a tab whose page asks you to sign in
+with Firefox's sign-in dialog (see `tab_open` and `navigate` below).
 
 When a tab's page asks you to confirm leaving it, because the agent closes the tab or loads
 another page in it (a new address, a reload, going back or forward), Firefox selects that tab to
@@ -120,6 +121,17 @@ address.
   the page that loaded moves on to such an answer by itself before the call returns. `tab_open`
   closes the tab it made, and a tab `navigate` used keeps its page.
   [Security](security.md#files-a-page-loads-in-the-agents-tabs) has the limits.
+- When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
+  to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that
+  names the tab. The tab stays open with the dialog: Firefox selects it to show the dialog, even
+  while Foxleash is asking you something, and shows the page once you sign in or cancel, so the
+  agent reads the tab after that. The same holds for a reload when Foxleash loads the page's
+  address for it (in a tab Firefox had unloaded, or on a site question you answered). A plain
+  reload of the page the tab shows, going back and going forward do not notice the dialog, and
+  return the tab as it is when their wait runs out.
+  When Firefox signs you in by itself with a login it already holds and the site then takes more
+  than 2 seconds to answer, the call can still fail this way although no dialog shows; the page
+  then loads in the tab.
 
 ### While a tab is loading another page
 

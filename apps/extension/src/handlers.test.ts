@@ -71,7 +71,12 @@ import {
 import { createTabNavigations } from "./tab-navigations.ts";
 import { createUploads } from "./uploads.ts";
 import { WAIT_POLL_MS } from "./wait-for.ts";
-import { LOAD_AFTER_READY_MS, LOAD_GRACE_MS, LOAD_TIMEOUT_MS } from "./wait-for-load.ts";
+import {
+  LOAD_AFTER_READY_MS,
+  LOAD_GRACE_MS,
+  LOAD_TIMEOUT_MS,
+  SIGN_IN_GRACE_MS,
+} from "./wait-for-load.ts";
 
 describe("tabs_list", { timeout: 10000 }, () => {
   it("returns only the tabs in the session's group", async () => {
@@ -3927,6 +3932,143 @@ describe("a load that ends in a file the file guard refuses", { timeout: 10000 }
   });
 });
 
+describe("a load that waits on Firefox's sign-in dialog", { timeout: 10000 }, () => {
+  it("fails tab_open on a sign-in, and keeps the tab without selecting it", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://a.example");
+    const first = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const opening = open("s1", "https://a.example/private");
+    opening.catch(() => {});
+    const tabId = await begun(loads);
+    assert.notEqual(tabId, first.id);
+    await assertSignInNeeded(fake, timers, tabId, opening);
+    await flush();
+    assert.deepEqual([...fake.tabs.keys()], [first.id, tabId]);
+    assert.equal(fake.tabs.get(tabId)?.groupId, groupIdOf(fake, first.id));
+    assert.deepEqual(selects(fake, tabId), []);
+  });
+
+  it("fails tab_open on a sign-in beside the session's open site prompt, and keeps the tab", async () => {
+    const { fake, timers, call, access, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    const other = await open("s1");
+    const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+    void asking.catch(() => {});
+    await promptOf("s1");
+    const loads = loadNothing(fake);
+    const opening = call("s1", "tab_open", { url: "https://a.example/private" });
+    opening.catch(() => {});
+    const tabId = await begun(loads);
+    await assertSignInNeeded(fake, timers, tabId, opening);
+    await flush();
+    assert.ok(fake.tabs.has(tabId));
+    assert.equal(fake.tabs.get(tabId)?.groupId, groupIdOf(fake, other.id));
+    assert.deepEqual(selects(fake, tabId), []);
+    assert.equal(fake.tabs.get(other.id)?.active, true);
+    assert.equal(access.openPrompt("s1")?.tabId, other.id);
+  });
+
+  it("fails tab_open of a site allowed meanwhile on a sign-in, and keeps the tab", async () => {
+    const { fake, timers, call, grant } = setup();
+    const user = fake.openTab({ url: "https://user.example/", active: true });
+    const create = fake.browser.tabs.create;
+    fake.browser.tabs.create = async (properties) => {
+      await grant("https://a.example");
+      return create(properties);
+    };
+    const loads = loadNothing(fake);
+    const opening = call("s1", "tab_open", { url: "https://a.example/private" });
+    opening.catch(() => {});
+    const tabId = await begun(loads);
+    await assertSignInNeeded(fake, timers, tabId, opening);
+    await flush();
+    assert.deepEqual([...fake.tabs.keys()], [user.id, tabId]);
+    assert.deepEqual(selects(fake, tabId), []);
+    assert.equal(fake.tabs.get(user.id)?.active, true);
+  });
+
+  it("fails tab_open on a sign-in once the user allowed the site in its tab, and keeps the tab", async () => {
+    const { fake, timers, call, page, promptOf } = setup();
+    const user = fake.openTab({ url: "https://user.example/" });
+    const opening = call("s1", "tab_open", { url: "https://a.example/private" });
+    opening.catch(() => {});
+    const shown = await page("s1");
+    const { tabId } = await promptOf("s1");
+    const loads = loadNothing(fake);
+    shown.deliver({ type: "answer", answer: "once" });
+    assert.equal(await begun(loads), tabId);
+    await assertSignInNeeded(fake, timers, tabId, opening);
+    await flush();
+    assert.deepEqual([...fake.tabs.keys()], [user.id, tabId]);
+  });
+
+  it("fails navigate to a URL on a sign-in, and keeps the tab", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/private" });
+    navigated.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertSignInNeeded(fake, timers, tab.id, navigated);
+    assert.ok(fake.tabs.has(tab.id));
+  });
+
+  it("fails navigate reload of a tab Firefox unloaded on a sign-in", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/private");
+    await open("s1", "https://a.example/");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    fakeTab.discarded = true;
+    const loads = loadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertSignInNeeded(fake, timers, tab.id, reloaded);
+  });
+});
+
+/**
+ * The tab's top-level response is a 401 Basic challenge and nothing commits, and `call` fails saying
+ * so once `SIGN_IN_GRACE_MS` passed. No listener that hears it stops the request.
+ */
+async function assertSignInNeeded(
+  fake: FakeBrowser,
+  timers: { now(): number; advance(ms: number): void },
+  tabId: number,
+  call: Promise<unknown>,
+): Promise<void> {
+  const before = timers.now();
+  const answers = fake.emitWebRequest("onHeadersReceived", {
+    requestId: "sign-in",
+    tabId,
+    timeStamp: 1,
+    frameId: 0,
+    url: "https://a.example/private",
+    type: "main_frame",
+    statusCode: 401,
+    responseHeaders: [
+      { name: "Content-Type", value: "text/html; charset=utf-8" },
+      { name: "WWW-Authenticate", value: 'Basic realm="a.example"' },
+    ],
+  });
+  assert.deepEqual(answers, [undefined, undefined]);
+  timers.advance(SIGN_IN_GRACE_MS);
+  await assert.rejects(call, {
+    code: "sign_in_needed",
+    message: `Tab ${tabId} waits for the user to answer Firefox's sign-in dialog. Firefox shows the page once the user signs in or cancels; read the tab after that.`,
+  });
+  assert.equal(timers.now(), before + SIGN_IN_GRACE_MS);
+}
+
+/** The selects Foxleash made of the tab. */
+function selects(fake: FakeBrowser, tabId: number): unknown[] {
+  return fake.tabUpdates.filter((update) => update.tabId === tabId && update.active === true);
+}
+
 /**
  * Makes each load of a URL into a tab begin and commit nothing, as a load whose answer is a file
  * does; returns the ids of the tabs loaded so far.
@@ -3955,7 +4097,10 @@ async function begun(loads: number[]): Promise<number> {
   return tabId;
 }
 
-/** A file from a site no test approves answers the tab's top-frame load; the guard's answer. */
+/**
+ * A file from a site no test approves answers the tab's top-frame load; the guard's answer. A load
+ * wait of the tab also hears it, for a sign-in challenge, and answers nothing.
+ */
 function fileResponse(fake: FakeBrowser, tabId: number): unknown {
   const answers = fake.emitWebRequest("onHeadersReceived", {
     requestId: "file",
@@ -3970,8 +4115,10 @@ function fileResponse(fake: FakeBrowser, tabId: number): unknown {
       { name: "Content-Disposition", value: "attachment" },
     ],
   });
-  assert.equal(answers.length, 1);
-  return answers[0];
+  const [answer, ...others] = answers;
+  assert.ok(answers.length >= 1);
+  assert.ok(others.every((other) => other === undefined));
+  return answer;
 }
 
 /** The guard cancels the file, and `call` fails saying so with no time passed. */

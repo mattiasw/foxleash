@@ -405,7 +405,9 @@ export function createHandlers<Handle>({
    * so the page never loads outside the session's group. Loaded before it is selected: selecting
    * a tab Firefox has not loaded restores its page as a history load, which shows the cached copy
    * without asking the server unless the response was `no-store`. Not selected while the session
-   * is asking the user something.
+   * is asking the user something. A load that waits on Firefox's sign-in dialog fails with
+   * `sign_in_needed`, and the tab stays open, not selected by Foxleash: Firefox shows the dialog in
+   * it (ADR 0082).
    */
   async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
     refuseIfEnded(access, session, generation);
@@ -430,6 +432,8 @@ export function createHandlers<Handle>({
         ),
       );
     } catch (error) {
+      // Firefox shows its sign-in dialog in it, and selected it to do so.
+      if (error instanceof ToolError && error.code === "sign_in_needed") throw error;
       // Never selected, it holds nothing the user saw.
       await removeNewTab(session, tab.id);
       throw error;
@@ -441,7 +445,8 @@ export function createHandlers<Handle>({
    * Created unloaded on its prompt page, as `openOnPage`'s tab is on its page, so Firefox's unload
    * and restore add no about:blank entry; grouped before the prompt loads. A tab the prompt was
    * not shown in (its site allowed meanwhile) loads the page and is then selected, as
-   * `openOnPage`'s is, unless the session is asking the user something.
+   * `openOnPage`'s is, unless the session is asking the user something. A load that waits on
+   * Firefox's sign-in dialog fails with `sign_in_needed` and leaves the tab, as `openOnPage`'s does.
    */
   async function openOnPrompt(session: string, url: string, generation: number): Promise<TabInfo> {
     refuseIfEnded(access, session, generation);
@@ -465,8 +470,14 @@ export function createHandlers<Handle>({
       await approval.answer;
       loaded = await loadAfterAnswer(session, tab.id, url, { kind: "url", url }, generation);
     } catch (error) {
-      // A tab the prompt was never shown in holds nothing the user saw.
-      if (!approval.promptInTab) await removeNewTab(session, tab.id);
+      // A tab the prompt was never shown in holds nothing the user saw, unless Firefox shows its
+      // sign-in dialog in it.
+      if (
+        !approval.promptInTab &&
+        !(error instanceof ToolError && error.code === "sign_in_needed")
+      ) {
+        await removeNewTab(session, tab.id);
+      }
       throw error;
     }
     if (approval.promptInTab) return loaded;

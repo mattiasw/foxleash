@@ -161,6 +161,37 @@ An agent that can run programs on your computer can upload a file without these 
   sites, at most 20, grants them for the session only, never always, and sites on your blocklist
   or that you refused in the session stay so.
 
+## Questions stay in front of you
+
+While Foxleash is asking you something in a tab of the session's group (whether to allow a site,
+to save or run a recipe, or to allow the sites a task needs), the agent cannot select another tab:
+`tab_select` of any other tab is refused, and a tab `tab_open` opens is not selected. The agent
+cannot close the question's tab either, or load another page in it before you answer.
+
+Firefox and pages can still select a tab, and Foxleash does not stop them:
+
+- Firefox selects a tab to ask whether you want to leave its page, when the agent closes the tab
+  or loads another page in it (an address, a reload, going back or forward), and when a click by
+  the agent or the page itself starts such a load.
+- Firefox selects a tab to show its sign-in dialog when the page it loads asks you to sign in.
+  `tab_open` or `navigate` then fails about 2 seconds after the page asked, and the tab stays open
+  with the dialog.
+- A page may open a tab or select one it opened, also after the agent's click.
+- After the agent closes a tab you had selected, Firefox selects another.
+- Firefox may open its downloads panel when `download` saves a file.
+- Other agent sessions select their own tabs, their own questions included.
+- Only after you moved the question's tab out of the session's group: Firefox may bring the
+  session's own window to the front when Foxleash opens it, and `resize_window` may restore the
+  group's window.
+
+So a key you meant for the question can go to Firefox's dialog instead. A sign-in dialog may hold
+a login Firefox saved for the site that asked, so Enter could send it to that site; text you are
+typing into a recipe page can land in the dialog's fields; and Enter in a leave dialog can leave
+the page or close it. Such a tab stays open until you answer its dialog or close it. Foxleash's
+question still cannot be answered by mistake: its buttons stop answering as soon as its tab is
+hidden or Firefox's window loses focus, and answer again only after its tab has been shown, with
+the window focused, for a full second.
+
 ## Stopping an agent session
 
 The settings page lists each running agent session, numbered in the order it started, with a

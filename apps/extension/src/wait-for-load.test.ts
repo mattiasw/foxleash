@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import type { Tab } from "./browser-api.ts";
+import type { HttpHeader, Tab } from "./browser-api.ts";
 import {
   createFakeBrowser,
   createFakeTimers,
@@ -14,6 +14,7 @@ import {
   LOAD_AFTER_READY_MS,
   LOAD_GRACE_MS,
   LOAD_TIMEOUT_MS,
+  SIGN_IN_GRACE_MS,
   waitForLoad,
 } from "./wait-for-load.ts";
 
@@ -1709,7 +1710,361 @@ describe("waitForLoad", { timeout: 10000 }, () => {
       assertCleanedUp(fake, timers);
     });
   });
+
+  describe("with Firefox's sign-in dialog", () => {
+    const url = "https://a.example/private";
+
+    for (const [name, response] of [
+      ["a server's challenge", {}],
+      ["a proxy's challenge", { statusCode: 407, headers: [header("Proxy-Authenticate")] }],
+      ["a challenge in lowercase", { headers: [header("www-authenticate")] }],
+      ["a challenge in mixed case", { headers: [header("wWw-AuthenTicate")] }],
+    ] as const) {
+      it(`fails a load of a URL when ${name} for the tab's page commits nothing for 2 s`, async () => {
+        assert.equal(SIGN_IN_GRACE_MS, 2000);
+        const { fake, timers, tab } = setup();
+        const wait = track(
+          waitForLoad(fake.browser, timers, tab.id, url, async () =>
+            fake.emitStatus(tab.id, "loading"),
+          ),
+        );
+        await flush();
+        assert.deepEqual(challenge(fake, tab.id, response), [undefined]);
+        timers.advance(SIGN_IN_GRACE_MS - 1);
+        await flush();
+        assert.equal(wait.done(), false);
+        timers.advance(1);
+        await assert.rejects(wait.promise, (error: unknown) => {
+          assert.ok(error instanceof ToolError);
+          assert.equal(error.code, "sign_in_needed");
+          assert.equal(
+            error.message,
+            `Tab ${tab.id} waits for the user to answer Firefox's sign-in dialog. Firefox shows the page once the user signs in or cancels; read the tab after that.`,
+          );
+          return true;
+        });
+        assert.equal(timers.now(), SIGN_IN_GRACE_MS);
+        assert.deepEqual(signInRegistrations(fake), []);
+        assertCleanedUp(fake, timers);
+      });
+    }
+
+    for (const [name, tabOf, response] of [
+      ["a 401 without a challenge", "own", { headers: [header("Content-Type", "text/html")] }],
+      ["a 407 with a server's challenge", "own", { statusCode: 407 }],
+      ["a 200 with a challenge header", "own", { statusCode: 200 }],
+      ["another tab's challenge", "other", {}],
+      ["a frame's challenge", "own", { type: "sub_frame" }],
+    ] as const) {
+      it(`waits on after ${name}`, async () => {
+        const { fake, timers, tab } = setup();
+        const other = fake.openTab({ url: "https://a.example/" });
+        const wait = track(
+          waitForLoad(fake.browser, timers, tab.id, url, async () =>
+            fake.emitStatus(tab.id, "loading"),
+          ),
+        );
+        await flush();
+        challenge(fake, tabOf === "own" ? tab.id : other.id, response);
+        timers.advance(SIGN_IN_GRACE_MS);
+        await flush();
+        assert.equal(wait.done(), false);
+        tab.url = url;
+        fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+        fake.emitStatus(tab.id, "complete");
+        assert.equal((await wait.promise).url, url);
+        assert.deepEqual(signInRegistrations(fake), []);
+        assertCleanedUp(fake, timers);
+      });
+    }
+
+    it("waits on when the tab's page commits within 2 s of the challenge", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS - 1);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      timers.advance(SIGN_IN_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      assert.equal((await wait.promise).url, url);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("waits on when the page commits within 2 s, before the load reports loading", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(waitForLoad(fake.browser, timers, tab.id, url, async () => {}));
+      await flush();
+      challenge(fake, tab.id);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      fake.emitStatus(tab.id, "loading");
+      timers.advance(SIGN_IN_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      fake.emitStatus(tab.id, "complete");
+      assert.equal((await wait.promise).url, url);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails 2 s after a later challenge when the first one's page committed", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      timers.advance(SIGN_IN_GRACE_MS);
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await assert.rejects(wait.promise, { code: "sign_in_needed" });
+      assertCleanedUp(fake, timers);
+    });
+
+    it("counts the 2 s from the latest challenge", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      timers.advance(1000);
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS - 1);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await assert.rejects(wait.promise, { code: "sign_in_needed" });
+      assert.equal(timers.now(), 1000 + SIGN_IN_GRACE_MS);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails with sign_in_needed when the load times out within 2 s of a challenge", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      timers.advance(LOAD_TIMEOUT_MS - 500);
+      challenge(fake, tab.id);
+      timers.advance(499);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(1);
+      await assert.rejects(wait.promise, { code: "sign_in_needed" });
+      assert.equal(timers.now(), LOAD_TIMEOUT_MS);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("waits on when a new navigation starts within 2 s of the challenge", async () => {
+      const { fake, timers, tab } = setup();
+      const next = "https://a.example/next";
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS - 1);
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: next });
+      timers.advance(LOAD_TIMEOUT_MS - SIGN_IN_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      tab.url = next;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: next });
+      fake.emitStatus(tab.id, "complete");
+      assert.equal((await wait.promise).url, next);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails with navigation_timeout when a download answers the repeated request after a challenge", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS - 1);
+      challenge(fake, tab.id, {
+        statusCode: 200,
+        headers: [header("Content-Disposition", "attachment")],
+      });
+      timers.advance(SIGN_IN_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), false);
+      timers.advance(LOAD_TIMEOUT_MS);
+      await assert.rejects(wait.promise, { code: "navigation_timeout" });
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails with navigation_timeout when a new navigation ended the challenge's load", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "https://a.example/next" });
+      timers.advance(LOAD_TIMEOUT_MS);
+      await assert.rejects(wait.promise, { code: "navigation_timeout" });
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails 2 s after a challenge when only a navigation to about:blank starts meanwhile", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      challenge(fake, tab.id);
+      fake.emitBeforeNavigate({ tabId: tab.id, frameId: 0, url: "about:blank" });
+      timers.advance(SIGN_IN_GRACE_MS);
+      await flush();
+      assert.equal(wait.done(), true);
+      await assert.rejects(wait.promise, { code: "sign_in_needed" });
+      assertCleanedUp(fake, timers);
+    });
+
+    it("hears only the tab's top-level responses, with their headers, without blocking them", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = waitForLoad(fake.browser, timers, tab.id, url, async () =>
+        fake.emitStatus(tab.id, "loading"),
+      );
+      wait.catch(() => {});
+      await flush();
+      assert.deepEqual(
+        fake.webRequestRegistrations.filter((registration) => registration.filter.tabId === tab.id),
+        [
+          {
+            event: "onHeadersReceived",
+            filter: { urls: ["<all_urls>"], types: ["main_frame"], tabId: tab.id },
+            extraInfoSpec: ["responseHeaders"],
+          },
+        ],
+      );
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS);
+      await assert.rejects(wait, { code: "sign_in_needed" });
+    });
+
+    it("stops hearing challenges and leaves no timer when the wait fails another way first", async () => {
+      const { fake, timers, tab } = setup();
+      const failure = new Error("Invalid url");
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () => {
+          fake.emitStatus(tab.id, "loading");
+          challenge(fake, tab.id);
+          throw failure;
+        }),
+      );
+      await assert.rejects(wait.promise, failure);
+      assert.deepEqual(signInRegistrations(fake), []);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails when the page it loaded moves on to a challenge before the wait ends", async () => {
+      const { fake, timers, tab } = setup();
+      const wait = track(
+        waitForLoad(fake.browser, timers, tab.id, url, async () =>
+          fake.emitStatus(tab.id, "loading"),
+        ),
+      );
+      await flush();
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      await flush();
+      challenge(fake, tab.id);
+      timers.advance(SIGN_IN_GRACE_MS);
+      await assert.rejects(wait.promise, { code: "sign_in_needed" });
+      assertCleanedUp(fake, timers);
+    });
+
+    for (const [name, commit] of [
+      ["whose URL is not known", false],
+      ["that must commit", true],
+    ] as const) {
+      it(`does not hear challenges in a load ${name}`, async () => {
+        const { fake, timers, tab } = setup();
+        const wait = track(
+          waitForLoad(
+            fake.browser,
+            timers,
+            tab.id,
+            undefined,
+            async () => fake.emitStatus(tab.id, "loading"),
+            { commit },
+          ),
+        );
+        await flush();
+        assert.deepEqual(signInRegistrations(fake), []);
+        assert.deepEqual(challenge(fake, tab.id), []);
+        timers.advance(SIGN_IN_GRACE_MS);
+        await flush();
+        assert.equal(wait.done(), false);
+        timers.advance(LOAD_TIMEOUT_MS);
+        assert.equal((await wait.promise).id, tab.id);
+        assertCleanedUp(fake, timers);
+      });
+    }
+  });
 });
+
+/** A response to a request of the tab, by default a 401 Basic challenge; what the listeners answered. */
+function challenge(
+  fake: FakeBrowser,
+  tabId: number,
+  {
+    statusCode = 401,
+    headers = [header("WWW-Authenticate")],
+    type = "main_frame",
+  }: { statusCode?: number; headers?: readonly HttpHeader[]; type?: string } = {},
+): unknown[] {
+  return fake.emitWebRequest("onHeadersReceived", {
+    requestId: "sign-in",
+    tabId,
+    timeStamp: 1,
+    frameId: type === "main_frame" ? 0 : 4,
+    url: "https://a.example/private",
+    type,
+    statusCode,
+    responseHeaders: [...headers],
+  });
+}
+
+function header(name: string, value = 'Basic realm="a.example"'): HttpHeader {
+  return { name, value };
+}
+
+function signInRegistrations(fake: FakeBrowser) {
+  return fake
+    .activeWebRequestRegistrations()
+    .filter((registration) => registration.event === "onHeadersReceived");
+}
 
 /** A file guard's `onRefused` whose refusals a test fires. */
 function guard() {

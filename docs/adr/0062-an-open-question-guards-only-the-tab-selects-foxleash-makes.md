@@ -2,7 +2,9 @@
 
 **Status:** Accepted, 2026-11-14. Amends [0059](0059-agents-cannot-change-the-selected-tab-while-a-question-is-open.md):
 bounds its accepted gaps with a rule that decides a further one, and replaces its unmeasured belief
-about loads with a measurement.
+about loads with a measurement. Amended by
+[0082](0082-firefox-may-select-a-tab-for-its-sign-in-dialog-while-a-question-is-open.md),
+2026-11-18: adds Firefox's sign-in dialog on a load to its accepted list.
 
 ## Context
 
