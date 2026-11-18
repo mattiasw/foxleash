@@ -6,6 +6,7 @@ import {
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_REQUESTS,
   MAX_NETWORK_URL,
+  type NetworkBody,
   type NetworkRequestRead,
   type Result,
 } from "@foxleash/protocol";
@@ -13,6 +14,7 @@ import type {
   HeadersReceivedDetails,
   HttpHeader,
   RedirectDetails,
+  RequestBody,
   RequestDetails,
 } from "./browser-api.ts";
 import {
@@ -26,11 +28,13 @@ import {
   createNetworkLog,
   MAX_LOG_CHARS,
   MAX_OPEN_CAPTURES,
+  MAX_SHAPING_REST_MS,
   type NetworkReadOptions,
   REDACTED,
   REDACTED_HEADERS,
   REDACTED_REQUEST_HEADERS,
   redactHeaders,
+  SHAPING_ALLOWANCE_MS,
 } from "./network-log.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite, saveBlocklist } from "./settings.ts";
@@ -1842,11 +1846,7 @@ describe("network log", { timeout: 10000 }, () => {
   it("adds six non-blocking listeners for every URL, which return nothing", async () => {
     const { fake, request, tabIn } = setup();
     assert.deepEqual(fake.webRequestRegistrations, [
-      {
-        event: "onBeforeRequest",
-        filter: { urls: ["<all_urls>"] },
-        extraInfoSpec: ["requestBody"],
-      },
+      { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } },
       {
         event: "onSendHeaders",
         filter: { urls: ["<all_urls>"] },
@@ -2657,6 +2657,456 @@ describe("network log response bodies", { timeout: 10000 }, () => {
   });
 });
 
+describe("network log request body reading", { timeout: 10000 }, () => {
+  it("leaves a body unread in a tab outside every session's group", async () => {
+    const context = setup();
+    const { fake, groups, access, clock, read, request, tabIn } = context;
+    // A session runs elsewhere, so the tab is what decides.
+    await tabIn("s2", URL_A);
+    const tab = fake.openTab();
+    const page = countedBody(clock);
+    request(tab.id, `${SITE}/next`, {
+      type: "main_frame",
+      method: "POST",
+      timeStamp: 2000,
+      requestBody: page.requestBody,
+    });
+    assert.equal(page.reads(), 0);
+    access.admit("s1");
+    await groups.ensureGroup("s1", tab);
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    await flush();
+    assert.deepEqual(read(tab.id).requests[0]?.requestBody, { kind: "other" });
+
+    // Only between a commit and its decision has a tab outside every group a log.
+    const outside = fake.openTab();
+    fake.navigateByUser(outside.id, URL_A);
+    // Later than the commit, so that the log records it.
+    const fetched = send(context, outside.id, 0, { timeStamp: 5000 });
+    assert.equal(fetched.reads(), 0);
+  });
+
+  it("shapes the bodies of a tab from when it joins a running session's group", async (t) => {
+    quiet(t);
+    const context = setup();
+    const { fake, groups, read, tabIn } = context;
+    // The session's group is known before the tab joins it.
+    await tabIn("s1");
+    const tab = fake.openTab();
+    fake.navigateByUser(tab.id, URL_A);
+    await flush();
+    await groups.ensureGroup("s1", tab);
+    await flush();
+    send(context, tab.id, 0, { timeStamp: 5000 });
+    assert.deepEqual(read(tab.id).requests.at(-1)?.requestBody, SHAPED);
+  });
+
+  it("reads a body in a tab created in a running session's group", async () => {
+    const context = setup();
+    const { fake, tabIn } = context;
+    const first = await tabIn("s1", URL_A);
+    const created = fake.openTab({ groupId: first.groupId });
+    assert.ok(send(context, created.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("knows the group of a tab that was open before the log was created", async () => {
+    const parts = createParts();
+    const { fake, groups, access } = parts;
+    const tab = fake.openTab();
+    await groups.ensureGroup("s1", tab);
+    const context = setup(parts);
+    await flush();
+    access.admit("s1");
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("keeps what an event showed of a tab over an older answer about the open tabs", async (t) => {
+    const parts = createParts();
+    const { fake, groups, access } = parts;
+    const tab = fake.openTab();
+    await groups.ensureGroup("s1", tab);
+    // Keeps the group open while the tab is out of it.
+    const kept = fake.openTab();
+    await groups.ensureGroup("s1", kept);
+    const { promise, resolve } = Promise.withResolvers<void>();
+    const query = fake.browser.tabs.query;
+    t.mock.method(fake.browser.tabs, "query", async (queryInfo: Parameters<typeof query>[0]) => {
+      const tabs = await query(queryInfo);
+      await promise;
+      return tabs;
+    });
+    const context = setup(parts);
+    fake.ungroup(tab.id);
+    resolve();
+    await flush();
+    access.admit("s1");
+    assert.equal(send(context, tab.id, 0, { type: "main_frame" }).reads(), 0);
+    assert.ok(send(context, kept.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("learns the tabs' groups from events when the open tabs cannot be read, with a warning", async (t) => {
+    const warnings = t.mock.method(console, "warn", () => {});
+    const parts = createParts();
+    const { fake } = parts;
+    const query = fake.browser.tabs.query;
+    let calls = 0;
+    t.mock.method(fake.browser.tabs, "query", async (queryInfo: Parameters<typeof query>[0]) => {
+      calls += 1;
+      if (calls === 1) throw new Error("query failed");
+      return query(queryInfo);
+    });
+    const context = setup(parts);
+    await flush();
+    assert.deepEqual(
+      warnings.mock.calls.map((call) => JSON.parse(String(call.arguments[0]))),
+      [{ event: "network_recording_failed", error: "Error: query failed" }],
+    );
+    const tab = await context.tabIn("s1", URL_A);
+    send(context, tab.id);
+    assert.deepEqual(context.read(tab.id).requests.at(-1)?.requestBody, SHAPED);
+  });
+
+  it("leaves a body unread in the tabs of a session that is not running", async () => {
+    const context = setup();
+    const { access, tabIn } = context;
+    // Another session runs throughout, so Firefox is asked for bodies.
+    await tabIn("s2", URL_A);
+    // Its page keeps the group open once the session ended.
+    const tab = await tabIn("s1", URL_A);
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+    access.endSession("s1");
+    assert.equal(send(context, tab.id, 0, { type: "main_frame" }).reads(), 0);
+    access.admit("s1");
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("leaves a body unread in the tabs of a session the user stopped", async () => {
+    const context = setup();
+    const { access, tabIn } = context;
+    // Another session runs throughout, so Firefox is asked for bodies.
+    await tabIn("s2", URL_A);
+    const tab = await tabIn("s1", URL_A);
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+    access.stop("s1");
+    assert.equal(access.running("s1"), true);
+    assert.equal(send(context, tab.id, 0, { type: "main_frame" }).reads(), 0);
+  });
+
+  it("leaves a body unread in a tab moved to another window, until it shows its group again", async (t) => {
+    quiet(t);
+    const context = setup();
+    const { fake, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    fake.emitDetached(tab.id);
+    assert.equal(send(context, tab.id, 0, { type: "main_frame" }).reads(), 0);
+    fake.emitStatus(tab.id, "complete");
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("leaves a body unread that comes for a closed tab", async () => {
+    const context = setup();
+    const { fake, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    // Keeps the group open.
+    await tabIn("s1", URL_A);
+    fake.removeTab(tab.id);
+    assert.equal(send(context, tab.id, 0, { type: "main_frame" }).reads(), 0);
+  });
+
+  it("records no body for a request that sent none, also where it reads no body", async () => {
+    const context = setup();
+    const { fake, groups, access, read, request, tabIn } = context;
+    await tabIn("s2", URL_A);
+    // In a tab outside every group, which then joins one and commits the page.
+    const tab = fake.openTab();
+    request(tab.id, `${SITE}/next`, { type: "main_frame", timeStamp: 2000 });
+    access.admit("s1");
+    await groups.ensureGroup("s1", tab);
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    await flush();
+    // And once shaping took its allowance.
+    send(context, tab.id, SHAPING_ALLOWANCE_MS, { timeStamp: 3000 });
+    request(tab.id, `${SITE}/get`, { timeStamp: 3000, requestBody: null });
+    assert.deepEqual(
+      read(tab.id).requests.map((sent) => Object.hasOwn(sent, "requestBody")),
+      [false, true, false],
+    );
+  });
+
+  it("leaves the next body unread once shaping took its allowance, not a millisecond sooner", async () => {
+    const full = setup();
+    const tab = await full.tabIn("s1", URL_A);
+    assert.ok(send(full, tab.id, SHAPING_ALLOWANCE_MS).reads() > 0);
+    assert.equal(send(full, tab.id).reads(), 0);
+    assert.deepEqual(full.read(tab.id).requests.at(-1)?.requestBody, { kind: "other" });
+
+    const under = setup();
+    const other = await under.tabIn("s1", URL_A);
+    send(under, other.id, SHAPING_ALLOWANCE_MS - 1);
+    send(under, other.id);
+    assert.deepEqual(
+      under.read(other.id).requests.map((request) => request.requestBody),
+      [SHAPED, SHAPED],
+    );
+  });
+
+  it("reads bodies again when as much time has passed as the shaping took", async () => {
+    const early = setup();
+    const tab = await early.tabIn("s1", URL_A);
+    send(early, tab.id, 300);
+    early.clock.now += 50;
+    assert.equal(send(early, tab.id).reads(), 0);
+
+    const due = setup();
+    const other = await due.tabIn("s1", URL_A);
+    send(due, other.id, 300);
+    due.clock.now += 51;
+    send(due, other.id);
+    assert.deepEqual(due.read(other.id).requests.at(-1)?.requestBody, SHAPED);
+  });
+
+  it("counts the time before a body left unread once, and nothing for that body", async () => {
+    const context = setup();
+    const { clock, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    send(context, tab.id, 300);
+    clock.now += 30;
+    assert.equal(send(context, tab.id).reads(), 0);
+    clock.now += 10;
+    assert.equal(send(context, tab.id).reads(), 0);
+    clock.now += 11;
+    send(context, tab.id);
+    assert.deepEqual(read(tab.id).requests.at(-1)?.requestBody, SHAPED);
+  });
+
+  it("adds up the time of bodies that each took less than the allowance", async () => {
+    const context = setup();
+    const tab = await context.tabIn("s1", URL_A);
+    for (let index = 0; index < 3; index += 1) send(context, tab.id, 100);
+    assert.equal(send(context, tab.id).reads(), 0);
+    assert.deepEqual(
+      context.read(tab.id).requests.map((request) => request.requestBody),
+      [SHAPED, SHAPED, SHAPED, { kind: "other" }],
+    );
+  });
+
+  it("shares the allowance between sessions, tabs and kinds of request", async () => {
+    const context = setup();
+    const tab = await context.tabIn("s1", URL_A);
+    const other = await context.tabIn("s2", URL_A);
+    send(context, tab.id, 300);
+    assert.equal(send(context, other.id).reads(), 0);
+    assert.equal(send(context, other.id, 0, { type: "main_frame" }).reads(), 0);
+
+    const second = setup();
+    const page = await second.tabIn("s1", URL_A);
+    assert.ok(send(second, page.id, 300, { type: "main_frame" }).reads() > 0);
+    assert.equal(send(second, page.id).reads(), 0);
+  });
+
+  it("counts the time from the next body on when the clock is set back between bodies", async () => {
+    for (const [later, left] of [
+      [50, true],
+      [51, false],
+    ] as const) {
+      const context = setup();
+      const { clock, tabIn } = context;
+      const tab = await tabIn("s1", URL_A);
+      send(context, tab.id, 300);
+      clock.now -= 3_600_000;
+      assert.equal(send(context, tab.id).reads(), 0);
+      clock.now += later;
+      assert.equal(send(context, tab.id).reads() === 0, left, String(later));
+    }
+  });
+
+  it("counts no time for a body during whose reading the clock was set back", async () => {
+    const context = setup();
+    const tab = await context.tabIn("s1", URL_A);
+    send(context, tab.id, SHAPING_ALLOWANCE_MS - 50);
+    send(context, tab.id, -3_600_000);
+    // Nothing more is owed for it, and nothing less: 50 ms more use the allowance up.
+    assert.ok(send(context, tab.id, 50).reads() > 0);
+    assert.equal(send(context, tab.id).reads(), 0);
+  });
+
+  it("leaves bodies unread for the longest rest at most when the clock jumps during a reading", async () => {
+    const context = setup();
+    const { clock, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    send(context, tab.id, 3_600_000);
+    clock.now += MAX_SHAPING_REST_MS - 1;
+    assert.equal(send(context, tab.id).reads(), 0);
+    clock.now += 1;
+    send(context, tab.id);
+    assert.deepEqual(read(tab.id).requests.at(-1)?.requestBody, SHAPED);
+  });
+
+  it("counts the time of a body whose reading fails", async () => {
+    const context = setup();
+    const { clock, request, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    const requestBody = {
+      get formData(): never {
+        clock.now += 300;
+        throw new Error("unreadable");
+      },
+    };
+    assert.throws(() => request(tab.id, `${SITE}/api`, { method: "POST", requestBody }), {
+      message: "unreadable",
+    });
+    assert.equal(send(context, tab.id).reads(), 0);
+  });
+
+  it("neither reads nor counts the body of a request it does not record", async () => {
+    const context = setup();
+    const { fake, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    // In the session's group, with no page committed: no log.
+    const blank = await tabIn("s1");
+    fake.navigateByUser(tab.id, `${SITE}/second`);
+    await flush();
+    const unrecorded = [
+      send(context, blank.id, 300),
+      // An earlier document's request.
+      send(context, tab.id, 300, { timeStamp: 0 }),
+      // Another top document's site.
+      send(context, tab.id, 300, { documentUrl: `${OTHER}/` }),
+    ];
+    assert.deepEqual(
+      unrecorded.map((body) => body.reads()),
+      [0, 0, 0],
+    );
+    send(context, tab.id);
+    assert.deepEqual(
+      read(tab.id).requests.map((request) => request.requestBody),
+      [SHAPED],
+    );
+  });
+
+  it("asks Firefox for request bodies only while a session runs", async () => {
+    const context = setup();
+    const { fake, access, read, request, tabIn } = context;
+    const without = { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } };
+    const withBodies = { ...without, extraInfoSpec: ["requestBody"] };
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+
+    const tab = await tabIn("s1", URL_A);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [without, withBodies]);
+    request(tab.id, `${SITE}/first`);
+    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/first`]);
+
+    // A second session starting, and one of the two ending, change nothing.
+    await tabIn("s2", URL_A);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    access.endSession("s1");
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [without, withBodies]);
+
+    access.endSession("s2");
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [
+      without,
+      withBodies,
+      without,
+    ]);
+    // Still recorded: the page's own request shows once a session runs and the page commits.
+    request(tab.id, `${SITE}/next`, { type: "main_frame", timeStamp: 2000 });
+    access.admit("s1");
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    await flush();
+    fake.navigateByUser(tab.id, `${SITE}/next`);
+    await flush();
+    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/next`]);
+  });
+
+  it("asks Firefox for no request bodies once the user stopped every running session", async () => {
+    const { fake, access, tabIn } = setup();
+    const without = { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } };
+    const withBodies = { ...without, extraInfoSpec: ["requestBody"] };
+    await tabIn("s1", URL_A);
+    await tabIn("s2", URL_A);
+    // One of the two stopped changes nothing.
+    access.stop("s1");
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    access.stop("s2");
+    assert.equal(access.running("s2"), true);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+
+    // A stopped session's next request records it as running again before it is refused.
+    access.endSession("s1");
+    assert.throws(() => access.admit("s1"), { code: "session_stopped" });
+    assert.equal(access.running("s1"), true);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+
+    await tabIn("s3", URL_A);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+  });
+});
+
+/** What `countedBody` holds, as its shape. */
+const SHAPED: NetworkBody = {
+  kind: "form",
+  fields: [{ name: "field", depth: 1, kind: "text", filled: true }],
+};
+
+interface CountedBody {
+  requestBody: RequestBody;
+  /** How often what the body holds was read. */
+  reads(): number;
+}
+
+/**
+ * Starts a POST of the tab's top frame with a counted body whose reading takes `ms`; returns the
+ * body.
+ */
+function send(
+  { clock, request }: Pick<Context, "clock" | "request">,
+  tabId: number,
+  ms = 0,
+  details: RequestOverrides = {},
+): CountedBody {
+  const body = countedBody(clock, ms);
+  request(tabId, `${SITE}/api`, { method: "POST", ...details, requestBody: body.requestBody });
+  return body;
+}
+
+/**
+ * A form body that counts each read of what it holds, as Firefox's own object would not; the
+ * first read moves the clock by `ms`, which is how a body takes time to shape.
+ */
+function countedBody(clock: Context["clock"], ms = 0): CountedBody {
+  let reads = 0;
+  const read = <Value>(value: Value): Value => {
+    if (reads === 0) clock.now += ms;
+    reads += 1;
+    return value;
+  };
+  return {
+    requestBody: {
+      get formData() {
+        return read({ field: ["value"] });
+      },
+      get raw() {
+        return read([{ bytes: bytesOf("field=value") }]);
+      },
+    },
+    reads: () => reads,
+  };
+}
+
+/** The non-blocking `onBeforeRequest` listeners among the registrations: all but the holds. */
+function requestListeners(
+  registrations: Context["fake"]["webRequestRegistrations"],
+): Context["fake"]["webRequestRegistrations"] {
+  return registrations.filter(
+    (registration) =>
+      registration.event === "onBeforeRequest" &&
+      registration.extraInfoSpec?.includes("blocking") !== true,
+  );
+}
+
 /** Starts a fetch of the tab whose request headers take about 100,500 characters. */
 function headersRequest(
   fake: Context["fake"],
@@ -2789,12 +3239,8 @@ function bytesOf(text: string): ArrayBuffer {
   return copy;
 }
 
-function setup() {
-  const fake = createFakeBrowser();
-  const timers = createFakeTimers();
-  const groups = createSessionGroups(fake.browser);
-  const sessions: SessionMemory = new Map();
-  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+/** A network log over `parts`; a test that acts before the log exists makes them itself. */
+function setup({ fake, groups, sessions, access } = createParts()) {
   // What the log's clock reads; a test sets it.
   const clock = { now: 5000 };
   const network = createNetworkLog({
@@ -2859,6 +3305,15 @@ function setup() {
 }
 
 type Context = ReturnType<typeof setup>;
+
+function createParts() {
+  const fake = createFakeBrowser();
+  const timers = createFakeTimers();
+  const groups = createSessionGroups(fake.browser);
+  const sessions: SessionMemory = new Map();
+  const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
+  return { fake, groups, sessions, access };
+}
 
 /** A request's details to change; a null `documentUrl` leaves it out. */
 type RequestOverrides = Partial<Omit<RequestDetails, "documentUrl">> & {

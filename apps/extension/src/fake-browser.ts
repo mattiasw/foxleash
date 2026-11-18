@@ -957,6 +957,8 @@ export function createFakeBrowser(): FakeBrowser {
     webRequestListeners.set(event, listeners);
     return {
       addListener: (listener, filter, extraInfoSpec) => {
+        // Firefox ignores a second add of a listener it already has.
+        if (listeners.has(listener)) return;
         const registration: WebRequestRegistration = { event, filter: structuredClone(filter) };
         if (extraInfoSpec !== undefined) registration.extraInfoSpec = [...extraInfoSpec];
         fake.webRequestRegistrations.push(registration);

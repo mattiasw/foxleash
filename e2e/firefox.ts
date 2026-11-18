@@ -229,6 +229,8 @@ export interface CreditCard {
 }
 
 export interface Firefox {
+  /** Firefox's process id, which is also the id of its process group. */
+  readonly pid: number;
   /** Installs the unpacked extension in `path` as a temporary add-on and returns its id. */
   installExtension(path: string): Promise<string>;
   /** The URL of a file in the installed extension, such as its settings page. */
@@ -629,7 +631,11 @@ export async function launchFirefox({
   // Set by quit(). Once the group is gone its id can lead another group, so close() must not
   // signal it again.
   let quitting: Promise<void> | undefined;
+  const { pid } = child;
+  // Firefox answered above, so its spawn did not fail.
+  if (pid === undefined) throw new Error("Firefox has no process id");
   return {
+    pid,
     async installExtension(path) {
       const result = await session.send("webExtension.install", {
         extensionData: { type: "path", path },

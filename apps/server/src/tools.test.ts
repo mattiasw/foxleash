@@ -2799,6 +2799,8 @@ describe("read_network", () => {
       "With body true, each request that sent a body includes requestBody, its shape and never a value or a length:",
       "kind is form (each name once, filled by its first value), json (the keys of a JSON object or array, at most 4 deep, of an array only its first element, named []) or other.",
       "Each field gives the kind of its value (text for a form value; string, number, boolean, null, object or array for JSON) and, for text, strings, objects and arrays, whether it is filled; an other body says whether it is filled when Foxleash got its bytes.",
+      "A body Foxleash did not read is other with nothing more, whatever it held: one sent before its tab was in the tab group, or right after Foxleash spent a quarter of a second or more reading large bodies.",
+      "A request sent while no agent session was running has no requestBody, whether it sent a body or not.",
       "A name that is not a plain field name (an ASCII letter or _ first, then letters, digits, _ . : $ [ ] or -, at most 100 characters) is left out, and one (name withheld) field stands for all such names of an object or form; of names that differ only in numbers in brackets, such as a[0] and a[1], only the first is listed.",
       "At most 100 fields are listed, the shallowest first, with truncated true in requestBody when more were left out.",
       "A multipart file field is a text field, filled when the file has a name. With responseBody true, each fetch or XMLHttpRequest request whose response Foxleash captured includes responseBody: the text of the response as it arrived in the page, without the request being sent again.",

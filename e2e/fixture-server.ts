@@ -72,6 +72,7 @@ export const TITLES = {
   networkLargeDone: "Fixture network large done",
   networkBodies: "Fixture network bodies",
   networkBodiesFrame: "Fixture network bodies frame",
+  networkBurst: "Fixture network burst",
   waitLate: "Fixture wait late",
   waitNavigate: "Fixture wait navigate",
   downloadLogin: "Fixture download login",
@@ -902,6 +903,13 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       response.end("ok");
     } else if (path === "/api/beacon-top" || path === "/api/beacon-frame") {
+      response.writeHead(204, { "Cache-Control": "no-store" });
+      response.end();
+    } else if (path === "/network-burst") {
+      sendHtml(response, NETWORK_BURST_PAGE);
+    } else if (path === "/api/burst-sink") {
+      // No content, so a form sent here leaves its page in place.
+      request.resume();
       response.writeHead(204, { "Cache-Control": "no-store" });
       response.end();
     } else if (path === "/download/receipt.pdf") {
@@ -3811,6 +3819,111 @@ window.addEventListener("load", async () => {
   }
   document.title = "${TITLES.networkLargeDone}";
 });
+</script>
+</body></html>
+`;
+
+// Sends nothing by itself: a test calls its functions. smallBurst sends `count` small JSON bodies
+// at once. buildJson keeps one flat JSON object of about `bytes` bytes, which fetchBurst then
+// sends `count` times, one every `everyMs` ms. buildForm makes a text/plain form whose one field's
+// name and value make such an object of its body, which formBurst then submits likewise; the
+// sink's answer keeps the page in place, and a submit replaces one still being sent. burstDone
+// says when every fetch of fetchBurst has settled, or formBurst has submitted its last.
+const NETWORK_BURST_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.networkBurst}</title></head>
+<body><h1>${TITLES.networkBurst}</h1>
+<script>
+const SINK = "/api/burst-sink";
+let json = "{}";
+let form;
+window.burstDone = false;
+
+const pairs = (bytes) => {
+  const parts = [];
+  for (let index = 0, length = 0; length < bytes; index += 1) {
+    const pair = '"k' + index + '":1,';
+    parts.push(pair);
+    length += pair.length;
+  }
+  return parts.join("");
+};
+
+const every = (count, everyMs, send, done) => {
+  window.burstDone = false;
+  let left = count;
+  const timer = setInterval(() => {
+    send();
+    left -= 1;
+    if (left > 0) return;
+    clearInterval(timer);
+    done();
+  }, everyMs);
+  return true;
+};
+
+window.smallBurst = async (count) => {
+  const sent = Array.from({ length: count }, (_, index) =>
+    fetch(SINK + "?small=" + index, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ index, name: "burst", ok: true }),
+    }),
+  );
+  await Promise.all(sent);
+  return count;
+};
+
+window.buildJson = (bytes) => {
+  json = "{" + pairs(bytes) + '"x":1}';
+  return json.length;
+};
+
+window.fetchBurst = (count, everyMs) => {
+  const sent = [];
+  return every(
+    count,
+    everyMs,
+    () => {
+      sent.push(
+        fetch(SINK, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: json,
+        }).catch(() => undefined),
+      );
+    },
+    () => {
+      Promise.all(sent).then(() => {
+        window.burstDone = true;
+      });
+    },
+  );
+};
+
+window.buildForm = (bytes) => {
+  form = document.createElement("form");
+  form.method = "post";
+  form.enctype = "text/plain";
+  form.action = SINK;
+  const input = document.createElement("input");
+  input.type = "hidden";
+  // Sent as name=value: the "=" becomes the text of the last key.
+  input.name = "{" + pairs(bytes) + '"x":"';
+  input.value = '"}';
+  form.append(input);
+  document.body.append(form);
+  return input.name.length + 1 + input.value.length;
+};
+
+window.formBurst = (count, everyMs) =>
+  every(
+    count,
+    everyMs,
+    () => form.submit(),
+    () => {
+      window.burstDone = true;
+    },
+  );
 </script>
 </body></html>
 `;

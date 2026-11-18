@@ -54,6 +54,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `download` now works on approved `http://` sites that are not on this computer, such as a
   development server on your network, a router or an intranet tool. Firefox sent its request to
   `https://` instead, which is another site, so the download failed and nothing was saved.
+- A page that sends very large requests no longer keeps Foxleash busy for minutes, with the
+  agent's tool calls waiting behind them. With no agent session running, Foxleash no longer asks
+  Firefox for what requests send. In a tab outside an agent's tab group it no longer reads it. In
+  an agent's tabs it reads it only while it has time to spare, and `read_network` shows `other`
+  for the rest.
 
 ### Security
 

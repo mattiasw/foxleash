@@ -294,6 +294,13 @@ the cache.
   request bodies (16,777,216 bytes by default), or one that is not JSON in strict UTF-8, which
   says whether it is filled. When Firefox gives a file instead of the body's bytes, `other` does
   not say whether it is filled.
+- Foxleash reads what a request sent only in the tabs of a running agent session's group. A body
+  shows as `other`, with nothing more, when its request was sent before its tab was in such a
+  group, or right after Foxleash spent a quarter of a second or more reading large bodies: it then
+  reads none until as much time has passed as the reading took, 10 seconds at most, or longer when
+  the computer's clock was set back meanwhile. How long the earlier bodies took decides which are
+  left out, not a body's own size. A request sent while no agent session was running shows no
+  `requestBody` at all.
 - With `responseBody`, each fetch or XMLHttpRequest request whose response Foxleash captured
   includes `responseBody`: the response's text as it arrived in the page, so the agent can read
   what a form's POST got back without sending it again. Foxleash captures the responses to
