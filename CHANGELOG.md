@@ -61,6 +61,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   site it asks about is visible, and `tab_open` and `navigate` refuse, before asking, an address
   whose host is not a domain name or an IP address, such as one with parentheses or commas, or is
   longer than 253 characters.
+- A click or Enter by the agent no longer sends a form with GET that holds a password or another
+  field whose value Foxleash hides, such as a sign-in form without a script that Firefox filled
+  in: GET puts the form's values in the page's address, which the agent sees. Foxleash now
+  refuses the action, and the agent asks you to send the form.
 
 ## [0.5.0] - 2026-11-17
 

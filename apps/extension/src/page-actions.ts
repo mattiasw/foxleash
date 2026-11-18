@@ -251,6 +251,19 @@ export function formDestination(
 }
 
 /**
+ * The method a submission uses, as HTML picks it: the submitter's `formmethod` attribute when
+ * present, else the form's `method` attribute; the keywords match ASCII case-insensitively and
+ * anything else is GET.
+ */
+export function submissionMethod(
+  formmethod: string | null,
+  method: string | null,
+): "get" | "post" | "dialog" {
+  const value = (formmethod ?? method ?? "").replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+  return value === "post" || value === "dialog" ? value : "get";
+}
+
+/**
  * The viewport's overflow on an axis, from the computed overflow of the root element and of
  * `body`, and whether `body` is a scroll container of its own. CSS propagates `body`'s overflow
  * to the viewport when the root's is `visible` on both axes; `visible` there acts as `auto`.

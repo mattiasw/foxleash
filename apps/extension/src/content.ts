@@ -2,7 +2,14 @@ import type { BrowserApi } from "./browser-api.ts";
 import { readConsoleRecords } from "./console-messages.ts";
 import { elementRect } from "./element-rect.ts";
 import { createElementRefs, type ElementRefs } from "./element-refs.ts";
-import { clickOptions, dragOptions, hoverOptions, scrollOptions } from "./page-actions.ts";
+import { shadowRootOf } from "./flat-tree.ts";
+import {
+  clickOptions,
+  dragOptions,
+  hoverOptions,
+  scrollOptions,
+  submissionMethod,
+} from "./page-actions.ts";
 import * as actions from "./page-actions-dom.ts";
 import { createPageChanges, type PageChanges } from "./page-changes.ts";
 import { fillFormOptions } from "./page-fill.ts";
@@ -21,7 +28,9 @@ import { readPageText, renderedText } from "./page-text-dom.ts";
 import { uploadFile } from "./page-upload.ts";
 import {
   describeElement,
+  documentElements,
   focusedElement,
+  isProtected,
   notePasswordFields,
   type PageMemory,
   passwordFieldsRevealed,
@@ -58,7 +67,10 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     upload_file: act(watched, (params) => uploadFile(params, { refs }), byRef),
     click: act(
       watched,
-      (params) => actions.click(parsed(clickOptions(params)), { refs, pointer }),
+      (params) =>
+        withoutProtectedGetSubmit(memory, () =>
+          actions.click(parsed(clickOptions(params)), { refs, pointer }),
+        ),
       byRef,
       true,
     ),
@@ -82,7 +94,10 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     type: act(watched, (params) => input.typeText(parsed(typeOptions(params)), { refs }), byRef),
     press_key: act(
       watched,
-      (params) => input.pressKey(parsed(pressKeyOptions(params)), { refs }),
+      (params) =>
+        withoutProtectedGetSubmit(memory, () =>
+          input.pressKey(parsed(pressKeyOptions(params)), { refs }),
+        ),
       (params) => (Object.hasOwn(params, "ref") ? byRef(params) : (focusedElement() ?? undefined)),
     ),
     fill_form: act(
@@ -153,6 +168,109 @@ function refTarget(refs: ElementRefs<Element>, ref: unknown): Element | undefine
 function parsed<T>(options: T | string): T {
   if (typeof options === "string") throw new PageError("invalid_params", options);
   return options;
+}
+
+/**
+ * `run`, refused when it sets off a submission that the page does not cancel, that is sent with
+ * GET and that would send a protected field's value, which GET puts in the page's address. The
+ * submission is then cancelled. `run` must be synchronous: the listeners go when it returns.
+ */
+function withoutProtectedGetSubmit<T>(memory: PageMemory, run: () => T): T {
+  // A submit event is not composed: a form in a shadow root sends one that never reaches window.
+  const shadows: ShadowRoot[] = [];
+  for (const element of documentElements()) {
+    const shadow = shadowRootOf(element);
+    if (shadow !== null) shadows.push(shadow);
+  }
+  let stopped: { field?: Element } | undefined;
+  // Each event is decided once, by the listener on the last node of its path: added during the
+  // act, it runs after every listener the page had there when the act started.
+  const watch =
+    (root: ShadowRoot | undefined) =>
+    (event: Event): void => {
+      try {
+        if (event.defaultPrevented) return;
+        if (root !== undefined && event.composedPath().at(-1) !== root) return;
+        const field = protectedFieldSent(event, memory);
+        if (field === undefined) return;
+        event.preventDefault();
+        stopped ??= { field };
+      } catch {
+        event.preventDefault();
+        stopped ??= {};
+      }
+    };
+  const onWindow = watch(undefined);
+  const onShadows = shadows.map((shadow) => ({ shadow, listener: watch(shadow) }));
+  let result: T;
+  try {
+    window.addEventListener("submit", onWindow);
+    for (const { shadow, listener } of onShadows) shadow.addEventListener("submit", listener);
+    result = run();
+  } finally {
+    window.removeEventListener("submit", onWindow);
+    for (const { shadow, listener } of onShadows) shadow.removeEventListener("submit", listener);
+  }
+  if (stopped === undefined) return result;
+  throw new PageError(
+    "protected_get_form",
+    stopped.field === undefined
+      ? "Foxleash could not check whether the form would put the value of a protected field in the page's address, so it cancelled its submission: ask the user to send this form."
+      : `The form would put the value of protected field ${memory.refs.refFor(stopped.field)} in the page's address, as it is sent with GET, so Foxleash cancelled its submission: ask the user to send this form.`,
+  );
+}
+
+/** The first protected field whose value the submit event's form would send with GET, if any. */
+function protectedFieldSent(event: Event, memory: PageMemory): Element | undefined {
+  if (!(event instanceof SubmitEvent)) return undefined;
+  const form = event.target;
+  if (!(form instanceof HTMLFormElement)) return undefined;
+  const submitter = event.submitter;
+  const method = submissionMethod(
+    submitter === null
+      ? null
+      : Element.prototype.getAttributeNS.call(submitter, null, "formmethod"),
+    Element.prototype.getAttributeNS.call(form, null, "method"),
+  );
+  return method === "get" ? protectedFieldOf(form, memory) : undefined;
+}
+
+/**
+ * The form's first listed field that it sends with a protected value. A form-associated custom
+ * element sends what its script passes on, so a protected field with a value inside it, in its
+ * shadow tree or among its descendants, counts, named or not.
+ */
+function protectedFieldOf(form: HTMLFormElement, memory: PageMemory): Element | undefined {
+  for (const element of input.formElements(form)) {
+    if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement) {
+      const name = Element.prototype.getAttributeNS.call(element, null, "name");
+      if (
+        isProtected(element, memory) &&
+        !element.matches(":disabled") &&
+        name !== null &&
+        name !== "" &&
+        element.value !== ""
+      ) {
+        return element;
+      }
+      continue;
+    }
+    // Of the listed elements, only a form-associated custom element has a hyphen in its name.
+    if (!element.localName.includes("-") || element.matches(":disabled")) continue;
+    const shadow = shadowRootOf(element);
+    for (const root of shadow === null ? [element] : [shadow, element]) {
+      for (const inner of documentElements(root)) {
+        if (
+          (inner instanceof HTMLInputElement || inner instanceof HTMLTextAreaElement) &&
+          isProtected(inner, memory) &&
+          inner.value !== ""
+        ) {
+          return inner;
+        }
+      }
+    }
+  }
+  return undefined;
 }
 
 /** Whether the page shows the text, or has an element matching the selector, wait_for asks for. */

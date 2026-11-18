@@ -625,7 +625,7 @@ function blockingFieldsOf(form: HTMLFormElement): number {
 }
 
 /** The form's listed controls, through the prototype: a control named elements shadows them. */
-function formElements(form: HTMLFormElement): Element[] {
+export function formElements(form: HTMLFormElement): Element[] {
   const elements: unknown = Object.getOwnPropertyDescriptor(
     HTMLFormElement.prototype,
     "elements",

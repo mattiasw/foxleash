@@ -16,6 +16,7 @@ import {
   scrollDelta,
   scrollOptions,
   scrollResultOf,
+  submissionMethod,
   viewportOverflow,
   visiblePoint,
   wheelScrolls,
@@ -600,6 +601,59 @@ describe("formDestination", () => {
   it("keeps an attribute of only spaces", () => {
     assert.equal(formDestination("  ", "/b", doc), "  ");
     assert.equal(formDestination(null, " ", doc), " ");
+  });
+});
+
+describe("submissionMethod", () => {
+  it("is GET with neither attribute, or an empty method", () => {
+    assert.equal(submissionMethod(null, null), "get");
+    assert.equal(submissionMethod(null, ""), "get");
+  });
+
+  it("matches post and dialog in any ASCII case", () => {
+    for (const method of ["post", "POST", "Post", "pOsT"]) {
+      assert.equal(submissionMethod(null, method), "post", method);
+    }
+    for (const method of ["dialog", "DIALOG", "Dialog"]) {
+      assert.equal(submissionMethod(null, method), "dialog", method);
+    }
+    assert.equal(submissionMethod(null, "get"), "get");
+    assert.equal(submissionMethod(null, "GET"), "get");
+  });
+
+  it("takes formmethod over the form's method, both ways", () => {
+    assert.equal(submissionMethod("get", "post"), "get");
+    assert.equal(submissionMethod("post", "get"), "post");
+    assert.equal(submissionMethod("POST", null), "post");
+    assert.equal(submissionMethod("dialog", "get"), "dialog");
+  });
+
+  it("takes an empty formmethod over the form's method, as GET", () => {
+    assert.equal(submissionMethod("", "post"), "get");
+    assert.equal(submissionMethod("", "dialog"), "get");
+  });
+
+  it("is GET for an unknown value or one with spaces around it", () => {
+    for (const method of [
+      "put",
+      "delete",
+      " post",
+      "post ",
+      "\tpost",
+      "post\n",
+      "postt",
+      "dialo",
+    ]) {
+      assert.equal(submissionMethod(null, method), "get", JSON.stringify(method));
+      assert.equal(submissionMethod(method, "post"), "get", JSON.stringify(method));
+    }
+  });
+
+  it("is GET for a non-ASCII look-alike, also one that upper-cases to POST", () => {
+    // Cyrillic o, and the long s, which toUpperCase turns into S.
+    for (const method of ["p\u043est", "po\u017ft", "PO\u017fT", "dia\u0131og"]) {
+      assert.equal(submissionMethod(null, method), "get", JSON.stringify(method));
+    }
   });
 });
 

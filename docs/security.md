@@ -216,6 +216,36 @@ country, also shows the option Firefox chose. The text of a network response tha
 returns, and a file that `download` saves, can still contain a protected field's value when the site
 sends it back (see [Response bodies](#response-bodies) and [Downloads](#downloads)).
 
+### Forms sent with GET
+
+A form sent with GET puts the values of its fields in the address of the page it opens. The agent
+would get that address in the action's result, in `tabs_list` and in `read_network`, and it stays
+in the tab's history and the site's logs. So when a `click`, or Enter with `press_key`, would send
+a form with GET while the form would send the value of a protected field, Foxleash cancels the
+submission and refuses the action, naming the field, and the agent asks you to send the form. A
+form without a `method` attribute is sent with GET, and a submit button's `formmethod` counts. A
+protected field counts when the form sends it: when it has a name and a value and is not
+disabled. A custom form element that holds a protected field with a value, in its own shadow tree
+or among the elements it contains, counts too, named or not, since its script decides what the
+form sends. A form whose own script cancels the browser's submission, as most sign-in pages do,
+works as before, and so do forms sent with POST.
+
+This does not cover:
+
+- a form you send yourself with GET: the page's address then holds its values, protected ones
+  included, and `tabs_list`, `read_network` and the result of the agent's next action show it;
+- a form the page's own scripts send after the agent's click or Enter: with the form's `submit()`,
+  also from the button's own click handler or from a link whose address runs a script
+  (`javascript:`), later, such as from a timer, or by handling the submission and putting the
+  values in the page's address or in the address of a request the script makes, which
+  `read_network` shows;
+- a page's script that stops the browser's submit event before it reaches Foxleash, that adds
+  values to the form when it is sent, or that adds a listener, a form or a shadow root while the
+  action runs.
+
+These depend on the site's own code, and Foxleash cannot tell such a script from one that handles
+a sign-in properly without also refusing forms that scripts handle.
+
 ### A password field that the page changes
 
 In `read_page`, a password field that the page turns into another kind of field stays protected
@@ -330,7 +360,8 @@ Exceptions and limits:
   `a[1]`) only the first, but the number of other distinct plain names, and which of them are
   empty, show: a code typed into one box per digit, each box with a name of its own, shows its
   length.
-- A form sent with GET puts its values in the URL, which `read_network` shows.
+- A form sent with GET puts its values in the URL, which `read_network` shows (see
+  [Forms sent with GET](#forms-sent-with-get)).
 - A JSON body that Firefox cuts at its limit for request bodies (16,777,216 bytes by default)
   turns from `json` to `other`. An agent that can make the page send about 16 MiB in another
   field of the same body can find the body's exact length from where it turns.

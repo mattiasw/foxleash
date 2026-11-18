@@ -1331,7 +1331,10 @@ function fieldOf(
   return undefined;
 }
 
-function isProtected(field: HTMLInputElement | HTMLTextAreaElement, page: PageMemory): boolean {
+export function isProtected(
+  field: HTMLInputElement | HTMLTextAreaElement,
+  page: PageMemory,
+): boolean {
   return isProtectedField({
     localName: field.localName,
     type: field.type,

@@ -1559,6 +1559,7 @@ describe("parsePageReply", () => {
       "no_element_at_point",
       "in_frame",
       "cross_site_navigation",
+      "protected_get_form",
       "not_editable",
       "no_effect",
     ]) {

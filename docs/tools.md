@@ -361,6 +361,10 @@ onto the element.
 - It refuses clicks on links and form buttons that lead to another site or out of the browser,
   such as to an email address: the agent opens a page on another site with `navigate`, which
   asks you first.
+- It refuses a click that would send a form with GET while the form would send the value of a
+  protected field, since GET puts the form's values in the page's address (see
+  [Forms sent with GET](security.md#forms-sent-with-get)). A form whose own script handles the
+  submit is not refused.
 - Firefox's pop-up blocker stops a link or form button that opens a new tab unless you allow
   pop-ups for the site; a new tab that does open joins the agent's tab group, while a new window
   is out of the agent's reach.
@@ -415,7 +419,8 @@ events and then does what the browser would do, unless the page cancels the key:
 Other keys reach only the page's own key handlers and do not insert or delete text.
 
 Enter on a link or in a form that leads to another site or out of the browser is refused, as
-clicks are. Enter on a link or in a form that opens a new tab meets the pop-up blocker, as
+clicks are. So is Enter that would send a form with GET while the form would send the value of a
+protected field. Enter on a link or in a form that opens a new tab meets the pop-up blocker, as
 clicks do.
 
 ### What an action's result says

@@ -188,8 +188,9 @@ defense is complete. Foxleash limits what a fooled agent can do:
   Foxleash page in Firefox. Sites allowed this way are allowed for the session only.
 - Text results and screenshots hide the values of password fields, of one-time code and card
   number fields that the page marks as such for autofill, and of text fields that Firefox
-  filled in from your saved logins, addresses or cards, until you edit them. This has
-  [exceptions](docs/security.md#protected-fields).
+  filled in from your saved logins, addresses or cards, until you edit them, and a click or
+  Enter by the agent that would send them in a page's address, with a form sent with GET, is
+  refused. This has [exceptions](docs/security.md#protected-fields).
 - Tool results mark page content as untrusted, and the agent is told not to follow
   instructions found in pages.
 

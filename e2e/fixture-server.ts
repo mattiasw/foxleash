@@ -73,6 +73,8 @@ export const TITLES = {
   autofill: "Fixture autofill",
   autofillFramed: "Fixture autofill framed",
   cardAutofill: "Fixture card autofill",
+  protectedForm: "Fixture protected form",
+  protectedSent: "Fixture protected sent",
   beforeUnload: "Fixture before unload",
   navStart: "Fixture navigation start",
   navMiddle: "Fixture navigation middle",
@@ -281,6 +283,17 @@ export const AUTOFILL_COLOURS = {
 } as const;
 /** The login the autofill tests save for the fixture server, which Firefox fills into its page. */
 export const AUTOFILL_LOGIN = { username: "WMWM MWMW", password: "pw-autofill-Jd5XqR" } as const;
+/** The values of the protected fields on the protected form pages that need no saved login. */
+export const PROTECTED_FORM_SECRETS = {
+  shadow: "pw-shadow-Vb7Lq2",
+  slotted: "pw-slotted-Gp6Ye1",
+  alone: "pw-alone-Rt4Kc8",
+  face: "pw-face-Hn2Wd6",
+  wrapped: "pw-wrapped-Tk9Pw4",
+  unnamed: "pw-unnamed-Qs8Fj3",
+  disabled: "pw-disabled-Lm5Tz9",
+  fenced: "pw-fenced-Xc3Nb7",
+} as const;
 /** The text colours of the card autofill page: the card number field's fill colour, and a plain field's. */
 export const CARD_AUTOFILL_COLOURS = { filled: [0, 112, 64], plain: [128, 0, 96] } as const;
 /** The card the card autofill tests have Firefox fill into its page, digits only as Firefox fills it. */
@@ -711,6 +724,30 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end(AUTOFILL_FRAME_PAGE);
     } else if (path === "/card-autofill") {
       sendHtml(response, CARD_AUTOFILL_PAGE);
+    } else if (path === "/protected-get") {
+      sendHtml(response, PROTECTED_GET_PAGE);
+    } else if (path === "/protected-get-handled") {
+      sendHtml(response, PROTECTED_GET_HANDLED_PAGE);
+    } else if (path === "/protected-formmethod") {
+      sendHtml(response, PROTECTED_FORMMETHOD_PAGE);
+    } else if (path === "/protected-post") {
+      sendHtml(response, PROTECTED_POST_PAGE);
+    } else if (path === "/protected-alone") {
+      sendHtml(response, PROTECTED_ALONE_PAGE);
+    } else if (path === "/protected-unsent") {
+      sendHtml(response, PROTECTED_UNSENT_PAGE);
+    } else if (path === "/protected-shadow") {
+      sendHtml(response, PROTECTED_SHADOW_PAGE);
+    } else if (path === "/protected-slotted") {
+      sendHtml(response, PROTECTED_SLOTTED_PAGE);
+    } else if (path === "/protected-face") {
+      sendHtml(response, PROTECTED_FACE_PAGE);
+    } else if (path === "/protected-wrapped") {
+      sendHtml(response, PROTECTED_WRAPPED_PAGE);
+    } else if (path === "/protected-sent") {
+      // The protected form pages send here, with GET or POST.
+      request.resume();
+      sendHtml(response, PROTECTED_SENT_PAGE);
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/act") {
@@ -2227,6 +2264,187 @@ function autofillPage(action: string, script: string): string {
 ${script}</body></html>
 `;
 }
+
+// Login forms Firefox fills with a saved login on load, as the autofill page's, with named fields
+// so a form sent with GET puts their values in its address. Those without a method send with GET.
+const PROTECTED_GET_PAGE = namedLoginPage('action="/protected-sent"', "");
+
+// Its script handles the submission from a listener on window, registered before any act.
+const PROTECTED_GET_HANDLED_PAGE = namedLoginPage(
+  'action="/protected-sent"',
+  "",
+  `<script>addEventListener("submit", (event) => {
+  event.preventDefault();
+  document.getElementById("status").textContent = "Handled by the page";
+});</script>
+`,
+);
+
+const PROTECTED_FORMMETHOD_PAGE = namedLoginPage(
+  'action="/protected-sent" method="post"',
+  'formmethod="get"',
+);
+
+const PROTECTED_POST_PAGE = namedLoginPage('action="/protected-sent" method="post"', "");
+
+function namedLoginPage(formAttributes: string, buttonAttributes: string, script = ""): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<form ${formAttributes}>
+<label for="login-name">Login name</label>
+<input id="login-name" type="text" name="user">
+<label for="password">Password</label>
+<input id="password" type="password" name="pass">
+<button type="submit" ${buttonAttributes}>Sign in</button>
+</form>
+<p id="status"></p>
+${script}</body></html>
+`;
+}
+
+// One password field and no button: Enter submits the form with no submitter.
+const PROTECTED_ALONE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<form action="/protected-sent">
+<label for="password">Password</label>
+<input id="password" type="password" name="pass" value="${PROTECTED_FORM_SECRETS.alone}">
+</form>
+</body></html>
+`;
+
+// A GET form whose protected fields are not sent: unnamed, disabled, in a disabled fieldset, empty.
+const PROTECTED_UNSENT_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<form action="/protected-sent">
+<label for="query">Query</label>
+<input id="query" type="text" name="q" value="plain-query">
+<label for="unnamed">Unnamed password</label>
+<input id="unnamed" type="password" value="${PROTECTED_FORM_SECRETS.unnamed}">
+<label for="disabled">Disabled password</label>
+<input id="disabled" type="password" name="off" value="${PROTECTED_FORM_SECRETS.disabled}" disabled>
+<fieldset disabled>
+<label for="fenced">Fenced password</label>
+<input id="fenced" type="password" name="fenced" value="${PROTECTED_FORM_SECRETS.fenced}">
+</fieldset>
+<label for="empty">Empty password</label>
+<input id="empty" type="password" name="empty">
+<button type="submit">Search</button>
+</form>
+</body></html>
+`;
+
+// A GET sign-in form in a closed shadow root: its submit event never reaches window.
+const PROTECTED_SHADOW_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<sign-in-box></sign-in-box>
+<script>
+customElements.define("sign-in-box", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "closed" }).innerHTML = '<form action="/protected-sent"><label for="user">Login name</label><input id="user" type="text" name="user" value="shadow-user"><label for="pass">Password</label><input id="pass" type="password" name="pass" value="${PROTECTED_FORM_SECRETS.shadow}"><button type="submit">Sign in</button></form>';
+  }
+});
+</script>
+</body></html>
+`;
+
+// A GET sign-in form slotted into a shadow root, whose submission the page handles on document,
+// after the event has passed the shadow root.
+const PROTECTED_SLOTTED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<slot-box>
+<form action="/protected-sent">
+<label for="login-name">Login name</label>
+<input id="login-name" type="text" name="user" value="slotted-user">
+<label for="password">Password</label>
+<input id="password" type="password" name="pass" value="${PROTECTED_FORM_SECRETS.slotted}">
+<button type="submit">Sign in</button>
+</form>
+</slot-box>
+<p id="status"></p>
+<script>
+customElements.define("slot-box", class extends HTMLElement {
+  constructor() {
+    super();
+    this.attachShadow({ mode: "open" }).innerHTML = "<slot></slot>";
+  }
+});
+document.addEventListener("submit", (event) => {
+  event.preventDefault();
+  document.getElementById("status").textContent = "Handled by the page";
+});
+</script>
+</body></html>
+`;
+
+// A GET form whose password is a form-associated custom element: it sends the value of the
+// password field in its closed shadow root.
+const PROTECTED_FACE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<form action="/protected-sent">
+<label for="login-name">Login name</label>
+<input id="login-name" type="text" name="user" value="face-user">
+<pass-field name="pass"></pass-field>
+<button type="submit">Sign in</button>
+</form>
+<script>
+customElements.define("pass-field", class extends HTMLElement {
+  static formAssociated = true;
+  #internals = this.attachInternals();
+  #field;
+  constructor() {
+    super();
+    const shadow = this.attachShadow({ mode: "closed" });
+    shadow.innerHTML = '<label for="secret">Password</label><input id="secret" type="password" value="${PROTECTED_FORM_SECRETS.face}">';
+    this.#field = shadow.getElementById("secret");
+    this.#field.addEventListener("input", () => this.#internals.setFormValue(this.#field.value));
+  }
+  connectedCallback() {
+    this.#internals.setFormValue(this.#field.value);
+  }
+});
+</script>
+</body></html>
+`;
+
+// A GET form whose password is a form-associated custom element with no shadow root: it sends the
+// value of the unnamed password field among its children.
+const PROTECTED_WRAPPED_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedForm}</title></head>
+<body>
+<form action="/protected-sent">
+<label for="login-name">Login name</label>
+<input id="login-name" type="text" name="user" value="wrapped-user">
+<pass-wrap name="pass">
+<label for="wrapped">Password</label>
+<input id="wrapped" type="password" value="${PROTECTED_FORM_SECRETS.wrapped}">
+</pass-wrap>
+<button type="submit">Sign in</button>
+</form>
+<script>
+customElements.define("pass-wrap", class extends HTMLElement {
+  static formAssociated = true;
+  #internals = this.attachInternals();
+  connectedCallback() {
+    const field = this.querySelector("input");
+    this.#internals.setFormValue(field.value);
+    field.addEventListener("input", () => this.#internals.setFormValue(field.value));
+  }
+});
+</script>
+</body></html>
+`;
+
+const PROTECTED_SENT_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.protectedSent}</title></head>
+<body><h1>${TITLES.protectedSent}</h1></body></html>
+`;
 
 // An autofill page, /autofill unless given, in a frame from another site.
 function autofillFramedPage(port: number, framePath = "/autofill?frame", script = ""): string {
