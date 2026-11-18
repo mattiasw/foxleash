@@ -6,6 +6,7 @@ import type {
   HttpHeader,
   Tab,
 } from "./browser-api.ts";
+import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { redactedUrl } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
@@ -17,7 +18,7 @@ export const MAX_REFUSAL_TABS = 100;
 
 export interface FileGuardDeps {
   browser: Pick<BrowserApi, "webRequest" | "tabs" | "webNavigation">;
-  groups: Pick<SessionGroups, "sessionOf">;
+  groups: Pick<SessionGroups, "sessionOf" | "rememberedSessionOf">;
   access: Pick<SiteAccess, "view" | "onRunningChange">;
 }
 
@@ -75,11 +76,14 @@ const PAGE_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml
  * In the tabs of a session's group, cancels the response to a page or frame load that is anything
  * other than a web page and comes from a site that session may not act on, so Firefox neither
  * saves nor shows it (ADR 0081). A tab or window opened from a tab judged as a session's is judged
- * as that session's too, until it closes (ADR 0089). Call it at the top level of the background
- * script. Its listeners, for the responses and for the tabs that tabs open, are added when the
- * first session starts running, not at once: Firefox wakes a suspended background for a listener
- * added at the top level, and holds the request meanwhile (ADR 0071). They are never removed: a
- * session's group outlives its session, and a page left open in it can load a file at any time.
+ * as that session's too, until it closes (ADR 0089). A tab of a group the extension remembers
+ * creating for a session, also before a restart, an update or a reload, is judged as that session's
+ * (ADR 0091). Call it at the top level of the background script. Its listeners, for the responses
+ * and for the tabs that tabs open, are added when the first session starts running, or as soon as
+ * a tab of a remembered group is seen, from the background's start on (ADR 0091); never at the top
+ * level: Firefox wakes a suspended background for a listener added there, and holds the request
+ * meanwhile (ADR 0071). They are never removed: a session's group outlives its session, and a page
+ * left open in it can load a file at any time.
  */
 export function createFileGuard({ browser, groups, access }: FileGuardDeps): FileGuard {
   const refusals = new Map<number, Refusal[]>();
@@ -92,8 +96,29 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
     refusals.delete(tabId);
     opened.delete(tabId);
   });
+  browser.tabs.onCreated.addListener((tab) => listenFor(tab));
+  browser.tabs.onUpdated.addListener((_tabId, _changeInfo, tab) => listenFor(tab));
+  void listenForOpenTabs();
 
   return { refusedSince, onRefused };
+
+  /** Never rejects. */
+  async function listenFor(tab: Tab): Promise<void> {
+    if (listening) return;
+    if ((await groups.rememberedSessionOf(tab.groupId)) !== undefined) listen();
+  }
+
+  /** Never rejects: a failed query leaves it to the tab events. */
+  async function listenForOpenTabs(): Promise<void> {
+    let tabs: Tab[];
+    try {
+      tabs = await browser.tabs.query({});
+    } catch (error) {
+      warn({ event: "file_guard_tabs_unread", error: String(error) });
+      return;
+    }
+    for (const tab of tabs) void listenFor(tab);
+  }
 
   function listen(): void {
     if (listening) return;
@@ -159,11 +184,16 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
     const session = groups.sessionOf(tab.groupId);
     // The group wins over a tie, and a refusal there is not the old opener's.
     if (session !== undefined) return { session };
-    if (entry === undefined) return undefined;
-    const tie = await entry.tie;
-    if (tie !== undefined) return tie;
-    // The source was no session's when it opened the tab, but may have joined a group since.
-    return tieOf(entry.source).catch(() => undefined);
+    if (entry !== undefined) {
+      const tie = await entry.tie;
+      if (tie !== undefined) return tie;
+      // The source was no session's when it opened the tab, but may have joined a group since.
+      const later = await tieOf(entry.source).catch(() => undefined);
+      if (later !== undefined) return later;
+    }
+    // Last: a tie or a current group says more about the tab than the group it was left in.
+    const remembered = await groups.rememberedSessionOf(tab.groupId);
+    return remembered === undefined ? undefined : { session: remembered };
   }
 
   /** The only place a refusal is recorded. The opener hears of it for `refusedSince` only. */

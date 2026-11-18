@@ -2,7 +2,7 @@ import type { BrowserApi } from "./browser-api.ts";
 import { allowedSiteFor, ToolError } from "./handlers.ts";
 import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
-import { RECIPE_KEY_PREFIX, TAG_MARK_KEY } from "./settings.ts";
+import { RECIPE_KEY_PREFIX, SESSION_GROUPS_KEY, TAG_MARK_KEY } from "./settings.ts";
 import { redactedUrl, siteOf } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
@@ -147,10 +147,13 @@ export function createLiveDocuments({
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const keys = Object.keys(changes);
-    // A recipe or the tag mark never narrows access.
+    // A recipe, the tag mark or the remembered groups never narrow access.
     if (
       keys.length > 0 &&
-      keys.every((key) => key.startsWith(RECIPE_KEY_PREFIX) || key === TAG_MARK_KEY)
+      keys.every(
+        (key) =>
+          key.startsWith(RECIPE_KEY_PREFIX) || key === TAG_MARK_KEY || key === SESSION_GROUPS_KEY,
+      )
     ) {
       return;
     }

@@ -14,7 +14,7 @@ import { ToolError } from "./handlers.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { readRecipes } from "./recipes.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite } from "./settings.ts";
+import { grantSite, SESSION_GROUPS_KEY } from "./settings.ts";
 import { APPROVAL_WAIT_MS, createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 const RECIPE: RecipeFields = {
@@ -1701,7 +1701,7 @@ describe("allowing a recipe's sites", { timeout: 10000 }, () => {
     const sites = ["https://a.example", "https://b.example", "https://c.example"];
     await seed(fake, { ...TRIP, sites });
     await fake.browser.storage.local.set({ blocklist: ["b.example"] });
-    const before = await fake.browser.storage.local.get(null);
+    const before = await storedSettings(fake);
     const { page, answer, tabId } = await shownRun(fake, recipes);
     const joined = track(recipes.run("s1", "Trip"));
     await flush();
@@ -1717,7 +1717,7 @@ describe("allowing a recipe's sites", { timeout: 10000 }, () => {
     assert.deepEqual(joined.value, result);
     assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: false });
     assert.equal(recipes.openPrompt("s1"), undefined);
-    assert.deepEqual(await fake.browser.storage.local.get(null), before);
+    assert.deepEqual(await storedSettings(fake), before);
     assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "allowed" });
     assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
     assert.deepEqual(
@@ -2181,7 +2181,7 @@ describe("request", { timeout: 10000 }, () => {
     await fake.browser.storage.local.set({ blocklist: ["b.example"] });
     await grantSite(fake.browser, "https://c.example");
     sessions.set("s1", { allowed: new Set(), refused: new Set(["https://d.example"]), closed: 0 });
-    const before = await fake.browser.storage.local.get(null);
+    const before = await storedSettings(fake);
     const sites = [
       "https://e.example",
       "https://d.example",
@@ -2201,7 +2201,7 @@ describe("request", { timeout: 10000 }, () => {
     assert.deepEqual(answer.value, result);
     assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: false });
     assert.equal(recipes.openPrompt("s1"), undefined);
-    assert.deepEqual(await fake.browser.storage.local.get(null), before);
+    assert.deepEqual(await storedSettings(fake), before);
     assert.deepEqual(
       [...(sessions.get("s1")?.allowed ?? [])],
       ["https://e.example", "https://a.example"],
@@ -2729,6 +2729,12 @@ async function shownRequest(
   page.deliver({ type: "ready" });
   assert.equal(fieldsOfMessage(page.posted[0]).type, "sites");
   return { answer, tabId, page };
+}
+
+/** Everything stored but the remembered tab groups, which showing a prompt adds to. */
+async function storedSettings(fake: FakeBrowser): Promise<Record<string, unknown>> {
+  const { [SESSION_GROUPS_KEY]: _groups, ...settings } = await fake.browser.storage.local.get(null);
+  return settings;
 }
 
 function requestClosed(tabId: number): string {

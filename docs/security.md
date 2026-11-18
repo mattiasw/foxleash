@@ -605,11 +605,32 @@ Exceptions and limits:
   always: a file from a site you allowed only for that session no longer loads there. Moving the
   tab out of the group ends that, unless another tab of the group opened it.
 - A new tab or window that a page opened for such a file stays open, blank.
-- Foxleash knows an agent's tab group only in its background's memory. After a Firefox restart,
-  or an update or reload of the extension, the tabs of a group from before, and windows opened
-  from them, are no longer covered.
-- From the first agent session until Firefox restarts or the extension is updated or reloaded,
-  Foxleash's blocking listener sees the answer to every page and frame load in every tab. It
-  answers at once for a web page and for the two kinds of answer it lets through. For any other
-  answer it first looks up the tab and the tabs that opened it, one after the other, and for a
-  tab it covers reads your settings, before the answer goes on or is stopped.
+- Foxleash remembers in its storage the tab groups it made for agent sessions, up to 200, so after
+  a Firefox restart, or an update or reload of the extension, the tabs left in such a group stay
+  covered, judged by the sites you allowed always (ADR 0091). Limits:
+  - In the moment after Firefox starts or the extension is updated or reloaded, before Foxleash
+    has read that list, nothing is covered.
+  - Windows opened from those tabs before the restart, update or reload are no longer covered, and
+    the tabs of a session you stopped are judged by the sites you allowed always, as if you had
+    not stopped it.
+  - Once the list holds more than 200 groups, Foxleash forgets the oldest of those that have no
+    tab, such as one you saved and closed, until 200 remain; such a group is not covered when you
+    open it again. An agent can make that happen by opening and closing tabs. A group that still
+    has a tab is never forgotten.
+  - Groups made by a version of Foxleash before this one are not covered.
+  - While Foxleash cannot read its storage, the tabs of a group from before are not covered.
+- From the first agent session on, and also from the moment Foxleash sees a tab of a remembered
+  group, after Firefox's start or an update or reload of the extension, Foxleash's blocking
+  listener sees the answer to every page and frame load in every tab, until Firefox quits or the
+  extension is updated or reloaded. It answers at once for a web page and for the
+  two kinds of answer it lets through. For any other answer it first looks up the tab and the tabs
+  that opened it, one after the other, and for a tab it covers reads your settings, before the
+  answer goes on or is stopped. Measured, it adds a few milliseconds or less to a page load.
+  When Foxleash adds this listener while it is still starting, Firefox can note it for Foxleash's
+  next start; measured, it did so once, in Firefox 160 after a restart, and in none of the other
+  cases tried. With that note, at the next start, such as Firefox's, page and frame loads in every
+  tab wait until Foxleash has started, which it does when Firefox starts anyway; how long they
+  wait, and whether the very first loads after Firefox starts wait too, was not measured. If
+  Foxleash adds the listener again while starting, it checks the loads that waited in the tabs of
+  a remembered group, though not in a window opened from them before then; if not, they go on
+  unchecked and Firefox drops the note (ADR 0091).

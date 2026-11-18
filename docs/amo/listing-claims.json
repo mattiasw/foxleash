@@ -118,6 +118,18 @@
         },
         {
           "file": "apps/extension/src/file-guard.ts",
+          "contains": "const remembered = await groups.rememberedSessionOf(tab.groupId);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "if ((await groups.rememberedSessionOf(tab.groupId)) !== undefined) listen();"
+        },
+        {
+          "file": "apps/extension/src/session-groups.ts",
+          "contains": "[SESSION_GROUPS_KEY]: merged.map(([id, session]) => ({ id, session })),"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
           "contains": "if (view.allowed(details.url)) return undefined;"
         },
         { "file": "apps/extension/src/file-guard.ts", "contains": "return { cancel: true };" },

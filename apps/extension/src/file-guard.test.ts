@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import type { HeadersReceivedDetails, HttpHeader } from "./browser-api.ts";
+import { describe, it, type TestContext } from "node:test";
+import type { BrowserApi, HeadersReceivedDetails, HttpHeader } from "./browser-api.ts";
 import {
   createFakeBrowser,
   createFakeTimers,
@@ -10,7 +10,7 @@ import {
 } from "./fake-browser.ts";
 import { createFileGuard, MAX_REFUSAL_TABS, MAX_REFUSALS } from "./file-guard.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite, revokeSite, saveBlocklist } from "./settings.ts";
+import { grantSite, revokeSite, SESSION_GROUPS_KEY, saveBlocklist } from "./settings.ts";
 import { createSiteAccess, type SessionMemory } from "./site-access.ts";
 
 /** Stored as approved by `tabIn`. */
@@ -25,6 +25,12 @@ const ATTACHMENT: HttpHeader[] = [
   { name: "Content-Disposition", value: 'attachment; filename="export.csv"' },
 ];
 const LOCATION: HttpHeader = { name: "Location", value: `${B}/next` };
+/** The guard's listener for the responses, as it registers it. */
+const REGISTRATION = {
+  event: "onHeadersReceived",
+  filter: { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] },
+  extraInfoSpec: ["blocking", "responseHeaders"],
+};
 
 describe("the file guard's listener", { timeout: 10000 }, () => {
   it("is added when the first session starts running, once, and stays", async () => {
@@ -62,6 +68,150 @@ describe("the file guard's listener", { timeout: 10000 }, () => {
     const { fake } = setup();
     const tab = fake.openTab({ url: `${A}/page` });
     assert.deepEqual(fake.emitWebRequest("onHeadersReceived", response({ tabId: tab.id })), []);
+  });
+});
+
+describe("the file guard after a restart, an update or a reload", { timeout: 10000 }, () => {
+  it("listens at once when a tab of a group made for a session is open", async () => {
+    const { fake } = await leftBehind();
+    assert.deepEqual(fake.webRequestRegistrations, []);
+    assert.equal(fake.createdNavigationTargetListenerCount(), 0);
+    restart(fake);
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.equal(fake.createdNavigationTargetListenerCount(), 1);
+  });
+
+  it("listens only once a tab is created in such a group", async () => {
+    const { fake, left } = await leftBehind();
+    fake.removeTab(left.id);
+    restart(fake);
+    await flush();
+    fake.openTab({ url: `${A}/page` });
+    fake.openTab({ url: `${A}/page`, groupId: 4242 });
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, []);
+    assert.equal(fake.createdNavigationTargetListenerCount(), 0);
+    // The user opens the saved group again: Firefox keeps its id.
+    fake.openTab({ url: `${A}/page`, groupId: left.groupId });
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.equal(fake.createdNavigationTargetListenerCount(), 1);
+  });
+
+  it("listens only once a tab is moved into such a group", async () => {
+    const { fake, left } = await leftBehind();
+    const groupId = left.groupId;
+    fake.ungroup(left.id);
+    restart(fake);
+    await flush();
+    await fake.browser.tabs.group({ tabIds: [left.id] });
+    fake.emitStatus(left.id, "loading");
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, []);
+    fake.groups.set(groupId, { id: groupId, windowId: left.windowId });
+    await fake.browser.tabs.group({ groupId, tabIds: [left.id] });
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+  });
+
+  it("judges a tab left in such a group by the sites allowed always", async () => {
+    const { fake, left } = await leftBehind();
+    const { access, sessions, guard } = restart(fake);
+    await flush();
+    assert.equal(await verdict(respondOnce(fake, { tabId: left.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(left.id, 0), [B]);
+    assert.equal(
+      await verdict(respondOnce(fake, { tabId: left.id, url: `${A}/export` })),
+      "passed",
+    );
+    // The session reconnects with its id: its new answers count, as for any session.
+    access.admit("old");
+    sessions.set("old", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    assert.equal(await verdict(respondOnce(fake, { tabId: left.id })), "passed");
+  });
+
+  it("listens once a tab event shows such a group when the open tabs cannot be read", async (t) => {
+    const warned = warnings(t);
+    const { fake, left } = await leftBehind();
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", collect);
+    try {
+      restart(fake, {
+        ...fake.browser,
+        tabs: {
+          ...fake.browser.tabs,
+          query: async () => {
+            throw new Error("Tabs cannot be read");
+          },
+        },
+      });
+      await flush();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", collect);
+    }
+    assert.deepEqual(fake.webRequestRegistrations, []);
+    assert.deepEqual(warned(), [
+      { event: "file_guard_tabs_unread", error: "Error: Tabs cannot be read" },
+    ]);
+    fake.emitStatus(left.id, "loading");
+    await flush();
+    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+  });
+
+  it("ties a window opened from a tab left in such a group to its session", async () => {
+    const { fake, left } = await leftBehind();
+    const { guard } = restart(fake);
+    await flush();
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, left, window);
+    assert.equal(await verdict(respondOnce(fake, { tabId: window.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(left.id, 0), [B]);
+  });
+
+  it("judges a tab opened from no session's tab and moved into such a group by that group", async () => {
+    const { fake, left } = await leftBehind();
+    const { guard } = restart(fake);
+    await flush();
+    const own = fake.openTab({ url: `${A}/page` });
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, own, window);
+    await flush();
+    await fake.browser.tabs.group({ groupId: left.groupId, tabIds: [window.id] });
+    assert.equal(await verdict(respondOnce(fake, { tabId: window.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(own.id, 0), []);
+  });
+
+  it("judges a tied tab moved into such a group by its tie", async () => {
+    const { fake, left } = await leftBehind();
+    const { access, groups, sessions } = restart(fake);
+    access.admit("s2");
+    const opener = fake.openTab({ url: `${A}/page` });
+    await groups.ensureGroup("s2", opener);
+    sessions.set("s2", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    await flush();
+    await fake.browser.tabs.group({ groupId: left.groupId, tabIds: [window.id] });
+    assert.equal(await verdict(respondOnce(fake, { tabId: window.id })), "passed");
+  });
+
+  it("judges a tab of a running session's group by that session, whatever is stored", async () => {
+    const fake = createFakeBrowser();
+    await grantSite(fake.browser, A);
+    const { access, groups, sessions } = restart(fake);
+    access.admit("s1");
+    const tab = fake.openTab({ url: `${A}/page` });
+    const groupId = await groups.ensureGroup("s1", tab);
+    await fake.browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: [{ id: groupId, session: "old" }],
+    });
+    sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "passed");
   });
 });
 
@@ -681,6 +831,43 @@ function response(details: Overrides & { tabId: number }): HeadersReceivedDetail
   return sent;
 }
 
+/**
+ * A tab left on A's page in a group an earlier background made for the session "old", with A
+ * stored as approved; nothing listens yet.
+ */
+async function leftBehind(): Promise<{ fake: FakeBrowser; left: FakeTab }> {
+  const fake = createFakeBrowser();
+  await grantSite(fake.browser, A);
+  // No guard here: its registration would pass for the next background's.
+  const earlier = createSessionGroups(fake.browser);
+  const left = fake.openTab({ url: `${A}/page` });
+  await earlier.ensureGroup("old", left);
+  return { fake, left };
+}
+
+/** The background as it starts again, over the same browser. */
+function restart(fake: FakeBrowser, browser: BrowserApi = fake.browser) {
+  const timers = createFakeTimers();
+  const groups = createSessionGroups(browser);
+  const sessions: SessionMemory = new Map();
+  const access = createSiteAccess({ browser, groups, sessions, timers });
+  const guard = createFileGuard({ browser, groups, access });
+  return { groups, sessions, access, guard };
+}
+
+/** Fires the response at the guard's listener, the only one; what it answered. */
+function respondOnce(fake: FakeBrowser, details: Overrides & { tabId: number }): unknown {
+  const answers = fake.emitWebRequest("onHeadersReceived", response(details));
+  assert.equal(answers.length, 1);
+  return answers[0];
+}
+
+/** Collects what is logged with console.warn, parsed. */
+function warnings(t: TestContext): () => unknown[] {
+  const warn = t.mock.method(console, "warn", () => {});
+  return () => warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
+}
+
 function setup() {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
@@ -699,11 +886,8 @@ function setup() {
     return tab;
   }
 
-  /** Fires the response at the guard's listener, the only one; what it answered. */
   function respond(details: Overrides & { tabId: number }): unknown {
-    const answers = fake.emitWebRequest("onHeadersReceived", response(details));
-    assert.equal(answers.length, 1);
-    return answers[0];
+    return respondOnce(fake, details);
   }
 
   return { fake, groups, sessions, access, guard, tabIn, respond };

@@ -6,7 +6,9 @@ blocks or changes a request" of
 [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md) for this one case.
 Amended by [0089](0089-file-guard-ties-windows-to-the-tab-that-opened-them.md), 2026-11-18: a
 window or tab that a page in a session's tab opens is judged as that session's, so a file loaded
-there is no longer saved.
+there is no longer saved. Amended by
+[0091](0091-file-guard-remembers-session-groups-across-restarts.md), 2026-11-18: the tabs of a
+session's group stay judged after a Firefox restart or an update or reload of the add-on.
 
 ## Context
 

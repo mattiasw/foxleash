@@ -15,6 +15,9 @@ export const RECIPE_KEY_PREFIX = "recipe:";
  */
 export const TAG_MARK_KEY = "tagMark";
 
+/** The agent tab groups session-groups.ts remembers across restarts; not a setting. */
+export const SESSION_GROUPS_KEY = "sessionGroups";
+
 const BLOCKLIST_KEY = "blocklist";
 const SESSION_WINDOW_KEY = "sessionWindow";
 
@@ -48,7 +51,9 @@ export async function readSettings(browser: SettingsBrowser): Promise<Settings> 
       if (!sessionWindow) warn({ event: "ignored_setting", key });
       continue;
     }
-    if (key.startsWith(RECIPE_KEY_PREFIX) || key === TAG_MARK_KEY) continue;
+    if (key.startsWith(RECIPE_KEY_PREFIX) || key === TAG_MARK_KEY || key === SESSION_GROUPS_KEY) {
+      continue;
+    }
     const site = grantedSite(key, items[key]);
     if (site === undefined) warn({ event: "ignored_setting", key });
     else sites.push(site);
@@ -98,7 +103,12 @@ export function onSettingsChanged(browser: SettingsBrowser, listener: () => void
   browser.storage.onChanged.addListener((changes, areaName) => {
     if (areaName !== "local") return;
     const keys = Object.keys(changes);
-    if (keys.length === 1 && keys[0] === TAG_MARK_KEY) return;
+    if (
+      keys.length > 0 &&
+      keys.every((key) => key === TAG_MARK_KEY || key === SESSION_GROUPS_KEY)
+    ) {
+      return;
+    }
     listener();
   });
 }

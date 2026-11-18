@@ -67,6 +67,8 @@ export interface FakeBrowser {
   closeWindow(windowId: number): void;
   /** Makes the next `storage.local.set` reject, once. */
   failNextSet(): void;
+  /** Makes the next `storage.local.get` reject, once. */
+  failNextGet(): void;
   /** Every `scripting.executeScript` call, in order, with only the keys it was given. */
   injections: Injection[];
   /** What each `scripting.executeScript` call resolves to, once `nextInjectionResults` is empty. */
@@ -390,6 +392,7 @@ export function createFakeBrowser(): FakeBrowser {
   let windowCreateFailure: { error: unknown } | undefined;
   const onTabDetached = createEvent<(tabId: number) => void>();
   let failSet = false;
+  let failGet = false;
   let injectionFailure: { error: unknown } | undefined;
   let captureFailure: { error: unknown } | undefined;
   let captureHold: Promise<void> | undefined;
@@ -620,8 +623,15 @@ export function createFakeBrowser(): FakeBrowser {
     },
     storage: {
       local: {
-        get: async () =>
-          Object.fromEntries([...stored].map(([key, value]) => [key, structuredClone(value)])),
+        get: async () => {
+          if (failGet) {
+            failGet = false;
+            throw new Error("Storage cannot be read");
+          }
+          return Object.fromEntries(
+            [...stored].map(([key, value]) => [key, structuredClone(value)]),
+          );
+        },
         set: async (items) => {
           if (failSet) {
             failSet = false;
@@ -745,6 +755,9 @@ export function createFakeBrowser(): FakeBrowser {
     },
     failNextSet: () => {
       failSet = true;
+    },
+    failNextGet: () => {
+      failGet = true;
     },
     injections: [],
     injectionResults: [{ frameId: 0, result: null }],

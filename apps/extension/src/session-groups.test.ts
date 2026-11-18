@@ -1,8 +1,13 @@
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
+import { describe, it, type TestContext } from "node:test";
 import type { BrowserApi, Tab } from "./browser-api.ts";
 import { createFakeBrowser, type FakeBrowser, type FakeTab, flush } from "./fake-browser.ts";
-import { createSessionGroups, type SessionGroups } from "./session-groups.ts";
+import {
+  createSessionGroups,
+  MAX_REMEMBERED_GROUPS,
+  type SessionGroups,
+} from "./session-groups.ts";
+import { SESSION_GROUPS_KEY } from "./settings.ts";
 
 const BLANK = ["about:blank", "about:newtab", "about:home"];
 /** A createTab check that never refuses. */
@@ -723,6 +728,337 @@ describe("sessionOf", { timeout: 10000 }, () => {
     assert.equal(groups.sessionOf(tab.groupId), "s1");
     await groups.endSession("s1");
     assert.equal(groups.sessionOf(tab.groupId), undefined);
+  });
+});
+
+describe("rememberedSessionOf", { timeout: 10000 }, () => {
+  it("answers a group an earlier background created, which no other member knows", async () => {
+    const { fake, open } = setup();
+    const tab = await open("s1", { url: "https://example.com/" });
+    const later = createSessionGroups(fake.browser);
+    assert.equal(await later.rememberedSessionOf(tab.groupId), "s1");
+    assert.equal(later.sessionOf(tab.groupId), undefined);
+    assert.equal(later.isSessionGroup(tab.groupId), false);
+    assert.equal(await later.groupOf("s1"), undefined);
+    assert.equal(later.sessionOf(tab.groupId), undefined);
+    assert.equal(later.isSessionGroup(tab.groupId), false);
+  });
+
+  it("answers a group this created and forgot", async () => {
+    const { fake, groups, open } = setup();
+    const { groupId } = await open("s1", { url: "https://example.com/" });
+    fake.closeGroup(groupId);
+    assert.equal(await groups.groupOf("s1"), undefined);
+    assert.equal(groups.sessionOf(groupId), undefined);
+    assert.equal(await groups.rememberedSessionOf(groupId), "s1");
+  });
+
+  it("answers from memory before the stored list, also once the group is forgotten", async () => {
+    const { fake, groups, open } = setup();
+    const { groupId } = await open("new", { url: "https://example.com/" });
+    await fake.browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: [{ id: groupId, session: "old" }],
+    });
+    assert.equal(await groups.rememberedSessionOf(groupId), "new");
+    fake.closeGroup(groupId);
+    assert.equal(await groups.groupOf("new"), undefined);
+    assert.equal(await groups.rememberedSessionOf(groupId), "new");
+  });
+
+  it("answers undefined for no group without reading storage", async () => {
+    const { fake, groups } = setup();
+    fake.failNextGet();
+    assert.equal(await groups.rememberedSessionOf(undefined), undefined);
+    assert.equal(await groups.rememberedSessionOf(-1), undefined);
+    await assert.rejects(fake.browser.storage.local.get(null), /cannot be read/);
+  });
+
+  it("answers undefined for a group nothing created", async () => {
+    const { fake, groups } = setup();
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [{ id: 7, session: "old" }] });
+    assert.equal(await groups.rememberedSessionOf(8), undefined);
+  });
+
+  it("reads the stored list once and keeps it", async () => {
+    const fake = createFakeBrowser();
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [{ id: 7, session: "old" }] });
+    const groups = createSessionGroups(fake.browser);
+    assert.equal(await groups.rememberedSessionOf(7), "old");
+    fake.failNextGet();
+    assert.equal(await groups.rememberedSessionOf(7), "old");
+    await assert.rejects(fake.browser.storage.local.get(null), /cannot be read/);
+  });
+
+  it("answers from memory alone while the stored list cannot be read, and reads it again", async (t) => {
+    const warned = warnings(t);
+    const fake = createFakeBrowser();
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [{ id: 7, session: "old" }] });
+    const groups = createSessionGroups(fake.browser);
+    const tab = fake.openTab();
+    const id = await groups.ensureGroup("s1", tab);
+    fake.failNextGet();
+    // Two calls at once share the one read.
+    assert.deepEqual(
+      await Promise.all([
+        groups.rememberedSessionOf(7),
+        groups.rememberedSessionOf(7),
+        groups.rememberedSessionOf(id),
+      ]),
+      [undefined, undefined, "s1"],
+    );
+    assert.deepEqual(warned(), [
+      { event: "read_session_groups_failed", error: "Error: Storage cannot be read" },
+    ]);
+    assert.equal(await groups.rememberedSessionOf(7), "old");
+  });
+
+  it("counts a malformed stored list as empty, warns, and replaces it at the next group", async (t) => {
+    const good = { id: 7, session: "old" };
+    const malformed: [string, unknown][] = [
+      ["a record", good],
+      ["a string", JSON.stringify([good])],
+      ["a list with a string", [good, "x"]],
+      ["a list with null", [good, null]],
+      ["a list with a list", [good, [8, "old"]]],
+      // biome-ignore lint/suspicious/noSparseArray: a hole is what this case stores.
+      ["a list with a hole", [good, , good]],
+      ["a fractional id", [good, { id: 1.5, session: "old" }]],
+      ["an id past the safe integers", [good, { id: 2 ** 53, session: "old" }]],
+      ["an id that is a string", [good, { id: "8", session: "old" }]],
+      ["a session that is no string", [good, { id: 8, session: 8 }]],
+      ["no session", [good, { id: 8 }]],
+    ];
+    const warned = warnings(t);
+    for (const [name, value] of malformed) {
+      const seen = warned().length;
+      const fake = createFakeBrowser();
+      await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: value });
+      const groups = createSessionGroups(fake.browser);
+      assert.equal(await groups.rememberedSessionOf(7), undefined, name);
+      assert.deepEqual(warned().slice(seen), [{ event: "ignored_session_groups" }], name);
+      const id = await groups.ensureGroup("s1", fake.openTab());
+      assert.deepEqual(await storedGroups(fake), [{ id, session: "s1" }], name);
+    }
+  });
+
+  it("counts a stored entry whose id or session is inherited as malformed", async (t) => {
+    const cases = [
+      { own: { session: "old" }, inherited: { id: 8 } },
+      { own: { id: 8 }, inherited: { session: "old" } },
+    ];
+    const warned = warnings(t);
+    for (const { own, inherited } of cases) {
+      const seen = warned().length;
+      const fake = createFakeBrowser();
+      const entry: unknown = Object.assign(Object.create(inherited), own);
+      // Storage keeps no prototypes, so a value handed back with one is passed in directly.
+      fake.browser.storage.local.get = async () => ({ [SESSION_GROUPS_KEY]: [entry] });
+      const groups = createSessionGroups(fake.browser);
+      assert.equal(await groups.rememberedSessionOf(8), undefined);
+      assert.deepEqual(warned().slice(seen), [{ event: "ignored_session_groups" }]);
+    }
+  });
+});
+
+describe("the stored tab groups", { timeout: 10000 }, () => {
+  it("hold each new group, oldest first, and no group a tab joined", async () => {
+    const { fake, open } = setup();
+    const first = await open("s1", { url: "https://example.com/" });
+    await open("s1", { url: "https://example.com/next" });
+    const second = await open("s2", { url: "https://example.com/" });
+    assert.deepEqual(await storedGroups(fake), [
+      { id: first.groupId, session: "s1" },
+      { id: second.groupId, session: "s2" },
+    ]);
+  });
+
+  it("hold the group by the time ensureGroup resolves, also when storage is slow", async () => {
+    const { fake, groups } = setup();
+    const get = fake.browser.storage.local.get;
+    fake.browser.storage.local.get = async (keys) => {
+      await flush();
+      return get(keys);
+    };
+    const id = await groups.ensureGroup("s1", fake.openTab());
+    fake.browser.storage.local.get = get;
+    assert.deepEqual(await storedGroups(fake), [{ id, session: "s1" }]);
+  });
+
+  it("keep both groups when the first one's write is still under way as the second is made", async () => {
+    const { fake, groups } = setup();
+    const set = fake.browser.storage.local.set;
+    const held = Promise.withResolvers<void>();
+    const writing = Promise.withResolvers<void>();
+    fake.browser.storage.local.set = async (items) => {
+      fake.browser.storage.local.set = set;
+      writing.resolve();
+      await held.promise;
+      return set(items);
+    };
+    const first = groups.ensureGroup("s1", fake.openTab());
+    await writing.promise;
+    const second = groups.ensureGroup("s2", fake.openTab());
+    await flush();
+    held.resolve();
+    const ids = await Promise.all([first, second]);
+    assert.deepEqual(await storedGroups(fake), [
+      { id: ids[0], session: "s1" },
+      { id: ids[1], session: "s2" },
+    ]);
+  });
+
+  it("keep the stored order, this life's groups last, with no id twice and this life's session", async () => {
+    const { fake, open } = setup();
+    const first = await open("s1", { url: "https://example.com/" });
+    await fake.browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: [
+        { id: 50, session: "old" },
+        { id: first.groupId, session: "stale" },
+        { id: 51, session: "older" },
+      ],
+    });
+    const second = await open("s2", { url: "https://example.com/" });
+    assert.deepEqual(await storedGroups(fake), [
+      { id: 50, session: "old" },
+      { id: 51, session: "older" },
+      { id: first.groupId, session: "s1" },
+      { id: second.groupId, session: "s2" },
+    ]);
+  });
+
+  it("are not shortened by a read that fails, and take the group at the next append", async (t) => {
+    const warned = warnings(t);
+    const { fake, open } = setup();
+    const seeded = [
+      { id: 50, session: "old" },
+      { id: 51, session: "older" },
+    ];
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    fake.failNextGet();
+    const first = await open("s1", { url: "https://example.com/" });
+    assert.equal(fake.groups.has(first.groupId), true);
+    assert.deepEqual(await storedGroups(fake), seeded);
+    assert.deepEqual(warned(), [
+      { event: "remember_groups_failed", error: "Error: Storage cannot be read" },
+    ]);
+    const second = await open("s2", { url: "https://example.com/" });
+    assert.deepEqual(await storedGroups(fake), [
+      ...seeded,
+      { id: first.groupId, session: "s1" },
+      { id: second.groupId, session: "s2" },
+    ]);
+  });
+
+  it("take a group whose write failed at the next append, and the group is made all the same", async (t) => {
+    const warned = warnings(t);
+    const { fake, groups, open } = setup();
+    const tab = fake.openTab();
+    fake.failNextSet();
+    const id = await groups.ensureGroup("s1", tab);
+    assert.equal(fake.tabs.get(tab.id)?.groupId, id);
+    assert.equal(groups.sessionOf(id), "s1");
+    assert.equal(await storedGroups(fake), undefined);
+    assert.deepEqual(warned(), [
+      { event: "remember_groups_failed", error: "Error: Storage is full" },
+    ]);
+    const second = await open("s2", { url: "https://example.com/" });
+    assert.deepEqual(await storedGroups(fake), [
+      { id, session: "s1" },
+      { id: second.groupId, session: "s2" },
+    ]);
+  });
+
+  it("leave no rejection unhandled when the new group's title cannot be set", async (t) => {
+    warnings(t);
+    const { fake, groups } = setup();
+    fake.failNextSet();
+    fake.browser.tabGroups.update = async () => {
+      throw new Error("update failed");
+    };
+    const unhandled: unknown[] = [];
+    const collect = (reason: unknown) => unhandled.push(reason);
+    process.on("unhandledRejection", collect);
+    try {
+      await assert.rejects(groups.ensureGroup("s1", fake.openTab()), /update failed/);
+      await flush();
+      assert.deepEqual(unhandled, []);
+    } finally {
+      process.off("unhandledRejection", collect);
+    }
+  });
+
+  it("drop the oldest group without a tab over the cap", async () => {
+    const { fake, open } = setup();
+    const seeded = entries(1001, MAX_REMEMBERED_GROUPS);
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    const tab = await open("s1", { url: "https://example.com/" });
+    assert.equal(MAX_REMEMBERED_GROUPS, 200);
+    assert.deepEqual(await storedGroups(fake), [
+      ...seeded.slice(1),
+      { id: tab.groupId, session: "s1" },
+    ]);
+  });
+
+  it("keep every group that still has a tab, also over the cap", async () => {
+    const { fake, open } = setup();
+    const seeded = entries(1001, MAX_REMEMBERED_GROUPS);
+    for (const { id } of seeded) fake.openTab({ groupId: id });
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    const tab = await open("s1", { url: "https://example.com/" });
+    assert.deepEqual(await storedGroups(fake), [...seeded, { id: tab.groupId, session: "s1" }]);
+  });
+
+  it("drop only as many of the oldest groups without a tab as the cap needs", async () => {
+    const { fake, open } = setup();
+    const seeded = entries(1001, MAX_REMEMBERED_GROUPS + 1);
+    for (const groupId of [1001, 1002, 1004]) fake.openTab({ groupId });
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    const tab = await open("s1", { url: "https://example.com/" });
+    const kept = seeded.filter(({ id }) => id !== 1003 && id !== 1005);
+    assert.deepEqual(await storedGroups(fake), [...kept, { id: tab.groupId, session: "s1" }]);
+  });
+
+  it("keep every group when the open tabs cannot be read", async (t) => {
+    const warned = warnings(t);
+    const fake = createFakeBrowser();
+    const seeded = entries(1001, MAX_REMEMBERED_GROUPS);
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    const groups = createSessionGroups({
+      ...fake.browser,
+      tabs: {
+        ...fake.browser.tabs,
+        query: async () => {
+          throw new Error("Tabs cannot be read");
+        },
+      },
+    });
+    const id = await groups.ensureGroup("s1", fake.openTab());
+    assert.deepEqual(await storedGroups(fake), [...seeded, { id, session: "s1" }]);
+    assert.deepEqual(warned(), [
+      { event: "remember_groups_failed", error: "Error: Tabs cannot be read" },
+    ]);
+  });
+
+  it("read no tabs at the cap", async (t) => {
+    const warned = warnings(t);
+    const fake = createFakeBrowser();
+    const seeded = entries(1001, MAX_REMEMBERED_GROUPS - 1);
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: seeded });
+    let queries = 0;
+    const groups = createSessionGroups({
+      ...fake.browser,
+      tabs: {
+        ...fake.browser.tabs,
+        query: (queryInfo) => {
+          queries += 1;
+          return fake.browser.tabs.query(queryInfo);
+        },
+      },
+    });
+    const id = await groups.ensureGroup("s1", fake.openTab());
+    assert.deepEqual(await storedGroups(fake), [...seeded, { id, session: "s1" }]);
+    assert.equal(queries, 0);
+    assert.deepEqual(warned(), []);
   });
 });
 
@@ -1832,6 +2168,25 @@ function moveGroup(fake: FakeBrowser, groupId: number | undefined, windowId: num
   assert.ok(group !== undefined);
   group.windowId = windowId;
   for (const tab of fake.tabs.values()) if (tab.groupId === groupId) tab.windowId = windowId;
+}
+
+/** What is stored under the remembered groups' key. */
+async function storedGroups(fake: FakeBrowser): Promise<unknown> {
+  return (await fake.browser.storage.local.get(null))[SESSION_GROUPS_KEY];
+}
+
+/** `count` stored groups with ids from `first` on, each of its own session. */
+function entries(first: number, count: number): { id: number; session: string }[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: first + index,
+    session: `s${first + index}`,
+  }));
+}
+
+/** Collects what is logged with console.warn, parsed. */
+function warnings(t: TestContext): () => unknown[] {
+  const warn = t.mock.method(console, "warn", () => {});
+  return () => warn.mock.calls.map((call) => JSON.parse(String(call.arguments[0])));
 }
 
 function setup(onGrouped?: (tabId: number) => Promise<void>) {

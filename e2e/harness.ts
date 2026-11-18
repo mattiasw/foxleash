@@ -97,12 +97,18 @@ export interface Harness {
   startFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
   /**
    * Quits the Firefox started last and starts Firefox again on the same profile, installing the
-   * extension again. Seed settings and connect a new session afterwards: sessions end with the
-   * Firefox that quit, and whether storage.local carries over is not checked. The quit Firefox's
-   * output stays in the diagnostics. Firefox removes a temporary add-on when it quits, so the
-   * reinstall is an install again: the welcome page opens and is closed as by `startFirefox`.
+   * extension again. Connect a new session afterwards: sessions end with the Firefox that quit.
+   * The extension's storage.local carries over, though the add-on is installed again. The quit
+   * Firefox's output stays in the diagnostics. Firefox removes a temporary add-on when it quits, so
+   * the reinstall is an install again: the welcome page opens and is closed as by `startFirefox`.
    */
   restartFirefox(extensionDir: string, options?: StartOptions): Promise<Firefox>;
+  /**
+   * Reloads the extension as `browser.runtime.reload()` does, from its settings page, and resolves
+   * once the reloaded add-on serves its settings page again. Unlike an install, a reload opens no
+   * page.
+   */
+  reloadExtension(): Promise<void>;
   /**
    * Writes `entries` into the extension's storage.local from its settings page, in the Firefox
    * started last. The only way tests write settings: the extension has no test hook.
@@ -365,6 +371,34 @@ export function createHarness(): Harness {
         });
       }
       return startFirefox(extensionDir, options);
+    },
+
+    async reloadExtension() {
+      assertOpen();
+      const firefox = currentFirefox();
+      const context = await openSettingsPage(firefox);
+      // Not awaited: the page goes away with the add-on, and the call may go unanswered with it.
+      void firefox.evaluate(context, "browser.runtime.reload(); true").catch(() => undefined);
+      // The reload is asynchronous: until Firefox closed the old add-on's pages, a page opened
+      // can still be the old add-on's.
+      await pollUntil(
+        async () =>
+          (await firefox.contexts()).some((tab) => tab.context === context) ? undefined : true,
+        PAGE_TIMEOUT_MS,
+        "the reload to close the settings page",
+      );
+      const reloaded = await pollUntil(
+        async () => {
+          const attempt = await firefox.openContext(firefox.extensionUrl(SETTINGS_PAGE));
+          const title = await firefox.evaluate(attempt, "document.title").catch(() => undefined);
+          if (title === SETTINGS_TITLE) return attempt;
+          await firefox.closeContext(attempt);
+          return undefined;
+        },
+        PAGE_TIMEOUT_MS,
+        "the reloaded add-on to serve its settings page",
+      );
+      await firefox.closeContext(reloaded);
     },
 
     async seedSettings(entries) {

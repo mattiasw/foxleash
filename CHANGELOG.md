@@ -109,9 +109,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page or by you, until it closes, Foxleash now stops a page or frame load whose answer comes
   from such a site and is anything other than a web page; the agent's action says that the file
   was stopped, and `tab_open` and `navigate` fail at once saying that the site must be approved
-  first. The request still reaches that site, and a file that such a site's own service worker
-  or page produces, or that loads in a tab left in a group from before Firefox restarted or
-  Foxleash was updated, is still saved.
+  first. The tabs left in the group stay covered after Firefox restarts or Foxleash is updated,
+  judged by the sites you allowed always. The request still reaches that site, and a file that
+  such a site's own service worker or page produces is still saved, as is one that loads in the
+  moment after Firefox starts or Foxleash is updated, in a window opened from such a tab before
+  that, or in a group made by an earlier version of Foxleash.
 - The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an

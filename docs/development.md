@@ -133,8 +133,14 @@ A test that restarts Firefox starts it with
 it with `harness.restartFirefox(EXTENSION_DIST, { restoreSession: true })`. That calls
 `firefox.quit()`, which flushes each loaded tab's state into the session store and quits as
 File > Quit does, then starts Firefox on the same profile and installs the extension again.
-After a restart the test seeds its settings and connects a new MCP session: sessions end with
-the Firefox that quit, and whether the settings survive is not checked.
+After a restart the test connects a new MCP session: sessions end with the Firefox that quit.
+The extension's `storage.local`, and so the settings, carries over the restart, though the add-on
+is installed again (measured, ADR 0091); `e2e/foreign-file-restart.test.ts` depends on that.
+
+A test that reloads the extension, as `browser.runtime.reload()` does, calls
+`harness.reloadExtension()`. It evaluates the reload in the settings page, waits until Firefox
+has closed that page with the old add-on, then until a settings page it opens shows the reloaded
+add-on's title, and closes it. A reload opens no page, unlike an install.
 
 The approval prompt's buttons answer only a second after its page is both visible and
 focused, so `harness.waitForArmed` first brings the prompt's tab to the front with

@@ -13,7 +13,7 @@ import {
   type LiveDocumentsDeps,
 } from "./live-documents.ts";
 import { createSessionGroups } from "./session-groups.ts";
-import { grantSite, revokeSite, TAG_MARK_KEY } from "./settings.ts";
+import { grantSite, revokeSite, SESSION_GROUPS_KEY, TAG_MARK_KEY } from "./settings.ts";
 import { siteOf } from "./site.ts";
 import { createSiteAccess, type SessionMemory, type SiteAccess } from "./site-access.ts";
 
@@ -219,6 +219,18 @@ describe("live documents", { timeout: 10000 }, () => {
       { event: "ignored_setting", key: `site:${SITE}` },
       { event: "test_failed", tabId: tab.id, reason: "refused", code: "site_not_approved" },
     ]);
+  });
+
+  it("rechecks nothing at a change of the remembered tab groups", async (t) => {
+    quiet(t);
+    const { fake, documents, liveTab } = setup({});
+    const tab = await liveTab();
+    const get = t.mock.method(fake.browser.storage.local, "get");
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [{ id: 7, session: "s1" }] });
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [], [TAG_MARK_KEY]: 100 });
+    await flush();
+    assert.equal(get.mock.callCount(), 0);
+    assert.ok(documents.live(tab.id) !== undefined);
   });
 
   it("logs no drop at a new commit, a close or a withdrawal", async (t) => {

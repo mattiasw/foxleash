@@ -1,6 +1,10 @@
 import type { BrowserApi, Tab, TabGroup } from "./browser-api.ts";
-import { readSettings } from "./settings.ts";
+import { warn } from "./log.ts";
+import { isRecord, readSettings, SESSION_GROUPS_KEY } from "./settings.ts";
 import { PROMPT_PAGE } from "./site-access.ts";
+
+/** The most groups stored for `rememberedSessionOf`, unless more of them still have a tab. */
+export const MAX_REMEMBERED_GROUPS = 200;
 
 export interface SessionGroups {
   /** The session's tab group, or undefined when it has none or the user closed it. */
@@ -45,6 +49,14 @@ export interface SessionGroups {
   /** The session whose group this is; undefined for undefined, -1 and any other group. */
   sessionOf(groupId: number | undefined): string | undefined;
   /**
+   * The session a group was created for: a current one, one this created and forgot, or one an
+   * earlier background stored (ADR 0091); undefined for any other group, and for undefined and -1
+   * without reading storage. The first call that needs the stored list reads it and keeps it; a
+   * read that fails warns, answers from memory alone, and is tried again at the next call. Never
+   * rejects.
+   */
+  rememberedSessionOf(groupId: number | undefined): Promise<string | undefined>;
+  /**
    * Brings the session's own window to the front when `windowId` is that window, restoring it when
    * minimized; otherwise draws attention to `windowId`. `wanted` runs right before each
    * `windows.update`, with no await in between, and the update is skipped when it returns false.
@@ -78,6 +90,12 @@ export function createSessionGroups(
   // The window this created for each session while the setting was on, until it closes or the
   // session ends (and, once its first tab is settled, until the session's group is forgotten).
   const ownWindows = new Map<string, OwnWindow>();
+  // Every group created in this background life, with its session, oldest first; never forgotten.
+  const createdGroups = new Map<number, string>();
+  // Appends to the stored list, one after another.
+  let remembering: Promise<void> = Promise.resolve();
+  // The stored list as first read; undefined until a read succeeds.
+  let reading: Promise<Map<number, string> | undefined> | undefined;
   browser.tabs.onRemoved.addListener(tabRemoved);
   browser.tabs.onActivated.addListener(({ tabId, windowId }) => removeFirstTab(tabId, windowId));
   browser.windows.onRemoved.addListener((windowId) => {
@@ -94,6 +112,7 @@ export function createSessionGroups(
     closeTab,
     isSessionGroup,
     sessionOf,
+    rememberedSessionOf,
     showPromptWindow,
   };
 
@@ -183,6 +202,27 @@ export function createSessionGroups(
     return [...groups].find(([, id]) => id === groupId)?.[0];
   }
 
+  async function rememberedSessionOf(groupId: number | undefined): Promise<string | undefined> {
+    if (groupId === undefined || groupId === -1) return undefined;
+    // Holds every group `groups` holds, and wins over the stored list.
+    const created = createdGroups.get(groupId);
+    if (created !== undefined) return created;
+    return (await storedGroups())?.get(groupId);
+  }
+
+  /** Never rejects; undefined when the read failed. */
+  function storedGroups(): Promise<Map<number, string> | undefined> {
+    reading ??= browser.storage.local.get(null).then(
+      (items) => parseStoredGroups(items[SESSION_GROUPS_KEY]),
+      (error: unknown) => {
+        warn({ event: "read_session_groups_failed", error: String(error) });
+        reading = undefined;
+        return undefined;
+      },
+    );
+    return reading;
+  }
+
   async function showPromptWindow(
     session: string,
     windowId: number,
@@ -235,9 +275,53 @@ export function createSessionGroups(
       createProperties: { windowId: tab.windowId },
     });
     groups.set(session, id);
+    createdGroups.set(id, session);
+    // Never rejects, so a failed title update leaves nothing unhandled.
+    const stored = remember();
     await onGrouped(tab.id);
     await browser.tabGroups.update(id, { title: "Foxleash", color: "orange" });
+    await stored;
     return id;
+  }
+
+  /** Stores every group created in this life; never rejects, a failure only warns. */
+  function remember(): Promise<void> {
+    const step = remembering.then(storeGroups).catch((error: unknown) => {
+      warn({ event: "remember_groups_failed", error: String(error) });
+    });
+    remembering = step;
+    return step;
+  }
+
+  /** The stored list, then this life's groups: these are the newest, and win for the same id. */
+  async function storeGroups(): Promise<void> {
+    // A read that fails throws before the write: the stored list never gets shorter for it.
+    const items = await browser.storage.local.get(null);
+    const stored = [...parseStoredGroups(items[SESSION_GROUPS_KEY])].filter(
+      ([id]) => !createdGroups.has(id),
+    );
+    let merged = [...stored, ...createdGroups];
+    if (merged.length > MAX_REMEMBERED_GROUPS) merged = await withoutClosedGroups(merged);
+    await browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: merged.map(([id, session]) => ({ id, session })),
+    });
+  }
+
+  /** Drops the oldest entries whose group has no tab, down to the cap; keeps all when unsure. */
+  async function withoutClosedGroups(entries: [number, string][]): Promise<[number, string][]> {
+    let open: Set<number | undefined>;
+    try {
+      open = new Set((await browser.tabs.query({})).map((tab) => tab.groupId));
+    } catch (error) {
+      warn({ event: "remember_groups_failed", error: String(error) });
+      return entries;
+    }
+    let excess = entries.length - MAX_REMEMBERED_GROUPS;
+    return entries.filter(([id]) => {
+      const kept = excess === 0 || open.has(id);
+      if (!kept) excess -= 1;
+      return kept;
+    });
   }
 
   async function joinGroup(groupId: number, tabId: number): Promise<boolean> {
@@ -544,5 +628,33 @@ function isBlank(tab: Tab, promptPage: string, blankPage: (url: string) => boole
     (BLANK_URLS.has(tab.url) ||
       tab.url?.startsWith(promptPage) === true ||
       (tab.url !== undefined && blankPage(tab.url)))
+  );
+}
+
+/**
+ * The stored groups, oldest first. A missing list is empty; a malformed one warns and counts as
+ * empty.
+ */
+function parseStoredGroups(value: unknown): Map<number, string> {
+  const parsed = new Map<number, string>();
+  if (value === undefined) return parsed;
+  // Array.from turns holes into undefined, which every() would skip.
+  const entries: unknown[] | undefined = Array.isArray(value) ? Array.from(value) : undefined;
+  if (entries === undefined || !entries.every(isStoredGroup)) {
+    warn({ event: "ignored_session_groups" });
+    return parsed;
+  }
+  for (const { id, session } of entries) parsed.set(id, session);
+  return parsed;
+}
+
+/** Own properties only: an inherited `id` or `session` never counts. */
+function isStoredGroup(entry: unknown): entry is { id: number; session: string } {
+  return (
+    isRecord(entry) &&
+    Object.hasOwn(entry, "id") &&
+    Object.hasOwn(entry, "session") &&
+    Number.isSafeInteger(entry.id) &&
+    typeof entry.session === "string"
   );
 }

@@ -218,12 +218,20 @@ export const DOWNLOAD_COOKIE = { name: "download_session", value: "download-cook
 /** What /download/private.txt holds. */
 export const DOWNLOAD_SECRET = "download-secret-Zx8Wm2";
 
-/** The cookie /foreign/login sets, without which the exports under /foreign/ answer 403. */
+/**
+ * The cookie /foreign/login sets, without which the exports under /foreign/ answer 403, except
+ * /foreign/public.csv and /foreign/late.csv.
+ */
 export const FOREIGN_COOKIE = { name: "foreign_session", value: "foreign-cookie-Vd6Nq1" };
 /** What every export under /foreign/ holds. */
 export const FOREIGN_SECRET = "account,balance\nforeign-secret-Ty5Lw9,1200\n";
 /** How long after its load /foreign/script moves on to the other site's export. */
 export const FOREIGN_SCRIPT_MS = 600;
+/**
+ * How long /foreign/late.csv holds its answer: longer than the extension takes to add its listener
+ * once its settings page opens again after a reload or a restart.
+ */
+export const FOREIGN_LATE_MS = 3000;
 
 /** The name of the cookie /api/fetch sets. */
 export const NETWORK_COOKIE = "fixture_session";
@@ -993,7 +1001,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       // Cached, but a load asks again; a history load shows the cached copy.
       sendPage(response, counterTitle(hits.get(path) ?? 0), { "Cache-Control": "no-cache" });
     } else if (path.startsWith("/foreign/")) {
-      sendForeign(path, request, response);
+      sendForeign(path, request, response, timers);
     } else {
       // Firefox asks for /favicon.ico; it must not reach the counter.
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -1107,9 +1115,14 @@ export async function startFixtureServer(): Promise<FixtureServer> {
  * Answers a request under /foreign/: the pages on the approved site that lead to a file of the
  * other site (the same server under localhost), and that site's own pages and exports. An export
  * answers its file only with the cookie /foreign/login sets, as a site does for a user it knows,
- * and a page that says no without it.
+ * and a page that says no without it; /foreign/public.csv and /foreign/late.csv need no cookie.
  */
-function sendForeign(path: string, request: IncomingMessage, response: ServerResponse): void {
+function sendForeign(
+  path: string,
+  request: IncomingMessage,
+  response: ServerResponse,
+  timers: Set<NodeJS.Timeout>,
+): void {
   const other = `http://localhost:${request.socket.localPort}`;
   const headers = FOREIGN_EXPORTS[path];
   if (path === "/foreign/login") {
@@ -1137,7 +1150,11 @@ function sendForeign(path: string, request: IncomingMessage, response: ServerRes
   } else if (headers === undefined) {
     response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
     response.end("not found");
-  } else if (path !== "/foreign/public.csv" && !signedInTo(request, FOREIGN_COOKIE)) {
+  } else if (
+    path !== "/foreign/public.csv" &&
+    path !== "/foreign/late.csv" &&
+    !signedInTo(request, FOREIGN_COOKIE)
+  ) {
     // A page, which Foxleash lets load: a test whose request reached the other site without the
     // cookie then sees no stopped file, instead of passing on an answer that held no file.
     response.writeHead(403, {
@@ -1149,6 +1166,15 @@ function sendForeign(path: string, request: IncomingMessage, response: ServerRes
     // None of the entity headers: Firefox takes them, with the body, from its cache.
     response.writeHead(304, { ETag: headers.ETag, "Cache-Control": "no-cache" });
     response.end();
+  } else if (path === "/foreign/late.csv") {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      // Firefox may have given up on it meanwhile.
+      if (response.destroyed || response.writableEnded) return;
+      response.writeHead(200, headers);
+      response.end(FOREIGN_SECRET);
+    }, FOREIGN_LATE_MS);
+    timers.add(timer);
   } else {
     response.writeHead(200, headers);
     response.end(FOREIGN_SECRET);
@@ -2744,7 +2770,9 @@ const FOREIGN_GO = "/foreign/go/";
  * The response headers of each export under /foreign/: an attachment; a CSV with no
  * Content-Disposition, which Firefox saves all the same; two Content-Type headers, of which
  * Firefox goes by the last; one Firefox keeps in its cache; one it asks about again each time;
- * and one that needs no cookie, since Firefox sends a frame from another site none.
+ * one that needs no cookie, since Firefox sends a frame from another site none; and one that needs
+ * none either and answers only after FOREIGN_LATE_MS, so a test whose cookies may not survive a
+ * restart can send a tab to it right after the extension starts again.
  */
 const FOREIGN_EXPORTS: Record<string, Record<string, string | string[]>> = {
   "/foreign/export.csv": {
@@ -2771,6 +2799,11 @@ const FOREIGN_EXPORTS: Record<string, Record<string, string | string[]>> = {
   "/foreign/public.csv": {
     "Content-Type": "text/csv",
     "Content-Disposition": 'attachment; filename="public.csv"',
+    "Cache-Control": "no-store",
+  },
+  "/foreign/late.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="late.csv"',
     "Cache-Control": "no-store",
   },
 };

@@ -8,6 +8,7 @@ import {
   onSettingsChanged,
   readSettings,
   revokeSite,
+  SESSION_GROUPS_KEY,
   SITE_KEY_PREFIX,
   saveBlocklist,
   saveSessionWindow,
@@ -143,6 +144,21 @@ describe("readSettings", () => {
     });
     assert.deepEqual(warnings(), []);
     assert.equal(TAG_MARK_KEY, "tagMark");
+  });
+
+  it("skips the remembered tab groups without a warning", async (t) => {
+    const { fake, warnings } = setup(t);
+    await fake.browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: [{ id: 7, session: "s1" }],
+      "site:https://a.example": GRANT,
+    });
+    assert.deepEqual(await readSettings(fake.browser), {
+      sites: ["https://a.example"],
+      blocklist: undefined,
+      sessionWindow: false,
+    });
+    assert.deepEqual(warnings(), []);
+    assert.equal(SESSION_GROUPS_KEY, "sessionGroups");
   });
 
   it("reads the session window setting as on only for a stored true", async (t) => {
@@ -421,6 +437,22 @@ describe("onSettingsChanged", () => {
     assert.equal(calls, 1);
     await saveSessionWindow(fake.browser, true);
     assert.equal(calls, 2);
+  });
+
+  it("does not call the listener for a change of only the remembered tab groups and the tag mark", async (t) => {
+    const { fake } = setup(t);
+    let calls = 0;
+    onSettingsChanged(fake.browser, () => {
+      calls += 1;
+    });
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [] });
+    await fake.browser.storage.local.set({ [SESSION_GROUPS_KEY]: [], [TAG_MARK_KEY]: 100 });
+    assert.equal(calls, 0);
+    await fake.browser.storage.local.set({
+      [SESSION_GROUPS_KEY]: [],
+      "site:https://a.example": GRANT,
+    });
+    assert.equal(calls, 1);
   });
 
   it("does not call the listener for another storage area", (t) => {
