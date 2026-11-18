@@ -6,6 +6,7 @@ import {
   type ActPage,
 } from "@foxleash/protocol";
 import type { BrowserApi, Tab, Timers } from "./browser-api.ts";
+import { type FileGuard, MAX_REFUSALS } from "./file-guard.ts";
 import { NAVIGATION_WAIT_MS } from "./handlers.ts";
 import type { NetworkLog } from "./network-log.ts";
 import { isRecord, ownField } from "./page-messages.ts";
@@ -43,6 +44,8 @@ export interface ActSettleDeps<Handle> {
   timers: Timers<Handle>;
   navigations: Pick<TabNavigations, "begun" | "settled">;
   network: Pick<NetworkLog, "requestsSince">;
+  /** What the file guard refused in each tab. */
+  files: Pick<FileGuard, "refusedSince">;
   pages: Pick<PageScripts, "request">;
   /** The epoch clock webRequest's timeStamp is compared with: Date.now in the background. */
   now: () => number;
@@ -89,7 +92,7 @@ const CAP = Symbol("cap");
 const FAILED = Symbol("failed");
 
 export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle {
-  const { browser, groups, access, timers, navigations, network, pages, now } = deps;
+  const { browser, groups, access, timers, navigations, network, files, pages, now } = deps;
   return { begin };
 
   function begin(session: string, tabId: number, generation: number): ActWatch {
@@ -143,6 +146,8 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
       if (opened !== DEADLINE && opened !== undefined && opened.length > 0) {
         result.openedTabs = opened;
       }
+      const refused = refusedSince(before, result.openedTabs ?? []);
+      if (refused.length > 0) result.refusedFiles = refused;
       if (ending.page !== "loaded" && ending.page !== "loading") {
         const { begun } = network.requestsSince(tabId, before.since);
         if (begun > 0) result.requests = begun;
@@ -257,6 +262,15 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
       const now = await groupTabs();
       if (now === undefined) return undefined;
       return now.filter((id) => !earlier.includes(id)).sort((a, b) => a - b);
+    }
+
+    /**
+     * The sites of what the file guard refused since the act, in the tab and in the tabs the act
+     * opened: a link that opens a tab has its file refused there. Each site once.
+     */
+    function refusedSince(before: Snapshot, opened: readonly number[]): string[] {
+      const sites = [tabId, ...opened].flatMap((id) => files.refusedSince(id, before.since));
+      return [...new Set(sites)].slice(0, MAX_REFUSALS);
     }
 
     /** Clears every timer the watch started; clearing one that already ran does nothing. */

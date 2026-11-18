@@ -1,4 +1,9 @@
-import { createServer, type IncomingHttpHeaders, type ServerResponse } from "node:http";
+import {
+  createServer,
+  type IncomingHttpHeaders,
+  type IncomingMessage,
+  type ServerResponse,
+} from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
 
@@ -85,6 +90,12 @@ export const TITLES = {
   viewLarge: "Fixture view large",
   recordingForm: "Fixture recording form",
   longAddress: "Fixture long address",
+  foreignLogin: "Fixture foreign login",
+  foreignLinks: "Fixture foreign links",
+  foreignScript: "Fixture foreign script",
+  foreignFrame: "Fixture foreign frame",
+  foreignPage: "Fixture foreign page",
+  foreignWarmed: "Fixture foreign warmed",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -201,6 +212,13 @@ export const NETWORK_STREAM_GAP_MS = 150;
 export const DOWNLOAD_COOKIE = { name: "download_session", value: "download-cookie-Pq4Rt7" };
 /** What /download/private.txt holds. */
 export const DOWNLOAD_SECRET = "download-secret-Zx8Wm2";
+
+/** The cookie /foreign/login sets, without which the exports under /foreign/ answer 403. */
+export const FOREIGN_COOKIE = { name: "foreign_session", value: "foreign-cookie-Vd6Nq1" };
+/** What every export under /foreign/ holds. */
+export const FOREIGN_SECRET = "account,balance\nforeign-secret-Ty5Lw9,1200\n";
+/** How long after its load /foreign/script moves on to the other site's export. */
+export const FOREIGN_SCRIPT_MS = 600;
 
 /** The name of the cookie /api/fetch sets. */
 export const NETWORK_COOKIE = "fixture_session";
@@ -940,6 +958,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/counter-no-cache") {
       // Cached, but a load asks again; a history load shows the cached copy.
       sendPage(response, counterTitle(hits.get(path) ?? 0), { "Cache-Control": "no-cache" });
+    } else if (path.startsWith("/foreign/")) {
+      sendForeign(path, request, response);
     } else {
       // Firefox asks for /favicon.ico; it must not reach the counter.
       response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
@@ -1047,6 +1067,58 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     }
     heldBodies.clear();
   }
+}
+
+/**
+ * Answers a request under /foreign/: the pages on the approved site that lead to a file of the
+ * other site (the same server under localhost), and that site's own pages and exports. An export
+ * answers its file only with the cookie /foreign/login sets, as a site does for a user it knows,
+ * and a page that says no without it.
+ */
+function sendForeign(path: string, request: IncomingMessage, response: ServerResponse): void {
+  const other = `http://localhost:${request.socket.localPort}`;
+  const headers = FOREIGN_EXPORTS[path];
+  if (path === "/foreign/login") {
+    sendPage(response, TITLES.foreignLogin, {
+      "Set-Cookie": `${FOREIGN_COOKIE.name}=${FOREIGN_COOKIE.value}; Path=/; SameSite=Lax`,
+    });
+  } else if (path === "/foreign/page") {
+    sendPage(response, TITLES.foreignPage);
+  } else if (path === "/foreign/warm") {
+    sendHtml(response, FOREIGN_WARM_PAGE);
+  } else if (path === "/foreign/links") {
+    sendHtml(response, FOREIGN_LINKS_PAGE);
+  } else if (path === "/foreign/script") {
+    sendHtml(response, foreignScriptPage(other));
+  } else if (path === "/foreign/frame") {
+    sendHtml(response, foreignFramePage(other));
+  } else if (path.startsWith(FOREIGN_GO)) {
+    // From the approved site to the same path's end on the other site.
+    response.writeHead(302, { Location: `${other}/foreign/${path.slice(FOREIGN_GO.length)}` });
+    response.end();
+  } else if (headers === undefined) {
+    response.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+    response.end("not found");
+  } else if (path !== "/foreign/public.csv" && !signedInTo(request, FOREIGN_COOKIE)) {
+    // A page, which Foxleash lets load: a test whose request reached the other site without the
+    // cookie then sees no stopped file, instead of passing on an answer that held no file.
+    response.writeHead(403, {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    response.end("<!doctype html><title>Forbidden</title>");
+  } else if (headers.ETag !== undefined && request.headers["if-none-match"] === headers.ETag) {
+    // None of the entity headers: Firefox takes them, with the body, from its cache.
+    response.writeHead(304, { ETag: headers.ETag, "Cache-Control": "no-cache" });
+    response.end();
+  } else {
+    response.writeHead(200, headers);
+    response.end(FOREIGN_SECRET);
+  }
+}
+
+function signedInTo(request: IncomingMessage, cookie: { name: string; value: string }): boolean {
+  return (request.headers.cookie ?? "").split("; ").includes(`${cookie.name}=${cookie.value}`);
 }
 
 /** Answers a /held-image.gif request with the pixel; a response already closed is left alone. */
@@ -2624,6 +2696,112 @@ function minimalPdf(): string {
   for (const offset of offsets) pdf += `${String(offset).padStart(10, "0")} 00000 n \n`;
   pdf += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
   return pdf;
+}
+
+const FOREIGN_GO = "/foreign/go/";
+
+/**
+ * The response headers of each export under /foreign/: an attachment; a CSV with no
+ * Content-Disposition, which Firefox saves all the same; two Content-Type headers, of which
+ * Firefox goes by the last; one Firefox keeps in its cache; one it asks about again each time;
+ * and one that needs no cookie, since Firefox sends a frame from another site none.
+ */
+const FOREIGN_EXPORTS: Record<string, Record<string, string | string[]>> = {
+  "/foreign/export.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="export.csv"',
+    "Cache-Control": "no-store",
+  },
+  "/foreign/plain.csv": { "Content-Type": "text/csv", "Cache-Control": "no-store" },
+  "/foreign/two-types.csv": {
+    "Content-Type": ["text/html", "text/csv"],
+    "Cache-Control": "no-store",
+  },
+  "/foreign/cached.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="cached.csv"',
+    "Cache-Control": "max-age=600",
+  },
+  "/foreign/revalidated.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="revalidated.csv"',
+    "Cache-Control": "no-cache",
+    ETag: '"foreign-v1"',
+  },
+  "/foreign/public.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="public.csv"',
+    "Cache-Control": "no-store",
+  },
+};
+
+// On the approved site: links that lead, through a redirect of the same site, to the other site's
+// exports, a link to a file of the site itself, and a file field whose files' text the page keeps
+// in window.received.
+const FOREIGN_LINKS_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignLinks}</title></head>
+<body>
+<main>
+<p><a href="${FOREIGN_GO}export.csv">Export</a></p>
+<p><a href="${FOREIGN_GO}export.csv" target="_blank">Export in a new tab</a></p>
+<p><a href="${FOREIGN_GO}export.csv" download>Export as a download</a></p>
+<p><a href="${FOREIGN_GO}plain.csv">Plain export</a></p>
+<p><a href="${FOREIGN_GO}two-types.csv">Two types export</a></p>
+<p><a href="${FOREIGN_GO}cached.csv">Cached export</a></p>
+<p><a href="${FOREIGN_GO}revalidated.csv">Revalidated export</a></p>
+<p><a href="/download/data.bin">Own file</a></p>
+<input id="statement" type="file" aria-label="Statement">
+</main>
+<script>
+window.received = [];
+const statement = document.getElementById("statement");
+statement.addEventListener("change", async () => {
+  window.received = await Promise.all(Array.from(statement.files, (file) => file.text()));
+});
+</script>
+</body></html>
+`;
+
+// On the other site, in a tab of the user's own: fetches the address in its query, so Firefox's
+// cache holds the answer, then says so in its title.
+const FOREIGN_WARM_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Fixture foreign warming</title></head>
+<body>
+<script>
+fetch(new URLSearchParams(location.search).get("path"))
+  .then((response) => response.text())
+  .then(() => {
+    document.title = ${JSON.stringify(TITLES.foreignWarmed)};
+  });
+</script>
+</body></html>
+`;
+
+/** On the approved site: moves on to the other site's export by itself, after its load. */
+function foreignScriptPage(other: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignScript}</title></head>
+<body>
+<p>Moving on</p>
+<script>
+addEventListener("load", () => {
+  setTimeout(() => {
+    location.href = ${JSON.stringify(`${other}/foreign/export.csv`)};
+  }, ${FOREIGN_SCRIPT_MS});
+});
+</script>
+</body></html>
+`;
+}
+
+/** On the approved site: a frame on the other site's export that needs no cookie. */
+function foreignFramePage(other: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignFrame}</title></head>
+<body>
+<iframe title="Export" src="${other}/foreign/public.csv"></iframe>
+</body></html>
+`;
 }
 
 // Four file fields, one taking several files, one with no label and one with an explicit textbox

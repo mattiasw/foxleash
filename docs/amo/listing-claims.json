@@ -90,6 +90,41 @@
       ]
     },
     {
+      "listing": "Foxleash stops a page or frame load whose answer comes from a site you have not approved, or that is on the blocklist, and is anything other than a web page",
+      "evidence": [
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "{ urls: [\"<all_urls>\"], types: [\"main_frame\", \"sub_frame\"] }"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "[\"blocking\", \"responseHeaders\"]"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "if (isPage(headers)) return undefined;"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "session = groups.sessionOf(tab.groupId);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "if (view.allowed(details.url)) return undefined;"
+        },
+        { "file": "apps/extension/src/file-guard.ts", "contains": "return { cancel: true };" },
+        {
+          "file": "apps/extension/src/background.ts",
+          "contains": "createFileGuard({ browser, groups, access })"
+        },
+        { "file": "apps/extension/src/wait-for-load.ts", "contains": "\"file_refused\"" },
+        {
+          "file": "apps/extension/src/act-settle.ts",
+          "contains": "result.refusedFiles = refused;"
+        }
+      ]
+    },
+    {
       "listing": "A recipe is saved only by your click on Foxleash's page in Firefox",
       "evidence": [
         { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },

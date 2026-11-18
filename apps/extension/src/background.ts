@@ -3,6 +3,7 @@ import type { BrowserApi, Timers } from "./browser-api.ts";
 import { createConnection } from "./connection.ts";
 import { createConsoleRecording } from "./console-recording.ts";
 import { createDownloads } from "./downloads.ts";
+import { createFileGuard } from "./file-guard.ts";
 import { watchInstall } from "./first-run.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
@@ -57,6 +58,7 @@ const recordings = createConsoleRecording({
   now: () => Date.now(),
 });
 const network = createNetworkLog({ browser, groups, access, now: () => Date.now() });
+const files = createFileGuard({ browser, groups, access });
 const views = createPageViews({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });
@@ -67,6 +69,7 @@ const settle = createActSettle({
   timers,
   navigations,
   network,
+  files,
   pages,
   now: () => Date.now(),
 });
@@ -93,6 +96,7 @@ const handleRequest = createHandlers({
   uploads,
   recordings,
   network,
+  files,
   downloads,
   recipes,
   settle,

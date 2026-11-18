@@ -111,6 +111,15 @@ address.
 - Before asking about a site you have not approved, `tab_open` and `navigate` refuse an address
   whose host is not a domain name or an IP address, such as one with parentheses or commas, or is
   longer than 253 characters, as `request_sites` does, because the prompt shows the site as it is.
+- When the tab's load ends in an answer that is not a web page (a file Firefox would save, or a
+  PDF, an image or text it would show) from a site the session may not act on, as after a
+  redirect to such a site, Foxleash stops the load and `tab_open` or `navigate` fails at once,
+  not after 30 seconds: the error names the site, says that nothing was saved and that the site
+  must be approved first, which `tab_open` or `navigate` to that site asks you for, unless the
+  site is on the blocklist. That holds for a reload and for going back or forward too, and when
+  the page that loaded moves on to such an answer by itself before the call returns. `tab_open`
+  closes the tab it made, and a tab `navigate` used keeps its page.
+  [Security](security.md#files-a-page-loads-in-the-agents-tabs) has the limits.
 
 ### While a tab is loading another page
 
@@ -445,6 +454,14 @@ shows it), is still loading one, the page changed, nothing changed, the page was
 at 2 seconds, or the tab closed. It also lists tabs that opened in the agent's group and counts
 the requests the page began after the action.
 
+When the action led the tab, a frame in it or a tab it opened to load something other than a web
+page from a site the session may not act on, such as a link that redirects to another site's
+file, Foxleash stops that load and the result's `refusedFiles` lists the site. Nothing of the
+file was saved, and it loads only once you approved its site, which `tab_open` or `navigate` to
+that site asks you for, unless the site is on the blocklist. The list holds what was stopped
+during the action and its wait, at most 20 sites; a load stopped later is in no result
+([Security](security.md#files-a-page-loads-in-the-agents-tabs)).
+
 Foxleash watches the elements, attributes and text of the page's own document and its shadow
 roots, and its fields' values, not frames, canvas drawing, or CSS animations and transitions, so
 the agent reads the page before repeating an action whose result says nothing changed.
@@ -520,6 +537,12 @@ a dot, files named like keys or files that hold a PEM, OpenSSH, PuTTY, PGP or ag
 and at most 100 files and 10 MB per upload. [Uploads](security.md#uploads) names the folders and
 how to change them.
 
+`~/Downloads` is an upload folder by default, and it is where Firefox saves files. So that a page
+cannot get a file from another site saved there for `upload_file` to hand over, Foxleash stops a
+load in the agent's tabs whose answer is a file from a site the session may not act on;
+[Security](security.md#files-a-page-loads-in-the-agents-tabs) says what that covers and what it
+does not.
+
 ### `download`
 
 `download` saves a file from the web, given its whole URL (with the page's site in front of a
@@ -540,6 +563,11 @@ agent can move it from there.
   a number when the name is taken, so an existing file is never replaced.
 - At most 100 MiB and 50 seconds per file, one download at a time.
 - Each download shows in Firefox's downloads panel and history.
+
+Firefox also saves a file when a page or frame in the agent's tabs loads one, as after a click on
+a link to a file. A file from a site you approved is saved as before. One from a site the session
+may not act on is stopped, so nothing is saved, and the action's result or the failed `tab_open`
+or `navigate` says so ([Security](security.md#files-a-page-loads-in-the-agents-tabs)).
 
 ## Recipes and site requests
 

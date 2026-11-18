@@ -128,14 +128,19 @@ export interface BrowserApi {
     onDOMContentLoaded: BrowserEvent<(details: DocumentDetails) => void>;
   };
   /**
-   * Listeners never block or change a request. A recorded tab's hold is registered "blocking"
-   * only so Firefox lets Foxleash filter that tab's fetch and XHR responses, and returns at once
-   * (ADR 0071).
+   * Listeners never change a request, and block in two places only. A recorded tab's hold is
+   * registered "blocking" so Firefox lets Foxleash filter that tab's fetch and XHR responses, and
+   * returns at once (ADR 0071). The file guard's `onHeadersReceived` listener cancels a page or
+   * frame load, in a tab of a session's group, that is not a web page and comes from a site the
+   * session may not act on (ADR 0081).
    */
   webRequest: {
     onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
     onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>;
-    onHeadersReceived: WebRequestEvent<(details: HeadersReceivedDetails) => void>;
+    onHeadersReceived: WebRequestEvent<
+      | ((details: HeadersReceivedDetails) => void)
+      | ((details: HeadersReceivedDetails) => Promise<Cancel | undefined> | Cancel | undefined)
+    >;
     onBeforeRedirect: WebRequestEvent<(details: RedirectDetails) => void>;
     onCompleted: WebRequestEvent<(details: CompletedDetails) => void>;
     onErrorOccurred: WebRequestEvent<(details: ErrorDetails) => void>;
@@ -178,6 +183,11 @@ export interface WebRequestEvent<Listener> {
     extraInfoSpec?: ("requestHeaders" | "responseHeaders" | "requestBody" | "blocking")[],
   ): void;
   removeListener(listener: Listener): void;
+}
+
+/** What a listener registered "blocking" answers to stop the request; nothing lets it go on. */
+export interface Cancel {
+  cancel: true;
 }
 
 /**
@@ -239,6 +249,9 @@ export interface SendHeadersDetails extends WebRequestDetails {
 }
 
 export interface HeadersReceivedDetails extends WebRequestDetails {
+  frameId: number;
+  url: string;
+  type: string;
   statusCode: number;
   responseHeaders?: HttpHeader[];
 }

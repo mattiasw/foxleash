@@ -184,6 +184,10 @@ defense is complete. Foxleash limits what a fooled agent can do:
   never over an existing file. The file is saved as the site sent it, with nothing hidden or
   redacted. The agent reads a downloaded file with its own tools, outside Foxleash's untrusted
   marking.
+- In the agent's tabs, Foxleash stops a page or frame load whose answer is anything other than a
+  web page, such as a file Firefox would save, and comes from a site you have not approved or
+  that is on the blocklist, so a page on an approved site cannot get such a file saved into
+  your download folder. This has [limits](docs/security.md#files-a-page-loads-in-the-agents-tabs).
 - A recipe is saved, and a recipe's or a task's sites are allowed, only by your click on a
   Foxleash page in Firefox. Sites allowed this way are allowed for the session only.
 - Text results and screenshots hide the values of password fields, of one-time code and card
@@ -198,11 +202,13 @@ Ways that still reach a site you have not approved without asking include: going
 a tab's history; a page on an approved site that redirects or, with its own scripts, sends the tab
 to another site; a page on an approved site that loads an address on another site that the agent
 gave it, for example as an image; and a download from an approved site that redirects to another
-site. In the first two, the agent then sees only that site's address. When an address the agent
-opens or downloads answers with a redirect to another site, Firefox sends that site all your cookies
-for it, including those that a link from another site would not carry. Asking before opening a site
-you have not approved and refusing clicks that lead to another site cover where the tab goes: they
-make it harder to send what the agent read to another site, not impossible.
+site. In the first two, the agent then sees only that site's address, and Foxleash stops the load
+when that site answers with anything other than a web page; the request still reaches that site.
+When an address the agent opens or downloads answers with a redirect to another site, Firefox sends
+that site all your cookies for it, including those that a link from another site would not carry.
+Asking before opening a site you have not approved and refusing clicks that lead to another site
+cover where the tab goes: they make it harder to send what the agent read to another site, not
+impossible.
 
 [docs/security.md](docs/security.md) describes each safeguard in full, with its exceptions.
 

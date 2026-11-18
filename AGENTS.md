@@ -169,6 +169,8 @@ permission prompts can be switched off:
 - Sites an agent names with `request_sites` are granted for a session only by a user click on an
   extension page that lists them, at most 20, and never always (ADR 0046).
 - `upload_file` reads only from allowed folders and refuses dotfiles and key files.
+- In the tabs of a session's group, a page or frame load whose answer is not a web page and comes
+  from a site the session may not act on is cancelled, so Firefox saves no such file (ADR 0081).
 - Tool results mark page content as untrusted.
 
 Do not weaken any of these without an ADR. See `docs/adr/` for the threat model.

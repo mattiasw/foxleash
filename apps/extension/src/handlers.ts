@@ -38,6 +38,7 @@ import type {
 import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
 import { type Downloads, downloadNameProblem } from "./downloads.ts";
+import type { FileGuard } from "./file-guard.ts";
 import { foreignFramePlan } from "./foreign-frames.ts";
 import { watchFrameErrors } from "./frame-errors.ts";
 import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
@@ -126,6 +127,8 @@ export interface HandlerDeps<Handle> {
   network: Pick<NetworkLog, "read">;
   /** Saves files into the download folder; it imports this file too. */
   downloads: Pick<Downloads, "save">;
+  /** Tells a load's wait that its response was refused as a file. */
+  files: Pick<FileGuard, "onRefused">;
   /** The session's recipe pages; `import type`, since it imports this file. */
   recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt" | "request">;
   /** Watches the page after an act; `import type`, since it imports this file. */
@@ -277,6 +280,7 @@ export function createHandlers<Handle>({
   recordings,
   network,
   downloads,
+  files,
   recipes,
   settle,
   views,
@@ -422,7 +426,7 @@ export function createHandlers<Handle>({
           tab.id,
           url,
           () => browser.tabs.update(tab.id, { url, loadReplace: true }),
-          { unloaded: true, ready: navigations },
+          { unloaded: true, ready: navigations, files },
         ),
       );
     } catch (error) {
@@ -563,7 +567,7 @@ export function createHandlers<Handle>({
                 tabId,
                 target.kind === "url" ? target.url : undefined,
                 () => startNavigation(tabId, target),
-                { unloaded: tab.discarded === true, ready: navigations },
+                { unloaded: tab.discarded === true, ready: navigations, files },
               );
         noteReturned(loaded);
         const shown =
@@ -807,7 +811,7 @@ export function createHandlers<Handle>({
         fragment
           ? () => browser.tabs.reload(tabId, { bypassCache: true })
           : () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true },
+        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true, files },
       );
     }
     return loaded;
@@ -1764,6 +1768,7 @@ export function createHandlers<Handle>({
             {
               unloaded: tab.discarded === true,
               ready: target.kind === "url" ? navigations : undefined,
+              files,
             },
           );
     noteReturned(loaded);
@@ -1800,12 +1805,17 @@ export function createHandlers<Handle>({
         tabId,
         url,
         () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { unloaded: true },
+        { unloaded: true, files },
       );
     }
     // No URL to wait for: the reload loads whichever entry Firefox reloads.
-    const reloaded = await waitForLoad(browser, timers, tabId, undefined, () =>
-      browser.tabs.reload(tabId, { bypassCache: true }),
+    const reloaded = await waitForLoad(
+      browser,
+      timers,
+      tabId,
+      undefined,
+      () => browser.tabs.reload(tabId, { bypassCache: true }),
+      { files },
     );
     // A reload cut off by its timeout gets no second wait.
     if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;
@@ -1831,7 +1841,7 @@ export function createHandlers<Handle>({
       tabId,
       url,
       () => browser.tabs.update(tabId, { url, loadReplace: true }),
-      { timeoutMs: BLANK_RELOAD_TIMEOUT_MS },
+      { timeoutMs: BLANK_RELOAD_TIMEOUT_MS, files },
     );
   }
 

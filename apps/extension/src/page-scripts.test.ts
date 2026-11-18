@@ -10,6 +10,7 @@ import {
   flush,
   type TabMessage,
 } from "./fake-browser.ts";
+import { createFileGuard } from "./file-guard.ts";
 import { createHandlers, NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
 import {
   handlePageMessage,
@@ -1748,6 +1749,7 @@ function setup() {
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const navigations = createTabNavigations({ browser: fake.browser, timers });
+  const files = createFileGuard({ browser: fake.browser, groups, access });
   const pages = createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
   const network = {
     read: () => ({ recording: false, requests: [], truncated: false }),
@@ -1760,6 +1762,7 @@ function setup() {
     timers,
     navigations,
     network,
+    files,
     pages,
     now: () => 0,
   });
@@ -1774,6 +1777,7 @@ function setup() {
     uploads: createUploads(timers),
     recordings: { liveRecording: () => undefined },
     network,
+    files,
     downloads: { save: async () => ({ path: "", bytes: 0 }) },
     recipes: {
       propose: () => Promise.reject(new Error("unused")),

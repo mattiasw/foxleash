@@ -15,6 +15,7 @@ import {
   type FakeTimers,
   flush,
 } from "./fake-browser.ts";
+import { MAX_REFUSALS } from "./file-guard.ts";
 import { NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
 import type { RequestCounts } from "./network-log.ts";
 import { PAGE_REQUEST_MS } from "./page-scripts.ts";
@@ -560,6 +561,88 @@ describe("act settle", { timeout: 10000 }, () => {
     });
   });
 
+  describe("files the guard refused", () => {
+    it("lists what was refused in the tab since the act was sent", async () => {
+      const { act, finish, refused, refusedAsks, sentAt, tab } = await started();
+      refused.set(tab.id, [OTHER, "https://c.example"]);
+      const { after } = await act();
+      const { value } = await finish(after);
+      assert.deepEqual(value, {
+        element: BUTTON,
+        page: "unchanged",
+        refusedFiles: [OTHER, "https://c.example"],
+      });
+      assert.deepEqual(refusedAsks, [{ tabId: tab.id, since: sentAt() }]);
+    });
+
+    it("leaves refusedFiles out when nothing was refused", async () => {
+      const { act, finish, refusedAsks, tab } = await started();
+      const { after } = await act();
+      const { value } = await finish(after);
+      assert.equal("refusedFiles" in value, false);
+      assert.deepEqual(
+        refusedAsks.map((ask) => ask.tabId),
+        [tab.id],
+      );
+    });
+
+    it("lists what was refused in a tab the act opened, each site once", async () => {
+      const { act, finish, fake, groups, refused, refusedAsks, sentAt, tab } = await started();
+      const outside = fake.openTab();
+      refused.set(outside.id, ["https://d.example"]);
+      let joined: FakeTab | undefined;
+      const { after } = await act(WATCHED, () => {
+        joined = fake.openTab();
+        void groups.ensureGroup("s1", joined);
+        refused.set(tab.id, [OTHER]);
+        refused.set(joined.id, ["https://c.example", OTHER]);
+      });
+      const { value } = await finish(after);
+      assert.ok(joined !== undefined);
+      assert.deepEqual(value, {
+        element: BUTTON,
+        page: "unchanged",
+        openedTabs: [joined.id],
+        refusedFiles: [OTHER, "https://c.example"],
+      });
+      assert.deepEqual(refusedAsks, [
+        { tabId: tab.id, since: sentAt() },
+        { tabId: joined.id, since: sentAt() },
+      ]);
+    });
+
+    it("lists no more sites than the guard keeps for one tab", async () => {
+      const { act, finish, fake, groups, refused, tab } = await started();
+      const sites = Array.from(
+        { length: MAX_REFUSALS + 5 },
+        (_, index) => `https://s${index}.example`,
+      );
+      const { after } = await act(WATCHED, () => {
+        const joined = fake.openTab();
+        void groups.ensureGroup("s1", joined);
+        refused.set(tab.id, sites.slice(0, MAX_REFUSALS));
+        refused.set(joined.id, sites.slice(MAX_REFUSALS));
+      });
+      const { value } = await finish(after);
+      assert.deepEqual(value.refusedFiles, sites.slice(0, MAX_REFUSALS));
+    });
+
+    it("lists what was refused in the tab when the deadline passed", async () => {
+      const { settle, tab, timers, refused } = await started();
+      refused.set(tab.id, [OTHER]);
+      const watch = settle.begin("s1", tab.id, 0);
+      await flush();
+      watch.sent();
+      timers.advance(PAGE_REQUEST_MS);
+      assert.deepEqual(await watch.after(WATCHED), {
+        element: BUTTON,
+        page: "unknown",
+        refusedFiles: [OTHER],
+      });
+      watch.stop();
+    });
+  });
+
   describe("bounds", () => {
     it("answers at once when the deadline passed during the act's page request", async () => {
       const { settle, tab, timers, polls } = await started();
@@ -816,12 +899,21 @@ async function started() {
   };
   const epoch = 1_000_000;
   let sent = Number.NaN;
+  // What the file guard refused in each tab, and what the settle asked it.
+  const refused = new Map<number, string[]>();
+  const refusedAsks: { tabId: number; since: number }[] = [];
   const settle = createActSettle({
     browser: fake.browser,
     groups,
     access,
     timers,
     navigations,
+    files: {
+      refusedSince: (tabId: number, since: number) => {
+        refusedAsks.push({ tabId, since });
+        return refused.get(tabId) ?? [];
+      },
+    },
     network: {
       requestsSince: (_tabId: number, since: number) => {
         network.sinces.push(since);
@@ -878,6 +970,8 @@ async function started() {
     generations,
     waits,
     network,
+    refused,
+    refusedAsks,
     act,
     finish,
     sentAt: () => sent,

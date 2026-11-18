@@ -5,6 +5,7 @@ import type {
   TabUpdatedListener,
   Timers,
 } from "./browser-api.ts";
+import type { FileGuard } from "./file-guard.ts";
 import { secondsText, ToolError } from "./handlers.ts";
 import { withoutFragment } from "./site.ts";
 import type { NavigationOutcome, TabNavigations } from "./tab-navigations.ts";
@@ -40,7 +41,10 @@ export const LOAD_AFTER_READY_MS = 400;
  * With `commit` and no URL, a complete ends the wait only after a top-frame commit, not of
  * about:blank, that followed a top-frame onBeforeNavigate the wait heard, before or after the
  * loading status and whatever its URL; the grace ends nothing, and the timeout still returns the
- * tab as it is.
+ * tab as it is. With `files`, every kind of wait fails at once with `file_refused` when the file
+ * guard refuses a response in the tab's top frame while it runs: such a load commits no document,
+ * so nothing else would tell the wait. That holds after the tab arrived too: a page that moves on
+ * to such a file before the wait ends is reported, since no later result would say so.
  */
 export function waitForLoad<Handle>(
   browser: BrowserApi,
@@ -53,11 +57,13 @@ export function waitForLoad<Handle>(
     unloaded = false,
     commit = false,
     ready,
+    files,
   }: {
     timeoutMs?: number;
     unloaded?: boolean;
     commit?: boolean;
     ready?: Pick<TabNavigations, "settled"> | undefined;
+    files?: Pick<FileGuard, "onRefused">;
   } = {},
 ): Promise<Tab> {
   return new Promise((resolve, reject) => {
@@ -135,6 +141,15 @@ export function waitForLoad<Handle>(
       browser.webNavigation.onBeforeNavigate.addListener(onBeforeNavigate);
       browser.webNavigation.onCommitted.addListener(onCommitted);
     }
+    const stopHearingRefusals = files?.onRefused((refusedTabId, site, frameId) => {
+      if (refusedTabId !== tabId || frameId !== 0) return;
+      fail(
+        new ToolError(
+          "file_refused",
+          `Tab ${tabId}'s load ended in a file from ${site}, a site this session may not act on. Foxleash stopped it; nothing was saved. To get the file, the site must be approved first: tab_open or navigate to it asks the user, unless it is on the blocklist.`,
+        ),
+      );
+    });
     let graceTimer = armGrace();
     // The load can finish before the navigation's promise settles, so nothing waits for it.
     (async () => navigate())().catch(fail);
@@ -227,6 +242,7 @@ export function waitForLoad<Handle>(
       browser.tabs.onUpdated.removeListener(listener);
       browser.webNavigation.onBeforeNavigate.removeListener(onBeforeNavigate);
       browser.webNavigation.onCommitted.removeListener(onCommitted);
+      stopHearingRefusals?.();
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
       if (readyTimer !== undefined) timers.clearTimeout(readyTimer);

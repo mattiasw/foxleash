@@ -471,6 +471,12 @@ export interface ActAfter {
   /** Tabs that opened in the session's group during the act or the wait. */
   openedTabs?: number[];
   /**
+   * Sites this session may not act on whose answer to a page or frame load, in the tab or in a tab
+   * the act opened, Foxleash stopped during the act or the wait because it was a file and not a
+   * page; absent when none.
+   */
+  refusedFiles?: string[];
+  /**
    * How many requests the page began after the act (beacons, pings, CSP reports, websockets and
    * media left out); absent when none. Unchanged with requests can mean the page sent what the act
    * asked for without showing it.

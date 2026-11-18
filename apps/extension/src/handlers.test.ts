@@ -31,6 +31,7 @@ import {
   flush,
   ONE_PIXEL_PNG,
 } from "./fake-browser.ts";
+import { createFileGuard } from "./file-guard.ts";
 import {
   BLANK_RELOAD_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
@@ -3810,6 +3811,184 @@ describe("a load that commits nothing into a tab Firefox unloaded", { timeout: 1
     await assert.rejects(navigated, { code: "navigation_timeout" });
   });
 });
+
+describe("a load that ends in a file the file guard refuses", { timeout: 10000 }, () => {
+  it("fails tab_open at once, and closes the tab it made", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://a.example");
+    const first = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const opening = open("s1", "https://a.example/export");
+    opening.catch(() => {});
+    const tabId = await begun(loads);
+    assert.notEqual(tabId, first.id);
+    await assertFileRefused(fake, timers, tabId, opening);
+    await flush();
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
+  });
+
+  it("fails navigate to a URL at once, and keeps the tab", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/export" });
+    navigated.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(fake, timers, tab.id, navigated);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/");
+  });
+
+  it("fails navigate reload at once", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads: number[] = [];
+    // The reloaded address now redirects to the file.
+    fake.browser.tabs.reload = async (tabId) => {
+      loads.push(tabId);
+      fake.emitStatus(tabId, "loading");
+    };
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails navigate reload of a tab Firefox unloaded at once", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/page");
+    await open("s1", "https://a.example/");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    fakeTab.discarded = true;
+    const loads = loadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails the load in place of a blank that a reload landed on at once", async () => {
+    const { fake, timers, call, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    reloadToBlank(fake);
+    const loads = loadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails the load of the address a step back did not load again at once", async () => {
+    const context = setup();
+    const tab = await historyTab(context);
+    const loads = loadNothing(context.fake);
+    recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const stepped = context.call("s1", "navigate", { tabId: tab.id, action: "back" });
+    stepped.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(context.fake, context.timers, tab.id, stepped);
+  });
+
+  it("fails the load that follows the user's approval at once", async () => {
+    const { fake, timers, call, open, page } = setup();
+    const tab = await open("s1");
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/export" });
+    navigated.catch(() => {});
+    const shown = await page("s1");
+    const loads = loadNothing(fake);
+    shown.deliver({ type: "answer", answer: "once" });
+    assert.equal(await begun(loads), tab.id);
+    await assertFileRefused(fake, timers, tab.id, navigated);
+  });
+
+  it("lists the file's site in the result of the act it was refused during", async () => {
+    const { fake, timers, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const clicked = { ref: "a2", x: 1, y: 2 };
+    replyWith(async (type) => {
+      if (type === "page_changes") return { state: "current", changes: 0, quietMs: 500 };
+      // The click follows a link of the page that redirects to another site's file.
+      assert.deepEqual(await fileResponse(fake, tab.id), { cancel: true });
+      return { ...clicked, watch: "w.1" };
+    });
+    const result = call("s1", "click", { tabId: tab.id, ref: "a2" });
+    for (let turn = 0; turn < 50 && timers.pending() === 0; turn += 1) await flush();
+    await flush();
+    timers.advance(MIN_SETTLE_MS);
+    assert.deepEqual(await result, {
+      ...clicked,
+      after: { page: "unchanged", refusedFiles: ["https://c.example"] },
+    });
+  });
+});
+
+/**
+ * Makes each load of a URL into a tab begin and commit nothing, as a load whose answer is a file
+ * does; returns the ids of the tabs loaded so far.
+ */
+function loadNothing(fake: FakeBrowser): number[] {
+  const loads: number[] = [];
+  const { update, get } = fake.browser.tabs;
+  fake.browser.tabs.update = async (tabId, properties) => {
+    const tab = fake.tabs.get(tabId);
+    if (properties.url === undefined || tab === undefined) return update(tabId, properties);
+    loads.push(tabId);
+    tab.discarded = false;
+    fake.emitBeforeNavigate({ tabId, frameId: 0, url: properties.url });
+    fake.emitStatus(tabId, "loading");
+    return get(tabId);
+  };
+  return loads;
+}
+
+/** The tab whose load began, once one did. */
+async function begun(loads: number[]): Promise<number> {
+  for (let turn = 0; turn < 50 && loads.length === 0; turn += 1) await flush();
+  const [tabId] = loads;
+  assert.ok(tabId !== undefined, "no load began");
+  assert.equal(loads.length, 1);
+  return tabId;
+}
+
+/** A file from a site no test approves answers the tab's top-frame load; the guard's answer. */
+function fileResponse(fake: FakeBrowser, tabId: number): unknown {
+  const answers = fake.emitWebRequest("onHeadersReceived", {
+    requestId: "file",
+    tabId,
+    timeStamp: 1,
+    frameId: 0,
+    url: "https://c.example/export.csv",
+    type: "main_frame",
+    statusCode: 200,
+    responseHeaders: [
+      { name: "Content-Type", value: "text/csv" },
+      { name: "Content-Disposition", value: "attachment" },
+    ],
+  });
+  assert.equal(answers.length, 1);
+  return answers[0];
+}
+
+/** The guard cancels the file, and `call` fails saying so with no time passed. */
+async function assertFileRefused(
+  fake: FakeBrowser,
+  timers: { now(): number },
+  tabId: number,
+  call: Promise<unknown>,
+): Promise<void> {
+  const before = timers.now();
+  assert.deepEqual(await fileResponse(fake, tabId), { cancel: true });
+  await assert.rejects(call, {
+    code: "file_refused",
+    message: `Tab ${tabId}'s load ended in a file from https://c.example, a site this session may not act on. Foxleash stopped it; nothing was saved. To get the file, the site must be approved first: tab_open or navigate to it asks the user, unless it is on the blocklist.`,
+  });
+  assert.equal(timers.now(), before);
+}
 
 // Hosts the site prompt refuses to show as they are; request_sites refuses them too.
 const NOT_PLAIN_URLS = [
@@ -10092,6 +10271,7 @@ function setup({
     },
   };
   const navigations = createTabNavigations({ browser: fake.browser, timers });
+  const files = createFileGuard({ browser: fake.browser, groups, access });
   const settle = createActSettle({
     browser: fake.browser,
     groups,
@@ -10099,6 +10279,7 @@ function setup({
     timers,
     navigations,
     network,
+    files,
     pages,
     now: () => 0,
   });
@@ -10114,6 +10295,7 @@ function setup({
     uploads,
     recordings,
     network,
+    files,
     downloads,
     recipes,
     settle,

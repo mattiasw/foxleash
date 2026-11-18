@@ -59,13 +59,16 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 1001,
       requestHeaders: [{ name: "Accept", value: "*/*" }],
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: tab.id,
-      timeStamp: 1100,
-      statusCode: 201,
-      responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1100,
+        statusCode: 201,
+        responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
+      }),
+    );
     const [received] = read(tab.id).requests;
     assert.equal(received?.status, 201);
     assert.equal(received?.durationMs, undefined);
@@ -168,13 +171,16 @@ describe("network log", { timeout: 10000 }, () => {
     const tab = await tabIn("s1", URL_A);
     const id = request(tab.id, `${SITE}/api`);
     const responseHeaders = [{ name: "Content-Type", value: "text/plain" }];
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: tab.id,
-      timeStamp: 1010,
-      statusCode: 200,
-      responseHeaders,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1010,
+        statusCode: 200,
+        responseHeaders,
+      }),
+    );
     fake.emitWebRequest("onCompleted", {
       requestId: id,
       tabId: tab.id,
@@ -211,13 +217,16 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 1001,
       requestHeaders: sent,
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: tab.id,
-      timeStamp: 1002,
-      statusCode: 200,
-      responseHeaders: received,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1002,
+        statusCode: 200,
+        responseHeaders: received,
+      }),
+    );
     const expected = {
       requestHeaders: [
         { name: "COOKIE", value: REDACTED },
@@ -272,13 +281,16 @@ describe("network log", { timeout: 10000 }, () => {
         timeStamp: 1010,
         requestHeaders,
       });
-      fake.emitWebRequest("onHeadersReceived", {
-        requestId: id,
-        tabId: tab.id,
-        timeStamp: 1020,
-        statusCode: 200,
-        responseHeaders: received,
-      });
+      fake.emitWebRequest(
+        "onHeadersReceived",
+        headersEvent({
+          requestId: id,
+          tabId: tab.id,
+          timeStamp: 1020,
+          statusCode: 200,
+          responseHeaders: received,
+        }),
+      );
       return id;
     });
     const kept = [{ name: "Content-Length", value: "512" }];
@@ -367,13 +379,16 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 1001,
       requestHeaders: headers,
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: tab.id,
-      timeStamp: 1002,
-      statusCode: 302,
-      responseHeaders: headers,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1002,
+        statusCode: 302,
+        responseHeaders: headers,
+      }),
+    );
     fake.emitWebRequest("onBeforeRedirect", {
       requestId: id,
       tabId: tab.id,
@@ -486,12 +501,15 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 1001,
       requestHeaders: [],
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: old,
-      tabId: tab.id,
-      timeStamp: 1002,
-      statusCode: 200,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: old,
+        tabId: tab.id,
+        timeStamp: 1002,
+        statusCode: 200,
+      }),
+    );
     fake.emitWebRequest("onCompleted", {
       requestId: old,
       tabId: tab.id,
@@ -581,13 +599,16 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 2001,
       requestHeaders: [{ name: "Cookie", value: "secret" }],
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: page,
-      tabId: tab.id,
-      timeStamp: 2002,
-      statusCode: 200,
-      responseHeaders: [{ name: "Content-Type", value: "text/html" }],
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: page,
+        tabId: tab.id,
+        timeStamp: 2002,
+        statusCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/html" }],
+      }),
+    );
     // Not the current page's request.
     assert.deepEqual(read(tab.id).requests, []);
     fake.navigateByUser(tab.id, `${SITE}/next#part`);
@@ -708,13 +729,16 @@ describe("network log", { timeout: 10000 }, () => {
       requestHeaders: [{ name: "Cookie", value: "secret" }],
     });
     await flush();
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: page,
-      tabId: tab.id,
-      timeStamp: 1550,
-      statusCode: 200,
-      responseHeaders: [{ name: "Content-Type", value: "text/html" }],
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: page,
+        tabId: tab.id,
+        timeStamp: 1550,
+        statusCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/html" }],
+      }),
+    );
     fake.emitWebRequest("onCompleted", {
       requestId: page,
       tabId: tab.id,
@@ -1136,13 +1160,16 @@ describe("network log", { timeout: 10000 }, () => {
       ids.push(id);
       // Twice: an update counts the difference, not the whole entry again.
       for (const timeStamp of [1001, 1002]) {
-        fake.emitWebRequest("onHeadersReceived", {
-          requestId: id,
-          tabId: tab.id,
-          timeStamp,
-          statusCode: 200,
-          responseHeaders: headers,
-        });
+        fake.emitWebRequest(
+          "onHeadersReceived",
+          headersEvent({
+            requestId: id,
+            tabId: tab.id,
+            timeStamp,
+            statusCode: 200,
+            responseHeaders: headers,
+          }),
+        );
       }
     }
     const trimmed = read(tab.id);
@@ -1169,13 +1196,16 @@ describe("network log", { timeout: 10000 }, () => {
     const tab = await tabIn("s1", URL_A);
     const headers = bigHeaders(MAX_NETWORK_HEADERS);
     const page = request(tab.id, `${SITE}/next`, { type: "main_frame" });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: page,
-      tabId: tab.id,
-      timeStamp: 1001,
-      statusCode: 200,
-      responseHeaders: headers,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: page,
+        tabId: tab.id,
+        timeStamp: 1001,
+        statusCode: 200,
+        responseHeaders: headers,
+      }),
+    );
     fake.navigateByUser(tab.id, `${SITE}/next`);
     await flush();
     const chars = (url: string, type: string) =>
@@ -1189,13 +1219,16 @@ describe("network log", { timeout: 10000 }, () => {
       const id = request(tab.id, `${SITE}/${String(index).padStart(3, "0")}`, {
         timeStamp: 2000,
       });
-      fake.emitWebRequest("onHeadersReceived", {
-        requestId: id,
-        tabId: tab.id,
-        timeStamp: 2001,
-        statusCode: 200,
-        responseHeaders: headers,
-      });
+      fake.emitWebRequest(
+        "onHeadersReceived",
+        headersEvent({
+          requestId: id,
+          tabId: tab.id,
+          timeStamp: 2001,
+          statusCode: 200,
+          responseHeaders: headers,
+        }),
+      );
     }
     const result = read(tab.id);
     assert.equal(result.requests.length, count);
@@ -1217,12 +1250,15 @@ describe("network log", { timeout: 10000 }, () => {
     fake.navigateByUser(0, `${SITE}/`);
     await flush();
     const id = request(0, `${SITE}/api`, { timeStamp: 2000 });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: 0,
-      timeStamp: 2001,
-      statusCode: 204,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: 0,
+        timeStamp: 2001,
+        statusCode: 204,
+      }),
+    );
     assert.deepEqual(
       read(0).requests.map(({ url, status }) => [url, status]),
       [
@@ -1317,12 +1353,15 @@ describe("network log", { timeout: 10000 }, () => {
     done("/400", 400);
     // Its headers arrived, its body still loads.
     const loading = request(tabId, `${SITE}/404`);
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: loading,
-      tabId,
-      timeStamp,
-      statusCode: 404,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: loading,
+        tabId,
+        timeStamp,
+        statusCode: 404,
+      }),
+    );
     done("/500", 500);
     const moved = request(tabId, `${SITE}/moved`);
     fake.emitWebRequest("onBeforeRedirect", {
@@ -1341,12 +1380,15 @@ describe("network log", { timeout: 10000 }, () => {
       error: "NS_ERROR_CONNECTION_REFUSED",
     });
     const cut = request(tabId, `${SITE}/cut`);
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: cut,
-      tabId,
-      timeStamp,
-      statusCode: 200,
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: cut,
+        tabId,
+        timeStamp,
+        statusCode: 200,
+      }),
+    );
     fake.emitWebRequest("onErrorOccurred", {
       requestId: cut,
       tabId,
@@ -1633,7 +1675,7 @@ describe("network log", { timeout: 10000 }, () => {
       ...details,
       requestHeaders: [{ name: "a", value: "" }],
     });
-    fake.emitWebRequest("onHeadersReceived", { ...details, statusCode: 500 });
+    fake.emitWebRequest("onHeadersReceived", headersEvent({ ...details, statusCode: 500 }));
     fake.emitWebRequest("onBeforeRedirect", {
       ...details,
       statusCode: 302,
@@ -1837,7 +1879,7 @@ describe("network log", { timeout: 10000 }, () => {
         documentUrl: URL_A,
       }),
       fake.emitWebRequest("onSendHeaders", { ...details, requestHeaders: [] }),
-      fake.emitWebRequest("onHeadersReceived", { ...details, statusCode: 200 }),
+      fake.emitWebRequest("onHeadersReceived", headersEvent({ ...details, statusCode: 200 })),
       fake.emitWebRequest("onBeforeRedirect", {
         ...details,
         statusCode: 302,
@@ -1867,13 +1909,16 @@ describe("network log", { timeout: 10000 }, () => {
       timeStamp: 1001,
       requestHeaders: [{ name: "Accept", value: "*/*" }],
     });
-    fake.emitWebRequest("onHeadersReceived", {
-      requestId: id,
-      tabId: tab.id,
-      timeStamp: 1002,
-      statusCode: 200,
-      responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
-    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1002,
+        statusCode: 200,
+        responseHeaders: [{ name: "Content-Type", value: "text/plain" }],
+      }),
+    );
     const before = structuredClone(read(tab.id));
     const [first] = read(tab.id).requests;
     assert.ok(first !== undefined);
@@ -2675,13 +2720,20 @@ function headersOf(
   statusCode = 200,
   contentType = "application/json",
 ): HeadersReceivedDetails {
-  return {
+  return headersEvent({
     requestId,
     tabId,
     timeStamp: 1100,
     statusCode,
     responseHeaders: [{ name: "Content-Type", value: contentType }],
-  };
+  });
+}
+
+/** The response headers of a fetch in the top frame; the log reads neither its URL nor its type. */
+function headersEvent(
+  details: Omit<HeadersReceivedDetails, "frameId" | "url" | "type">,
+): HeadersReceivedDetails {
+  return { frameId: 0, url: `${SITE}/api`, type: "xmlhttprequest", ...details };
 }
 
 function redirectOf(tabId: number, requestId: string, redirectUrl: string): RedirectDetails {

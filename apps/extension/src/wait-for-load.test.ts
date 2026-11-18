@@ -1575,7 +1575,160 @@ describe("waitForLoad", { timeout: 10000 }, () => {
       assertCleanedUp(fake, timers);
     });
   });
+
+  describe("with the file guard", () => {
+    const site = "https://b.example";
+    const waits: [string, string | undefined, { commit?: boolean }][] = [
+      ["a load of a URL", "https://a.example/export", {}],
+      ["a load whose URL is not known", undefined, {}],
+      ["a load that must commit", undefined, { commit: true }],
+    ];
+    for (const [name, url, options] of waits) {
+      it(`fails ${name} at once when its response is refused as a file`, async () => {
+        const { fake, timers, tab } = setup();
+        const { files, refuse, listening } = guard();
+        const wait = track(
+          waitForLoad(
+            fake.browser,
+            timers,
+            tab.id,
+            url,
+            async () => fake.emitStatus(tab.id, "loading"),
+            { ...options, files },
+          ),
+        );
+        await flush();
+        assert.equal(wait.done(), false);
+        assert.equal(listening(), 1);
+        refuse(tab.id, site, 0);
+        await assert.rejects(wait.promise, (error: unknown) => {
+          assert.ok(error instanceof ToolError);
+          assert.equal(error.code, "file_refused");
+          assert.equal(
+            error.message,
+            `Tab ${tab.id}'s load ended in a file from https://b.example, a site this session may not act on. Foxleash stopped it; nothing was saved. To get the file, the site must be approved first: tab_open or navigate to it asks the user, unless it is on the blocklist.`,
+          );
+          return true;
+        });
+        assert.equal(listening(), 0);
+        assertCleanedUp(fake, timers);
+      });
+    }
+
+    it("hears a refusal from before the navigation starts", async () => {
+      const { fake, timers, tab } = setup();
+      const { files, refuse, listening } = guard();
+      const seen: number[] = [];
+      const wait = waitForLoad(
+        fake.browser,
+        timers,
+        tab.id,
+        "https://a.example/export",
+        async () => {
+          seen.push(listening());
+          refuse(tab.id, site, 0);
+        },
+        { files },
+      );
+      await assert.rejects(wait, { code: "file_refused" });
+      assert.deepEqual(seen, [1]);
+      assert.equal(listening(), 0);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("fails when the page it loaded moves on to a refused file before the wait ends", async () => {
+      const { fake, timers, tab } = setup();
+      const { files, refuse, listening } = guard();
+      const url = "https://a.example/thanks";
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => fake.emitStatus(tab.id, "loading"),
+          { files },
+        ),
+      );
+      await flush();
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      await flush();
+      assert.equal(wait.done(), false);
+      refuse(tab.id, site, 0);
+      await assert.rejects(wait.promise, { code: "file_refused" });
+      assert.equal(listening(), 0);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("waits on when the refusal is another tab's or a frame's", async () => {
+      const { fake, timers, tab } = setup();
+      const other = fake.openTab({ url: "https://a.example/" });
+      const { files, refuse, listening } = guard();
+      const url = "https://a.example/next";
+      const wait = track(
+        waitForLoad(
+          fake.browser,
+          timers,
+          tab.id,
+          url,
+          async () => fake.emitStatus(tab.id, "loading"),
+          { files },
+        ),
+      );
+      await flush();
+      refuse(other.id, site, 0);
+      refuse(tab.id, site, 4);
+      await flush();
+      assert.equal(wait.done(), false);
+      assert.equal(listening(), 1);
+      tab.url = url;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url });
+      fake.emitStatus(tab.id, "complete");
+      assert.equal((await wait.promise).url, url);
+      assert.equal(listening(), 0);
+      assertCleanedUp(fake, timers);
+    });
+
+    it("stops hearing refusals when the wait ends at its timeout", async () => {
+      const { fake, timers, tab } = setup();
+      const { files, listening } = guard();
+      const wait = waitForLoad(
+        fake.browser,
+        timers,
+        tab.id,
+        "https://a.example/export",
+        async () => fake.emitStatus(tab.id, "loading"),
+        { files },
+      );
+      wait.catch(() => {});
+      await flush();
+      timers.advance(LOAD_TIMEOUT_MS);
+      await assert.rejects(wait, { code: "navigation_timeout" });
+      assert.equal(listening(), 0);
+      assertCleanedUp(fake, timers);
+    });
+  });
 });
+
+/** A file guard's `onRefused` whose refusals a test fires. */
+function guard() {
+  const listeners = new Set<(tabId: number, site: string, frameId: number) => void>();
+  return {
+    files: {
+      onRefused: (listener: (tabId: number, site: string, frameId: number) => void) => {
+        listeners.add(listener);
+        return () => {
+          listeners.delete(listener);
+        };
+      },
+    },
+    refuse: (tabId: number, site: string, frameId: number) => {
+      for (const listener of [...listeners]) listener(tabId, site, frameId);
+    },
+    listening: () => listeners.size,
+  };
+}
 
 function setup() {
   const fake = createFakeBrowser();
