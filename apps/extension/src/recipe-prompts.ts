@@ -4,6 +4,7 @@ import { recipeNotFound, ToolError } from "./handlers.ts";
 import { checkRecipe, findRecipe, lookOf, readRecipes, saveRecipe } from "./recipes.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
+import { hasPlainHost, MAX_SITE_HOST } from "./site.ts";
 import {
   APPROVAL_WAIT_MS,
   approvalPending,
@@ -225,6 +226,8 @@ export function createRecipePrompts<Handle>({
     const generation = generationOf(session);
     const recipe = await findRecipe(browser, name);
     if (recipe === undefined) throw recipeNotFound(name);
+    const notPlain = recipe.sites.find((site) => !hasPlainHost(site));
+    if (notPlain !== undefined) throw siteNotAsked(recipe.name, notPlain);
     return askForSites(session, generation, {
       recipe: { name: recipe.name, description: recipe.description },
       key: `recipe:${recipe.name}`,
@@ -724,6 +727,13 @@ function recipePageClosed(prompt: RunPrompt<unknown>): ToolError {
     prompt.recipe === undefined
       ? `The page asking about the agent's sites in tab ${prompt.tabId} closed without an answer.`
       : `The recipe page in tab ${prompt.tabId} closed without an answer.`,
+  );
+}
+
+function siteNotAsked(name: string, site: string): ToolError {
+  return new ToolError(
+    "invalid_url",
+    `The recipe ${JSON.stringify(name)} lists ${JSON.stringify(site)}, whose host is not a domain name of at most ${MAX_SITE_HOST} characters or an IP address, so Foxleash does not ask about it; the user can remove it from the recipe in Foxleash's settings.`,
   );
 }
 

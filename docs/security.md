@@ -160,6 +160,10 @@ An agent that can run programs on your computer can upload a file without these 
 - Allowing the sites an agent asks for takes your click too, on a page that shows only those
   sites, at most 20, grants them for the session only, never always, and sites on your blocklist
   or that you refused in the session stay so.
+- The pages that allow a recipe's sites or the sites an agent asks for show only sites whose host
+  is a domain name of at most 253 characters or an IP address, as the site prompt does: Foxleash
+  does not save a recipe with another site, `request_sites` refuses one, and a recipe saved
+  earlier with such a site is not run until you remove the site from it.
 
 ## Questions stay in front of you
 

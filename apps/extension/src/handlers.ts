@@ -76,7 +76,7 @@ import {
 } from "./screenshot.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord } from "./settings.ts";
-import { hasPlainHost, siteOf, withoutFragment } from "./site.ts";
+import { siteOf, withoutFragment } from "./site.ts";
 import {
   type Approval,
   approvalPending,
@@ -2262,10 +2262,6 @@ function uploadFiles(value: unknown): { name: string; type: string; size: number
 function requestedSite(entry: unknown): string | { problem: string } {
   const site = siteOfEntry(entry);
   if (site === undefined) return { problem: "this entry is blank." };
-  if (typeof site !== "string") return site;
-  if (!hasPlainHost(site)) {
-    return { problem: "this address's host is not a domain name or an IP address." };
-  }
   return site;
 }
 

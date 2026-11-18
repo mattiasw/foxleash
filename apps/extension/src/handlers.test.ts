@@ -9913,6 +9913,17 @@ describe("recipe_propose", { timeout: 10000 }, () => {
       message:
         "propose_recipe was refused: steps: Line 1, column 2: U+200B (zero width space) is invisible; remove it.",
     });
+    await assert.rejects(
+      call("s1", "recipe_propose", {
+        ...RECIPE,
+        sites: ["https://a.example", "https://accounts.google.com,evil.example/"],
+      }),
+      {
+        code: "invalid_params",
+        message:
+          "propose_recipe was refused: sites: Line 2: this address's host is not a domain name or an IP address.",
+      },
+    );
     assert.equal(fake.tabs.size, tabs);
     assert.equal(recipes.openPrompt("s1"), undefined);
   });

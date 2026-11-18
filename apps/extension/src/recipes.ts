@@ -9,7 +9,7 @@ import {
 } from "@foxleash/protocol";
 import { warn } from "./log.ts";
 import { isRecord, RECIPE_KEY_PREFIX, type SettingsBrowser } from "./settings.ts";
-import { MAX_SITE_HOST, siteOf } from "./site.ts";
+import { hasPlainHost, MAX_SITE_HOST, siteOf } from "./site.ts";
 
 /** One thing to fix in a recipe, as one sentence the settings page shows verbatim. */
 export type RecipeProblem = {
@@ -400,6 +400,9 @@ export function siteOfEntry(entry: unknown): string | undefined | { problem: str
   }
   // The URL parser keeps a "*" in a host, which would make a site that matches no tab.
   if (host.includes("*")) return { problem: "this address has a wildcard; list each site." };
+  if (!hasPlainHost(site)) {
+    return { problem: "this address's host is not a domain name or an IP address." };
+  }
   return site;
 }
 

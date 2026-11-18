@@ -338,14 +338,13 @@ describe("check", () => {
 
   it("still reports such a site as blocked, and allows it when stored or granted", async () => {
     const { fake, access, sessions } = setup();
-    sessions.set("s1", state([OVERLONG_SITE]));
+    sessions.set("s1", state([OVERLONG_SITE, COMMA_SITE]));
     await rejectsWith(
       access.check("s1", "https://accounts.google.com(x).paypal.com/"),
       "site_blocked",
     );
     await grantSite(fake.browser, PARENTHESES_SITE);
     assert.deepEqual(await access.check("s1", `${PARENTHESES_SITE}/a`), { decision: "allowed" });
-    assert.deepEqual(await access.allowForSession("s1", [COMMA_SITE], () => true), [COMMA_SITE]);
     assert.deepEqual(await access.check("s1", `${COMMA_SITE}/a`), { decision: "allowed" });
     assert.deepEqual(await access.check("s1", `${OVERLONG_SITE}/a`), { decision: "allowed" });
   });
@@ -2046,6 +2045,24 @@ describe("allowForSession", () => {
     assert.equal((await readSettings(fake.browser)).sites.includes("https://a.example"), false);
     assert.deepEqual(await access.check("s1", "https://a.example/"), { decision: "allowed" });
     assert.deepEqual(await access.check("s2", "https://a.example/"), { decision: "ask" });
+  });
+
+  it("never allows a site whose host is not plain", async () => {
+    const { access, sessions } = setup();
+    const granted = await access.allowForSession(
+      "s1",
+      [...NOT_PLAIN_SITES, "https://a.example"],
+      () => true,
+    );
+    assert.deepEqual(granted, ["https://a.example"]);
+    assert.deepEqual(sessions.get("s1")?.allowed, new Set(["https://a.example"]));
+    for (const site of NOT_PLAIN_SITES) {
+      await assert.rejects(
+        access.check("s1", `${site}/a`),
+        { code: "invalid_url", message: NOT_PLAIN },
+        site,
+      );
+    }
   });
 
   it("never allows a string that is not exactly an http or https site", async () => {

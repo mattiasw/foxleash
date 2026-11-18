@@ -618,6 +618,8 @@ recipe only when you click Save there; Discard drops it.
   Foxleash opens no more in that session.
 - A page still open when the session ends stays open and can still save. A page not yet shown
   when the session ends is not shown.
+- A site whose host is not a domain name or an IP address, such as one with parentheses or
+  commas, or is longer than 253 characters, is refused, as `request_sites` refuses it.
 
 ### `list_recipes` and `get_recipe`
 
@@ -644,6 +646,9 @@ never always.
 - Like a site prompt, it no longer opens once the session has stopped asking after three refused
   or closed prompts.
 - Sites outside the recipe are still asked one by one.
+- A saved recipe that lists a site whose host is not a domain name or an IP address, as one saved
+  before Foxleash refused such sites can, is refused without a page until you remove the site
+  from it on the settings page.
 
 ### `request_sites`
 

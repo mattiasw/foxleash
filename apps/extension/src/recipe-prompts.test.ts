@@ -1041,6 +1041,44 @@ describe("run", { timeout: 10000 }, () => {
     assert.deepEqual(created, []);
   });
 
+  it("refuses a saved recipe that lists a site with a host that is not plain, opening nothing", async () => {
+    const { fake, recipes } = setup();
+    const overlong = `https://${"a".repeat(63)}.${"b".repeat(63)}.${"c".repeat(63)}.${"d".repeat(62)}`;
+    const notPlain = [
+      "https://accounts.google.com(verified-by-foxleash).evil.example",
+      "https://accounts.google.com,evil.example",
+      overlong,
+    ];
+    await seed(
+      fake,
+      TRIP,
+      ...notPlain.map((site, index) => ({
+        ...TRIP,
+        name: `Odd ${index}`,
+        sites: ["https://a.example", site],
+      })),
+      { ...TRIP, name: "Two", sites: [notPlain[1] ?? "", "https://a.example", notPlain[0] ?? ""] },
+    );
+    const created = recordCreates(fake);
+    const refusal = (name: string, site: string | undefined) =>
+      `The recipe "${name}" lists "${site}", whose host is not a domain name of at most 253 characters or an IP address, so Foxleash does not ask about it; the user can remove it from the recipe in Foxleash's settings.`;
+    for (const [index, site] of notPlain.entries()) {
+      // Tracked, not awaited: a run that opened a page would wait for its answer.
+      const running = track(recipes.run("s1", `Odd ${index}`));
+      for (let turn = 0; turn < 10; turn += 1) await flush();
+      assertRejected(running, "invalid_url", refusal(`Odd ${index}`, site));
+    }
+    const two = track(recipes.run("s1", "Two"));
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assertRejected(two, "invalid_url", refusal("Two", notPlain[1]));
+    assert.deepEqual(created, []);
+    assert.equal(recipes.openPrompt("s1"), undefined);
+    // The refusals were charged nothing: a third discarded page would refuse this one.
+    await spend(fake, recipes, 2);
+    const { tabId } = await openRun(fake, recipes);
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+  });
+
   it("finds the recipe by its normalized name", async () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP);

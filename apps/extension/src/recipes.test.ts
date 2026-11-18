@@ -11,6 +11,7 @@ import {
   recipeName,
   recipeOf,
   saveRecipe,
+  siteOfEntry,
 } from "./recipes.ts";
 
 const NOW = "2026-10-30T12:00:00.000Z";
@@ -313,6 +314,41 @@ describe("checkRecipe", () => {
     ]);
     assert.deepEqual(problems({ ...VALID, sites: [SITE, 1] }), [
       { field: "sites", text: "Line 2: this is not an http or https address.", line: 2 },
+    ]);
+  });
+
+  it("refuses a site line whose host is not a domain name or an IP address, by line", () => {
+    const notPlain = "this address's host is not a domain name or an IP address.";
+    const sites = [
+      "https://ok.example",
+      "https://accounts.google.com(verified-by-foxleash).evil.example/",
+      "https://accounts.google.com,evil.example/",
+      "https://a..example",
+      "https://.example",
+      `https://${"a".repeat(64)}.example`,
+    ].join("\n");
+    assert.deepEqual(
+      problems({ ...VALID, sites }),
+      [2, 3, 4, 5, 6].map((line) => ({ field: "sites", text: `Line ${line}: ${notPlain}`, line })),
+    );
+    assert.deepEqual(
+      siteOfEntry("https://accounts.google.com(verified-by-foxleash).evil.example/"),
+      {
+        problem: notPlain,
+      },
+    );
+    assert.deepEqual(siteOfEntry("https://accounts.google.com,evil.example/"), {
+      problem: notPlain,
+    });
+    const plain = checkRecipe({
+      ...VALID,
+      sites: "https://[::1]:8080\nhttp://127.0.0.1:8080\nhttps://a_b.example",
+    });
+    assert.ok(plain.ok);
+    assert.deepEqual(plain.recipe.sites, [
+      "https://[::1]:8080",
+      "http://127.0.0.1:8080",
+      "https://a_b.example",
     ]);
   });
 

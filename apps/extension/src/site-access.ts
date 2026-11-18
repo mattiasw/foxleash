@@ -489,7 +489,12 @@ export function createSiteAccess<Handle>({
     if (!stillOpen()) return [];
     const granted: string[] = [];
     for (const site of sites) {
-      if (states.get(site) !== "askable" || siteOf(site) !== site || granted.includes(site)) {
+      if (
+        states.get(site) !== "askable" ||
+        siteOf(site) !== site ||
+        !hasPlainHost(site) ||
+        granted.includes(site)
+      ) {
         continue;
       }
       stateOf(session).allowed.add(site);
