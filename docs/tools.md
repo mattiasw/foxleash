@@ -26,13 +26,17 @@ Each agent session's tabs open in an orange tab group titled Foxleash, and Foxle
 tabs in that group, including tabs you move into it and tabs that a page in the group opens,
 also after your own click. When the agent session ends, Foxleash closes its group if the group
 holds only blank tabs, so pages you may still be reading stay open. Those tabs no longer show ON
-on the toolbar button, unless the same session reconnects. A tool call still running when the
-agent session ends stops before its next step in the browser: it sends no more input or files to
-the page, opens, selects or closes no tab, starts loading no page, resizes no window, takes no
-screenshot and saves no file. A blank tab it was opening right then is closed again. A step it
-took before the session ended, such as a click already sent or a page that already began
-loading, is not undone: a tab whose page began loading stays open, and Foxleash does not select it
-once the session has ended.
+on the toolbar button, unless the same session reconnects. An agent session also ends when
+Firefox loses its connection to the Foxleash program, because the program stopped or crashed. An
+agent still running then goes on as the same session, with its answers forgotten: Foxleash asks
+again for the sites you allowed only for that session, it may ask again about sites you refused,
+and it again has three refused or closed prompts before it stops asking. A tool call still
+running when the agent session ends stops before its next step in the browser: it sends no more
+input or files to the page, opens, selects or closes no tab, starts loading no page, resizes no
+window, takes no screenshot and saves no file. A blank tab it was opening right then is closed
+again. A step it took before the session ended, such as a click already sent or a page that
+already began loading, is not undone: a tab whose page began loading stays open, and Foxleash
+does not select it once the session has ended.
 
 The Foxleash button in the toolbar shows ON on the tabs an agent session can use, and ! on tabs
 outside an agent session's group when the program is too old for the add-on or newer than it;

@@ -944,6 +944,184 @@ describe("connection program state", { timeout: 10000 }, () => {
   });
 });
 
+describe("connection port loss", { timeout: 10000 }, () => {
+  it("ends each session of a dropped port once, at the drop", async (t) => {
+    const { fake, timers, openWelcomed, ended, state } = setup(t);
+    const first = await openWelcomed();
+    first.deliver({ ...request, id: "a" });
+    first.deliver({ ...request, id: "b", session: "s2" });
+    first.deliver({ ...request, id: "c" });
+    await flush();
+    assert.deepEqual(ended, []);
+    first.drop();
+    assert.deepEqual(ended, ["s1", "s2"]);
+    assert.equal(state(), "missing");
+    assert.equal(timers.pending(), 1);
+
+    timers.advance(500);
+    await flush();
+    const second = port(fake.ports, 1);
+    second.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    second.deliver({ ...request, id: "d" });
+    await flush();
+    assert.deepEqual(second.posted.at(-1), { type: "response", id: "d", ok: true, result: null });
+    second.drop();
+    assert.deepEqual(ended, ["s1", "s2", "s1"]);
+  });
+
+  it("ends the session of a request still running when its port drops", async (t) => {
+    const result = Promise.withResolvers<unknown>();
+    const { openWelcomed, ended } = setup(t, () => result.promise);
+    const host = await openWelcomed();
+    host.deliver(request);
+    host.drop();
+    assert.deepEqual(ended, ["s1"]);
+    result.resolve({ tabs: [] });
+    await flush();
+    assert.equal(host.posted.length, 1);
+  });
+
+  it("does not end again a session the host already ended on that port", async (t) => {
+    const { openWelcomed, ended } = setup(t);
+    const host = await openWelcomed();
+    host.deliver(request);
+    await flush();
+    host.deliver({ type: "session_end", session: "s1" });
+    host.drop();
+    assert.deepEqual(ended, ["s1"]);
+  });
+
+  it("ends a session that sent again after the host ended it on that port", async (t) => {
+    const { openWelcomed, ended } = setup(t);
+    const host = await openWelcomed();
+    host.deliver(request);
+    await flush();
+    host.deliver({ type: "session_end", session: "s1" });
+    host.deliver({ ...request, id: "r2" });
+    await flush();
+    host.drop();
+    assert.deepEqual(ended, ["s1", "s1"]);
+  });
+
+  it("ends no session whose requests the port refused", async (t) => {
+    const handled: string[] = [];
+    const handleRequest = async (received: RequestMessage) => {
+      handled.push(received.session);
+      return null;
+    };
+
+    const unwelcomed = setup(t, handleRequest);
+    const before = await unwelcomed.open();
+    before.deliver(request);
+    await flush();
+    assert.deepEqual(before.posted.at(-1), noWelcome("r1"));
+    before.drop();
+    assert.deepEqual(unwelcomed.ended, []);
+
+    const unserved = setup(t, handleRequest);
+    const old = await unserved.openWelcomed(OLDEST_SERVED_PROTOCOL - 1);
+    old.deliver(request);
+    await flush();
+    assert.equal(fieldsOf(old.posted.at(-1))?.ok, false);
+    old.drop();
+    assert.deepEqual(unserved.ended, []);
+    assert.deepEqual(handled, []);
+  });
+
+  it("ends the sessions of the port a re-check replaces", async (t) => {
+    const { fake, openWelcomed, ask, ended } = setup(t);
+    const first = await openWelcomed();
+    first.deliver(request);
+    await flush();
+    assert.deepEqual(first.posted.at(-1), { type: "response", id: "r1", ok: true, result: null });
+    first.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL - 1, version: "0.1.0" });
+    assert.deepEqual(await ask(), { state: "too_old" });
+    assert.equal(fake.ports.length, 2);
+    assert.deepEqual(ended, ["s1"]);
+    first.drop();
+    assert.deepEqual(ended, ["s1"]);
+  });
+
+  it("logs an end that fails and still ends the port's other sessions", async (t) => {
+    const { openWelcomed, ended, warnings } = setup(t, undefined, async (session) => {
+      if (session === "s1") throw new Error("tabs gone");
+    });
+    const host = await openWelcomed();
+    host.deliver(request);
+    host.deliver({ ...request, id: "r2", session: "s2" });
+    await flush();
+    host.drop();
+    await flush();
+    assert.deepEqual(ended, ["s1", "s2"]);
+    assert.deepEqual(warnings(), [
+      { event: "disconnected", error: null },
+      { event: "error", error: "Error: tabs gone" },
+    ]);
+  });
+
+  it("logs an end that throws at once and still ends the others and reconnects", async (t) => {
+    const { fake, timers, openWelcomed, ended, state, warnings } = setup(
+      t,
+      undefined,
+      (session) => {
+        if (session === "s1") throw new Error("sync");
+        return Promise.resolve();
+      },
+    );
+    const host = await openWelcomed();
+    host.deliver(request);
+    host.deliver({ ...request, id: "r2", session: "s2" });
+    await flush();
+    host.drop();
+    assert.deepEqual(ended, ["s1", "s2"]);
+    assert.equal(state(), "missing");
+    assert.deepEqual(warnings(), [
+      { event: "disconnected", error: null },
+      { event: "error", error: "Error: sync" },
+    ]);
+    timers.advance(500);
+    assert.equal(fake.ports.length, 2);
+  });
+
+  it("does not handle a request that arrives on a dropped port", async (t) => {
+    const handled: string[] = [];
+    const { fake, timers, openWelcomed, ended } = setup(t, async (received) => {
+      handled.push(received.session);
+      return null;
+    });
+    const first = await openWelcomed();
+    first.drop();
+    first.deliver({ ...request, session: "s9" });
+    await flush();
+    assert.deepEqual(handled, []);
+    assert.equal(first.posted.length, 1);
+
+    timers.advance(500);
+    await flush();
+    const second = port(fake.ports, 1);
+    second.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    second.drop();
+    assert.deepEqual(ended, []);
+  });
+
+  it("does not handle a request that arrives on a port a re-check replaced", async (t) => {
+    const handled: string[] = [];
+    const { fake, openWelcomed, ask } = setup(t, async (received) => {
+      handled.push(received.session);
+      return null;
+    });
+    const first = await openWelcomed();
+    first.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL - 1, version: "0.1.0" });
+    await ask();
+    assert.equal(fake.ports.length, 2);
+    first.deliver({ type: "welcome", protocol: PROTOCOL_VERSION, version: "0.1.0" });
+    first.deliver(request);
+    await flush();
+    assert.deepEqual(handled, []);
+    assert.equal(first.posted.length, 1);
+  });
+});
+
 function setup(
   t: TestContext,
   handleRequest: (request: RequestMessage, protocol: number) => Promise<unknown> = async () => null,

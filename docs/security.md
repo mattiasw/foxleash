@@ -228,8 +228,11 @@ Exceptions:
   disabled (see [The risk](#the-risk)).
 - Closing the session's tab group does not stop the session: the next tab it opens makes a new
   group.
-- A session whose program went away without telling Firefox stays listed as running until Firefox
-  restarts.
+- A session also ends when Firefox loses its connection to the Foxleash program, because the
+  program stopped or crashed. An agent still running then goes on as the same session, still
+  stopped if you stopped it. Its answers are forgotten: it is asked again for the sites you
+  allowed only for that session, may ask again about sites you refused, and again has three refused
+  or closed prompts before it stops asking.
 
 ## Untrusted page content
 

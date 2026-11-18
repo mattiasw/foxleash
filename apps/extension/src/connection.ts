@@ -65,6 +65,8 @@ export function createConnection<Handle>({
   let rechecked = false;
   /** Per port, so a new port starts without one and a welcome never affects another port. */
   const verdicts = new WeakMap<Port, Verdict>();
+  /** Per port, the sessions whose requests it passed on; a new port starts with none. */
+  const admitted = new WeakMap<Port, Set<string>>();
 
   browser.permissions.onAdded.addListener(permissionsChanged);
   browser.permissions.onRemoved.addListener(permissionsChanged);
@@ -104,7 +106,10 @@ export function createConnection<Handle>({
     }, RECHECK_INTERVAL_MS);
     const replaced = port;
     port = undefined;
-    replaced?.disconnect();
+    if (replaced !== undefined) {
+      replaced.disconnect();
+      endAdmitted(replaced);
+    }
     connect().catch(logError);
   }
 
@@ -185,21 +190,28 @@ export function createConnection<Handle>({
     const message = parsed.message;
     if (message.type === "request") answer(current, message).catch(logError);
     else if (message.type === "welcome") welcomed(current, message);
-    else if (message.type === "session_end") endSession(message.session).catch(logError);
-    else warn({ event: "unexpected_message", type: message.type });
+    else if (message.type === "session_end") {
+      admitted.get(current)?.delete(message.session);
+      endSession(message.session).catch(logError);
+    } else warn({ event: "unexpected_message", type: message.type });
   }
 
   async function answer(current: Port, request: RequestMessage): Promise<void> {
-    respond(current, await outcome(request, verdicts.get(current)));
+    // Nothing would end a session recorded on a port that is already gone.
+    if (port !== current) return;
+    respond(current, await outcome(current, request, verdicts.get(current)));
   }
 
   async function outcome(
+    current: Port,
     request: RequestMessage,
     verdict: Verdict | undefined,
   ): Promise<ResponseMessage> {
     try {
       if (verdict === undefined) throw new ToolError("protocol_mismatch", NO_WELCOME);
       if (!verdict.served) throw new ToolError("protocol_mismatch", verdict.mismatch);
+      const sessions = admitted.get(current) ?? new Set<string>();
+      admitted.set(current, sessions.add(request.session));
       const result = await handleRequest(request, verdict.protocol);
       return { type: "response", id: request.id, ok: true, result };
     } catch (error) {
@@ -258,6 +270,20 @@ export function createConnection<Handle>({
     port = undefined;
     setProgramState("missing");
     scheduleReconnect();
+    endAdmitted(current);
+  }
+
+  /** A host that went away sends no session_end; a live bridge's next request admits it again. */
+  function endAdmitted(lost: Port): void {
+    const sessions = admitted.get(lost);
+    admitted.delete(lost);
+    for (const session of sessions ?? []) {
+      try {
+        endSession(session).catch(logError);
+      } catch (error) {
+        logError(error);
+      }
+    }
   }
 
   function setProgramState(next: ProgramState): void {
