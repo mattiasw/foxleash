@@ -51,6 +51,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   also closed the tab; the tab now stays open with the dialog. The add-on listing and the docs now
   say that Firefox itself may select a tab to show such a dialog, or to ask whether you want to
   leave a page, while Foxleash is asking you something, and that a page may select a tab it opens.
+- `download` now works on approved `http://` sites that are not on this computer, such as a
+  development server on your network, a router or an intranet tool. Firefox sent its request to
+  `https://` instead, which is another site, so the download failed and nothing was saved.
 
 ### Security
 

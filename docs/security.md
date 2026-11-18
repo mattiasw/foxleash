@@ -466,10 +466,11 @@ rule (see [The risk](#the-risk)).
 
 Downloads save only a file served by a site you approved, after any redirects: Foxleash checks the
 address before the request, and the final address before it reads or saves anything. The request
-carries all your cookies for the site, as a request from that site's own page would. Downloads go
-only into your Firefox download folder, under a plain file name, never over an existing file. The
-file's content reaches the agent only when it reads the file with its own tools, outside Foxleash's
-untrusted marking.
+carries all your cookies for the site, as a request from that site's own page would. An `http://`
+address is requested over plain http, so the file and your cookies for the site that are not
+marked Secure travel unencrypted. Downloads go only into your Firefox download folder, under a
+plain file name, never over an existing file. The file's content reaches the agent only when it
+reads the file with its own tools, outside Foxleash's untrusted marking.
 
 `download` can save the successful answer of any address on an approved site, not only a file a
 page links to. Foxleash hides and redacts nothing in it, so the file can hold a value the server
@@ -478,7 +479,8 @@ put in a protected field, and sign-in tokens that `read_network` would redact.
 On the way to the final address, a redirect can make Firefox request an address on a site you
 have not approved or on the blocklist, also with all your cookies for that site, including those
 that a link from another site would not carry; no file from such a site is saved (see [Site
-approval](#site-approval)).
+approval](#site-approval)). Such a step to an `http://` address goes over plain http, also on the
+way from one `https://` address to another.
 
 ### Files a page loads in the agent's tabs
 

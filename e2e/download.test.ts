@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { LAN_HOST } from "./firefox.ts";
 import {
   DOWNLOAD_SECRET,
   type FixtureServer,
@@ -24,6 +25,7 @@ describe("download in real Firefox", () => {
   let fixtures: FixtureServer;
   let session: Session;
   let other = "";
+  let lan = "";
 
   before(
     async () => {
@@ -32,9 +34,12 @@ describe("download in real Firefox", () => {
       fixtures = await startFixtureServer();
       // The same server under another site, which the tests never approve.
       other = `http://localhost:${fixtures.port}`;
+      // The same server under a site that is not a loopback address, which the tests approve.
+      lan = `http://${LAN_HOST}:${fixtures.port}`;
       await harness.startFirefox(EXTENSION_DIST);
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
+        [`site:${lan}`]: { grantedAt: new Date().toISOString() },
       });
       session = await harness.connect();
       await harness.waitUntilReady(session);
@@ -102,6 +107,20 @@ describe("download in real Firefox", () => {
     assert.equal(readFileSync(saved.path, "utf8"), receiptPdf());
   });
 
+  test("saves a file from an approved http site outside loopback over http", async () => {
+    const path = "/download/receipt.pdf";
+    const hits = fixtures.hits(path);
+    const saved = await save(path, "lan.pdf", lan);
+    assert.deepEqual(saved, {
+      path: join(harness.downloads, "lan.pdf"),
+      bytes: Buffer.byteLength(receiptPdf()),
+    });
+    assert.equal(readFileSync(saved.path, "utf8"), receiptPdf());
+    // An upgraded request reaches the server as a TLS handshake, never as a request.
+    assert.equal(fixtures.hits(path), hits + 1);
+    assert.equal(fixtures.downloadHeaders().at(-1)?.host, `${LAN_HOST}:${fixtures.port}`);
+  });
+
   test("refuses a URL on a site the session may not act on before any request", async () => {
     const text = await harness.refused(session, "download", {
       url: `${other}/download/unapproved.pdf`,
@@ -149,8 +168,12 @@ describe("download in real Firefox", () => {
     }
   });
 
-  async function save(path: string, filename: string): Promise<{ path: string; bytes: number }> {
-    const result = await harness.ok(session, "download", { url: fixtures.url(path), filename });
+  async function save(
+    path: string,
+    filename: string,
+    site = fixtures.site,
+  ): Promise<{ path: string; bytes: number }> {
+    const result = await harness.ok(session, "download", { url: `${site}${path}`, filename });
     assert.ok(
       typeof result === "object" &&
         result !== null &&

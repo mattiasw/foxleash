@@ -571,6 +571,11 @@ agent can move it from there.
   address on a site you have not approved or on the blocklist, with all your cookies for that
   site, including those that a link from another site would not carry; no file from such a site
   is saved.
+- An `http://` address is fetched over plain http, as the page's own requests to it are, so the
+  file and your cookies for the site travel unencrypted. Only where Firefox itself requires https
+  for the host, as HTTPS-Only Mode does for a host name or a site can ask it to, does the request
+  go to `https://`, as the page would; nothing is then saved unless you approved that `https://`
+  site too.
 - The name must not contain a slash or backslash, control or formatting characters, or start
   with a dot, and Firefox refuses some others, such as names ending in `.desktop`. Firefox adds
   a number when the name is taken, so an existing file is never replaced.

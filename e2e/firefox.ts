@@ -203,6 +203,12 @@ const SAVED_LOGINS = "return Services.logins.getAllLogins().then((logins) => log
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
 
+/**
+ * A host name the test profile resolves to this computer (network.dns.localDomains). Firefox
+ * does not count it as a loopback address, so it treats it like a server on the network.
+ */
+export const LAN_HOST = "lan.test";
+
 export interface FirefoxOutput {
   stdout: string;
   stderr: string;
@@ -925,6 +931,11 @@ function buildUserJs(
       "browser.download.dir",
       downloadDir,
       "Downloads go into the test's temp home, never the developer's folder.",
+    ],
+    [
+      "network.dns.localDomains",
+      LAN_HOST,
+      `Resolve ${LAN_HOST} to this computer, so a test reaches the fixture server under a site that is not a loopback address, as a server on the network is not.`,
     ],
     [
       "signon.autofillForms",

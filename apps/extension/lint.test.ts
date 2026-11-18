@@ -281,6 +281,14 @@ describe("manifest.json", () => {
     const major = gecko.strict_min_version.split(".")[0];
     assert.equal(esbuildOptions.target, `firefox${major}`);
   });
+
+  // Firefox's Manifest V3 default for extension pages adds upgrade-insecure-requests, which turns
+  // download's fetch of an http address outside loopback into an https request to another site.
+  test("declares the extension pages' policy without upgrading http requests", async () => {
+    const manifest = await readManifest();
+    assert.ok("content_security_policy" in manifest);
+    assert.deepEqual(manifest.content_security_policy, { extension_pages: "script-src 'self'" });
+  });
 });
 
 async function geckoSettings(): Promise<object> {
@@ -292,12 +300,17 @@ async function geckoSettings(): Promise<object> {
 }
 
 async function browserSpecificSettings(): Promise<object> {
-  const manifest: unknown = JSON.parse(
-    await readFile(join(import.meta.dirname, "manifest.json"), "utf8"),
-  );
-  assert.ok(typeof manifest === "object" && manifest !== null);
+  const manifest = await readManifest();
   assert.ok("browser_specific_settings" in manifest);
   const settings = manifest.browser_specific_settings;
   assert.ok(typeof settings === "object" && settings !== null);
   return settings;
+}
+
+async function readManifest(): Promise<object> {
+  const manifest: unknown = JSON.parse(
+    await readFile(join(import.meta.dirname, "manifest.json"), "utf8"),
+  );
+  assert.ok(typeof manifest === "object" && manifest !== null);
+  return manifest;
 }
