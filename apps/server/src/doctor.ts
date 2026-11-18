@@ -5,7 +5,7 @@ import type {
   StdioPipe,
 } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { isAbsolute, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import {
   EXTENSION_ID,
@@ -76,6 +76,8 @@ type Probe =
 
 const SETUP = "run npm run setup";
 const NO_FIREFOX = "is Firefox running with the Foxleash extension?";
+const FLATPAK_FIREFOX = ".var/app/org.mozilla.firefox";
+const PORTAL_SETTING = "widget.use-xdg-desktop-portal.native-messaging";
 const TEMP_PREFIX = "/tmp/foxleash-doctor-";
 const LAUNCHER_PATH = "/usr/bin:/bin";
 const CLAUDE_TIMEOUT_MS = 15_000;
@@ -474,6 +476,7 @@ function checkSocketDirectory(options: DoctorOptions, report: Report): boolean {
       "socket directory",
       `no host has started yet in ${socketDir}; ${NO_FIREFOX}`,
     );
+    flatpakStep(options.home, report);
   } else {
     report.line(
       "FAIL",
@@ -519,6 +522,32 @@ async function checkHosts(options: DoctorOptions, report: Report): Promise<void>
   }
   if (answered === 0) {
     report.line("FAIL", "hosts", `no running host answered in ${socketDir}; ${NO_FIREFOX}`);
+    flatpakStep(options.home, report);
+  }
+}
+
+function flatpakStep(home: string, report: Report): void {
+  if (!hasFlatpakFirefox(home)) {
+    return;
+  }
+  report.continuation(
+    `Firefox from Flatpak is installed (${join(home, FLATPAK_FIREFOX)}). It starts the`,
+  );
+  report.continuation(
+    "Foxleash host only after one setting: open about:config in that Firefox, set",
+  );
+  report.continuation(`${PORTAL_SETTING} to 2, and click Allow when it asks to`);
+  report.continuation(
+    "start the WebExtension backend. The README's install section has the steps.",
+  );
+}
+
+// Flatpak keeps each app's data under ~/.var/app.
+function hasFlatpakFirefox(home: string): boolean {
+  try {
+    return statSync(join(home, FLATPAK_FIREFOX)).isDirectory();
+  } catch {
+    return false;
   }
 }
 

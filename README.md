@@ -23,8 +23,10 @@ server, and from there to the agent.
 ## Requirements
 
 - Linux
-- Firefox 153 or later, installed from Mozilla's package or tarball (Snap and Flatpak
-  builds are untested)
+- Firefox 153 or later, installed from Mozilla's package or tarball, as the Snap, or as the
+  Flatpak from Flathub. The Snap and the Flatpak need a desktop that can start WebExtension
+  backends, such as Ubuntu's, and the Flatpak needs
+  [one setting first](#firefox-from-snap-or-flatpak).
 - Node.js 24 or later
 - An MCP client. The setup command registers Foxleash with Claude Code if it is installed.
 - The GitHub CLI (`gh`), logged in (`gh auth login`) with an account that can read this
@@ -73,6 +75,35 @@ all websites.
 
 - **Update:** `git pull && npm ci && npm run setup`, then confirm the installation in Firefox.
 - **Remove:** `npm run teardown`, then remove the extension in Firefox.
+
+### Firefox from Snap or Flatpak
+
+Both builds ask your desktop to start the Foxleash program for them. Ubuntu adds this to its
+desktop portal; on a system without it, neither build can start the program.
+
+If Firefox does not offer to add Foxleash when setup runs, copy
+`~/.cache/foxleash/foxleash-<version>.xpi` to your Downloads folder, open `about:addons` in
+Firefox, click the gear button, choose "Install Add-on From File" and pick the file.
+
+**Snap:** while the add-on installs, your desktop asks once "Allow Firefox to start WebExtension
+backend?". Click Allow.
+
+**Flatpak:** `npm run setup` is still needed, because your desktop reads the file it writes. Then
+give Firefox one setting:
+
+1. In the Flatpak Firefox, type `about:config` in the address bar and press Enter.
+2. If Firefox shows "Proceed with Caution", click "Accept the Risk and Continue".
+3. In the search box at the top, type `widget.use-xdg-desktop-portal.native-messaging`. If two
+   settings show, use the one whose name ends in `native-messaging`, not
+   `native-messaging-proxy`.
+4. Click the pencil button at the end of its row, replace `0` with `2`, and press Enter.
+5. Your desktop asks "Allow Mozilla Firefox to start WebExtension backend?". Click Allow. "Don't
+   allow" is selected, so pressing Enter refuses.
+6. The Foxleash page shows the program as connected by itself, and `npm run doctor` passes.
+
+The Flatpak Firefox keeps its own settings folder, so it does not see the file setup writes. With
+this setting it asks your desktop to start the program outside the Flatpak, and the value 2 makes
+it do that only when it runs in Flatpak or Snap.
 
 ## Use
 

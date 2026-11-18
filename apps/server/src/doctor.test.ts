@@ -68,6 +68,7 @@ const LIMIT = { timeout: 10_000 };
 const REAL_LIMIT = { timeout: 20_000 };
 const SHORT = { welcomeMs: 300, exitMs: 300, killMs: 300 };
 const SETUP = "run npm run setup";
+const FLATPAK_FIREFOX = ".var/app/org.mozilla.firefox";
 const DEAD_PID = 2147483647;
 const PERMISSION_OK = "ok extension permissions: access to all websites granted";
 const hosts: FakeHost[] = [];
@@ -662,6 +663,22 @@ describe("doctor, the socket directory", () => {
     assert.equal(result.code, 1);
   });
 
+  it("adds the Flatpak step to a missing directory", LIMIT, async () => {
+    const f = await fixture();
+    const missing = path.join(root, "no-such-dir-flatpak");
+    addFlatpakFirefox(f);
+    const result = await runDoctor(f, { socketDir: missing });
+    assert.deepEqual(result.lines, [
+      `ok native manifest: ${f.manifest}`,
+      launcherOk(f),
+      ...claudeLines(f),
+      `FAIL socket directory: no host has started yet in ${missing}; is Firefox running with the Foxleash extension?`,
+      ...flatpakLines(f),
+      "4 checks, 1 failed",
+    ]);
+    assert.equal(result.code, 1);
+  });
+
   it("fails a directory open to others and skips the hosts", LIMIT, async () => {
     const f = await fixture();
     await fakeHost(f.socketDir, process.pid);
@@ -672,6 +689,19 @@ describe("doctor, the socket directory", () => {
       `FAIL socket directory: ${f.socketDir} is open to other users (mode 0755); remove it and restart Firefox`,
     ]);
     assert.equal(result.lines.at(-1), "4 checks, 1 failed");
+  });
+
+  it("leaves the Flatpak step out when the directory is open to others", LIMIT, async () => {
+    const f = await fixture();
+    addFlatpakFirefox(f);
+    await fakeHost(f.socketDir, process.pid);
+    chmodSync(f.socketDir, 0o755);
+    const result = await runDoctor(f);
+    chmodSync(f.socketDir, 0o700);
+    assert.deepEqual(result.lines.slice(-2), [
+      `FAIL socket directory: ${f.socketDir} is open to other users (mode 0755); remove it and restart Firefox`,
+      "4 checks, 1 failed",
+    ]);
   });
 
   it("warns about each skipped candidate first", LIMIT, async () => {
@@ -701,6 +731,19 @@ describe("doctor, the hosts", () => {
     assert.equal(result.code, 1);
   });
 
+  it("leaves the Flatpak step out when it cannot list the directory", LIMIT, async () => {
+    const f = await fixture();
+    addFlatpakFirefox(f);
+    chmodSync(f.socketDir, 0o300);
+    const result = await runDoctor(f);
+    chmodSync(f.socketDir, 0o700);
+    assert.ok(
+      result.lines.every((line) => !line.includes("Flatpak")),
+      result.lines.join("\n"),
+    );
+    assert.equal(result.code, 1);
+  });
+
   it("fails with only a socket of a dead process", LIMIT, async () => {
     const f = await fixture();
     const stale = await staleSocket(f.socketDir, DEAD_PID);
@@ -727,6 +770,40 @@ describe("doctor, the hosts", () => {
     const f = await fixture();
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["hosts", "extension"]), [noHost(f)]);
+    assert.equal(result.code, 1);
+  });
+
+  it("adds the Flatpak step to an empty directory", LIMIT, async () => {
+    const f = await fixture();
+    addFlatpakFirefox(f);
+    const result = await runDoctor(f);
+    assert.deepEqual(result.lines.slice(result.lines.indexOf(noHost(f))), [
+      noHost(f),
+      ...flatpakLines(f),
+      "5 checks, 1 failed",
+    ]);
+    assert.equal(result.code, 1);
+  });
+
+  it("leaves the Flatpak step out when a host answers", LIMIT, async () => {
+    const f = await fixture();
+    addFlatpakFirefox(f);
+    const host = await fakeHost(f.socketDir, process.pid);
+    const result = await runDoctor(f);
+    assert.deepEqual(result.lines, [...allOk(f, host), "7 checks, 0 failed"]);
+    assert.equal(result.code, 0);
+  });
+
+  it("ignores a file where the Flatpak folder would be", LIMIT, async () => {
+    const f = await fixture();
+    mkdirSync(path.join(f.home, ".var/app"), { recursive: true });
+    writeFileSync(path.join(f.home, FLATPAK_FIREFOX), "");
+    const result = await runDoctor(f);
+    assert.ok(
+      result.lines.every((line) => !line.includes("Flatpak")),
+      result.lines.join("\n"),
+    );
+    assert.equal(result.lines.at(-1), "5 checks, 1 failed");
     assert.equal(result.code, 1);
   });
 
@@ -1032,7 +1109,8 @@ function leftovers(): string[] {
   return process.getActiveResourcesInfo().filter((name) => name === "Timeout");
 }
 
-// Every line is a status line, a continuation of the Claude Code line, or the summary.
+// Every line is a status line, a continuation of the Claude Code line or of a no-host FAIL line,
+// or the summary.
 function assertShape(lines: string[], code: number): void {
   const statuses = lines.slice(0, -1);
   let continues = false;
@@ -1042,7 +1120,10 @@ function assertShape(lines: string[], code: number): void {
       continue;
     }
     assert.match(line, /^(ok|warn|FAIL) [^:]+: /);
-    continues = line === "ok claude code: foxleash is registered";
+    continues =
+      line === "ok claude code: foxleash is registered" ||
+      line.startsWith("FAIL socket directory: no host has started yet ") ||
+      line.startsWith("FAIL hosts: no running host answered ");
   }
   const checks = statuses.filter((line) => !line.startsWith("  "));
   const failed = checks.filter((line) => line.startsWith("FAIL ")).length;
@@ -1212,6 +1293,19 @@ function extensionOk(): string {
 
 function noHost(f: Fixture): string {
   return `FAIL hosts: no running host answered in ${f.socketDir}; is Firefox running with the Foxleash extension?`;
+}
+
+function addFlatpakFirefox(f: Fixture): void {
+  mkdirSync(path.join(f.home, FLATPAK_FIREFOX), { recursive: true });
+}
+
+function flatpakLines(f: Fixture): string[] {
+  return [
+    `  Firefox from Flatpak is installed (${path.join(f.home, FLATPAK_FIREFOX)}). It starts the`,
+    "  Foxleash host only after one setting: open about:config in that Firefox, set",
+    "  widget.use-xdg-desktop-portal.native-messaging to 2, and click Allow when it asks to",
+    "  start the WebExtension backend. The README's install section has the steps.",
+  ];
 }
 
 function age(socketPath: string, seconds: number): void {

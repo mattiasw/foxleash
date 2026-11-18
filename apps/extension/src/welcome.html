@@ -19,6 +19,12 @@
         <pre><code id="program-command"></code></pre>
         <p>The command needs <span id="program-requirement"></span>. You can get it from
           <a href="https://nodejs.org/" target="_blank" rel="noopener noreferrer">nodejs.org</a>.</p>
+        <p>If you use Firefox from Flatpak, it also needs one setting before it can start the
+          program. Type <code>about:config</code> in the address bar and press Enter, and accept
+          the warning. Search for <code>widget.use-xdg-desktop-portal.native-messaging</code> (not
+          the one ending in <code>-proxy</code>), click its edit button, change <code>0</code> to
+          <code>2</code> and press Enter. When Firefox asks to start the WebExtension backend,
+          click Allow.</p>
       </div>
       <div id="program-update" hidden>
         <p>To update the program, open a terminal in the folder where you installed Foxleash and run

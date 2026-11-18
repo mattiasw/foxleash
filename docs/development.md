@@ -433,7 +433,9 @@ registered command with this checkout. It checks the socket directory with the s
 the host, and makes one `mcp` hello and welcome round trip over each socket of a running
 process, reading the extension's state from the welcome. The extension reports its access to
 all websites when it connects to the host and again whenever the user grants or revokes it, so
-that line shows the current state.
+that line shows the current state. When the socket directory does not exist or no host answered,
+and `~/.var/app/org.mozilla.firefox` is a folder, doctor prints the `about:config` step for
+Firefox from Flatpak under that FAIL line.
 
 ## Probing synthetic input
 
