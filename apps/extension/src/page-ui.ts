@@ -94,7 +94,8 @@ export function fieldsOf(value: unknown): Record<string, unknown> | undefined {
  * started. Input that can open a Firefox menu (a lone Alt, F10, the Menu key, a key pressed with
  * Alt, a right-button press or a `contextmenu` event) disarms the page with no second running until
  * the page next sees a key, a pointer press or a click, from which the second starts (ADR 0063,
- * 0064).
+ * 0064). A resize of the page's viewport after `watch()` starts the second again, and a pointer
+ * press under way at the resize does not answer (ADR 0083).
  * `aria-disabled`, not `disabled`, keeps the buttons focusable.
  */
 export function armButtons<Handle>(options: {
@@ -217,6 +218,8 @@ export function armButtons<Handle>(options: {
       arming.visible(document.visibilityState === "visible");
     });
     window.addEventListener("focus", () => arming.focused(!keys.held()));
+    // A resize moves the buttons (ADR 0083).
+    window.addEventListener("resize", rearm);
   }
 
   function onKeyup(event: KeyboardEvent): void {

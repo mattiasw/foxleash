@@ -1814,6 +1814,11 @@ describe("tab_close, tab_select and resize_window", () => {
         "This resizes the user's whole window, the user's own tabs in it included.",
       ),
     );
+    assert.ok(
+      named("resize_window")?.description?.includes(
+        "While Foxleash is asking the user something for this session, it refuses to resize the window.",
+      ),
+    );
     assert.deepEqual(named("tab_close")?.inputSchema.required, ["tabId"]);
     assert.deepEqual(named("tab_select")?.inputSchema.required, ["tabId"]);
     assert.deepEqual(named("resize_window")?.inputSchema.required, ["width", "height"]);

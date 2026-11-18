@@ -78,6 +78,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   be approved first. The request still reaches that site, and a file that such a site's own
   service worker or page produces, or that loads in a pop-up window or in a tab left in a group
   from before Firefox restarted or Foxleash was updated, is still saved.
+- The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
+  or to allow the sites a task needs) now wait a full second again after its window changes size,
+  so a click aimed at where a button was cannot answer another button that moved there, and an
+  agent can no longer resize the window while Foxleash is asking you something for it.
 
 ## [0.5.0] - 2026-11-17
 

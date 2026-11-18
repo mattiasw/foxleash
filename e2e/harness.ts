@@ -44,6 +44,9 @@ const ARMED_STATE = `(() => {
     document.hasFocus() + ", document.visibilityState " + document.visibilityState;
 })()`;
 
+const SHOWN = "document.hasFocus() true, document.visibilityState visible";
+const VIEWPORT = 'window.innerWidth + "x" + window.innerHeight';
+
 // The longest socket path the host can make must fit in sun_path (108 bytes with its NUL).
 const MAX_SOCKET_PATH_BYTES = 107;
 const LONGEST_SOCKET_TAIL = join("fh-e2e-XXXXXX", "run", "foxleash", "2147483647.sock");
@@ -118,6 +121,18 @@ export interface Harness {
    * are armed.
    */
   waitForArmed(context: string, buttons?: number): Promise<void>;
+  /**
+   * Requires the page's answer buttons, three unless given, to be armed in a focused, visible
+   * page; resizes the window through `session`; waits until the page's viewport has changed and
+   * its `resize` event has run; then requires every button to be unarmed with the page still
+   * focused and visible.
+   */
+  resizeUnarms(
+    session: Session,
+    context: string,
+    size: { width: number; height: number },
+    buttons?: number,
+  ): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
   /**
@@ -194,6 +209,31 @@ export function createHarness(): Harness {
       throw new Error(`${name} returned no result: ${messageOf(error)}${diagnostics(session)}`, {
         cause: error,
       });
+    }
+  }
+
+  async function ok(
+    session: Session,
+    name: string,
+    args: Record<string, unknown> = {},
+    timeoutMs?: number,
+  ): Promise<unknown> {
+    const result = await call(session, name, args, timeoutMs);
+    if (result.isError) {
+      throw new Error(`${name} failed:\n${result.text}${diagnostics(session)}`);
+    }
+    return parseResult(result.text);
+  }
+
+  async function expectArming(
+    firefox: Firefox,
+    context: string,
+    expected: string,
+    when: string,
+  ): Promise<void> {
+    const state = await firefox.evaluate(context, ARMED_STATE);
+    if (state !== expected) {
+      throw new Error(`${when}, the page has ${String(state)}, not ${expected}${diagnostics()}`);
     }
   }
 
@@ -415,6 +455,39 @@ export function createHarness(): Harness {
       );
     },
 
+    async resizeUnarms(session, context, size, buttons = 3) {
+      assertOpen();
+      const firefox = currentFirefox();
+      await expectArming(
+        firefox,
+        context,
+        `${buttons} buttons, 0 unarmed; ${SHOWN}`,
+        "before the resize",
+      );
+      const before = await firefox.evaluate(context, VIEWPORT);
+      await ok(session, "resize_window", size);
+      // The resize event fires in the rendering update before that update's animation frames: one
+      // frame after the size is seen to change, it has run.
+      await firefox.evaluate(
+        context,
+        `new Promise((resolve, reject) => {
+          const deadline = performance.now() + ${PAGE_TIMEOUT_MS};
+          const frame = () => {
+            if (${VIEWPORT} !== ${JSON.stringify(before)}) requestAnimationFrame(() => resolve(null));
+            else if (performance.now() > deadline) reject(new Error("the viewport stayed " + ${VIEWPORT}));
+            else requestAnimationFrame(frame);
+          };
+          requestAnimationFrame(frame);
+        })`,
+      );
+      await expectArming(
+        firefox,
+        context,
+        `${buttons} buttons, ${buttons} unarmed; ${SHOWN}`,
+        "right after the resize",
+      );
+    },
+
     waitForHost,
 
     async waitUntilReady(session, accept = (result) => !result.isError) {
@@ -438,13 +511,7 @@ export function createHarness(): Harness {
       return call(session, name, args, timeoutMs);
     },
 
-    async ok(session, name, args = {}, timeoutMs) {
-      const result = await call(session, name, args, timeoutMs);
-      if (result.isError) {
-        throw new Error(`${name} failed:\n${result.text}${diagnostics(session)}`);
-      }
-      return parseResult(result.text);
-    },
+    ok,
 
     async refused(session, name, args = {}) {
       const result = await call(session, name, args);

@@ -1214,6 +1214,66 @@ describe("recipes the agent proposes, in real Firefox", () => {
     }
   });
 
+  test("a resize of the propose page's window starts its arming second again, and its session cannot resize it", async (t) => {
+    // Another session in the same window, with its tab opened before the page.
+    const resizing = await connected(t);
+    await harness.ok(resizing, "tab_open");
+    await harness.ok(resizing, "resize_window", { width: 1000, height: 700 });
+    const session = await connected(t);
+    t.after(() => removeStored(["recipe:Resized"]));
+    const { page } = await propose(session, proposal("Resized"));
+    await harness.waitForArmed(page, 2);
+
+    const text = await harness.refused(session, "resize_window", { width: 900, height: 700 });
+    assert.ok(text.includes("Foxleash is still asking the user in tab"), text);
+
+    await harness.resizeUnarms(resizing, page, { width: 900, height: 700 }, 2);
+    await firefox.click(page, SAVE);
+    await waitForStatus(page, UNARMED);
+    assert.equal((await storedRecipes())["recipe:Resized"], undefined);
+
+    // Reading storage selected the settings page's tab, which disarmed this page.
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, SAVE);
+    await waitForStatus(page, "Saved.");
+  });
+
+  test("a resize of the run page's window starts its arming second again, and its session cannot resize it", async (t) => {
+    await harness.seedSettings({
+      "recipe:Resized trip": {
+        ...storedRecipe("Resized trip", "Open it."),
+        sites: [fixtures.site],
+      },
+    });
+    t.after(() => removeStored(["recipe:Resized trip"]));
+    const resizing = await connected(t);
+    await harness.ok(resizing, "tab_open");
+    await harness.ok(resizing, "resize_window", { width: 1000, height: 700 });
+    const session = await connected(t);
+    const existing = await runContexts();
+    const starting = pending(harness.call(session, "start_recipe", { name: "Resized trip" }));
+    const page = await harness.pageContext(RUN_PAGE, existing);
+    await waitFor(
+      page,
+      "document.getElementById('recipe').textContent",
+      "Recipe Resized trip: Download the latest receipt.",
+    );
+    await harness.waitForArmed(page, 2);
+
+    const text = await harness.refused(session, "resize_window", { width: 900, height: 700 });
+    assert.ok(text.includes("Foxleash is still asking the user in tab"), text);
+
+    await harness.resizeUnarms(resizing, page, { width: 900, height: 700 }, 2);
+    await firefox.click(page, ALLOW);
+    await waitForStatus(page, UNARMED);
+    await stillPending(starting, PENDING_MS);
+
+    await harness.waitForArmed(page, 2);
+    await firefox.click(page, ALLOW);
+    const result = await starting;
+    assert.equal(result.isError, false, result.text);
+  });
+
   async function connected(t: TestContext): Promise<Session> {
     const session = await harness.connect();
     t.after(() => session.close());

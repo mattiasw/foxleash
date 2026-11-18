@@ -85,9 +85,10 @@ to, and leave the others alone.
 
 While Foxleash is asking you something in a tab of the agent's group (whether to allow a site,
 to save or run a recipe, or to allow the sites a task needs), the agent cannot switch to another
-tab, and a tab it opens with `tab_open` meanwhile is not selected, though Firefox may still
-select a tab a page opens, also after the agent's click, or a tab whose page asks you to sign in
-with Firefox's sign-in dialog (see `tab_open` and `navigate` below).
+tab or resize the window, and a tab it opens with `tab_open` meanwhile is not selected, though
+Firefox may still select a tab a page opens, also after the agent's click, or a tab whose page
+asks you to sign in with Firefox's sign-in dialog (see `tab_open` and `navigate` below). After
+the window changes size, the question's buttons wait a full second again before they answer.
 
 When a tab's page asks you to confirm leaving it, because the agent closes the tab or loads
 another page in it (a new address, a reload, going back or forward), Firefox selects that tab to

@@ -30,6 +30,7 @@ import {
   type FakeTab,
   flush,
   ONE_PIXEL_PNG,
+  type WindowUpdate,
 } from "./fake-browser.ts";
 import { createFileGuard } from "./file-guard.ts";
 import {
@@ -5851,6 +5852,112 @@ describe("resize_window", { timeout: 10000 }, () => {
       });
     }
   });
+
+  it("refuses while the session's site prompt is open, wherever it is shown", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const other = await open("s1");
+    const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+    void asking.catch(() => {});
+    const prompt = await promptOf("s1");
+    assert.equal(prompt.tabId, other.id);
+    // The user drags the prompt's tab out of the session's group.
+    fake.ungroup(other.id);
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+      code: "approval_pending",
+      message: `Foxleash is waiting for the user to answer in tab ${other.id} whether to allow https://b.example. Try again after the user has answered.`,
+    });
+    assert.deepEqual(resizes(fake), []);
+  });
+
+  it("refuses while the session's recipe page is open", async () => {
+    const { fake, call, open } = setup();
+    await open("s1");
+    const proposed = await call("s1", "recipe_propose", {
+      name: "Receipt",
+      description: "Download the latest receipt.",
+      sites: ["https://shop.example"],
+      steps: "Open https://shop.example/orders.",
+    });
+    assert.ok("tabId" in proposed);
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+      code: "recipe_prompt_open",
+      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
+    });
+    assert.deepEqual(resizes(fake), []);
+  });
+
+  it("refuses when the prompt was shown while the session's group was being read", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const other = await open("s1");
+    const get = fake.browser.tabGroups.get;
+    let armed = true;
+    fake.browser.tabGroups.get = async (groupId) => {
+      if (armed) {
+        armed = false;
+        const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+        void asking.catch(() => {});
+        await promptOf("s1");
+      }
+      return get(groupId);
+    };
+    await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
+      code: "approval_pending",
+    });
+    assert.equal(armed, false);
+    assert.deepEqual(resizes(fake), []);
+  });
+
+  it("resizes again once the prompt is answered or its tab closed", async () => {
+    for (const ending of ["answered", "closed"]) {
+      const { fake, call, open, grant, page, promptOf } = setup();
+      fake.currentWindowId = 3;
+      await grant("https://a.example");
+      await open("s1", "https://a.example/");
+      const other = await open("s1");
+      const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+      void asking.catch(() => {});
+      await promptOf("s1");
+      if (ending === "answered") (await page("s1")).deliver({ type: "answer", answer: "once" });
+      else fake.removeTab(other.id);
+      await asking.catch(() => {});
+      assert.deepEqual(
+        await call("s1", "resize_window", { width: 900, height: 700 }),
+        { width: 900, height: 700 },
+        ending,
+      );
+      assert.deepEqual(
+        resizes(fake),
+        [{ windowId: 3, state: "normal", width: 900, height: 700 }],
+        ending,
+      );
+    }
+  });
+
+  it("resizes for another session while one session's prompt is open", async () => {
+    const { fake, call, open, grant, promptOf } = setup();
+    fake.currentWindowId = 3;
+    await grant("https://a.example");
+    await open("s1", "https://a.example/");
+    const other = await open("s1");
+    await open("s2");
+    const asking = call("s1", "navigate", { tabId: other.id, url: "https://b.example/" });
+    void asking.catch(() => {});
+    await promptOf("s1");
+    assert.deepEqual(await call("s2", "resize_window", { width: 900, height: 700 }), {
+      width: 900,
+      height: 700,
+    });
+    assert.deepEqual(resizes(fake), [{ windowId: 3, state: "normal", width: 900, height: 700 }]);
+  });
+
+  // Showing a question draws attention to its window; only an update with a size resizes it.
+  function resizes(fake: FakeBrowser): WindowUpdate[] {
+    return fake.windowUpdates.filter((update) => update.width !== undefined);
+  }
 });
 
 describe("wait_for", { timeout: 10000 }, () => {

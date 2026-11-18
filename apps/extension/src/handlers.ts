@@ -988,7 +988,8 @@ export function createHandlers<Handle>({
 
   /**
    * Resizes the window that holds the session's group, out of a maximized, minimized or full-screen
-   * state first, and returns the size Firefox reports for it.
+   * state first, and returns the size Firefox reports for it. Refused while the session's site
+   * prompt or recipe page is open, wherever it is shown: a resize moves the question's buttons.
    */
   async function resizeWindow(
     session: string,
@@ -1005,6 +1006,7 @@ export function createHandlers<Handle>({
       );
     }
     refuseIfEnded(access, session, generation);
+    keepPromptInView(session);
     // A maximized or full-screen window ignores a size; the normal state combines with one.
     await browser.windows.update(group.windowId, { state: "normal", width, height });
     const resized = await browser.windows.get(group.windowId);
@@ -1877,10 +1879,11 @@ export function createHandlers<Handle>({
 
   /**
    * Refuses selecting any tab but the one showing the session's open prompt or recipe page, which
-   * would hide the user's question behind a page the agent chose. Called right before the select
-   * starts, with no await in between.
+   * would hide the user's question behind a page the agent chose. With no tab, for resize_window,
+   * refuses while either question is open. Called right before the select or resize starts, with
+   * no await in between.
    */
-  function keepPromptInView(session: string, tabId: number): void {
+  function keepPromptInView(session: string, tabId?: number): void {
     const shown = access.openPrompt(session);
     if (shown !== undefined && shown.tabId !== tabId)
       throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);

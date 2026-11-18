@@ -4,7 +4,9 @@
 bounds its accepted gaps with a rule that decides a further one, and replaces its unmeasured belief
 about loads with a measurement. Amended by
 [0082](0082-firefox-may-select-a-tab-for-its-sign-in-dialog-while-a-question-is-open.md),
-2026-11-18: adds Firefox's sign-in dialog on a load to its accepted list.
+2026-11-18: adds Firefox's sign-in dialog on a load to its accepted list. Amended by
+[0083](0083-a-resize-restarts-a-questions-arming.md), 2026-11-18: refuses resize_window while the
+session's question is open, and restarts a question's arming on a resize.
 
 ## Context
 

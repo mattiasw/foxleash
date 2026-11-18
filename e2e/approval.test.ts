@@ -22,6 +22,8 @@ const ANSWER = {
 // Each answer button's answer and label, in page order.
 const ANSWER_LABELS =
   'JSON.stringify([...document.querySelectorAll("button[data-answer]")].map((button) => [button.dataset.answer, button.textContent]))';
+// Where the Allow this session button is drawn, to show that a resize left it under the pointer.
+const ONCE_PLACE = `JSON.stringify(document.querySelector(${JSON.stringify(ANSWER.once)}).getBoundingClientRect())`;
 const UNARMED = "The buttons respond a moment after this window is focused.";
 const UNARMED_COUNT =
   "document.querySelectorAll('button[data-answer][aria-disabled=\"true\"]').length";
@@ -853,6 +855,71 @@ describe("the approval prompt, in real Firefox", () => {
     await waitForStatus(prompt, UNARMED);
     await stillPending(navigating, PENDING_MS);
     assert.equal(site.hits("/a"), hits);
+  });
+
+  test("a resize of the prompt's window starts its arming second again, and the asking session cannot resize it", async (t) => {
+    // Another session in the same window, with its tab opened before the question: a session that
+    // is not asking selects the tab it opens, which would hide the prompt.
+    const resizing = await connected();
+    t.after(() => resizing.close());
+    await harness.ok(resizing, "tab_open");
+    await harness.ok(resizing, "resize_window", { width: 1000, height: 700 });
+    const session = await connected();
+    t.after(() => session.close());
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, site.site);
+    const hits = site.hits("/a");
+    await harness.waitForArmed(prompt);
+
+    const text = await harness.refused(session, "resize_window", { width: 900, height: 700 });
+    assert.ok(text.includes("Foxleash is waiting for the user to answer in tab"), text);
+
+    await harness.resizeUnarms(resizing, prompt, { width: 900, height: 700 });
+    await firefox.click(prompt, ANSWER.always);
+    await waitForStatus(prompt, UNARMED);
+    await stillPending(opening, PENDING_MS);
+    assert.equal(site.hits("/a"), hits);
+
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, ANSWER.once);
+    assert.equal(tabOf(await opening).url, site.url("/a"));
+    assert.equal(site.hits("/a"), hits + 1);
+  });
+
+  test("a press held on an armed button while the prompt's window is resized does not answer, also once the buttons arm again", async (t) => {
+    const resizing = await connected();
+    t.after(() => resizing.close());
+    await harness.ok(resizing, "tab_open");
+    await harness.ok(resizing, "resize_window", { width: 1000, height: 700 });
+    const session = await connected();
+    t.after(() => session.close());
+    const existing = await promptContexts();
+    const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
+    const prompt = await harness.promptContext(existing);
+    await waitForQuestion(prompt, site.site);
+    const hits = site.hits("/a");
+    await harness.waitForArmed(prompt);
+    const place = await firefox.evaluate(prompt, ONCE_PLACE);
+
+    // The page arms under a held press; the release lands on the same button, which did not move.
+    await firefox.press(prompt, ANSWER.once);
+    try {
+      await harness.resizeUnarms(resizing, prompt, { width: 900, height: 700 });
+      assert.equal(await firefox.evaluate(prompt, ONCE_PLACE), place);
+      await waitFor(prompt, `String(${UNARMED_COUNT})`, "0");
+    } finally {
+      await firefox.release(prompt);
+    }
+    await waitForStatus(prompt, UNARMED);
+    await stillPending(opening, PENDING_MS);
+    assert.equal(site.hits("/a"), hits);
+
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, ANSWER.once);
+    assert.equal(tabOf(await opening).url, site.url("/a"));
+    assert.equal(site.hits("/a"), hits + 1);
   });
 
   async function connected(): Promise<Session> {
