@@ -81,7 +81,7 @@ Foxleash asks before it opens a page on a site you have not approved, and it ref
 
 Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (writing to the clipboard, entering fullscreen, opening a file picker, and opening pop-up windows and new tabs unless you allow pop-ups for the site) do not work, and neither do sites that ignore simulated events.
 
-Foxleash runs on Linux only, with Firefox desktop 153 or later. It does not work on Firefox for Android.
+Foxleash runs on Linux only, with Firefox desktop 153 or later. It does not work on Firefox for Android. It does not run in Firefox's private windows, so the agent never sees or acts in them, and it does not work at all when Firefox is set to never remember history, which makes every window private.
 
 About the name: the agent works in your Firefox on a leash that you hold, and a leash is also an old collective noun for foxes, as in a leash of foxes.
 
@@ -145,6 +145,11 @@ the local program runs on Linux only.
 
 It does not work on Firefox for Android. Firefox for Android has no `nativeMessaging` or
 `tabGroups` API, and there is no local Foxleash program for the extension to talk to.
+
+The manifest declares `"incognito": "not_allowed"`, so Firefox never runs the extension in
+private windows, whatever an enterprise policy says, and the add-ons manager offers no switch
+for it. When a user granted an earlier version access to private windows, Firefox removes that
+permission once the extension starts as a version that declares the key.
 
 The manifest has no `gecko_android` key, so AMO records each version for Firefox desktop
 only. That is what each submission requests: `"compatibility": ["firefox"]` in the version

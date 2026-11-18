@@ -289,6 +289,14 @@ describe("manifest.json", () => {
     assert.ok("content_security_policy" in manifest);
     assert.deepEqual(manifest.content_security_policy, { extension_pages: "script-src 'self'" });
   });
+
+  // In a private window, downloads went to the normal windows' list with their cookies and an
+  // Always allow outlived the window.
+  test("never runs in private windows", async () => {
+    const manifest = await readManifest();
+    assert.ok("incognito" in manifest);
+    assert.equal(manifest.incognito, "not_allowed");
+  });
 });
 
 async function geckoSettings(): Promise<object> {

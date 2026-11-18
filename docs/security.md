@@ -93,6 +93,39 @@ Tabs on sites you have not approved show the agent only the site's address, with
 or title, and a local file only as `file:`. The sites you allowed always are listed in the
 extension's settings page in the add-ons manager, each with a Revoke button.
 
+## Private windows
+
+Foxleash does not run in Firefox's private windows: its manifest declares `"incognito":
+"not_allowed"`, and Firefox enforces it. The add-ons manager shows it as "Not Allowed in Private
+Windows", with no switch to change that. So tabs in private windows never reach the agent,
+Foxleash shows no question and makes no tab group there, reads and acts in nothing there, and
+takes no answer, recipe grant or download from them. Its toolbar button does not show in private
+windows.
+
+- With a private window in front, the agent's tabs and Foxleash's questions open in a normal
+  window.
+- With only private windows open, the agent cannot open a tab until you open a normal window,
+  unless the "Open each agent session in its own window" setting is on, which opens one.
+- With Firefox set to "Never remember history", or to "Always use private browsing mode" in its
+  custom history settings, every window is a private window, so Foxleash does not work at all.
+  The own-window setting does not help: the window it opens is private too, Foxleash can neither
+  use it nor close it, and each time the agent tries to open a tab one more such window with a
+  blank tab stays open. Close them yourself.
+
+When Foxleash was allowed in private windows, a site you allowed always from a private window
+stayed allowed after the window closed, a file the agent downloaded from a private window showed
+in the normal windows' download list and was requested with the normal windows' cookies, and an
+agent session could move its tabs and questions into the private window. Firefox keeps a private
+window apart from the normal ones and forgets it when it closes; Foxleash did not.
+
+If you chose Allow for private windows in an earlier version, Firefox removes that permission
+when the add-on starts as the new version, without asking, and an enterprise policy cannot grant
+it. A Foxleash tab group open in a private window at the update stays open, untouched: its agent
+session ended when the extension restarted, and Foxleash no longer sees, reads, acts in or closes
+its tabs. Close them yourself. A site you allowed always from a private window before the update
+stays in the list of sites allowed always, now for normal windows: Foxleash never recorded which
+window an answer came from. Revoke such a site on the settings page if you do not want that.
+
 ## The blocklist
 
 A built-in list of common financial and health sites is blocked by default. The list is short

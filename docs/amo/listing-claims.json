@@ -211,6 +211,12 @@
       ]
     },
     {
+      "listing": "It does not run in Firefox's private windows",
+      "evidence": [
+        { "file": "apps/extension/manifest.json", "contains": "\"incognito\": \"not_allowed\"" }
+      ]
+    },
+    {
       "listing": "Foxleash never gives it the values a request sent",
       "evidence": [
         {

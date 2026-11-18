@@ -204,6 +204,8 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - It refuses clicks on links and form buttons that lead to another site or out of the browser.
 - Tabs on sites you have not approved show the agent only the site's address, with no path,
   query or title.
+- Foxleash does not run in Firefox's [private windows](docs/security.md#private-windows), so
+  nothing in them reaches the agent.
 - A built-in list of common financial and health sites is blocked by default. The list is
   short and names mostly sites in the United States, the Nordic countries and the United
   Kingdom: a site that is not on it, such as a regional care provider, is not blocked until you
@@ -268,6 +270,11 @@ are simulated. Some things therefore do not work:
 - sites that ignore simulated events.
 
 The agent is told about these limits and asks you to take such steps yourself.
+
+Foxleash does not run in Firefox's private windows (the add-ons manager shows it as not allowed
+there): the agent's tabs open in normal windows, and with Firefox set to never remember history
+every window is private, so Foxleash does not work. See
+[docs/security.md](docs/security.md#private-windows) for the details.
 
 ## The name
 

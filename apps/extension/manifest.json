@@ -2,6 +2,7 @@
   "manifest_version": 3,
   "name": "Foxleash",
   "description": "Lets an AI agent on your computer use this Firefox through MCP tools.",
+  "incognito": "not_allowed",
   "browser_specific_settings": {
     "gecko": {
       "id": "foxleash@mattiasw.com",

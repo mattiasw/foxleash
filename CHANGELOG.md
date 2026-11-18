@@ -22,6 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A `batch` that reads a page with `read_page` and `role` alone right after a `read_page` with
   `find` on the same tab now reads the page once for both, as it already did with the role
   first, so it answers faster.
+- Foxleash no longer runs in Firefox's private windows, even when its Run in Private Windows
+  setting was Allow, and updating turns that setting off. Before, an agent could open its tabs
+  there, a site allowed always from a private window stayed allowed after the window closed, and
+  its downloads showed in the normal windows' download list. A site allowed always from a private
+  window before the update stays allowed: revoke it on the settings page if you do not want that.
 
 ### Removed
 

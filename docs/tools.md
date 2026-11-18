@@ -138,6 +138,10 @@ address.
   When Firefox signs you in by itself with a login it already holds and the site then takes more
   than 2 seconds to answer, the call can still fail this way although no dialog shows; the page
   then loads in the tab.
+- While only private windows are open, `tab_open` of a session that has no tab group yet fails
+  until you open a normal window, unless the "Open each agent session in its own window" setting
+  is on, because Foxleash does not run in private windows.
+  [Security](security.md#private-windows) has the details.
 
 ### While a tab is loading another page
 
