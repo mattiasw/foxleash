@@ -336,8 +336,15 @@ export const PROTECTED_FORM_SECRETS = {
 } as const;
 /** The text colours of the card autofill page: the card number field's fill colour, and a plain field's. */
 export const CARD_AUTOFILL_COLOURS = { filled: [0, 112, 64], plain: [128, 0, 96] } as const;
-/** The text colours of the card preview page: the expiry drop-downs' and a plain drop-down's. */
-export const CARD_PREVIEW_COLOURS = { previewed: [208, 32, 0], plain: [0, 80, 112] } as const;
+/**
+ * The text colours of the card preview page: the expiry drop-downs', a plain drop-down's and a
+ * plain text field's.
+ */
+export const CARD_PREVIEW_COLOURS = {
+  previewed: [208, 32, 0],
+  plain: [0, 80, 112],
+  text: [96, 0, 176],
+} as const;
 /** The card the card autofill tests have Firefox fill into its page, digits only as Firefox fills it. */
 export const AUTOFILL_CARD = {
   name: "Ada Lovelace",
@@ -2694,7 +2701,8 @@ const CARD_AUTOFILL_PAGE = `<!doctype html>
 // A card form whose expiry drop-downs Firefox's form autofill identifies by their autocomplete
 // tokens. Their first, selected option is empty, so they draw no text until Firefox previews into
 // them. Firefox forces `color` on a field it fills or previews, so their colour is a
-// `-webkit-text-fill-color`. The plain drop-down outside the form is the control.
+// `-webkit-text-fill-color`. The plain drop-down outside the form is hidden in screenshots like
+// every drop-down; the plain text field is the control that a screenshot still draws field text.
 const CARD_PREVIEW_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.cardPreview}</title>
 <style>${SHOT_FIELD_STYLE}
@@ -2707,6 +2715,7 @@ select {
   color: ${rgb(CARD_PREVIEW_COLOURS.plain)};
   -webkit-text-fill-color: ${rgb(CARD_PREVIEW_COLOURS.plain)};
 }
+#plain-text { color: ${rgb(CARD_PREVIEW_COLOURS.text)}; }
 </style></head>
 <body>
 <form action="/a" method="post">
@@ -2728,6 +2737,7 @@ select {
 </select>
 </form>
 <select id="plain-pick" aria-label="Plain pick"><option>MMMM WWWW</option></select>
+<input id="plain-text" type="text" aria-label="Plain text" value="MMMM WWWW">
 </body></html>
 `;
 

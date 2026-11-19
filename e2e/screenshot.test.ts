@@ -488,18 +488,19 @@ describe("screenshot in real Firefox", () => {
       "Firefox to preview the card",
     );
     assert.equal(await firefox.evaluate(context, values), '["",""]');
-    // Firefox draws the previewed options in the page's colour without Foxleash.
-    const duringPreview = countColour(
-      decodePng(await firefox.captureViewport(context)),
-      CARD_PREVIEW_COLOURS.previewed,
-    );
+    // Firefox draws the previewed options in the page's colour without Foxleash, and the plain
+    // drop-down's text.
+    const capture = decodePng(await firefox.captureViewport(context));
+    const duringPreview = countColour(capture, CARD_PREVIEW_COLOURS.previewed);
     assert.ok(
       duringPreview >= beforePreview + DRAWN,
       `only ${duringPreview - beforePreview} more pixels of the previewed option colour`,
     );
+    assertDrawn(capture, CARD_PREVIEW_COLOURS.plain, "plain drop-down");
     const png = await shotOf({ tabId });
     assertNone(png, CARD_PREVIEW_COLOURS.previewed, "previewed option");
-    assertDrawn(png, CARD_PREVIEW_COLOURS.plain, "plain drop-down");
+    assertNone(png, CARD_PREVIEW_COLOURS.plain, "plain drop-down");
+    assertDrawn(png, CARD_PREVIEW_COLOURS.text, "plain text field");
     // The preview was still live when Foxleash captured the page.
     assert.equal(await firefox.evaluate(context, previewing), true);
     assert.equal(await firefox.evaluate(context, values), '["",""]');

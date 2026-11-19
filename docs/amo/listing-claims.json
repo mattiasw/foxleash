@@ -423,7 +423,7 @@
       ]
     },
     {
-      "listing": "Screenshots hide the text of the same fields, also in frames from other sites, with a style sheet Foxleash adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxleash takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame, or is a frame of another add-on, such as a password manager's menu, or lies inside one. While it takes a screenshot of a page with such a frame, Foxleash hides that frame and every other frame of the page or frame that holds it, so none of their content is in the screenshot.",
+      "listing": "Screenshots hide the text of the same fields and of drop-downs, also in frames from other sites, with a style sheet Foxleash adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxleash takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame, or is a frame of another add-on, such as a password manager's menu, or lies inside one. While it takes a screenshot of a page with such a frame, Foxleash hides that frame and every other frame of the page or frame that holds it, so none of their content is in the screenshot.",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
         {
@@ -463,6 +463,7 @@
           "contains": "url.startsWith(ERROR_PAGE_PREFIX)"
         },
         { "file": "apps/extension/src/screenshot.ts", "contains": "input:autofill" },
+        { "file": "apps/extension/src/screenshot.ts", "contains": "\"select\"," },
         { "file": "apps/extension/src/screenshot.ts", "contains": "CREDENTIAL_TOKENS" },
         {
           "file": "apps/extension/src/screenshot.ts",

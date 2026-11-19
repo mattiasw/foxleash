@@ -301,10 +301,11 @@ Text results never return the values of these fields, only whether they are fill
 Firefox fills saved passwords into login pages when they load, and a page you approved could
 otherwise hand yours to the agent. A field that is none of these still shows its value. In text
 results, a drop-down that Firefox filled in from your saved addresses or cards, such as a card's
-expiry month or a country, also shows the option Firefox chose; screenshots hide it (see
-[Screenshots](#screenshots)). The text of a network response that `read_network`
-returns, and a file that `download` saves, can still contain a protected field's value when the site
-sends it back (see [Response bodies](#response-bodies) and [Downloads](#downloads)).
+expiry month or a country, also shows the option Firefox chose; screenshots hide it, as they hide
+the text of every drop-down (see [Screenshots](#screenshots)). The text of a network response that
+`read_network` returns, and a file that `download` saves, can still contain a protected field's
+value when the site sends it back (see [Response bodies](#response-bodies) and
+[Downloads](#downloads)).
 
 ### Forms sent with GET
 
@@ -419,11 +420,13 @@ it, such as a PDF in a frame. There are two exceptions:
   with every other frame of the same page or frame, so none of their content is in the
   screenshot.
 
-A screenshot also hides the text of a drop-down that Firefox filled in from your saved addresses
-or cards, until its option changes, and the option Firefox shows in a drop-down while you
-highlight a saved address or card in Firefox's menu without choosing it. Text results give the
-option of a filled drop-down (see [Protected fields](#protected-fields)) and never a previewed
-one.
+A screenshot also hides the text of every drop-down, so it shows no drop-down's option, whether
+Firefox filled it in or not. Firefox shows the option of a saved address or card in a drop-down
+while you highlight that entry in its menu without choosing it, and a screenshot never shows it.
+Text results give a drop-down's option outside frames, also one Firefox filled in (see
+[Protected fields](#protected-fields)), and never a previewed one. The options of a list box, a
+drop-down shown as a list, are hidden too, unless the page styles the options' text itself. See
+[ADR 0100](adr/0100-screenshots-hide-the-text-of-every-drop-down.md).
 
 When the page turns a password field into another kind of field after the agent read the page,
 took a screenshot of it or acted in it while it was a password field, a screenshot hides the

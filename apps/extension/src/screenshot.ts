@@ -33,8 +33,8 @@ const MASK_DECLARATIONS: readonly string[] = [
 ];
 const MASK_BODY = `{ ${MASK_DECLARATIONS.join("; ")}; }`;
 /**
- * read_page's protected fields (ADR 0010, 0021), but for the remembered password fields, and the
- * drop-downs Firefox filled in or previews, whose filled option read_page shows.
+ * read_page's protected fields (ADR 0010, 0021), but for the remembered password fields, and every
+ * drop-down (ADR 0100).
  */
 const FIELD_SELECTORS: readonly string[] = [
   'input[type="password" i]',
@@ -44,7 +44,7 @@ const FIELD_SELECTORS: readonly string[] = [
   ]),
   "input:autofill",
   "textarea:autofill",
-  "select:autofill",
+  "select",
 ];
 
 /**

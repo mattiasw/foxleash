@@ -208,7 +208,7 @@ describe("the mask style sheets", () => {
     "transition: none !important",
   ];
 
-  it("hides password, credential autocomplete and autofilled fields, their selection and old snapshots", () => {
+  it("hides password, credential autocomplete and autofilled fields, every drop-down, their selection and old snapshots", () => {
     const fields = [
       'input[type="password" i]',
       ...CREDENTIAL_TOKENS.flatMap((token) => [
@@ -217,11 +217,10 @@ describe("the mask style sheets", () => {
       ]),
       "input:autofill",
       "textarea:autofill",
-      "select:autofill",
+      "select",
     ];
     assert.ok(fields.includes('input[*|autocomplete~="cc-number" i]'));
     assert.ok(fields.includes("input:autofill"));
-    assert.ok(fields.includes("select:autofill"));
     assert.deepEqual(rulesOf(FIELD_MASK_CSS), [
       { selectors: fields, declarations: DECLARATIONS },
       { selectors: fields.map((field) => `${field}::selection`), declarations: DECLARATIONS },
