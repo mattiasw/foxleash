@@ -9,6 +9,10 @@ window or tab that a page in a session's tab opens is judged as that session's, 
 there is no longer saved. Amended by
 [0091](0091-file-guard-remembers-session-groups-across-restarts.md), 2026-11-18: the tabs of a
 session's group stay judged after a Firefox restart or an update or reload of the add-on.
+Amended by [0092](0092-file-guard-cancels-downloads-from-loads-whose-headers-never-came.md),
+2026-11-18: a download from a load whose headers never came, as when the other site's service
+worker answers it, is cancelled and its file removed after the fact, and `upload_file` refuses a
+file changed in the last 5 seconds.
 
 ## Context
 

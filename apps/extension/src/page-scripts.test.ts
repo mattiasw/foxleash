@@ -1749,7 +1749,7 @@ function setup() {
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const navigations = createTabNavigations({ browser: fake.browser, timers });
-  const files = createFileGuard({ browser: fake.browser, groups, access });
+  const files = createFileGuard({ browser: fake.browser, groups, access, now: () => Date.now() });
   const pages = createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
   const network = {
     read: () => ({ recording: false, requests: [], truncated: false }),

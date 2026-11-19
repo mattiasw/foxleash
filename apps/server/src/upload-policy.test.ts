@@ -1,10 +1,21 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { constants } from "node:fs";
-import { mkdir, mkdtemp, open, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  open,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { join } from "node:path";
 import { after, before, describe, it } from "node:test";
 import {
+  FRESH_FILE_MS,
   fileType,
   type ReadContext,
   type ReadHandle,
@@ -23,6 +34,7 @@ const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
 const CHANGED = "changed while Foxleash read it; try again.";
+const FRESH = "was saved or changed a moment ago; try again in a few seconds.";
 const HOME_NOTE = "is your home folder or contains it, so it would cover your whole home folder";
 const DOT_NOTE = "is inside a folder whose name starts with a dot";
 const FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
@@ -700,7 +712,7 @@ describe("readAllowedFile on the open descriptor", () => {
             fd: handle.fd,
             stat: async () => {
               const info = await handle.stat();
-              return { isFile: () => info.isFile(), nlink: info.nlink, size: info.size + change };
+              return { ...info, isFile: () => info.isFile(), size: info.size + change };
             },
             read: (buffer, offset, length, position) =>
               handle.read(buffer, offset, length, position),
@@ -745,6 +757,109 @@ describe("readAllowedFile on the open descriptor", () => {
   });
 });
 
+describe("readAllowedFile by the file's age", () => {
+  /** A real handle on ok.txt whose stat gives these times, in ms since the epoch. */
+  function dated(times: { mtimeMs: number; ctimeMs: number; birthtimeMs: number }) {
+    return async (file: string, flags: number): Promise<ReadHandle> => {
+      const handle = await open(file, flags);
+      return {
+        fd: handle.fd,
+        stat: async () => {
+          const info = await handle.stat();
+          return {
+            isFile: () => info.isFile(),
+            nlink: info.nlink,
+            size: info.size,
+            ...times,
+          };
+        },
+        read: (buffer, offset, length, position) => handle.read(buffer, offset, length, position),
+        close: () => handle.close(),
+      };
+    };
+  }
+
+  const NOW = 1_800_000_000_000;
+  const OLD = NOW - 60_000;
+
+  it(
+    "refuses a file when any of its three times is less than FRESH_FILE_MS old",
+    LIMIT,
+    async () => {
+      for (const name of ["mtimeMs", "ctimeMs", "birthtimeMs"] as const) {
+        const times = {
+          mtimeMs: OLD,
+          ctimeMs: OLD,
+          birthtimeMs: OLD,
+          [name]: NOW - FRESH_FILE_MS + 1,
+        };
+        const result = await read(join(work, "ok.txt"), [work], {
+          open: dated(times),
+          now: () => NOW,
+        });
+        assert.equal(reasonOf(result), FRESH, name);
+      }
+    },
+  );
+
+  it("reads a file whose newest time is exactly FRESH_FILE_MS old", LIMIT, async () => {
+    for (const name of ["mtimeMs", "ctimeMs", "birthtimeMs"] as const) {
+      const times = { mtimeMs: OLD, ctimeMs: OLD, birthtimeMs: OLD, [name]: NOW - FRESH_FILE_MS };
+      const result = await read(join(work, "ok.txt"), [work], {
+        open: dated(times),
+        now: () => NOW,
+      });
+      assert.equal(result.ok, true, name);
+    }
+  });
+
+  it(
+    "reads a file whose modified time is ahead of the clock once its other times are old",
+    LIMIT,
+    async () => {
+      for (const [mtimeMs, ctimeMs, ok] of [
+        [NOW + 3_600_000, OLD, true],
+        [NOW + 3_600_000, NOW - FRESH_FILE_MS + 1, false],
+        // Not ahead: it counts.
+        [NOW, OLD, false],
+      ] as const) {
+        const result = await read(join(work, "ok.txt"), [work], {
+          open: dated({ mtimeMs, ctimeMs, birthtimeMs: OLD }),
+          now: () => NOW,
+        });
+        assert.equal(result.ok, ok, `${mtimeMs} ${ctimeMs}`);
+      }
+    },
+  );
+
+  it("reads an old file, and one on a file system with no birth time", LIMIT, async () => {
+    for (const birthtimeMs of [OLD, 0]) {
+      const result = await read(join(work, "ok.txt"), [work], {
+        open: dated({ mtimeMs: OLD, ctimeMs: OLD, birthtimeMs }),
+        now: () => NOW,
+      });
+      assert.deepEqual(result.ok && result.bytes, Buffer.from("ok bytes"), String(birthtimeMs));
+    }
+  });
+
+  it("refuses a file just written, and reads it once it is FRESH_FILE_MS old", LIMIT, async () => {
+    const file = join(work, "fresh.txt");
+    await writeFile(file, "fresh bytes");
+    const info = await stat(file);
+    const written = Math.max(info.mtimeMs, info.ctimeMs, info.birthtimeMs);
+    assert.equal(reasonOf(await read(file, [work], { now: () => written })), FRESH);
+    const later = await read(file, [work], { now: () => written + FRESH_FILE_MS });
+    assert.deepEqual(later.ok && later.bytes, Buffer.from("fresh bytes"));
+  });
+
+  it("reads the time from Date.now when given no clock", LIMIT, async () => {
+    const file = join(work, "fresh-now.txt");
+    await writeFile(file, "fresh bytes");
+    const result = await readAllowedFile(file, [work], { cwd: work, home, remaining: BUDGET });
+    assert.equal(reasonOf(result), FRESH);
+  });
+});
+
 describe("fileType", () => {
   it("names the MIME type of known extensions, in any case", () => {
     const expected: Record<string, string> = {
@@ -783,7 +898,15 @@ function read(
   folders: readonly string[] = [work],
   ctx: Partial<ReadContext> = {},
 ): Promise<ReadResult> {
-  return readAllowedFile(requested, folders, { cwd: work, home, remaining: BUDGET, ...ctx });
+  // Files a test writes are read at once: the clock runs ahead unless a test sets it. Not by
+  // FRESH_FILE_MS alone: a file's times carry fractions of the millisecond Date.now rounds down.
+  return readAllowedFile(requested, folders, {
+    cwd: work,
+    home,
+    remaining: BUDGET,
+    now: () => Date.now() + 2 * FRESH_FILE_MS,
+    ...ctx,
+  });
 }
 
 /** Writes each file into `work` and compares every outcome at once, so the diff names each miss. */

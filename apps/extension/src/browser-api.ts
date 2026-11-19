@@ -158,18 +158,32 @@ export interface BrowserApi {
       conflictAction: "uniquify";
     }): Promise<number>;
     search(query: { id: number }): Promise<DownloadItem[]>;
+    /** Rejects for a download that is already complete. */
     cancel(id: number): Promise<void>;
+    /** Deletes a complete download's file from the disk, its entry staying in the list; rejects for any other. */
+    removeFile(id: number): Promise<void>;
     onChanged: BrowserEvent<(delta: DownloadDelta) => void>;
+    /** Any download, also one the user or a page started. */
+    onCreated: BrowserEvent<(item: DownloadItem) => void>;
   };
 }
 
 /** Firefox's `downloads.DownloadItem`, as far as the extension reads it. */
 export interface DownloadItem {
   id: number;
+  /** The address the file comes from: for a page or frame load, the load's own address. */
+  url: string;
+  referrer?: string;
   /** The absolute path of the file. */
   filename: string;
   /** "in_progress", "interrupted" or "complete". */
   state: string;
+  /** When the download began, in ISO 8601 with whole milliseconds. */
+  startTime: string;
+  /** The id of the extension that started the download, if one did. */
+  byExtensionId?: string;
+  /** Whether the file is on the disk. */
+  exists?: boolean;
 }
 
 /** Firefox's `downloads.onChanged` delta, as far as the extension reads it. */

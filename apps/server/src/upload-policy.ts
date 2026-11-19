@@ -15,7 +15,14 @@ export type ReadResult =
 /** What `readAllowedFile` needs of an open file; `FileHandle` is one. */
 export interface ReadHandle {
   fd: number;
-  stat(): Promise<{ isFile(): boolean; size: number; nlink: number }>;
+  stat(): Promise<{
+    isFile(): boolean;
+    size: number;
+    nlink: number;
+    mtimeMs: number;
+    ctimeMs: number;
+    birthtimeMs: number;
+  }>;
   read(
     buffer: Buffer,
     offset: number,
@@ -31,7 +38,15 @@ export interface ReadContext {
   /** What is left of UPLOAD_MAX_BYTES for this call. */
   remaining: number;
   open?: (file: string, flags: number) => Promise<ReadHandle>;
+  /** The epoch clock a file's times are compared with. */
+  now?: () => number;
 }
+
+/**
+ * A file saved or changed less than this long ago is refused: a file guard in the extension may
+ * still be removing it, after the fact, when a page in the agent's tabs got it saved.
+ */
+export const FRESH_FILE_MS = 5_000;
 
 const KEY_EXTENSIONS = new Set([
   "pem",
@@ -93,6 +108,7 @@ const NOT_FILE = "is not a regular file; Foxleash uploads only files.";
 const MISSING = "does not exist.";
 const UNREADABLE = "cannot be read.";
 const CHANGED = "changed while Foxleash read it; try again.";
+const FRESH = "was saved or changed a moment ago; try again in a few seconds.";
 const TOO_LARGE = "would bring this upload over 10 MB, the most Foxleash uploads in one call.";
 
 /**
@@ -115,8 +131,8 @@ export function uploadFolders(ctx: {
 
 /**
  * Reads `requested` when it is a regular file inside one of `folders` with no name below the
- * folder starting with a dot and no key-shaped name, fits in `ctx.remaining`, and whose bytes
- * hold no private key. The deciding checks run on the real path and the bytes of the descriptor
+ * folder starting with a dot and no key-shaped name, was not saved or changed in the last
+ * FRESH_FILE_MS, fits in `ctx.remaining`, and whose bytes hold no private key. The deciding checks run on the real path and the bytes of the descriptor
  * that is read. Never throws for a file-system error: a refusal is one sentence that follows the
  * quoted path.
  */
@@ -145,7 +161,7 @@ export async function readAllowedFile(
     return refused(fileSystemProblem(error));
   }
   try {
-    const read = await readOpened(handle, folders, realFolders, ctx.remaining);
+    const read = await readOpened(handle, folders, realFolders, ctx.remaining, ctx.now ?? Date.now);
     return "reason" in read
       ? refused(read.reason)
       : { ok: true, path: read.path, name, bytes: read.bytes };
@@ -314,6 +330,7 @@ async function readOpened(
   folders: readonly string[],
   realFolders: readonly string[],
   remaining: number,
+  now: () => number,
 ): Promise<{ path: string; bytes: Buffer } | { reason: string }> {
   // The descriptor's own path, so a symlink swapped after the pre-check cannot change what is read.
   const real = await readlink(`/proc/self/fd/${handle.fd}`);
@@ -324,6 +341,14 @@ async function readOpened(
   if (!info.isFile()) return { reason: NOT_FILE };
   // Deleted after the open: its link then ends in " (deleted)", so the name checks miss it.
   if (info.nlink === 0) return { reason: CHANGED };
+  // ctime becomes now on any change and cannot be set back as mtime can; a file system with no
+  // birth time gives 0. An mtime ahead of the clock, as an unpacked archive can have, is left
+  // out: the ctime of setting it still counts.
+  const at = now();
+  const mtimeMs = info.mtimeMs > at ? 0 : info.mtimeMs;
+  if (at - Math.max(mtimeMs, info.ctimeMs, info.birthtimeMs) < FRESH_FILE_MS) {
+    return { reason: FRESH };
+  }
   if (info.size > remaining) return { reason: TOO_LARGE };
   const bytes = Buffer.alloc(info.size);
   let offset = 0;

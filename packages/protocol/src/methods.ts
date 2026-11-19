@@ -473,7 +473,9 @@ export interface ActAfter {
   /**
    * Sites this session may not act on whose answer to a page or frame load, in the tab, in a tab
    * the act opened or in a window opened from the tab, Foxleash stopped during the act or the wait
-   * because it was a file and not a page; absent when none.
+   * because it was a file and not a page; absent when none. A download Foxleash cancelled because
+   * the site's service worker answered the load can be missing: most often a download in a tab the
+   * act opened, which Firefox closes, and sometimes one that began after the act settled.
    */
   refusedFiles?: string[];
   /**

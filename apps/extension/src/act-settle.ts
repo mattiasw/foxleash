@@ -45,7 +45,7 @@ export interface ActSettleDeps<Handle> {
   navigations: Pick<TabNavigations, "begun" | "settled">;
   network: Pick<NetworkLog, "requestsSince">;
   /** What the file guard refused in each tab. */
-  files: Pick<FileGuard, "refusedSince">;
+  files: Pick<FileGuard, "refusedSince" | "settled">;
   pages: Pick<PageScripts, "request">;
   /** The epoch clock webRequest's timeStamp is compared with: Date.now in the background. */
   now: () => number;
@@ -146,6 +146,8 @@ export function createActSettle<Handle>(deps: ActSettleDeps<Handle>): ActSettle 
       if (opened !== DEADLINE && opened !== undefined && opened.length > 0) {
         result.openedTabs = opened;
       }
+      // A download the guard is still judging may yet be refused.
+      await raced(files.settled());
       const refused = refusedSince(before, result.openedTabs ?? []);
       if (refused.length > 0) result.refusedFiles = refused;
       if (ending.page !== "loaded" && ending.page !== "loading") {

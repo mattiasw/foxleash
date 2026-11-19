@@ -611,6 +611,33 @@ describe("act settle", { timeout: 10000 }, () => {
       ]);
     });
 
+    it("waits for the guard's judgements under way, and lists a refusal they make", async () => {
+      const { act, finish, judgeUntil, refused, tab, timers } = await started();
+      const judged = Promise.withResolvers<void>();
+      judgeUntil(judged.promise);
+      const { after } = await act();
+      timers.setTimeout(() => {
+        refused.set(tab.id, [OTHER]);
+        judged.resolve();
+      }, 500);
+      const { value, elapsed } = await finish(after);
+      assert.deepEqual(value, { element: BUTTON, page: "unchanged", refusedFiles: [OTHER] });
+      assert.equal(elapsed, 500);
+    });
+
+    it("answers by its deadline when the guard's judgements never end", async () => {
+      const { settle, finish, judgeUntil, tab, timers } = await started();
+      judgeUntil(new Promise(() => {}));
+      const watch = settle.begin("s1", tab.id, 0);
+      await flush();
+      watch.sent();
+      timers.advance(PAGE_REQUEST_MS - 1000);
+      const { value, elapsed } = await finish(watch.after(WATCHED));
+      watch.stop();
+      assert.deepEqual(value, { element: BUTTON, page: "unchanged" });
+      assert.equal(elapsed, 1000);
+    });
+
     it("lists no more sites than the guard keeps for one tab", async () => {
       const { act, finish, fake, groups, refused, tab } = await started();
       const sites = Array.from(
@@ -902,6 +929,8 @@ async function started() {
   // What the file guard refused in each tab, and what the settle asked it.
   const refused = new Map<number, string[]>();
   const refusedAsks: { tabId: number; since: number }[] = [];
+  // What the file guard's settled() answers: its judgements under way end at once by default.
+  let judgements: Promise<void> = Promise.resolve();
   const settle = createActSettle({
     browser: fake.browser,
     groups,
@@ -913,6 +942,7 @@ async function started() {
         refusedAsks.push({ tabId, since });
         return refused.get(tabId) ?? [];
       },
+      settled: () => judgements,
     },
     network: {
       requestsSince: (_tabId: number, since: number) => {
@@ -975,6 +1005,9 @@ async function started() {
     act,
     finish,
     sentAt: () => sent,
+    judgeUntil: (ended: Promise<void>) => {
+      judgements = ended;
+    },
     answerWith: (next: () => Promise<unknown>) => {
       answer = next;
     },

@@ -101,6 +101,11 @@ export const TITLES = {
   foreignWindowScript: "Fixture foreign window script",
   foreignPage: "Fixture foreign page",
   foreignWarmed: "Fixture foreign warmed",
+  foreignWorkerReady: "Fixture foreign worker ready",
+  foreignWorkerFrame: "Fixture foreign worker frame",
+  foreignWorkerFlood: "Fixture foreign worker flood",
+  foreignWorkerFlooded: "Fixture foreign worker flooded",
+  foreignWorkerRetry: "Fixture foreign worker retry",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -1125,6 +1130,8 @@ function sendForeign(
 ): void {
   const other = `http://localhost:${request.socket.localPort}`;
   const headers = FOREIGN_EXPORTS[path];
+  // Where a page of the approved site leads, below /foreign/ of the other site.
+  const to = new URL(request.url ?? "/", other).searchParams.get("to") ?? "export.csv";
   if (path === "/foreign/login") {
     sendPage(response, TITLES.foreignLogin, {
       "Set-Cookie": `${FOREIGN_COOKIE.name}=${FOREIGN_COOKIE.value}; Path=/; SameSite=Lax`,
@@ -1136,13 +1143,30 @@ function sendForeign(
   } else if (path === "/foreign/links") {
     sendHtml(response, FOREIGN_LINKS_PAGE);
   } else if (path === "/foreign/script") {
-    sendHtml(response, foreignScriptPage(other));
+    sendHtml(response, foreignScriptPage(`${other}/foreign/${to}`));
   } else if (path === "/foreign/frame") {
     sendHtml(response, foreignFramePage(other));
   } else if (path === "/foreign/windows") {
     sendHtml(response, FOREIGN_WINDOWS_PAGE);
   } else if (path === "/foreign/window-script") {
     sendHtml(response, foreignWindowScriptPage(other));
+  } else if (path === "/foreign/worker-setup") {
+    sendHtml(response, FOREIGN_WORKER_SETUP_PAGE);
+  } else if (path === "/foreign/worker.js") {
+    response.writeHead(200, {
+      "Content-Type": "text/javascript; charset=utf-8",
+      "Cache-Control": "no-store",
+    });
+    response.end(FOREIGN_WORKER);
+  } else if (path === "/foreign/worker-frame") {
+    sendHtml(response, foreignWorkerFramePage(other, `${other}/foreign/${to}`));
+  } else if (path === "/foreign/worker-flood") {
+    sendHtml(response, foreignWorkerFloodPage(other));
+  } else if (path === "/foreign/worker-retry") {
+    sendHtml(response, foreignWorkerRetryPage(`${other}/foreign/${to}`));
+  } else if (path.startsWith("/foreign/sw/hang/")) {
+    // Firefox gives up on a worker that never answers after a minute and asks the site itself.
+    sendPage(response, TITLES.foreignPage);
   } else if (path.startsWith(FOREIGN_GO)) {
     // From the approved site to the same path's end on the other site.
     response.writeHead(302, { Location: `${other}/foreign/${path.slice(FOREIGN_GO.length)}` });
@@ -1152,6 +1176,7 @@ function sendForeign(
     response.end("not found");
   } else if (
     path !== "/foreign/public.csv" &&
+    path !== "/foreign/sw/public.csv" &&
     path !== "/foreign/late.csv" &&
     !signedInTo(request, FOREIGN_COOKIE)
   ) {
@@ -2772,7 +2797,9 @@ const FOREIGN_GO = "/foreign/go/";
  * Firefox goes by the last; one Firefox keeps in its cache; one it asks about again each time;
  * one that needs no cookie, since Firefox sends a frame from another site none; and one that needs
  * none either and answers only after FOREIGN_LATE_MS, so a test whose cookies may not survive a
- * restart can send a tab to it right after the extension starts again.
+ * restart can send a tab to it right after the extension starts again. The two under /foreign/sw/
+ * are what the other site's service worker passes on to the network: an export that needs the
+ * cookie and one that needs none.
  */
 const FOREIGN_EXPORTS: Record<string, Record<string, string | string[]>> = {
   "/foreign/export.csv": {
@@ -2806,6 +2833,16 @@ const FOREIGN_EXPORTS: Record<string, Record<string, string | string[]>> = {
     "Content-Disposition": 'attachment; filename="late.csv"',
     "Cache-Control": "no-store",
   },
+  "/foreign/sw/export.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="worker-export.csv"',
+    "Cache-Control": "no-store",
+  },
+  "/foreign/sw/public.csv": {
+    "Content-Type": "text/csv",
+    "Content-Disposition": 'attachment; filename="worker-public.csv"',
+    "Cache-Control": "no-store",
+  },
 };
 
 // On the approved site: links that lead, through a redirect of the same site, to the other site's
@@ -2822,6 +2859,10 @@ const FOREIGN_LINKS_PAGE = `<!doctype html>
 <p><a href="${FOREIGN_GO}two-types.csv">Two types export</a></p>
 <p><a href="${FOREIGN_GO}cached.csv">Cached export</a></p>
 <p><a href="${FOREIGN_GO}revalidated.csv">Revalidated export</a></p>
+<p><a href="${FOREIGN_GO}sw/export.csv">Worker export</a></p>
+<p><a href="${FOREIGN_GO}sw/built.csv">Worker built export</a></p>
+<p><a href="${FOREIGN_GO}sw/export.csv" target="_blank">Worker export in a new tab</a></p>
+<p><a href="${FOREIGN_GO}sw/built.csv" target="_blank">Worker built export in a new tab</a></p>
 <p><a href="/download/data.bin">Own file</a></p>
 <input id="statement" type="file" aria-label="Statement">
 </main>
@@ -2871,8 +2912,11 @@ fetch(new URLSearchParams(location.search).get("path"))
 </body></html>
 `;
 
-/** On the approved site: moves on to the other site's export by itself, after its load. */
-function foreignScriptPage(other: string): string {
+/**
+ * On the approved site: moves on to `target`, the other site's export unless its query says
+ * otherwise, by itself after its load. window.moved is set once it did.
+ */
+function foreignScriptPage(target: string): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.foreignScript}</title></head>
 <body>
@@ -2880,8 +2924,148 @@ function foreignScriptPage(other: string): string {
 <script>
 addEventListener("load", () => {
   setTimeout(() => {
-    location.href = ${JSON.stringify(`${other}/foreign/export.csv`)};
+    location.href = ${JSON.stringify(target)};
+    window.moved = true;
   }, ${FOREIGN_SCRIPT_MS});
+});
+</script>
+</body></html>
+`;
+}
+
+/**
+ * On the other site: registers its service worker for /foreign/sw/, then says so in its title and,
+ * in a frame, to the page around it. In a frame on the approved site the worker is registered for
+ * that site's partition, where Firefox keeps a frame's worker apart from the site's own.
+ */
+const FOREIGN_WORKER_SETUP_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>Fixture foreign worker setup</title></head>
+<body>
+<script>
+(async () => {
+  const registration = await navigator.serviceWorker.register("/foreign/worker.js", {
+    scope: "/foreign/sw/",
+  });
+  const worker = registration.installing ?? registration.waiting ?? registration.active;
+  while (worker.state !== "activated") {
+    await new Promise((resolve) => worker.addEventListener("statechange", resolve, { once: true }));
+  }
+  document.title = ${JSON.stringify(TITLES.foreignWorkerReady)};
+  if (parent !== window) parent.postMessage(document.title, "*");
+})();
+</script>
+</body></html>
+`;
+
+/**
+ * The other site's service worker: it builds the answer to /foreign/sw/built.csv itself, never
+ * answers below /foreign/sw/hang/, and passes every other request below /foreign/sw/ on to the
+ * network. Firefox reports none of these answers to webRequest.onHeadersReceived for the page or
+ * frame load.
+ */
+const FOREIGN_WORKER = `self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim()));
+self.addEventListener("fetch", (event) => {
+  const path = new URL(event.request.url).pathname;
+  if (path === "/foreign/sw/built.csv") {
+    event.respondWith(
+      new Response(${JSON.stringify(FOREIGN_SECRET)}, {
+        headers: {
+          "Content-Type": "text/csv",
+          "Content-Disposition": 'attachment; filename="built.csv"',
+        },
+      }),
+    );
+  } else if (path.startsWith("/foreign/sw/hang/")) {
+    event.respondWith(new Promise(() => {}));
+  } else if (path.startsWith("/foreign/sw/")) {
+    event.respondWith(fetch(event.request));
+  }
+});
+`;
+
+/**
+ * On the approved site: frames the other site's worker setup, which registers the worker for this
+ * site's partition, then adds a frame on `target`. window.framed is set once it did.
+ */
+function foreignWorkerFramePage(other: string, target: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignWorkerFrame}</title></head>
+<body>
+<iframe title="Setup" src="${other}/foreign/worker-setup"></iframe>
+<script>
+addEventListener("message", (event) => {
+  if (event.data !== ${JSON.stringify(TITLES.foreignWorkerReady)} || window.framed) return;
+  const frame = document.createElement("iframe");
+  frame.title = "Export";
+  frame.src = ${JSON.stringify(target)};
+  document.body.append(frame);
+  window.framed = true;
+});
+</script>
+</body></html>
+`;
+}
+
+/**
+ * On the approved site: once the other site's worker is registered for this site's partition,
+ * adds 300 frames whose loads the worker never answers, then a frame on the export the worker
+ * builds, then removes the 300 frames, and says so in its title.
+ */
+function foreignWorkerFloodPage(other: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignWorkerFlood}</title></head>
+<body>
+<iframe title="Setup" src="${other}/foreign/worker-setup"></iframe>
+<script>
+let started = false;
+addEventListener("message", async (event) => {
+  if (event.data !== ${JSON.stringify(TITLES.foreignWorkerReady)} || started) return;
+  started = true;
+  const hung = [];
+  for (let index = 0; index < 300; index += 1) {
+    const frame = document.createElement("iframe");
+    frame.src = ${JSON.stringify(`${other}/foreign/sw/hang/`)} + index;
+    document.body.append(frame);
+    hung.push(frame);
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1000));
+  const real = document.createElement("iframe");
+  real.src = ${JSON.stringify(`${other}/foreign/sw/built.csv`)};
+  document.body.append(real);
+  for (const frame of hung) frame.remove();
+  document.title = ${JSON.stringify(TITLES.foreignWorkerFlooded)};
+});
+</script>
+</body></html>
+`;
+}
+
+/**
+ * On the approved site: from its load on, moves on to `target` every 30 ms until window.done is
+ * set, and has the links page's file field, whose files' text it keeps in window.received.
+ */
+function foreignWorkerRetryPage(target: string): string {
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignWorkerRetry}</title></head>
+<body>
+<main>
+<input id="statement" type="file" aria-label="Statement">
+</main>
+<script>
+window.received = [];
+const statement = document.getElementById("statement");
+statement.addEventListener("change", async () => {
+  window.received = await Promise.all(Array.from(statement.files, (file) => file.text()));
+});
+addEventListener("load", () => {
+  const timer = setInterval(() => {
+    if (window.done) {
+      clearInterval(timer);
+      return;
+    }
+    location.href = ${JSON.stringify(target)};
+  }, 30);
 });
 </script>
 </body></html>

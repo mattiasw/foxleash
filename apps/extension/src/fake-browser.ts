@@ -228,10 +228,19 @@ export interface FakeBrowser {
   finishDownload(id: number, state: "complete" | "interrupted"): void;
   /** Fires `downloads.onChanged` alone. */
   emitDownloadChanged(delta: DownloadDelta): void;
-  /** Every `downloads.cancel` call's id, in order. */
+  /**
+   * Every `downloads.cancel` call's id, in order. As in Firefox, a cancel rejects for a complete
+   * download and turns one in progress into an interrupted one whose file is gone.
+   */
   cancelledDownloads: number[];
   /** Makes every later `downloads.cancel` reject with `error`. */
   failCancel(error: unknown): void;
+  /** Every `downloads.removeFile` call's id, in order. */
+  removedFiles: number[];
+  /** Makes every later `downloads.removeFile` reject with `error`. */
+  failRemoveFile(error: unknown): void;
+  /** Lists the download, as `downloads.search` answers for it, and fires `downloads.onCreated`. */
+  emitDownloadCreated(item: DownloadItem): void;
   /** Listeners on `downloads.onChanged`. */
   downloadListenerCount(): number;
 }
@@ -426,6 +435,8 @@ export function createFakeBrowser(): FakeBrowser {
   const onDownloadChanged = createEvent<(delta: DownloadDelta) => void>();
   let downloadFailure: { error: unknown } | undefined;
   let cancelFailure: { error: unknown } | undefined;
+  let removeFileFailure: { error: unknown } | undefined;
+  const onDownloadCreated = createEvent<(item: DownloadItem) => void>();
   let nextDownloadId = 1;
 
   const browser: BrowserApi = {
@@ -703,8 +714,10 @@ export function createFakeBrowser(): FakeBrowser {
         const id = nextDownloadId++;
         const item: DownloadItem = {
           id,
+          url: options.url,
           filename: `${FAKE_DOWNLOAD_FOLDER}/${options.filename}`,
           state: "in_progress",
+          startTime: new Date(latestTimeStamp).toISOString(),
         };
         fake.downloads.set(id, item);
         if (fake.downloadTiming === "immediate") item.state = fake.downloadState;
@@ -720,8 +733,17 @@ export function createFakeBrowser(): FakeBrowser {
       cancel: async (id) => {
         fake.cancelledDownloads.push(id);
         if (cancelFailure !== undefined) throw cancelFailure.error;
+        const item = fake.downloads.get(id);
+        if (item?.state === "complete") throw new Error(`Download ${id} is already complete`);
+        if (item?.state === "in_progress")
+          Object.assign(item, { state: "interrupted", exists: false });
+      },
+      removeFile: async (id) => {
+        fake.removedFiles.push(id);
+        if (removeFileFailure !== undefined) throw removeFileFailure.error;
       },
       onChanged: onDownloadChanged,
+      onCreated: onDownloadCreated,
     },
   };
 
@@ -954,6 +976,14 @@ export function createFakeBrowser(): FakeBrowser {
     cancelledDownloads: [],
     failCancel: (error) => {
       cancelFailure = { error };
+    },
+    removedFiles: [],
+    failRemoveFile: (error) => {
+      removeFileFailure = { error };
+    },
+    emitDownloadCreated: (item) => {
+      fake.downloads.set(item.id, item);
+      for (const listener of [...onDownloadCreated.listeners]) listener({ ...item });
     },
     downloadListenerCount: () => onDownloadChanged.listeners.size,
   };

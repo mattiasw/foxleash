@@ -58,7 +58,7 @@ const recordings = createConsoleRecording({
   now: () => Date.now(),
 });
 const network = createNetworkLog({ browser, groups, access, now: () => Date.now() });
-const files = createFileGuard({ browser, groups, access });
+const files = createFileGuard({ browser, groups, access, now: () => Date.now() });
 const views = createPageViews({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });

@@ -212,7 +212,8 @@ defense is complete. Foxleash limits what a fooled agent can do:
   add it to the list in the settings. Proposals for more sites are welcome, as an issue or as a
   pull request that edits [the built-in list](apps/extension/src/default-blocklist.ts).
 - File uploads only read from [allowed folders](docs/security.md#uploads) (the agent's working
-  folder and `~/Downloads` by default) and never dotfiles or key files.
+  folder and `~/Downloads` by default), never dotfiles or key files, and no file saved or changed
+  in the last 5 seconds.
 - Downloads save only a file served by a site you approved, into your Firefox download folder,
   never over an existing file. The file is saved as the site sent it, with nothing hidden or
   redacted. The agent reads a downloaded file with its own tools, outside Foxleash's untrusted
@@ -220,7 +221,10 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - In the agent's tabs, Foxleash stops a page or frame load whose answer is anything other than a
   web page, such as a file Firefox would save, and comes from a site you have not approved or
   that is on the blocklist, so a page on an approved site cannot get such a file saved into
-  your download folder. This has [limits](docs/security.md#files-a-page-loads-in-the-agents-tabs).
+  your download folder. When that site's service worker answers, Foxleash cancels the download
+  and removes its file right after Firefox starts it, but does not stop an answer Firefox shows
+  instead, such as a PDF. This has
+  [limits](docs/security.md#files-a-page-loads-in-the-agents-tabs).
 - A recipe is saved, and a recipe's or a task's sites are allowed, only by your click on a
   Foxleash page in Firefox. Sites allowed this way are allowed for the session only.
 - Text results and screenshots hide the values of password fields, of one-time code and card

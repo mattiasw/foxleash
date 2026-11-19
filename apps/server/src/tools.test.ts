@@ -31,6 +31,7 @@ import {
   type UploadContext,
   untrusted,
 } from "./tools.ts";
+import { FRESH_FILE_MS } from "./upload-policy.ts";
 
 interface Call {
   method: MethodName;
@@ -293,6 +294,7 @@ describe("tools", () => {
       "FOXLEASH_UPLOAD_DIRS in the MCP client's configuration; no tool can change them",
       "Files and folders whose names start with a dot, and files named like keys",
       "and so is a file that holds a PEM, OpenSSH, PuTTY, PGP or age private key, whatever its name",
+      "A file saved or changed in the last 5 seconds is refused too; try it again a moment later.",
       "At most 100 files and 10 MB in total per call.",
       "upload_file never asks",
     ]) {
@@ -3818,6 +3820,28 @@ describe("upload_file", () => {
     ]);
   });
 
+  it("refuses a file saved a moment ago, by the clock of the server", LIMIT, async () => {
+    await writeFile(join(folder, "fresh.txt"), "fresh");
+    const logs: { message: string; detail: unknown }[] = [];
+    const { client, calls } = await start(() => ({ target: "input" }), undefined, {
+      folders: [folder],
+      cwd: folder,
+      home,
+      log: (message, detail) => logs.push({ message, detail }),
+    });
+    const output = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 1, ref: REF, paths: ["fresh.txt"] },
+    });
+    const reason = "was saved or changed a moment ago; try again in a few seconds.";
+    assert.deepEqual(output, {
+      content: [{ type: "text", text: `Foxleash uploaded nothing: "fresh.txt" ${reason}` }],
+      isError: true,
+    });
+    assert.deepEqual(calls, []);
+    assert.deepEqual(logs, [{ message: "upload refused", detail: { path: "fresh.txt", reason } }]);
+  });
+
   it("refuses files over 10 MB together before anything is sent", LIMIT, async () => {
     await writeFile(join(folder, "six-a.bin"), Buffer.alloc(6 * 1024 * 1024));
     await writeFile(join(folder, "six-b.bin"), Buffer.alloc(6 * 1024 * 1024));
@@ -3947,6 +3971,8 @@ describe("upload_file", () => {
       cwd: folder,
       home,
       log: (message, detail) => logs.push({ message, detail }),
+      // Files a test writes are uploaded at once.
+      now: () => Date.now() + 2 * FRESH_FILE_MS,
     });
     return { ...harness, logs };
   }
@@ -5100,7 +5126,13 @@ function framedIn(framed: string | undefined): string {
 async function start(
   answer: Answer,
   saveFolder?: string,
-  upload: UploadContext = { folders: [], cwd: undefined, home: "/nonexistent", log: () => {} },
+  upload: UploadContext = {
+    folders: [],
+    cwd: undefined,
+    home: "/nonexistent",
+    log: () => {},
+    now: () => Date.now() + 2 * FRESH_FILE_MS,
+  },
 ): Promise<Harness> {
   const calls: Call[] = [];
   const bridge: ToolBridge = {

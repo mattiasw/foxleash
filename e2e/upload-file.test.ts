@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import { createHash, randomBytes } from "node:crypto";
-import { mkdir, mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
+import { FRESH_FILE_MS } from "../apps/server/src/upload-policy.ts";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
@@ -101,6 +103,22 @@ describe("upload_file in real Firefox", () => {
         refs[key] = ref;
       }
       assert.equal(tree.match(/ file field$/gm)?.length, 4, tree);
+      // upload_file refuses a file saved or changed in the last FRESH_FILE_MS.
+      const written = await Promise.all(
+        [
+          join(allowed, "big.bin"),
+          join(allowed, "notes.txt"),
+          join(allowed, "photo.png"),
+          join(allowed, ".secret"),
+          join(outer, "outside.txt"),
+        ].map(async (file) => {
+          const info = await stat(file);
+          return Math.max(info.mtimeMs, info.ctimeMs, info.birthtimeMs);
+        }),
+      );
+      // Rounded up: a file's times carry fractions of the millisecond.
+      const wait = Math.ceil(Math.max(...written) + FRESH_FILE_MS - Date.now());
+      if (wait > 0) await sleep(wait);
     },
     { timeout: 120_000 },
   );

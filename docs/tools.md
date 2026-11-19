@@ -501,7 +501,10 @@ the site. Nothing of the
 file was saved, and it loads only once you approved its site, which `tab_open` or `navigate` to
 that site asks you for, unless the site is on the blocklist. The list holds what was stopped
 during the action and its wait, at most 20 sites; a load stopped later is in no result
-([Security](security.md#files-a-page-loads-in-the-agents-tabs)).
+([Security](security.md#files-a-page-loads-in-the-agents-tabs)). A download that Foxleash
+cancelled because the site's service worker answered the load can be missing from the list: most
+often a download in a tab the action opened, which Firefox closes, and sometimes one that began
+after the action's result was settled.
 
 Foxleash watches the elements, attributes and text of the page's own document and its shadow
 roots, and its fields' values, not frames, canvas drawing, or CSS animations and transitions, so
@@ -578,9 +581,16 @@ a dot, files named like keys or files that hold a PEM, OpenSSH, PuTTY, PGP or ag
 and at most 100 files and 10 MB per upload. [Uploads](security.md#uploads) names the folders and
 how to change them.
 
+A file saved or changed in the last 5 seconds is refused, with a reason that says to try again in
+a few seconds. So the agent cannot upload a file that it, the `download` tool or you saved a
+moment ago until those seconds have passed, and a `batch` that downloads a file and uploads it in
+the same call gets that refusal.
+
 `~/Downloads` is an upload folder by default, and it is where Firefox saves files. So that a page
 cannot get a file from another site saved there for `upload_file` to hand over, Foxleash stops a
-load in the agent's tabs whose answer is a file from a site the session may not act on;
+load in the agent's tabs whose answer is a file from a site the session may not act on, and
+cancels, after the fact, the download of such a load that the site's service worker answered,
+removing its file;
 [Security](security.md#files-a-page-loads-in-the-agents-tabs) says what that covers and what it
 does not.
 

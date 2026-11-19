@@ -27,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   there, a site allowed always from a private window stayed allowed after the window closed, and
   its downloads showed in the normal windows' download list. A site allowed always from a private
   window before the update stays allowed: revoke it on the settings page if you do not want that.
+- `upload_file` refuses a file saved or changed in the last 5 seconds, saying to try again in a
+  few seconds. A file the agent or the `download` tool saved a moment ago, also in the same
+  `batch`, can be uploaded once those seconds have passed.
 
 ### Removed
 
@@ -110,10 +113,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   from such a site and is anything other than a web page; the agent's action says that the file
   was stopped, and `tab_open` and `navigate` fail at once saying that the site must be approved
   first. The tabs left in the group stay covered after Firefox restarts or Foxleash is updated,
-  judged by the sites you allowed always. The request still reaches that site, and a file that
-  such a site's own service worker or page produces is still saved, as is one that loads in the
-  moment after Firefox starts or Foxleash is updated, in a window opened from such a tab before
-  that, or in a group made by an earlier version of Foxleash.
+  judged by the sites you allowed always. When such a site's own service worker gives the answer,
+  Foxleash cancels the download and removes its file right after Firefox starts it, and
+  `upload_file` refuses a file saved in the last 5 seconds meanwhile. That also cancels a download
+  of your own of exactly the address of such a load begun in the agent's tabs in the 10 minutes
+  before, and, while a page there keeps more than 200 loads waiting, every download from a site
+  that session may not act on. Still saved are a download Firefox saves under another address than the load's, one
+  whose load the worker held for more than 10 minutes, and a file Foxleash could not remove. The
+  request still reaches that site. An answer of such a worker that Firefox shows
+  rather than saves, such as a PDF, is still shown, and still saved are a file that a page of such
+  a site builds itself, and one that loads in the moment after Firefox starts or Foxleash is
+  updated, in a window opened from such a tab before that, or in a group made by an earlier
+  version of Foxleash.
 - The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an

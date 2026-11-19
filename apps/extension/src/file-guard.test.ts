@@ -1,17 +1,31 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
-import type { BrowserApi, HeadersReceivedDetails, HttpHeader } from "./browser-api.ts";
+import type {
+  BrowserApi,
+  HeadersReceivedDetails,
+  HttpHeader,
+  RequestDetails,
+} from "./browser-api.ts";
 import {
   createFakeBrowser,
   createFakeTimers,
+  FAKE_EXTENSION_ID,
   type FakeBrowser,
   type FakeTab,
   flush,
 } from "./fake-browser.ts";
-import { createFileGuard, MAX_REFUSAL_TABS, MAX_REFUSALS } from "./file-guard.ts";
+import {
+  createFileGuard,
+  type FileGuard,
+  HOP_AGE_MS,
+  HOP_GRACE_MS,
+  MAX_REFUSAL_TABS,
+  MAX_REFUSALS,
+  MAX_TAB_HOPS,
+} from "./file-guard.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite, SESSION_GROUPS_KEY, saveBlocklist } from "./settings.ts";
-import { createSiteAccess, type SessionMemory } from "./site-access.ts";
+import { createSiteAccess, type SessionMemory, type SiteAccess } from "./site-access.ts";
 
 /** Stored as approved by `tabIn`. */
 const A = "https://a.example";
@@ -31,28 +45,31 @@ const REGISTRATION = {
   filter: { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] },
   extraInfoSpec: ["blocking", "responseHeaders"],
 };
+/** Every webRequest listener the guard registers, in order; only the first blocks. */
+const REGISTRATIONS = [
+  REGISTRATION,
+  ...["onBeforeRequest", "onCompleted", "onErrorOccurred"].map((event) => ({
+    event,
+    filter: { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] },
+  })),
+];
 
 describe("the file guard's listener", { timeout: 10000 }, () => {
   it("is added when the first session starts running, once, and stays", async () => {
     const { fake, access, groups, tabIn } = setup();
     assert.deepEqual(fake.webRequestRegistrations, []);
     await tabIn("s1");
-    const registration = {
-      event: "onHeadersReceived",
-      filter: { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] },
-      extraInfoSpec: ["blocking", "responseHeaders"],
-    };
-    assert.deepEqual(fake.webRequestRegistrations, [registration]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
     await tabIn("s2");
     access.endSession("s1");
     await groups.endSession("s1");
     access.endSession("s2");
     await groups.endSession("s2");
-    assert.deepEqual(fake.webRequestRegistrations, [registration]);
-    assert.deepEqual(fake.activeWebRequestRegistrations(), [registration]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), REGISTRATIONS);
     // A session that runs again adds no second one.
     access.admit("s1");
-    assert.deepEqual(fake.webRequestRegistrations, [registration]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
   });
 
   it("hears of the tabs that tabs open from the first running session on, once", async () => {
@@ -78,7 +95,7 @@ describe("the file guard after a restart, an update or a reload", { timeout: 100
     assert.equal(fake.createdNavigationTargetListenerCount(), 0);
     restart(fake);
     await flush();
-    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
     assert.equal(fake.createdNavigationTargetListenerCount(), 1);
   });
 
@@ -95,7 +112,7 @@ describe("the file guard after a restart, an update or a reload", { timeout: 100
     // The user opens the saved group again: Firefox keeps its id.
     fake.openTab({ url: `${A}/page`, groupId: left.groupId });
     await flush();
-    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
     assert.equal(fake.createdNavigationTargetListenerCount(), 1);
   });
 
@@ -112,7 +129,7 @@ describe("the file guard after a restart, an update or a reload", { timeout: 100
     fake.groups.set(groupId, { id: groupId, windowId: left.windowId });
     await fake.browser.tabs.group({ groupId, tabIds: [left.id] });
     await flush();
-    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
   });
 
   it("judges a tab left in such a group by the sites allowed always", async () => {
@@ -158,7 +175,7 @@ describe("the file guard after a restart, an update or a reload", { timeout: 100
     ]);
     fake.emitStatus(left.id, "loading");
     await flush();
-    assert.deepEqual(fake.webRequestRegistrations, [REGISTRATION]);
+    assert.deepEqual(fake.webRequestRegistrations, REGISTRATIONS);
   });
 
   it("ties a window opened from a tab left in such a group to its session", async () => {
@@ -762,6 +779,1124 @@ describe("onRefused", { timeout: 10000 }, () => {
   });
 });
 
+describe("a download from a load whose headers never came", { timeout: 10000 }, () => {
+  it("is cancelled and recorded for the load's tab and frame, by its site alone", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    const url = `${B}:8443/a/b?c=d`;
+    hop(fake, { tabId: tab.id, url: `${url}#e`, frameId: 3, type: "sub_frame", timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${url}#f`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(fake.removedFiles, []);
+    assert.deepEqual(heard, [[tab.id, `${B}:8443`, 3]]);
+    // Recorded once the file was gone, on the guard's clock.
+    assert.deepEqual(guard.refusedSince(tab.id, 1010), [`${B}:8443`]);
+    assert.deepEqual(guard.refusedSince(tab.id, 1011), []);
+  });
+
+  it("has its file removed when it is already complete, and is then recorded", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004, state: "complete" });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(fake.removedFiles, [1]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("is reported to nobody, and logged, when it is interrupted and its file still exists", async (t) => {
+    const warned = warnings(t);
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    clock.now = 1010;
+    // Firefox removes the file of no download that is not complete.
+    download(fake, { id: 1, started: 1004, state: "interrupted", exists: true });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(fake.removedFiles, []);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), []);
+    assert.deepEqual(warned(), [{ event: "file_guard_download_kept", id: 1 }]);
+  });
+
+  it("is matched with a load that reaches the guard after it, for HOP_GRACE_MS", async () => {
+    for (const [late, matched] of [
+      [HOP_GRACE_MS - 1, true],
+      [HOP_GRACE_MS, false],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      clock.now = 1010;
+      download(fake, { id: 1, started: 1004 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, []);
+      clock.now = 1010 + late;
+      hop(fake, { tabId: tab.id, timeStamp: 1000 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, matched ? [1] : [], String(late));
+      assert.deepEqual(guard.refusedSince(tab.id, 0), matched ? [B] : [], String(late));
+    }
+  });
+
+  it("is not matched with a load whose headers came, whatever they were", async () => {
+    for (const responseHeaders of [HTML, ATTACHMENT, null]) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      hop(fake, { tabId: tab.id, requestId: "h1", url: `${A}/next#top`, timeStamp: 1000 });
+      fake.emitWebRequest(
+        "onHeadersReceived",
+        response({ tabId: tab.id, requestId: "h1", url: `${A}/next`, responseHeaders }),
+      );
+      // Headers of another request, or of another address of the same request, end nothing.
+      hop(fake, { tabId: tab.id, requestId: "h2", timeStamp: 1000 });
+      fake.emitWebRequest("onHeadersReceived", response({ tabId: tab.id, requestId: "h3" }));
+      fake.emitWebRequest(
+        "onHeadersReceived",
+        response({ tabId: tab.id, requestId: "h2", url: `${B}/other` }),
+      );
+      await revokeSite(fake.browser, A);
+      clock.now = 1010;
+      download(fake, { id: 1, url: `${A}/next`, started: 1004 });
+      download(fake, { id: 2, started: 1004 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, [2], JSON.stringify(responseHeaders));
+    }
+  });
+
+  it("is not matched with a load that committed a page once HOP_GRACE_MS passed", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, url: `${B}/page`, timeStamp: 1000 });
+    clock.now = 1010;
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: `${B}/page#top`, timeStamp: 1005 });
+    clock.now = 1010 + HOP_GRACE_MS - 1;
+    download(fake, { id: 1, url: `${B}/page`, started: 1006 });
+    await idle(guard);
+    // A wrong pick stays matchable for a moment.
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    hop(fake, { tabId: tab.id, requestId: "h2", url: `${B}/page`, timeStamp: 2000 });
+    clock.now = 2010;
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: `${B}/page`, timeStamp: 2005 });
+    clock.now = 2010 + HOP_GRACE_MS;
+    download(fake, { id: 2, url: `${B}/page`, started: 2006 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("ends only the newest load of a commit's frame and address, begun before it", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const frame = { tabId: tab.id, frameId: 2, type: "sub_frame", url: `${B}/page` };
+    hop(fake, { ...frame, requestId: "h1", timeStamp: 1000 });
+    hop(fake, { ...frame, requestId: "h2", timeStamp: 1100 });
+    hop(fake, { ...frame, requestId: "h3", timeStamp: 1300 });
+    // Of another frame, and of the top frame: not this frame's loads.
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: `${B}/page`, timeStamp: 1100 });
+    fake.emitCommitted({ tabId: tab.id, frameId: 5, url: `${B}/page`, timeStamp: 1100 });
+    fake.emitCommitted({ tabId: tab.id, frameId: 2, url: `${B}/page`, timeStamp: 1100 });
+    clock.now = 1400 + HOP_GRACE_MS;
+    // h1 is older than the load the commit ended: it still matches.
+    download(fake, { id: 1, url: `${B}/page`, started: 1050 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    // With h1 taken by the header layer: h2 is gone, and h3, begun after the commit, still matches.
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      response({ tabId: tab.id, requestId: "h1", url: `${B}/page`, responseHeaders: HTML }),
+    );
+    download(fake, { id: 2, url: `${B}/page`, started: 1150 });
+    download(fake, { id: 3, url: `${B}/page`, started: 1350 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 3]);
+  });
+
+  it("is not matched with a load that began after it, but with one in the same millisecond", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, requestId: "h1", timeStamp: 1005 });
+    hop(fake, { tabId: tab.id, requestId: "h2", url: `${B}/other`, timeStamp: 1004.6 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    download(fake, { id: 2, url: `${B}/other`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [2]);
+  });
+
+  it("is judged by the session's sites, read anew", async (t) => {
+    const { fake, clock, access, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, requestId: "h1", url: `${A}/export`, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${A}/export`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+    // The allowed load ended in that download: its site no longer counts for another.
+    await revokeSite(fake.browser, A);
+    download(fake, { id: 2, url: `${A}/export`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+    await grantSite(fake.browser, B);
+    await saveBlocklist(fake.browser, ["b.example"]);
+    hop(fake, { tabId: tab.id, requestId: "h2", timeStamp: 1000 });
+    download(fake, { id: 3, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [3]);
+    await saveBlocklist(fake.browser, []);
+    hop(fake, { tabId: tab.id, requestId: "h3", timeStamp: 1000 });
+    t.mock.method(access, "view", async () => {
+      throw new Error("The session stopped");
+    });
+    download(fake, { id: 4, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [3, 4]);
+  });
+
+  it("is not matched with a load of a tab outside every group", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    hop(fake, { tabId: own.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+
+  it("is matched with a load of a tab moved into a session's group since, looked up anew", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const moved = fake.openTab({ url: `${A}/page` });
+    hop(fake, { tabId: moved.id, timeStamp: 1000 });
+    await idle(guard);
+    // Moved without a word of it: only the download's own lookup sees it.
+    const fakeTab = fake.tabs.get(moved.id);
+    assert.ok(fakeTab !== undefined);
+    fakeTab.groupId = tab.groupId;
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("waiting for its load's tab to join a session's group, is refused when it does", async (t) => {
+    for (const how of ["named", "on the tab"] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      const moved = fake.openTab({ url: `${A}/page` });
+      const gets = holdGets(t, fake, moved.id);
+      gets.release();
+      hop(fake, { tabId: moved.id, timeStamp: 1000 });
+      clock.now = 1010;
+      download(fake, { id: 1, started: 1004 });
+      fake.emitStatus(moved.id, "loading");
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, []);
+      if (how === "named") {
+        await fake.browser.tabs.group({ groupId: tab.groupId, tabIds: [moved.id] });
+      } else {
+        // Firefox does not always name the change: the tab shows it.
+        const fakeTab = fake.tabs.get(moved.id);
+        assert.ok(fakeTab !== undefined);
+        fakeTab.groupId = tab.groupId;
+        fake.emitStatus(moved.id, "loading");
+      }
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, [1], how);
+      assert.deepEqual(guard.refusedSince(moved.id, 0), [B], how);
+      // A tab event that shows the same group looks nothing up again.
+      const looked = gets.calls();
+      fake.emitStatus(moved.id, "complete");
+      await idle(guard);
+      assert.equal(gets.calls(), looked, how);
+    }
+  });
+
+  it("waiting for its load's tab to be tied, is refused for the tab and its opener", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    hop(fake, { tabId: window.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+    opens(fake, tab, window);
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("is refused, and recorded, when its load's tab cannot be looked up", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    await tabIn("s1");
+    hop(fake, { tabId: 999, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(guard.refusedSince(999, 0), [B]);
+  });
+
+  it("is matched with every load of its address when its start cannot be read", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, timeStamp: 5000 });
+    clock.now = 5010;
+    fake.emitDownloadCreated({
+      id: 1,
+      url: `${B}/export`,
+      filename: "/home/user/Downloads/export.csv",
+      state: "in_progress",
+      startTime: "not a time",
+    });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("is untouched when Foxleash started it, or comes from no web address", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    // A flood mark would refuse every other download.
+    const flooding = await tabIn("s1");
+    flood(fake, flooding.id, 1000);
+    hop(fake, { tabId: flooding.id, requestId: "over", url: `${B}/over`, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004, byExtensionId: FAKE_EXTENSION_ID });
+    download(fake, { id: 2, started: 1004, byExtensionId: "other@example.org" });
+    download(fake, { id: 3, url: "blob:moz-extension://x/y", started: 1004 });
+    download(fake, { id: 4, url: "data:text/csv,a", started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [2]);
+  });
+
+  it("is matched with a load that refused another download of its address", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    // The same load reported twice counts once against the cap.
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    hop(fake, { tabId: tab.id, timeStamp: 1001 });
+    for (let index = 1; index < MAX_TAB_HOPS; index += 1) {
+      hop(fake, { tabId: tab.id, requestId: `f${index}`, url: `${A}/f${index}`, timeStamp: 1002 });
+    }
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    download(fake, { id: 2, started: 1004 });
+    // No flood mark refuses it.
+    download(fake, { id: 3, url: `${C}/own`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("is refused after a download of its address from a window the page opened and closed", async () => {
+    for (const order of ["past the cap", "download first"] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      const popup = fake.openTab({ url: "about:blank" });
+      opens(fake, tab, popup);
+      await idle(guard);
+      // The other site's worker holds this load of the agent's tab.
+      hop(fake, { tabId: tab.id, requestId: "held", timeStamp: 1000 });
+      const decoy = () => hop(fake, { tabId: popup.id, requestId: "decoy", timeStamp: 1200 });
+      if (order === "past the cap") {
+        flood(fake, popup.id, 1100);
+        decoy();
+      }
+      clock.now = 1210;
+      download(fake, { id: 1, started: 1205 });
+      await idle(guard);
+      // Reported after its own download.
+      if (order === "download first") decoy();
+      clock.now = 1300;
+      fake.removeTab(popup.id);
+      await idle(guard);
+      // The worker answers the held load once the window's loads are gone.
+      clock.now = 1300 + HOP_GRACE_MS;
+      download(fake, { id: 2, started: 1300 + HOP_GRACE_MS - 5 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, [1, 2], order);
+      assert.deepEqual(guard.refusedSince(tab.id, 0), [B], order);
+    }
+  });
+
+  it("is matched with a load that ended otherwise, for HOP_GRACE_MS", async () => {
+    for (const event of ["onCompleted", "onErrorOccurred"] as const) {
+      for (const [later, matched] of [
+        [HOP_GRACE_MS - 1, true],
+        [HOP_GRACE_MS, false],
+      ] as const) {
+        const { fake, clock, guard, tabIn } = setup();
+        const tab = await tabIn("s1");
+        hop(fake, { tabId: tab.id, requestId: "h1", timeStamp: 1000 });
+        hop(fake, { tabId: tab.id, requestId: "h2", url: `${B}/2`, timeStamp: 1000 });
+        clock.now = 1010;
+        const ended = { requestId: "h1", tabId: tab.id, timeStamp: 1005 };
+        if (event === "onCompleted") {
+          fake.emitWebRequest(event, { ...ended, statusCode: 200, fromCache: false });
+        } else {
+          fake.emitWebRequest(event, { ...ended, error: "NS_BINDING_ABORTED" });
+        }
+        clock.now = 1010 + later;
+        download(fake, { id: 1, started: 1004 });
+        download(fake, { id: 2, url: `${B}/2`, started: 1004 });
+        await idle(guard);
+        assert.deepEqual(fake.cancelledDownloads, matched ? [1, 2] : [2], `${event} ${later}`);
+      }
+    }
+  });
+
+  it("whose file is not removed is reported to nobody, and logged", async (t) => {
+    const warned = warnings(t);
+    for (const how of ["removal fails", "gone from the list", "still in progress"] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      const heard: unknown[][] = [];
+      guard.onRefused((...refusal) => heard.push(refusal));
+      hop(fake, { tabId: tab.id, timeStamp: 1000 });
+      clock.now = 1010;
+      if (how === "removal fails") fake.failRemoveFile(new Error("Cannot remove"));
+      if (how === "still in progress") fake.failCancel(new Error("Cancel failed"));
+      download(fake, {
+        id: 7,
+        started: 1004,
+        state: how === "removal fails" ? "complete" : undefined,
+      });
+      if (how === "gone from the list") fake.downloads.delete(7);
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, [7], how);
+      assert.deepEqual(guard.refusedSince(tab.id, 0), [], how);
+      assert.deepEqual(heard, [], how);
+    }
+    assert.deepEqual(warned(), [
+      { event: "file_guard_download_kept", id: 7 },
+      { event: "file_guard_download_kept", id: 7 },
+      { event: "file_guard_download_kept", id: 7 },
+    ]);
+  });
+
+  it("is refused once when a load arrives while its own judgement waits", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const slow = await tabIn("s1");
+    const held = holdGets(t, fake, slow.id);
+    hop(fake, { tabId: slow.id, requestId: "h1", timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard, false);
+    hop(fake, { tabId: tab.id, requestId: "h2", timeStamp: 1001 });
+    await idle(guard, false);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    held.release();
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(slow.id, 0), []);
+  });
+
+  it("of two of one address reported before the load, both are refused by it", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    download(fake, { id: 2, started: 1004 });
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+});
+
+describe("the loads the guard keeps", { timeout: 10000 }, () => {
+  it("are at most MAX_TAB_HOPS per tab; past that, a flood mark refuses by site", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    flood(fake, tab.id, 1000);
+    // Not kept: matched by the flood mark only, so nothing is recorded.
+    hop(fake, { tabId: tab.id, requestId: "over", url: `${B}/over`, timeStamp: 1500 });
+    const other = fake.openTab({ url: `${A}/page` });
+    clock.now = 1600;
+    download(fake, { id: 1, url: `${B}/over`, started: 1550 });
+    download(fake, { id: 2, url: `${C}/own`, started: 1550 });
+    download(fake, { id: 3, url: `${A}/own`, started: 1550 });
+    // Begun before the mark.
+    download(fake, { id: 4, url: `${C}/before`, started: 1499 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), []);
+    assert.deepEqual(guard.refusedSince(other.id, 0), []);
+    assert.deepEqual(heard, []);
+  });
+
+  it("keep a flood mark when the count falls, until HOP_AGE_MS after the last load over the cap", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    flood(fake, tab.id, 1000);
+    hop(fake, { tabId: tab.id, requestId: "over-1", url: `${B}/over`, timeStamp: 1500 });
+    hop(fake, { tabId: tab.id, requestId: "over-2", url: `${B}/over`, timeStamp: 1700 });
+    clock.now = 1800;
+    for (let index = 0; index < MAX_TAB_HOPS; index += 1) {
+      fake.emitWebRequest("onErrorOccurred", {
+        requestId: `f${index}`,
+        tabId: tab.id,
+        timeStamp: 1800,
+        error: "NS_BINDING_ABORTED",
+      });
+    }
+    clock.now = 1800 + HOP_GRACE_MS;
+    download(fake, { id: 1, url: `${C}/a`, started: 1500 });
+    await idle(guard);
+    clock.now = 1700 + HOP_AGE_MS;
+    download(fake, { id: 2, url: `${C}/b`, started: 1500 });
+    await idle(guard);
+    clock.now = 1701 + HOP_AGE_MS;
+    download(fake, { id: 3, url: `${C}/c`, started: 1500 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+  });
+
+  it("of a closed tab, flood mark included, go HOP_GRACE_MS after it closed", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const flooding = await tabIn("s1");
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    hop(fake, { tabId: tab.id, requestId: "h2", url: `${B}/second`, timeStamp: 1000 });
+    flood(fake, flooding.id, 1000);
+    hop(fake, { tabId: flooding.id, requestId: "over", url: `${B}/over`, timeStamp: 1500 });
+    clock.now = 2000;
+    fake.removeTab(tab.id);
+    fake.removeTab(flooding.id);
+    clock.now = 2000 + HOP_GRACE_MS - 1;
+    download(fake, { id: 1, started: 1600 });
+    download(fake, { id: 2, url: `${C}/a`, started: 1600 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    clock.now = 2000 + HOP_GRACE_MS;
+    download(fake, { id: 3, url: `${C}/b`, started: 1600 });
+    download(fake, { id: 4, url: `${B}/second`, started: 1600 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+  });
+
+  it("of a tab of no session set a flood mark that refuses nothing", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    flood(fake, own.id, 1000);
+    hop(fake, { tabId: own.id, requestId: "over", url: `${B}/over`, timeStamp: 1500 });
+    clock.now = 1600;
+    download(fake, { id: 1, url: `${C}/a`, started: 1550 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+
+  it("of a tab tied after the download set a flood mark that refuses it", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    flood(fake, window.id, 1000);
+    hop(fake, { tabId: window.id, requestId: "over", timeStamp: 1001 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1005 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+    opens(fake, tab, window);
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("of a tab tied while its first lookup runs set a flood mark that refuses its download", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    flood(fake, window.id, 1000);
+    hop(fake, { tabId: window.id, requestId: "over", timeStamp: 1001 });
+    opens(fake, tab, window);
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1005 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("of a tab that cannot be looked up set a flood mark that refuses every site", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    await tabIn("s1");
+    flood(fake, 999, 1000);
+    hop(fake, { tabId: 999, requestId: "over", url: `${B}/over`, timeStamp: 1500 });
+    clock.now = 1600;
+    download(fake, { id: 1, url: `${A}/own`, started: 1550 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("of a session whose sites cannot be read set a flood mark that refuses every site", async (t) => {
+    const { fake, clock, access, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    flood(fake, tab.id, 1000);
+    hop(fake, { tabId: tab.id, requestId: "over", url: `${B}/over`, timeStamp: 1500 });
+    t.mock.method(access, "view", async () => {
+      throw new Error("The session stopped");
+    });
+    clock.now = 1600;
+    download(fake, { id: 1, url: `${A}/own`, started: 1550 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("go once HOP_AGE_MS old", async () => {
+    for (const [age, matched] of [
+      [HOP_AGE_MS - 1, true],
+      [HOP_AGE_MS, false],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      hop(fake, { tabId: tab.id, timeStamp: 1000 });
+      clock.now = 1000 + age;
+      download(fake, { id: 1, started: 1000 + age - 5 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, matched ? [1] : [], String(age));
+    }
+  });
+
+  it("of a tab of no session go once HOP_GRACE_MS old", async () => {
+    for (const [age, matched] of [
+      [HOP_GRACE_MS - 1, true],
+      [HOP_GRACE_MS, false],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      const moved = fake.openTab({ url: `${A}/page` });
+      hop(fake, { tabId: moved.id, timeStamp: 1000 });
+      await idle(guard);
+      // Moved without a word of it: only a download's own lookup sees it.
+      const fakeTab = fake.tabs.get(moved.id);
+      assert.ok(fakeTab !== undefined);
+      fakeTab.groupId = tab.groupId;
+      clock.now = 1000 + age;
+      download(fake, { id: 1, started: 1004 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, matched ? [1] : [], String(age));
+    }
+  });
+
+  it("of a burst share one lookup, and a tie while it runs looks the tab up again", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    const held = holdGets(t, fake, window.id);
+    for (const requestId of ["h1", "h2", "h3"]) {
+      hop(fake, { tabId: window.id, requestId, url: `${B}/${requestId}`, timeStamp: 1000 });
+    }
+    await flush();
+    assert.equal(held.calls(), 1);
+    opens(fake, tab, window);
+    held.release();
+    await idle(guard);
+    assert.equal(held.calls(), 2);
+    // The second lookup's outcome serves the download.
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${B}/h1`, started: 1004 });
+    await idle(guard);
+    assert.equal(held.calls(), 2);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    // A load after both settled starts one more, which the next load shares.
+    hop(fake, { tabId: window.id, requestId: "h4", url: `${B}/h4`, timeStamp: 1005 });
+    hop(fake, { tabId: window.id, requestId: "h5", url: `${B}/h5`, timeStamp: 1005 });
+    await idle(guard);
+    assert.equal(held.calls(), 3);
+  });
+
+  it("of a tab closed before its load reached the guard are judged by the tab's opener", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    const fromSession = fake.openTab({ url: "about:blank" });
+    opens(fake, tab, fromSession);
+    const fromOwn = fake.openTab({ url: "about:blank" });
+    opens(fake, own, fromOwn);
+    const closedSession = await tabIn("s1");
+    await flush();
+    clock.now = 1000;
+    for (const closing of [fromSession, fromOwn, closedSession]) fake.removeTab(closing.id);
+    clock.now = 1010;
+    hop(fake, { tabId: fromSession.id, requestId: "h1", url: `${B}/1`, timeStamp: 1000 });
+    hop(fake, { tabId: fromOwn.id, requestId: "h2", url: `${B}/2`, timeStamp: 1000 });
+    hop(fake, { tabId: closedSession.id, requestId: "h3", url: `${B}/3`, timeStamp: 1000 });
+    for (const id of [1, 2, 3]) download(fake, { id, url: `${B}/${id}`, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads.toSorted(), [1, 3]);
+    assert.deepEqual(guard.refusedSince(fromSession.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("whose commit came first end at once, and still match for HOP_GRACE_MS", async () => {
+    for (const [later, matched] of [
+      [HOP_GRACE_MS - 1, true],
+      [HOP_GRACE_MS, false],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      clock.now = 1000;
+      fake.emitCommitted({ tabId: tab.id, frameId: 4, url: `${B}/page`, timeStamp: 1005 });
+      clock.now = 1001;
+      hop(fake, { tabId: tab.id, frameId: 4, url: `${B}/page`, timeStamp: 1005 });
+      clock.now = 1001 + later;
+      download(fake, { id: 1, url: `${B}/page`, started: 1006 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, matched ? [1] : [], String(later));
+    }
+  });
+
+  it("are not ended by a commit of another frame, or one older than the load", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    clock.now = 1000;
+    fake.emitCommitted({ tabId: tab.id, frameId: 5, url: `${B}/page`, timeStamp: 1010 });
+    fake.emitCommitted({ tabId: tab.id, frameId: 4, url: `${B}/page`, timeStamp: 1004 });
+    fake.emitCommitted({ tabId: tab.id, frameId: 4, url: `${B}/other`, timeStamp: 1010 });
+    fake.emitCommitted({ tabId: -1, frameId: 4, url: `${B}/page`, timeStamp: 1010 });
+    fake.emitCommitted({ tabId: tab.id, frameId: 4, url: "about:blank", timeStamp: 1010 });
+    hop(fake, { tabId: tab.id, frameId: 4, url: `${B}/page`, timeStamp: 1005 });
+    clock.now = 1000 + HOP_GRACE_MS + 1;
+    download(fake, { id: 1, url: `${B}/page`, started: 1006 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("are only of tabs, and only of web addresses", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const looked: number[] = [];
+    const get = fake.browser.tabs.get;
+    t.mock.method(fake.browser.tabs, "get", (tabId: number) => {
+      looked.push(tabId);
+      return get(tabId);
+    });
+    hop(fake, { tabId: -1, timeStamp: 1000 });
+    hop(fake, { tabId: tab.id, url: "ftp://b.example/export", timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(looked, []);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+
+  it("are kept only once a session ran, by listeners that do not block", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = fake.openTab({ url: `${A}/page` });
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.equal(fake.committedListenerCount(), 0);
+    await tabIn("s1");
+    assert.equal(fake.committedListenerCount(), 1);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), REGISTRATIONS);
+    download(fake, { id: 2, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+});
+
+describe("the guard's bounds, at their edges", { timeout: 10000 }, () => {
+  it("keeps a load of a tab whose id is 0: only a negative id means no tab", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const get = fake.browser.tabs.get;
+    t.mock.method(fake.browser.tabs, "get", async (tabId: number) =>
+      tabId === 0 ? { ...(await get(tab.id)), id: 0 } : get(tabId),
+    );
+    hop(fake, { tabId: 0, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("checks a waiting download against a load of a tab that cannot be looked up", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    await tabIn("s1");
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    hop(fake, { tabId: 999, timeStamp: 1000 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("checks a waiting download against a flood mark set after it", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${C}/own`, started: 1004 });
+    await idle(guard);
+    flood(fake, tab.id, 1000);
+    hop(fake, { tabId: tab.id, requestId: "over", url: `${B}/over`, timeStamp: 1001 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("keeps a flood mark's start while a load over the cap comes by its end", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    flood(fake, tab.id, 900);
+    clock.now = 1000;
+    hop(fake, { tabId: tab.id, requestId: "over-1", url: `${B}/over`, timeStamp: 1000 });
+    // The first loads are too old by now: the tab fills up again.
+    clock.now = 1000 + HOP_AGE_MS;
+    for (let index = 0; index < MAX_TAB_HOPS; index += 1) {
+      hop(fake, {
+        tabId: tab.id,
+        requestId: `g${index}`,
+        url: `${A}/g${index}`,
+        timeStamp: clock.now,
+      });
+    }
+    hop(fake, { tabId: tab.id, requestId: "over-2", url: `${B}/over`, timeStamp: clock.now });
+    download(fake, { id: 1, url: `${C}/own`, started: 1500 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("uses a commit for one load only", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const frame = { tabId: tab.id, frameId: 4, url: `${B}/page` };
+    clock.now = 1000;
+    fake.emitCommitted({ ...frame, timeStamp: 1010 });
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h1", timeStamp: 1005 });
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h2", timeStamp: 1006 });
+    clock.now = 1000 + HOP_GRACE_MS;
+    download(fake, { id: 1, url: `${B}/page`, started: 1007 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("does not keep a commit that ended a load for a later one", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const frame = { tabId: tab.id, frameId: 4, url: `${B}/page` };
+    clock.now = 1000;
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h1", timeStamp: 1000 });
+    fake.emitCommitted({ ...frame, timeStamp: 1050 });
+    // Reported after the commit, begun before it.
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h2", timeStamp: 1040 });
+    clock.now = 1000 + HOP_GRACE_MS;
+    download(fake, { id: 1, url: `${B}/page`, started: 1045 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("does not spend a commit on a load too old to match", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const frame = { tabId: tab.id, frameId: 4, url: `${B}/page` };
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h1", timeStamp: 1000 });
+    clock.now = 1000 + HOP_AGE_MS;
+    fake.emitCommitted({ ...frame, timeStamp: 1000 + HOP_AGE_MS });
+    // Reported after the commit, begun before it: the commit is this load's.
+    hop(fake, { ...frame, type: "sub_frame", requestId: "h2", timeStamp: 999 + HOP_AGE_MS });
+    clock.now = 1000 + HOP_AGE_MS + HOP_GRACE_MS;
+    download(fake, { id: 1, url: `${B}/page`, started: 1000 + HOP_AGE_MS });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+
+  it("keeps a commit with no load for HOP_GRACE_MS only", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const frame = { tabId: tab.id, frameId: 4, url: `${B}/page` };
+    clock.now = 1000;
+    fake.emitCommitted({ ...frame, timeStamp: 1010 });
+    clock.now = 1000 + HOP_GRACE_MS;
+    hop(fake, { ...frame, type: "sub_frame", timeStamp: 1005 });
+    clock.now = 1001 + 2 * HOP_GRACE_MS;
+    download(fake, { id: 1, url: `${B}/page`, started: 1006 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("counts a load the header layer took no more against the cap", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    hop(fake, { tabId: tab.id, requestId: "first", url: `${B}/first`, timeStamp: 1000 });
+    for (let index = 1; index < MAX_TAB_HOPS; index += 1) {
+      hop(fake, { tabId: tab.id, requestId: `f${index}`, url: `${A}/f${index}`, timeStamp: 1000 });
+    }
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      response({ tabId: tab.id, requestId: "f1", url: `${A}/f1`, responseHeaders: HTML }),
+    );
+    hop(fake, { tabId: tab.id, requestId: "next", url: `${C}/next`, timeStamp: 1001 });
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${B}/first`, started: 1004 });
+    download(fake, { id: 2, url: `${C}/next`, started: 1004 });
+    await idle(guard);
+    // Both by their load, not by a flood mark: both recorded.
+    assert.deepEqual(guard.refusedSince(tab.id, 0).toSorted(), [B, C]);
+  });
+
+  it("drops a waiting download HOP_GRACE_MS old before a lookup settles", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    hop(fake, { tabId: window.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    clock.now = 1010 + HOP_GRACE_MS;
+    opens(fake, tab, window);
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+
+  it("refuses a download once when two judgements find the same flood", async (t) => {
+    const { fake, clock, access, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    flood(fake, tab.id, 1000);
+    hop(fake, { tabId: tab.id, requestId: "over-1", url: `${B}/over`, timeStamp: 1001 });
+    await idle(guard);
+    const held = holdViews(t, access);
+    clock.now = 1010;
+    download(fake, { id: 1, url: `${C}/own`, started: 1004 });
+    hop(fake, { tabId: tab.id, requestId: "over-2", url: `${B}/over`, timeStamp: 1005 });
+    await idle(guard, false);
+    held.release();
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("judges a tab closed HOP_GRACE_MS ago as one that cannot be looked up", async () => {
+    for (const [later, refused] of [
+      [HOP_GRACE_MS - 1, false],
+      [HOP_GRACE_MS, true],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      await tabIn("s1");
+      const own = fake.openTab({ url: `${A}/page` });
+      const fromOwn = fake.openTab({ url: "about:blank" });
+      opens(fake, own, fromOwn);
+      await flush();
+      clock.now = 1000;
+      fake.removeTab(fromOwn.id);
+      clock.now = 1000 + later;
+      hop(fake, { tabId: fromOwn.id, timeStamp: 1000 });
+      download(fake, { id: 1, started: 1004 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, refused ? [1] : [], String(later));
+    }
+  });
+});
+
+describe("settled", { timeout: 10000 }, () => {
+  it("resolves at once when no download is judged", async () => {
+    const { guard } = setup();
+    const done = tracked(guard.settled());
+    await flush();
+    assert.equal(done(), true);
+  });
+
+  it("waits for a judgement that waits for a tab lookup or the session's sites", async (t) => {
+    for (const what of ["tab", "sites"] as const) {
+      const { fake, clock, access, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      const held = what === "tab" ? holdGets(t, fake, tab.id) : holdViews(t, access);
+      hop(fake, { tabId: tab.id, timeStamp: 1000 });
+      clock.now = 1010;
+      download(fake, { id: 1, started: 1004 });
+      const done = tracked(guard.settled());
+      await flush();
+      await flush();
+      assert.equal(done(), false, what);
+      held.release();
+      await idle(guard);
+      assert.equal(done(), true, what);
+      assert.deepEqual(fake.cancelledDownloads, [1], what);
+    }
+  });
+
+  it("waits for the cancel and the removal of a download refused by a load or a flood", async (t) => {
+    for (const what of ["flood", "cancel", "removal"] as const) {
+      const { fake, clock, guard, tabIn } = setup();
+      const tab = await tabIn("s1");
+      if (what === "flood") {
+        flood(fake, tab.id, 1000);
+        hop(fake, { tabId: tab.id, requestId: "over", url: `${B}/over`, timeStamp: 1001 });
+      } else {
+        hop(fake, { tabId: tab.id, timeStamp: 1000 });
+      }
+      await idle(guard);
+      const gate = Promise.withResolvers<void>();
+      const method = what === "removal" ? "removeFile" : "cancel";
+      const original = fake.browser.downloads[method];
+      t.mock.method(fake.browser.downloads, method, async (id: number) => {
+        await gate.promise;
+        return original(id);
+      });
+      clock.now = 1010;
+      const url = what === "flood" ? `${C}/own` : `${B}/export`;
+      download(fake, {
+        id: 1,
+        url,
+        started: 1004,
+        state: what === "removal" ? "complete" : undefined,
+      });
+      await flush();
+      const done = tracked(guard.settled());
+      await idle(guard, false);
+      assert.equal(done(), false, what);
+      gate.resolve();
+      await idle(guard);
+      assert.equal(done(), true, what);
+      assert.deepEqual(fake.cancelledDownloads, [1], what);
+    }
+  });
+
+  it("waits for a refusal of the same download that a judgement begun after it made", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const slow = await tabIn("s1");
+    const held = holdGets(t, fake, slow.id);
+    hop(fake, { tabId: slow.id, requestId: "h1", timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await flush();
+    const done = tracked(guard.settled());
+    const gate = Promise.withResolvers<void>();
+    const cancel = fake.browser.downloads.cancel;
+    t.mock.method(fake.browser.downloads, "cancel", async (id: number) => {
+      await gate.promise;
+      return cancel(id);
+    });
+    hop(fake, { tabId: tab.id, requestId: "h2", timeStamp: 1001 });
+    await idle(guard, false);
+    held.release();
+    await idle(guard, false);
+    // The download's own judgement found it refused by the other one, whose cancel is held.
+    assert.equal(done(), false);
+    gate.resolve();
+    await idle(guard, false);
+    assert.equal(done(), true);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("does not wait for a download waiting for its load, or a judgement begun after it", async (t) => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await flush();
+    const done = tracked(guard.settled());
+    holdGets(t, fake, tab.id);
+    hop(fake, { tabId: tab.id, timeStamp: 1000 });
+    await flush();
+    await flush();
+    assert.equal(done(), true);
+    assert.deepEqual(fake.cancelledDownloads, []);
+  });
+});
+
+/** Fires `onBeforeRequest` for a page or frame load: B's export in the top frame by default. */
+function hop(
+  fake: FakeBrowser,
+  details: Partial<RequestDetails> & { tabId: number; timeStamp: number },
+): void {
+  fake.emitWebRequest("onBeforeRequest", {
+    requestId: "h1",
+    frameId: 0,
+    url: `${B}/export`,
+    method: "GET",
+    type: "main_frame",
+    ...details,
+  });
+}
+
+/** Lists a download Firefox began, of B's export by default, and fires `downloads.onCreated`. */
+function download(
+  fake: FakeBrowser,
+  {
+    id,
+    url = `${B}/export`,
+    started,
+    state = "in_progress",
+    ...rest
+  }: {
+    id: number;
+    url?: string;
+    started: number;
+    state?: string | undefined;
+    byExtensionId?: string;
+    exists?: boolean;
+  },
+): void {
+  fake.emitDownloadCreated({
+    id,
+    url,
+    filename: `/home/user/Downloads/file-${id}`,
+    state,
+    startTime: new Date(started).toISOString(),
+    ...rest,
+  });
+}
+
+/** MAX_TAB_HOPS loads in the tab, of A's pages. */
+function flood(fake: FakeBrowser, tabId: number, timeStamp: number): void {
+  for (let index = 0; index < MAX_TAB_HOPS; index += 1) {
+    hop(fake, { tabId, requestId: `f${index}`, url: `${A}/f${index}`, timeStamp });
+  }
+}
+
+/** Lets every pending callback run and, unless `judged` is false, every judgement end. */
+async function idle(guard: FileGuard, judged = true): Promise<void> {
+  for (let round = 0; round < 5; round += 1) {
+    await flush();
+    if (judged) await guard.settled();
+  }
+}
+
+/** Holds `tabs.get` of the tab until `release`; `calls` counts them. */
+function holdGets(t: TestContext, fake: FakeBrowser, tabId: number) {
+  const get = fake.browser.tabs.get;
+  const gate = Promise.withResolvers<void>();
+  let calls = 0;
+  t.mock.method(fake.browser.tabs, "get", async (id: number) => {
+    if (id !== tabId) return get(id);
+    calls += 1;
+    await gate.promise;
+    return get(id);
+  });
+  return { calls: () => calls, release: () => gate.resolve() };
+}
+
+/** Holds every `access.view` until `release`. */
+function holdViews(t: TestContext, access: Pick<SiteAccess, "view">) {
+  const view = access.view;
+  const gate = Promise.withResolvers<void>();
+  t.mock.method(access, "view", async (session: string) => {
+    await gate.promise;
+    return view(session);
+  });
+  return { release: () => gate.resolve() };
+}
+
+/** Whether the promise has settled, read synchronously. */
+function tracked(promise: Promise<unknown>): () => boolean {
+  let done = false;
+  void promise.then(() => {
+    done = true;
+  });
+  return () => done;
+}
+
 /** Fires what Firefox reports when a page in `source` opens `target`, a new tab or window. */
 function opens(fake: FakeBrowser, source: FakeTab, target: FakeTab): void {
   fake.emitCreatedNavigationTarget({
@@ -851,7 +1986,7 @@ function restart(fake: FakeBrowser, browser: BrowserApi = fake.browser) {
   const groups = createSessionGroups(browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser, groups, sessions, timers });
-  const guard = createFileGuard({ browser, groups, access });
+  const guard = createFileGuard({ browser, groups, access, now: () => 0 });
   return { groups, sessions, access, guard };
 }
 
@@ -870,11 +2005,13 @@ function warnings(t: TestContext): () => unknown[] {
 
 function setup() {
   const fake = createFakeBrowser();
+  // The guard's clock, on the scale of the fake's timeStamps.
+  const clock = { now: 0 };
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
   const sessions: SessionMemory = new Map();
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
-  const guard = createFileGuard({ browser: fake.browser, groups, access });
+  const guard = createFileGuard({ browser: fake.browser, groups, access, now: () => clock.now });
 
   /** A tab on A's page in the session's group, with A stored as approved. */
   async function tabIn(session: string): Promise<FakeTab> {
@@ -890,5 +2027,5 @@ function setup() {
     return respondOnce(fake, details);
   }
 
-  return { fake, groups, sessions, access, guard, tabIn, respond };
+  return { fake, clock, groups, sessions, access, guard, tabIn, respond };
 }

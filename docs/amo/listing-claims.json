@@ -68,7 +68,11 @@
         { "file": "apps/server/src/upload-policy.ts", "contains": "hasDotPart(" },
         { "file": "apps/server/src/upload-policy.ts", "contains": "holdsPrivateKey(bytes)" },
         { "file": "apps/server/src/upload-policy.ts", "contains": "startsWithSecretKeyPacket(" },
-        { "file": "apps/server/src/tools.ts", "contains": "readAllowedFile(" }
+        { "file": "apps/server/src/tools.ts", "contains": "readAllowedFile(" },
+        {
+          "file": "apps/server/src/upload-policy.ts",
+          "contains": "Math.max(mtimeMs, info.ctimeMs, info.birthtimeMs) < FRESH_FILE_MS"
+        }
       ]
     },
     {
@@ -135,7 +139,31 @@
         { "file": "apps/extension/src/file-guard.ts", "contains": "return { cancel: true };" },
         {
           "file": "apps/extension/src/background.ts",
-          "contains": "createFileGuard({ browser, groups, access })"
+          "contains": "createFileGuard({ browser, groups, access, now: () => Date.now() })"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "browser.webRequest.onBeforeRequest.addListener(onHop, loadTypes);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "browser.downloads.onCreated.addListener(onDownload);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "if (item.byExtensionId === browser.runtime.id"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "await browser.downloads.cancel(id);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "await browser.downloads.removeFile(id);"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "export const MAX_TAB_HOPS = 200;"
         },
         { "file": "apps/extension/src/wait-for-load.ts", "contains": "\"file_refused\"" },
         {

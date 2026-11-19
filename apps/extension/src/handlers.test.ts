@@ -204,8 +204,10 @@ describe("tab_open", { timeout: 10000 }, () => {
   });
 
   it("watches commits for an approved page only during its load and closes the tab it could not group", async () => {
-    const { fake, open, grant } = setup();
+    const { fake, access, open, grant } = setup();
     await grant("https://example.com");
+    // The file guard listens from the first running session on.
+    access.admit("s1");
     const before = fake.committedListenerCount();
     const during: number[] = [];
     const create = fake.browser.tabs.create;
@@ -3003,8 +3005,10 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     const tab = await historyTab(context);
     const listeners: [string, number, number][] = [];
     const committed = context.fake.committedListenerCount();
+    // The listeners that hear every request, such as the file guard's.
+    const always = send(context.fake, [frameRequest(tab.id, "https://a.example/f")]);
     const note = (label: string, tabId: number) => {
-      const requests = send(context.fake, [frameRequest(tabId, "https://a.example/f")]);
+      const requests = send(context.fake, [frameRequest(tabId, "https://a.example/f")]) - always;
       listeners.push([label, requests, context.fake.committedListenerCount() - committed]);
     };
     const update = context.fake.browser.tabs.update;
@@ -10787,7 +10791,14 @@ function setup({
     },
   };
   const navigations = createTabNavigations({ browser: fake.browser, timers });
-  const files = createFileGuard({ browser: fake.browser, groups, access });
+  const files = createFileGuard({
+    // Its own copy of tabs: a test that replaces a tabs method counts the handlers' calls, not
+    // the lookups the guard makes for each page load.
+    browser: { ...fake.browser, tabs: { ...fake.browser.tabs } },
+    groups,
+    access,
+    now: () => timers.now(),
+  });
   const settle = createActSettle({
     browser: fake.browser,
     groups,

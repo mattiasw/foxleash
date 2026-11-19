@@ -1,25 +1,45 @@
 import type {
   BrowserApi,
   Cancel,
+  CompletedDetails,
   CreatedNavigationTargetDetails,
+  DownloadItem,
+  ErrorDetails,
   HeadersReceivedDetails,
   HttpHeader,
+  NavigationDetails,
+  RequestDetails,
   Tab,
+  TabChangeInfo,
 } from "./browser-api.ts";
 import { warn } from "./log.ts";
 import type { SessionGroups } from "./session-groups.ts";
-import { redactedUrl } from "./site.ts";
+import { redactedUrl, withoutFragment } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
 /** The most refusals kept per tab, and so the most sites `refusedSince` returns. */
 export const MAX_REFUSALS = 20;
 /** The most tabs whose refusals are kept; the tab whose first one is the oldest goes first. */
 export const MAX_REFUSAL_TABS = 100;
+/**
+ * How long a page or frame load whose response headers never came is kept, so a download from it
+ * can still be matched: a service worker can hold the load at least 10 minutes (ADR 0092).
+ */
+export const HOP_AGE_MS = 600_000;
+/** The most such loads kept per tab; past it, the tab's flood mark matches by site. */
+export const MAX_TAB_HOPS = 200;
+/**
+ * How long a load is kept once it is known to have ended some other way or to be no session's,
+ * a closed tab's loads are kept, and a download that matched nothing waits for its load.
+ */
+export const HOP_GRACE_MS = 2_000;
 
 export interface FileGuardDeps {
-  browser: Pick<BrowserApi, "webRequest" | "tabs" | "webNavigation">;
+  browser: Pick<BrowserApi, "webRequest" | "tabs" | "webNavigation" | "downloads" | "runtime">;
   groups: Pick<SessionGroups, "sessionOf" | "rememberedSessionOf">;
   access: Pick<SiteAccess, "view" | "onRunningChange">;
+  /** The epoch clock webRequest's timeStamp is on: Date.now in the background. */
+  now: () => number;
 }
 
 export interface FileGuard {
@@ -31,6 +51,11 @@ export interface FileGuard {
   refusedSince(tabId: number, since: number): string[];
   /** Calls `listener` at each refusal; returns the function that removes it. */
   onRefused(listener: RefusalListener): () => void;
+  /**
+   * Resolves once the download judgements under way when it is called have ended; never rejects.
+   * A download still waiting for its load is not waited for.
+   */
+  settled(): Promise<void>;
 }
 
 export type RefusalListener = (tabId: number, site: string, frameId: number) => void;
@@ -63,6 +88,64 @@ interface Opened {
   tie: Promise<Tie | undefined>;
 }
 
+/** A page or frame load of a tab whose response headers have not come (ADR 0092). */
+interface Hop {
+  requestId: string;
+  /** Without its fragment. */
+  url: string;
+  tabId: number;
+  frameId: number;
+  timeStamp: number;
+  /** now() when it was seen to end some other way; it is still matched for HOP_GRACE_MS. */
+  ended?: number;
+}
+
+/** What a tab's lookup settled to. */
+type Lookup = { judged: Judgement } | { none: true } | { failed: true };
+
+/** A tab's kept loads, and what the tab is judged as. */
+interface Loads {
+  /** At most MAX_TAB_HOPS, oldest first. */
+  hops: Hop[];
+  /** The last lookup started; never rejects. */
+  lookup: Promise<Lookup>;
+  /** What that lookup settled to; unset while it runs. */
+  outcome?: Lookup;
+  /** A lookup was asked for while one was under way: it runs once more after it. */
+  again?: boolean;
+  /** The group tabs.onUpdated last showed the tab in. */
+  group?: number;
+  /**
+   * Set when a load came while the tab kept MAX_TAB_HOPS: `from` is the first such load's
+   * timeStamp, `until` HOP_AGE_MS after the last one's, cut to HOP_GRACE_MS after the tab closed.
+   */
+  flood?: { from: number; until: number };
+  /** now() when the tab closed. */
+  closed?: number;
+}
+
+/** A download Foxleash did not start, from an http(s) address. */
+interface Download {
+  id: number;
+  /** Without its fragment. */
+  url: string;
+  /** Its startTime in ms since the epoch; Infinity when unreadable. */
+  started: number;
+  /** now() at its onCreated. */
+  at: number;
+  /** Set when a judgement took it to refuse: that refusal, which no other judgement repeats. */
+  refusal?: Promise<void>;
+}
+
+/** A kept load, with its tab's entry: the entry may leave the map while the load is judged. */
+interface Candidate {
+  hop: Hop;
+  loads: Loads;
+}
+
+/** How a load judges a download from its address. */
+type Verdict = { refuse: true; judged?: Judgement } | { refuse: false; allowed: boolean };
+
 /** The redirects Firefox follows. It follows no 300, so that and every other 3xx is judged. */
 const REDIRECTS: ReadonlySet<number> = new Set([301, 302, 303, 307, 308]);
 /**
@@ -85,22 +168,35 @@ const PAGE_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml
  * meanwhile (ADR 0071). They are never removed: a session's group outlives its session, and a page
  * left open in it can load a file at any time.
  */
-export function createFileGuard({ browser, groups, access }: FileGuardDeps): FileGuard {
+export function createFileGuard({ browser, groups, access, now }: FileGuardDeps): FileGuard {
   const refusals = new Map<number, Refusal[]>();
   const listeners = new Set<RefusalListener>();
   const opened = new Map<number, Opened>();
+  const loads = new Map<number, Loads>();
+  /** Tabs closed in the last HOP_GRACE_MS, with their `opened` entry: for a load's lookup only. */
+  const closedTabs = new Map<number, { at: number; entry: Opened | undefined }>();
+  /** Commits in the last HOP_GRACE_MS that came before their load. */
+  let commits: { tabId: number; frameId: number; url: string; timeStamp: number; at: number }[] =
+    [];
+  /** Downloads that matched nothing yet, kept HOP_GRACE_MS from their onCreated. */
+  const unmatched = new Map<number, Download>();
+  const judging = new Set<Promise<void>>();
   let listening = false;
 
   access.onRunningChange(listen);
   browser.tabs.onRemoved.addListener((tabId) => {
+    if (listening) closeLoads(tabId);
     refusals.delete(tabId);
     opened.delete(tabId);
   });
   browser.tabs.onCreated.addListener((tab) => listenFor(tab));
-  browser.tabs.onUpdated.addListener((_tabId, _changeInfo, tab) => listenFor(tab));
+  browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    void listenFor(tab);
+    regroup(tabId, changeInfo, tab);
+  });
   void listenForOpenTabs();
 
-  return { refusedSince, onRefused };
+  return { refusedSince, onRefused, settled };
 
   /** Never rejects. */
   async function listenFor(tab: Tab): Promise<void> {
@@ -129,10 +225,20 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
       ["blocking", "responseHeaders"],
     );
     browser.webNavigation.onCreatedNavigationTarget.addListener(tie);
+    // The second layer (ADR 0092): a load whose headers never came, as when another site's
+    // service worker answers it, is matched with the download it becomes. None of these blocks.
+    const loadTypes = { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] };
+    browser.webRequest.onBeforeRequest.addListener(onHop, loadTypes);
+    browser.webRequest.onCompleted.addListener(onEnded, loadTypes);
+    browser.webRequest.onErrorOccurred.addListener(onEnded, loadTypes);
+    browser.webNavigation.onCommitted.addListener(onCommitted);
+    browser.downloads.onCreated.addListener(onDownload);
   }
 
   /** Answers at once, with nothing, for everything but a file: only that waits for a lookup. */
   function onHeaders(details: HeadersReceivedDetails): Promise<Cancel | undefined> | undefined {
+    // The header layer has this load.
+    forgetHop(details.tabId, details.requestId, withoutFragment(details.url));
     if (details.tabId < 0) return undefined;
     // Only these carry a response a site sent.
     if (!/^https?:/i.test(details.url)) return undefined;
@@ -185,15 +291,20 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
     // The group wins over a tie, and a refusal there is not the old opener's.
     if (session !== undefined) return { session };
     if (entry !== undefined) {
-      const tie = await entry.tie;
-      if (tie !== undefined) return tie;
-      // The source was no session's when it opened the tab, but may have joined a group since.
-      const later = await tieOf(entry.source).catch(() => undefined);
-      if (later !== undefined) return later;
+      const tied = await judgedByEntry(entry);
+      if (tied !== undefined) return tied;
     }
     // Last: a tie or a current group says more about the tab than the group it was left in.
     const remembered = await groups.rememberedSessionOf(tab.groupId);
     return remembered === undefined ? undefined : { session: remembered };
+  }
+
+  /** The judgement of a tab opened from another tab, by its tie; never rejects. */
+  async function judgedByEntry(entry: Opened): Promise<Judgement | undefined> {
+    const tie = await entry.tie;
+    if (tie !== undefined) return tie;
+    // The source was no session's when it opened the tab, but may have joined a group since.
+    return tieOf(entry.source).catch(() => undefined);
   }
 
   /** The only place a refusal is recorded. The opener hears of it for `refusedSince` only. */
@@ -221,6 +332,8 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
       source: details.sourceTabId,
       tie: tieOf(details.sourceTabId).catch(() => fallback),
     });
+    const entry = loads.get(details.tabId);
+    if (entry !== undefined) rerun(details.tabId, entry);
   }
 
   /** Rejects when the source is gone. */
@@ -254,6 +367,367 @@ export function createFileGuard({ browser, groups, access }: FileGuardDeps): Fil
     return () => {
       listeners.delete(listener);
     };
+  }
+
+  function settled(): Promise<void> {
+    return Promise.all([...judging]).then(() => undefined);
+  }
+
+  function closeLoads(tabId: number): void {
+    const at = now();
+    closedTabs.set(tabId, { at, entry: opened.get(tabId) });
+    const entry = loads.get(tabId);
+    if (entry === undefined) return;
+    entry.closed = at;
+    if (entry.flood !== undefined)
+      entry.flood.until = Math.min(entry.flood.until, at + HOP_GRACE_MS);
+  }
+
+  function regroup(tabId: number, changeInfo: TabChangeInfo, tab: Tab): void {
+    const entry = loads.get(tabId);
+    if (entry === undefined) return;
+    // Seen from the tab's own group, as Firefox does not always name a change of it.
+    const group = changeInfo.groupId ?? tab.groupId ?? -1;
+    if (group === entry.group) return;
+    entry.group = group;
+    rerun(tabId, entry);
+  }
+
+  function onHop(details: RequestDetails): void {
+    if (details.tabId < 0 || !/^https?:/i.test(details.url)) return;
+    const at = now();
+    prune(at);
+    const { tabId, requestId, frameId, timeStamp } = details;
+    const url = withoutFragment(details.url);
+    const entry = loadsOf(tabId);
+    let kept: Hop | undefined;
+    if (!entry.hops.some((hop) => hop.requestId === requestId && hop.url === url)) {
+      if (entry.hops.length >= MAX_TAB_HOPS) {
+        flooded(entry, timeStamp, at);
+      } else {
+        kept = { requestId, url, tabId, frameId, timeStamp };
+        entry.hops.push(kept);
+        endIfCommitted(kept, at);
+      }
+    }
+    // One lookup at a time: the loads that come while it runs share it.
+    if (entry.outcome !== undefined) void lookUp(tabId, entry);
+    for (const download of [...unmatched.values()]) {
+      const hop = kept !== undefined && matches(kept, download) ? kept : undefined;
+      track(download, recheck(download, hop === undefined ? [] : [{ hop, loads: entry }]));
+    }
+  }
+
+  /** The tab's entry; a new one with its lookup started. */
+  function loadsOf(tabId: number): Loads {
+    const known = loads.get(tabId);
+    if (known !== undefined) return known;
+    const entry: Loads = { hops: [], lookup: lookupOf(tabId) };
+    watch(tabId, entry);
+    // The load came after its tab's onRemoved.
+    const closed = closedTabs.get(tabId);
+    if (closed !== undefined) entry.closed = closed.at;
+    loads.set(tabId, entry);
+    return entry;
+  }
+
+  /** Never ended by the count: a load past the cap can still bring a download. */
+  function flooded(entry: Loads, timeStamp: number, at: number): void {
+    const live = entry.flood !== undefined && at <= entry.flood.until;
+    const from = live && entry.flood !== undefined ? entry.flood.from : timeStamp;
+    const until =
+      entry.closed === undefined
+        ? timeStamp + HOP_AGE_MS
+        : Math.min(timeStamp + HOP_AGE_MS, entry.closed + HOP_GRACE_MS);
+    entry.flood = { from, until };
+  }
+
+  /** A commit can reach the background before its own load. */
+  function endIfCommitted(hop: Hop, at: number): void {
+    const index = commits.findIndex(
+      (commit) =>
+        commit.tabId === hop.tabId &&
+        commit.frameId === hop.frameId &&
+        commit.url === hop.url &&
+        hop.timeStamp <= commit.timeStamp,
+    );
+    if (index < 0) return;
+    hop.ended = at;
+    commits.splice(index, 1);
+  }
+
+  function onEnded(details: CompletedDetails | ErrorDetails): void {
+    const at = now();
+    for (const hop of loads.get(details.tabId)?.hops ?? []) {
+      if (hop.requestId === details.requestId) hop.ended ??= at;
+    }
+  }
+
+  /** The load became a page: only the newest such load ended, so a page cannot end an older one. */
+  function onCommitted(details: NavigationDetails): void {
+    const at = now();
+    // Commits of documents with no load of their own, such as data: frames, come with no load
+    // event that would prune them.
+    prune(at);
+    const url = withoutFragment(details.url);
+    const hop = (loads.get(details.tabId)?.hops ?? []).findLast(
+      (each) =>
+        each.frameId === details.frameId && each.url === url && each.timeStamp <= details.timeStamp,
+    );
+    if (hop !== undefined) {
+      hop.ended ??= at;
+      return;
+    }
+    commits.push({
+      tabId: details.tabId,
+      frameId: details.frameId,
+      url,
+      timeStamp: details.timeStamp,
+      at,
+    });
+  }
+
+  function forgetHop(tabId: number, requestId: string, url: string): void {
+    const entry = loads.get(tabId);
+    const hop = entry?.hops.find((each) => each.requestId === requestId && each.url === url);
+    if (entry !== undefined && hop !== undefined) drop(entry, hop);
+  }
+
+  function drop(entry: Loads, hop: Hop): void {
+    entry.hops = entry.hops.filter((each) => each !== hop);
+  }
+
+  /** Starts a lookup unless one is under way, or asks for one more after it. */
+  function rerun(tabId: number, entry: Loads): void {
+    if (entry.outcome === undefined) entry.again = true;
+    else void lookUp(tabId, entry);
+  }
+
+  function lookUp(tabId: number, entry: Loads): Promise<Lookup> {
+    entry.lookup = lookupOf(tabId);
+    delete entry.outcome;
+    entry.again = false;
+    watch(tabId, entry);
+    return entry.lookup;
+  }
+
+  /** Added first, so it runs before anything that awaits the lookup. */
+  function watch(tabId: number, entry: Loads): void {
+    void entry.lookup.then((outcome) => looked(tabId, entry, outcome));
+  }
+
+  /** Never rejects. */
+  async function lookupOf(tabId: number): Promise<Lookup> {
+    // A tab Firefox closes as its download starts is judged by its opener, also when it closed
+    // before its load reached the background.
+    const entry = opened.get(tabId) ?? closedTabs.get(tabId)?.entry;
+    let judged: Judgement | undefined;
+    try {
+      judged = await judgedSession(tabId);
+    } catch {
+      if (entry === undefined) return { failed: true };
+      judged = await judgedByEntry(entry);
+    }
+    return judged === undefined ? { none: true } : { judged };
+  }
+
+  function looked(tabId: number, entry: Loads, outcome: Lookup): void {
+    entry.outcome = outcome;
+    if (entry.again === true) void lookUp(tabId, entry);
+    prune(now());
+    if (!("judged" in outcome)) return;
+    // The tab became a session's after its load and the download.
+    for (const download of [...unmatched.values()]) {
+      const candidates = entry.hops
+        .filter((hop) => matches(hop, download))
+        .map((hop) => ({ hop, loads: entry }));
+      track(download, recheck(download, newestFirst(candidates), [[tabId, entry]]));
+    }
+  }
+
+  function onDownload(item: DownloadItem): void {
+    const at = now();
+    prune(at);
+    // Foxleash's own `download` tool judges its address itself; a later piece handles the rest.
+    if (item.byExtensionId === browser.runtime.id || !/^https?:/i.test(item.url)) return;
+    const parsed = Date.parse(item.startTime);
+    const download: Download = {
+      id: item.id,
+      url: withoutFragment(item.url),
+      // An unreadable start matches every load: a NaN comparison would match none.
+      started: Number.isNaN(parsed) ? Number.POSITIVE_INFINITY : parsed,
+      at,
+    };
+    // Before any await: a load that arrives meanwhile finds it.
+    unmatched.set(download.id, download);
+    const candidates: Candidate[] = [];
+    for (const entry of loads.values()) {
+      for (const hop of entry.hops) {
+        if (matches(hop, download)) candidates.push({ hop, loads: entry });
+      }
+    }
+    track(download, recheck(download, newestFirst(candidates)));
+  }
+
+  function matches(hop: Hop, download: Download): boolean {
+    // startTime has whole milliseconds; a timeStamp may carry a fraction.
+    return hop.url === download.url && Math.floor(hop.timeStamp) <= download.started;
+  }
+
+  function newestFirst(candidates: Candidate[]): Candidate[] {
+    return candidates.sort((a, b) => b.hop.timeStamp - a.hop.timeStamp);
+  }
+
+  /** A judgement ends once the download's refusal has, whichever judgement made it. */
+  function track(download: Download, judgement: Promise<void>): void {
+    const tracked: Promise<void> = judgement
+      .then(() => download.refusal)
+      .then(() => {
+        judging.delete(tracked);
+      });
+    judging.add(tracked);
+  }
+
+  async function recheck(
+    download: Download,
+    candidates: Candidate[],
+    floods?: [number, Loads][],
+  ): Promise<void> {
+    await byHops(download, candidates);
+    await byFlood(download, floods);
+  }
+
+  /** Refuses the download when one of these loads, newest first, refuses it. */
+  async function byHops(download: Download, candidates: Candidate[]): Promise<void> {
+    let allowed: Candidate | undefined;
+    for (const candidate of candidates) {
+      const verdict = await verdictOf(candidate, download.url);
+      if (download.refusal !== undefined) return;
+      if (verdict.refuse) {
+        // Decided at once: a download is refused once. The load is kept: which load a download
+        // came from cannot be told, and a page could otherwise spend the load on a download of the
+        // same address from a window it opened and then closed, before the load's own.
+        take(download, refuse(download, candidate.hop, verdict.judged));
+        return;
+      }
+      if (verdict.allowed && allowed === undefined) allowed = candidate;
+    }
+    // Its load ended in this download.
+    if (allowed !== undefined) drop(allowed.loads, allowed.hop);
+  }
+
+  async function verdictOf({ hop, loads: entry }: Candidate, url: string): Promise<Verdict> {
+    const outcome = await outcomeOf(hop.tabId, entry);
+    if ("none" in outcome) return { refuse: false, allowed: false };
+    // A tab that cannot be looked up lets no file through, as for the header layer.
+    if ("failed" in outcome) return { refuse: true };
+    const { judged } = outcome;
+    try {
+      // Read anew each time: an approval the user withdrew a moment ago no longer counts.
+      const view = await access.view(judged.session);
+      if (view.allowed(url)) return { refuse: false, allowed: true };
+    } catch {
+      // A session the user stopped, or settings that cannot be read: refused.
+    }
+    return { refuse: true, judged };
+  }
+
+  /** The tab's lookup, made again when it said no session. */
+  async function outcomeOf(tabId: number, entry: Loads): Promise<Lookup> {
+    const outcome = await entry.lookup;
+    if (!("none" in outcome)) return outcome;
+    // The tab may have joined a group, or been tied, since: a lookup under way began after the
+    // outcome settled.
+    return entry.outcome === undefined ? entry.lookup : lookUp(tabId, entry);
+  }
+
+  /**
+   * During a flood, a download of a site the flooding tab's session may not act on, from any tab,
+   * Foxleash did not start: refused, and reported to nobody.
+   */
+  async function byFlood(download: Download, floods?: [number, Loads][]): Promise<void> {
+    for (const [tabId, entry] of floods ?? [...loads]) {
+      const flood = entry.flood;
+      if (flood === undefined || Math.floor(flood.from) > download.started) continue;
+      if (now() > flood.until) continue;
+      const outcome = await outcomeOf(tabId, entry);
+      if ("none" in outcome) continue;
+      if ("judged" in outcome && (await allows(outcome.judged.session, download.url))) continue;
+      // Decided at once, as for a load.
+      if (download.refusal !== undefined) continue;
+      take(download, refuse(download));
+    }
+  }
+
+  async function allows(session: string, url: string): Promise<boolean> {
+    try {
+      return (await access.view(session)).allowed(url);
+    } catch {
+      return false;
+    }
+  }
+
+  /** Its judgements end with the refusal: `track` waits for it. */
+  function take(download: Download, refusal: Promise<void>): void {
+    download.refusal = refusal;
+    unmatched.delete(download.id);
+  }
+
+  /** Cancels the download and removes its file; a match by one load is recorded once it is gone. */
+  async function refuse(download: Download, hop?: Hop, judged?: Judgement): Promise<void> {
+    const { id } = download;
+    try {
+      await browser.downloads.cancel(id);
+    } catch {
+      // Firefox rejects for a download already complete: its file is removed below.
+    }
+    let gone = false;
+    try {
+      const [item] = await browser.downloads.search({ id });
+      if (item?.state === "complete") {
+        // Resolving means the file is gone; a search right after can still say it exists.
+        await browser.downloads.removeFile(id);
+        gone = true;
+      } else {
+        // Firefox deletes the partial file of a download it interrupts, and removes the file of
+        // no other download that is not complete.
+        gone = item?.state === "interrupted" && item.exists !== true;
+      }
+    } catch {
+      // Not removed.
+    }
+    if (!gone) {
+      warn({ event: "file_guard_download_kept", id });
+      return;
+    }
+    if (hop !== undefined) {
+      refused(hop.tabId, redactedUrl(download.url), hop.frameId, now(), judged?.opener);
+    }
+  }
+
+  /** Forgets what is too old to match. */
+  function prune(at: number): void {
+    for (const [tabId, entry] of loads) {
+      const none = entry.outcome !== undefined && "none" in entry.outcome;
+      entry.hops = entry.hops.filter(
+        (hop) =>
+          at - hop.timeStamp < HOP_AGE_MS &&
+          (hop.ended === undefined || at - hop.ended < HOP_GRACE_MS) &&
+          !(none && at - hop.timeStamp >= HOP_GRACE_MS),
+      );
+      if (entry.flood !== undefined && at > entry.flood.until) delete entry.flood;
+      const closed = entry.closed !== undefined && at - entry.closed >= HOP_GRACE_MS;
+      const empty =
+        entry.hops.length === 0 && entry.flood === undefined && entry.outcome !== undefined;
+      if (closed || empty) loads.delete(tabId);
+    }
+    for (const [tabId, closed] of closedTabs) {
+      if (at - closed.at >= HOP_GRACE_MS) closedTabs.delete(tabId);
+    }
+    commits = commits.filter((commit) => at - commit.at < HOP_GRACE_MS);
+    for (const [id, download] of unmatched) {
+      if (at - download.at >= HOP_GRACE_MS) unmatched.delete(id);
+    }
   }
 }
 

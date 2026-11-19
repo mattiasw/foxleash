@@ -177,6 +177,15 @@ recognised.
 
 An upload takes at most 100 files and 10 MB.
 
+A file saved or changed in the last 5 seconds is refused too, by the newest of its modified,
+changed and created times: Foxleash may still be removing a file that a page got saved from a
+site the session may not act on (see
+[Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)). So a file the
+agent, the `download` tool or you saved less than 5 seconds ago is refused once, with a reason
+that says to try again in a few seconds, and a `batch` that downloads a file and uploads it in one
+call meets that refusal. A modified time ahead of the clock, as an unpacked archive can have,
+does not count.
+
 Once the extension has updated, it refuses uploads from an older Foxleash program, whose checks
 miss some keys, until you update the program.
 
@@ -571,6 +580,23 @@ What the agent learns:
   made.
 - A load stopped at any other time, such as one a page starts on a timer after the call
   returned, is in no result.
+- A download cancelled because of a load in the tab is reported the same way, by its site alone,
+  once its file is gone, but can be missing from the result: most often a download in a tab the
+  action opened, which Firefox closes, and sometimes one that began after the action's result was
+  settled. A download cancelled during a flood (see below), and one whose file Foxleash could not
+  remove, are in no result.
+
+When such a site's own service worker answers the load, there is no answer from the network to
+stop, and Firefox starts saving the file. For that case Foxleash keeps each page and frame load
+of every tab whose answer has not come, and when Firefox starts a download that Foxleash did not
+start, at the address of such a load in a tab it covers, begun before the download, on a site that
+session may not act on, Foxleash cancels the download and removes its file (ADR 0092). This is
+after the fact: the request reached that site, and the file exists for a moment, measured at
+about 15 to 50 ms for one load and at most about half a second while a page loads the file 33
+times a second. `upload_file` refuses a file saved or changed in the last 5 seconds, so it does
+not hand such a file over in that moment; a program other than Foxleash that reads the download
+folder in a loop can read it, and so can `upload_file` of a Foxleash program from before this
+check. The download stays in Firefox's downloads panel, cancelled.
 
 What counts as a web page: an answer with one `Content-Type` header of `text/html` or
 `application/xhtml+xml`, and no `Content-Disposition` header or one of the type `inline`.
@@ -584,9 +610,22 @@ Exceptions and limits:
 
 - The request still reaches that site, with the cookies Firefox sends for it. Only its answer is
   stopped.
-- Foxleash sees only answers that come from the network or from Firefox's cache. Still saved are:
-  an answer that such a site's own service worker gives, and a file that a page of such a site
-  builds itself, when the tab or a frame shows that page.
+- Still saved is a file that a page of such a site builds itself, when the tab or a frame shows
+  that page. An answer that such a site's service worker gives and that Firefox shows rather than
+  saves, such as a PDF, an image or text, is still shown: it starts no download.
+- A download whose address is not that of a load of the tab is not cancelled, such as one that a
+  service worker answers with a redirect it builds. Neither is one whose load the worker held for
+  more than 10 minutes before answering, nor a file Foxleash could not remove: that is logged, and
+  `upload_file` refuses the file only for its first 5 seconds.
+- A download of your own is cancelled and its file removed when a tab of an agent's group began a
+  load of exactly that address in the 10 minutes before, on a site that session may not act on,
+  that got no answer from the network and showed no page: one still waiting, or one whose own
+  download Foxleash already cancelled. Foxleash cannot tell which load a download came from, so
+  such a load keeps refusing its address. A page can cause that for each address it loads so.
+- A page in the agent's tabs that keeps more than 200 loads under way without an answer makes
+  Foxleash cancel and remove every download that Foxleash did not start, in any tab, from every
+  site that session may not act on, until 10 minutes after the last load over those 200, or 2
+  seconds after its tab closed. Such a download is in no result.
 - A window that a page in those tabs opens is not covered when the tab that opened it closes
   before Foxleash has looked that tab up, a matter of milliseconds, unless another tab of the
   group opened that tab. A page may be able to close its own tab that fast while the tab has
