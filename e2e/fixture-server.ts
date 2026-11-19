@@ -3007,8 +3007,8 @@ function foreignWorkerFramePage(other: string, target: string): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.foreignWorkerFrame}</title></head>
 <body>
-<iframe title="Setup" src="${other}/foreign/worker-setup"></iframe>
 <script>
+// Listen before the setup frame exists, so its message cannot arrive first.
 addEventListener("message", (event) => {
   if (event.data !== ${JSON.stringify(TITLES.foreignWorkerReady)} || window.framed) return;
   const frame = document.createElement("iframe");
@@ -3017,6 +3017,10 @@ addEventListener("message", (event) => {
   document.body.append(frame);
   window.framed = true;
 });
+const setup = document.createElement("iframe");
+setup.title = "Setup";
+setup.src = ${JSON.stringify(`${other}/foreign/worker-setup`)};
+document.body.append(setup);
 </script>
 </body></html>
 `;
@@ -3031,9 +3035,9 @@ function foreignWorkerFloodPage(other: string): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.foreignWorkerFlood}</title></head>
 <body>
-<iframe title="Setup" src="${other}/foreign/worker-setup"></iframe>
 <script>
 let started = false;
+// Listen before the setup frame exists, so its message cannot arrive first.
 addEventListener("message", async (event) => {
   if (event.data !== ${JSON.stringify(TITLES.foreignWorkerReady)} || started) return;
   started = true;
@@ -3051,6 +3055,10 @@ addEventListener("message", async (event) => {
   for (const frame of hung) frame.remove();
   document.title = ${JSON.stringify(TITLES.foreignWorkerFlooded)};
 });
+const setup = document.createElement("iframe");
+setup.title = "Setup";
+setup.src = ${JSON.stringify(`${other}/foreign/worker-setup`)};
+document.body.append(setup);
 </script>
 </body></html>
 `;
@@ -3136,7 +3144,9 @@ addEventListener("load", () => {
  * frame is sandboxed, so its page has no origin of its own.
  */
 function foreignBuiltFramePage(other: string, remove: boolean, sandbox: boolean): string {
-  const attributes = sandbox ? ' sandbox="allow-scripts allow-downloads"' : "";
+  const sandboxing = sandbox
+    ? 'frame.setAttribute("sandbox", "allow-scripts allow-downloads");'
+    : "";
   const removal = remove
     ? `frame.addEventListener("load", () => {
   setTimeout(() => {
@@ -3148,12 +3158,17 @@ function foreignBuiltFramePage(other: string, remove: boolean, sandbox: boolean)
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.foreignBuiltFrame}</title></head>
 <body>
-<iframe id="built" title="Built"${attributes} src="${other}/foreign/built"></iframe>
 <script>
-const frame = document.getElementById("built");
+// Listen before the frame exists, so its message cannot arrive first.
 addEventListener("message", (event) => {
   if (event.data === "saved") window.saved = true;
 });
+const frame = document.createElement("iframe");
+frame.id = "built";
+frame.title = "Built";
+${sandboxing}
+frame.src = ${JSON.stringify(`${other}/foreign/built`)};
+document.body.append(frame);
 ${removal}
 </script>
 </body></html>

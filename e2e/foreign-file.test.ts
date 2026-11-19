@@ -42,6 +42,24 @@ const RETRY_UPLOADS = 50;
 const RETRY_MS = 60_000;
 /** The reason upload_file gives for a file saved or changed a moment ago. */
 const FRESH_REASON = "was saved or changed a moment ago";
+/** How long a failure message waits for each read of what a tab or frame shows. */
+const DIAGNOSTIC_READ_MS = 5_000;
+/**
+ * A page's own address and load state, its fixture flags, and when its document became
+ * interactive and its load event started, in ms since the epoch (null when not yet).
+ */
+const PAGE_STATE = `(() => {
+  const navigation = performance.getEntriesByType("navigation")[0];
+  const at = (moment) => (moment ? Math.round(performance.timeOrigin + moment) : null);
+  return JSON.stringify({
+    href: location.href,
+    readyState: document.readyState,
+    saved: window.saved === true,
+    removed: window.removed === true,
+    interactiveAt: at(navigation?.domInteractive),
+    loadAt: at(navigation?.loadEventStart),
+  });
+})()`;
 
 interface Page {
   tabId: number;
@@ -798,11 +816,54 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       PAGE_TIMEOUT_MS,
       `a tab to show ${url}`,
     );
-    await pollUntil(
-      async () => ((await firefox.evaluate(found.context, saved)) === true ? true : undefined),
-      PAGE_TIMEOUT_MS,
-      `the page at ${url} to save its file`,
-    );
+    try {
+      await pollUntil(
+        async () => ((await firefox.evaluate(found.context, saved)) === true ? true : undefined),
+        PAGE_TIMEOUT_MS,
+        `the page at ${url} to save its file`,
+      );
+    } catch (error: unknown) {
+      throw new Error(`${messageOf(error)}; ${await pageStates(found.context)}`, { cause: error });
+    }
+  }
+
+  /** What the tab and each of its frames show, and how often the server sent the built page. */
+  async function pageStates(context: string): Promise<string> {
+    const [tab, frames] = await Promise.all([stateOf(context), framesOf(context)]);
+    const hits = fixtures.hits("/foreign/built");
+    return `the tab: ${tab}; ${frames}; requests for /foreign/built since the server started: ${hits}`;
+  }
+
+  async function stateOf(context: string): Promise<string> {
+    try {
+      return await pollUntil(
+        async () => {
+          const state = await firefox.evaluate(context, PAGE_STATE);
+          return typeof state === "string" ? state : undefined;
+        },
+        DIAGNOSTIC_READ_MS,
+        "the page's state",
+      );
+    } catch (error: unknown) {
+      return `not read: ${messageOf(error)}`;
+    }
+  }
+
+  async function framesOf(context: string): Promise<string> {
+    try {
+      const frames = await pollUntil(
+        () => firefox.frames(context),
+        DIAGNOSTIC_READ_MS,
+        "the tab's frames",
+      );
+      if (frames.length === 0) return "no frames";
+      const states = await Promise.all(
+        frames.map(async (frame) => `${frame.url} ${await stateOf(frame.context)}`),
+      );
+      return `frames: ${states.join(", ")}`;
+    } catch (error: unknown) {
+      return `frames not listed: ${messageOf(error)}`;
+    }
   }
 
   /**
@@ -854,4 +915,8 @@ function refOf(tree: string, line: string): string {
   const ref = new RegExp(`${line} \\[${REF}\\]`).exec(tree)?.[1];
   assert.ok(ref !== undefined, `no ref for ${line} in:\n${tree}`);
   return ref;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
