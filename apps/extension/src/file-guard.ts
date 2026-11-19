@@ -165,8 +165,18 @@ interface Download {
   started: number;
   /** now() at its onCreated. */
   at: number;
-  /** Set when a judgement took it to refuse: that refusal, which no other judgement repeats. */
-  refusal?: Promise<void>;
+  /**
+   * The kept loads of its address at its onCreated, its candidates then: a refusal another load
+   * made is not reported to them.
+   */
+  early: ReadonlySet<Hop>;
+  /**
+   * Set when a judgement took it to refuse: that refusal, which no other judgement repeats; it
+   * resolves to whether the file is gone.
+   */
+  refusal?: Promise<boolean>;
+  /** Set when a load refused it: the tab and frame pairs its refusal is recorded for. */
+  told?: Set<string>;
 }
 
 /** A kept load, with its tab's entry: the entry may leave the map while the load is judged. */
@@ -182,8 +192,8 @@ interface Built {
   site?: string;
   /** Its startTime in ms since the epoch; Infinity when unreadable. */
   started: number;
-  /** Set when its judgement took it to refuse. */
-  refusal?: Promise<void>;
+  /** Set when its judgement took it to refuse; resolves to whether the file is gone. */
+  refusal?: Promise<boolean>;
 }
 
 /** A kept document a built file is matched with, with its tab's entry, taken before any await. */
@@ -241,6 +251,11 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     [];
   /** Downloads that matched nothing yet, kept HOP_GRACE_MS from their onCreated. */
   const unmatched = new Map<number, Download>();
+  /**
+   * Downloads a load refused, kept HOP_GRACE_MS from their onCreated: a load of their address heard
+   * later is told.
+   */
+  const refusedDownloads = new Map<number, Download>();
   const judging = new Set<Promise<void>>();
   let listening = false;
 
@@ -480,6 +495,10 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       const hop = kept !== undefined && matches(kept, download) ? kept : undefined;
       track(download, recheck(download, hop === undefined ? [] : [{ hop, loads: entry }]));
     }
+    if (kept === undefined) return;
+    for (const download of [...refusedDownloads.values()]) {
+      if (matches(kept, download)) track(download, tell(download, { hop: kept, loads: entry }));
+    }
   }
 
   /** The tab's entry; a new one with its lookup started. */
@@ -651,6 +670,11 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
         .map((hop) => ({ hop, loads: entry }));
       track(download, recheck(download, newestFirst(candidates), [[tabId, entry]]));
     }
+    for (const download of [...refusedDownloads.values()]) {
+      for (const hop of entry.hops) {
+        if (matches(hop, download)) track(download, tell(download, { hop, loads: entry }));
+      }
+    }
   }
 
   function onDownload(item: DownloadItem): void {
@@ -662,20 +686,23 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       judgeBuilt(item, at);
       return;
     }
-    const download: Download = {
-      id: item.id,
-      url: withoutFragment(item.url),
-      started: startOf(item),
-      at,
-    };
-    // Before any await: a load that arrives meanwhile finds it.
-    unmatched.set(download.id, download);
+    const url = withoutFragment(item.url);
+    const started = startOf(item);
     const candidates: Candidate[] = [];
     for (const entry of loads.values()) {
       for (const hop of entry.hops) {
-        if (matches(hop, download)) candidates.push({ hop, loads: entry });
+        if (matches(hop, { url, started })) candidates.push({ hop, loads: entry });
       }
     }
+    const download: Download = {
+      id: item.id,
+      url,
+      started,
+      at,
+      early: new Set(candidates.map(({ hop }) => hop)),
+    };
+    // Before any await: a load that arrives meanwhile finds it.
+    unmatched.set(download.id, download);
     track(download, recheck(download, newestFirst(candidates)));
   }
 
@@ -826,7 +853,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     return undefined;
   }
 
-  function matches(hop: Hop, download: Download): boolean {
+  function matches(hop: Hop, download: Pick<Download, "url" | "started">): boolean {
     // startTime has whole milliseconds; a timeStamp may carry a fraction.
     return hop.url === download.url && Math.floor(hop.timeStamp) <= download.started;
   }
@@ -837,7 +864,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
 
   /** A judgement ends once the download's refusal has, whichever judgement made it. */
   function track(
-    download: { refusal?: Promise<void> | undefined },
+    download: { refusal?: Promise<unknown> | undefined },
     judgement: Promise<void>,
   ): void {
     const tracked: Promise<void> = judgement
@@ -860,9 +887,13 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   /** Refuses the download when one of these loads, newest first, refuses it. */
   async function byHops(download: Download, candidates: Candidate[]): Promise<void> {
     let allowed: Candidate | undefined;
-    for (const candidate of candidates) {
+    for (const [index, candidate] of candidates.entries()) {
       const verdict = await verdictOf(candidate, download.url);
-      if (download.refusal !== undefined) return;
+      if (download.refusal !== undefined) {
+        // Another load refused it meanwhile: a load heard after it is told.
+        await Promise.all(candidates.slice(index).map((each) => tell(download, each)));
+        return;
+      }
       if (verdict.refuse) {
         // Decided at once: a download is refused once. The load is kept: which load a download
         // came from cannot be told, and a page could otherwise spend the load on a download of the
@@ -871,12 +902,41 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
           download,
           refuse(download.id, candidate.hop, redactedUrl(download.url), verdict.judged),
         );
+        download.told = new Set([pairOf(candidate.hop)]);
+        refusedDownloads.set(download.id, download);
         return;
       }
       if (verdict.allowed && allowed === undefined) allowed = candidate;
     }
     // Its load ended in this download.
     if (allowed !== undefined) drop(allowed.loads, allowed.hop);
+  }
+
+  /**
+   * Records a load's refusal for a load of its address heard after the download, once per tab and
+   * frame.
+   */
+  async function tell(download: Download, candidate: Candidate): Promise<void> {
+    const { told } = download;
+    const pair = pairOf(candidate.hop);
+    if (told === undefined || download.early.has(candidate.hop) || told.has(pair)) return;
+    const verdict = await verdictOf(candidate, download.url);
+    // Checked again: another path may have told this tab and frame meanwhile.
+    if (!verdict.refuse || told.has(pair)) return;
+    told.add(pair);
+    if (await download.refusal) {
+      refused(
+        candidate.hop.tabId,
+        redactedUrl(download.url),
+        candidate.hop.frameId,
+        now(),
+        verdict.judged?.opener,
+      );
+    }
+  }
+
+  function pairOf({ tabId, frameId }: Pick<Hop, "tabId" | "frameId">): string {
+    return `${tabId}/${frameId}`;
   }
 
   async function verdictOf({ hop, loads: entry }: Candidate, url: string): Promise<Verdict> {
@@ -931,7 +991,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   }
 
   /** Its judgements end with the refusal: `track` waits for it. */
-  function take(download: Download, refusal: Promise<void>): void {
+  function take(download: Download, refusal: Promise<boolean>): void {
     download.refusal = refusal;
     unmatched.delete(download.id);
   }
@@ -945,7 +1005,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     tie?: Pick<Hop, "tabId" | "frameId">,
     site?: string,
     judged?: Judgement,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await browser.downloads.cancel(id);
     } catch {
@@ -968,11 +1028,12 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     }
     if (!gone) {
       warn({ event: "file_guard_download_kept", id });
-      return;
+      return false;
     }
     if (tie !== undefined && site !== undefined) {
       refused(tie.tabId, site, tie.frameId, now(), judged?.opener);
     }
+    return true;
   }
 
   /** Forgets what is too old to match. */
@@ -1009,6 +1070,9 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     commits = commits.filter((commit) => at - commit.at < HOP_GRACE_MS);
     for (const [id, download] of unmatched) {
       if (at - download.at >= HOP_GRACE_MS) unmatched.delete(id);
+    }
+    for (const [id, download] of refusedDownloads) {
+      if (at - download.at >= HOP_GRACE_MS) refusedDownloads.delete(id);
     }
   }
 }

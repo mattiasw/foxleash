@@ -89,6 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On a desktop whose download folder is not `~/Downloads`, such as one in another language,
   `upload_file` now reads from that download folder, where Firefox saves downloads, instead of
   from `~/Downloads`, so a file the `download` tool saved can be uploaded.
+- `navigate` or `tab_open` could wait 30 seconds and fail as a timeout, instead of failing at
+  once, when the address was answered with a file by the service worker of a site the agent may
+  not act on and another tab had loaded the same address a moment before. Nothing was saved
+  either way.
 
 ### Security
 

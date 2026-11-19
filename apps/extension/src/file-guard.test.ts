@@ -1218,6 +1218,259 @@ describe("a download from a load whose headers never came", { timeout: 10000 }, 
   });
 });
 
+describe("a load of a refused download's address heard after it", { timeout: 10000 }, () => {
+  it("hears of the refusal when a closed tab's load refused it first", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const first = await tabIn("s1");
+    const second = await tabIn("s1");
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    hop(fake, { tabId: first.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    clock.now = 1100;
+    fake.removeTab(first.id);
+    clock.now = 1200;
+    download(fake, { id: 2, started: 1160 });
+    await idle(guard);
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1150 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(heard, [
+      [first.id, B, 0],
+      [first.id, B, 0],
+      [second.id, B, 0],
+    ]);
+    assert.deepEqual(guard.refusedSince(second.id, 0), [B]);
+  });
+
+  it("hears of it when it arrives while another load's judgement refuses it", async (t) => {
+    const { fake, clock, access, guard, tabIn } = setup();
+    const first = await tabIn("s1");
+    const second = await tabIn("s1");
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    hop(fake, { tabId: first.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    clock.now = 1100;
+    fake.removeTab(first.id);
+    clock.now = 1200;
+    // The verdicts of the two loads, the late one's judged by its hop and by its lookup, wait on one
+    // gate, and every later one on the other.
+    const view = access.view;
+    const verdicts = Promise.withResolvers<void>();
+    const later = Promise.withResolvers<void>();
+    let views = 0;
+    t.mock.method(access, "view", async (session: string) => {
+      views += 1;
+      await (views <= 3 ? verdicts : later).promise;
+      return view(session);
+    });
+    download(fake, { id: 2, started: 1160 });
+    await idle(guard, false);
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1150 });
+    await idle(guard, false);
+    assert.equal(views, 3);
+    const done = tracked(guard.settled());
+    verdicts.resolve();
+    await idle(guard, false);
+    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(guard.refusedSince(second.id, 0), []);
+    // Its judgements end only once it was told.
+    assert.equal(done(), false);
+    later.resolve();
+    await idle(guard);
+    assert.equal(done(), true);
+    assert.deepEqual(heard, [
+      [first.id, B, 0],
+      [first.id, B, 0],
+      [second.id, B, 0],
+    ]);
+    assert.deepEqual(guard.refusedSince(second.id, 0), [B]);
+  });
+
+  it("hears of it only when it began no later than the download", async () => {
+    for (const [timeStamp, told] of [
+      [1004.5, true],
+      [1005, false],
+    ] as const) {
+      const { fake, guard, tabIn } = await refusedByLoad();
+      const second = await tabIn("s1");
+      hop(fake, { tabId: second.id, requestId: "h2", timeStamp });
+      await idle(guard);
+      assert.deepEqual(guard.refusedSince(second.id, 0), told ? [B] : [], String(timeStamp));
+      assert.deepEqual(fake.cancelledDownloads, [1], String(timeStamp));
+    }
+  });
+
+  it("hears of it for HOP_GRACE_MS from the download's onCreated", async () => {
+    for (const [late, told] of [
+      [HOP_GRACE_MS - 1, true],
+      [HOP_GRACE_MS, false],
+    ] as const) {
+      const { fake, clock, guard, tabIn } = await refusedByLoad();
+      const second = await tabIn("s1");
+      clock.now = 1010 + late;
+      hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+      await idle(guard);
+      assert.deepEqual(guard.refusedSince(second.id, 0), told ? [B] : [], String(late));
+    }
+  });
+
+  it("hears nothing in a tab whose session may act on the site, or of no session", async () => {
+    const { fake, guard, heard, tabIn } = await refusedByLoad();
+    const second = await tabIn("s1");
+    const own = fake.openTab({ url: `${A}/page` });
+    await grantSite(fake.browser, B);
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+    hop(fake, { tabId: own.id, requestId: "h3", timeStamp: 1002 });
+    await idle(guard);
+    assert.equal(heard.length, 1);
+    assert.deepEqual(guard.refusedSince(second.id, 0), []);
+    assert.deepEqual(guard.refusedSince(own.id, 0), []);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("is told once per tab and frame, and judged no more once told", async (t) => {
+    const { fake, access, guard, first, heard, tabIn } = await refusedByLoad();
+    const second = await tabIn("s1");
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    const view = t.mock.method(access, "view");
+    hop(fake, { tabId: second.id, requestId: "h3", timeStamp: 1003 });
+    // The refusing load's own tab and frame.
+    hop(fake, { tabId: first.id, requestId: "h4", timeStamp: 1003 });
+    await idle(guard);
+    assert.equal(view.mock.callCount(), 0);
+    hop(fake, {
+      tabId: second.id,
+      requestId: "h5",
+      frameId: 3,
+      type: "sub_frame",
+      timeStamp: 1003,
+    });
+    await idle(guard);
+    assert.deepEqual(heard, [
+      [first.id, B, 0],
+      [second.id, B, 0],
+      [second.id, B, 3],
+    ]);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("hears nothing when the refused download's file is not gone", async (t) => {
+    const warned = warnings(t);
+    const { fake, guard, heard, tabIn } = await refusedByLoad({
+      state: "interrupted",
+      exists: true,
+    });
+    const second = await tabIn("s1");
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    assert.deepEqual(heard, []);
+    assert.deepEqual(guard.refusedSince(second.id, 0), []);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(warned(), [{ event: "file_guard_download_kept", id: 1 }]);
+  });
+
+  it("is told before the guard settles", async (t) => {
+    const { fake, access, guard, tabIn } = await refusedByLoad();
+    const second = await tabIn("s1");
+    const views = holdViews(t, access);
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+    const done = tracked(guard.settled());
+    await idle(guard, false);
+    assert.equal(done(), false);
+    assert.deepEqual(guard.refusedSince(second.id, 0), []);
+    views.release();
+    await idle(guard);
+    assert.equal(done(), true);
+    assert.deepEqual(guard.refusedSince(second.id, 0), [B]);
+  });
+
+  it("is told once its tab becomes a session's, with its opener", async () => {
+    const { fake, clock, guard, first, heard } = await refusedByLoad();
+    const window = fake.openTab({ url: "about:blank" });
+    hop(fake, { tabId: window.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    assert.deepEqual(guard.refusedSince(window.id, 0), []);
+    clock.now = 1100;
+    opens(fake, first, window);
+    await idle(guard);
+    // A further lookup tells it nothing more.
+    opens(fake, first, window);
+    await idle(guard);
+    assert.deepEqual(heard, [
+      [first.id, B, 0],
+      [window.id, B, 0],
+    ]);
+    assert.deepEqual(guard.refusedSince(window.id, 0), [B]);
+    assert.deepEqual(guard.refusedSince(first.id, 1100), [B]);
+  });
+
+  it("hears nothing of a download a flood mark refused", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const flooding = await tabIn("s1");
+    const heard: unknown[][] = [];
+    guard.onRefused((...refusal) => heard.push(refusal));
+    flood(fake, flooding.id, 1000);
+    hop(fake, { tabId: flooding.id, requestId: "over", url: `${B}/over`, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    hop(fake, { tabId: tab.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    assert.deepEqual(heard, []);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), []);
+  });
+
+  it("of a tab closed before it was heard, is told for the tab's opener", async () => {
+    const { fake, clock, guard, tabIn } = setup();
+    const opener = await tabIn("s1");
+    const other = await tabIn("s1");
+    const window = fake.openTab({ url: "about:blank" });
+    opens(fake, opener, window);
+    await idle(guard);
+    hop(fake, { tabId: other.id, timeStamp: 1000 });
+    clock.now = 1010;
+    download(fake, { id: 1, started: 1004 });
+    await idle(guard);
+    assert.deepEqual(guard.refusedSince(opener.id, 0), []);
+    clock.now = 1100;
+    fake.removeTab(window.id);
+    await idle(guard);
+    hop(fake, { tabId: window.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    assert.deepEqual(guard.refusedSince(opener.id, 0), [B]);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+  });
+
+  it("of a tab that cannot be looked up, is told", async () => {
+    const { fake, guard } = await refusedByLoad();
+    hop(fake, { tabId: 999, requestId: "h2", timeStamp: 1002 });
+    await idle(guard);
+    assert.deepEqual(guard.refusedSince(999, 0), [B]);
+  });
+
+  it("heard in time, is told when its judgement ends after HOP_GRACE_MS", async (t) => {
+    const { fake, clock, guard, heard, tabIn } = await refusedByLoad();
+    const second = await tabIn("s1");
+    const gets = holdGets(t, fake, second.id);
+    clock.now = 1010 + HOP_GRACE_MS - 1;
+    hop(fake, { tabId: second.id, requestId: "h2", timeStamp: 1002 });
+    await idle(guard, false);
+    clock.now = 1010 + HOP_GRACE_MS;
+    gets.release();
+    await idle(guard);
+    assert.deepEqual(heard.slice(1), [[second.id, B, 0]]);
+  });
+});
+
 describe("the loads the guard keeps", { timeout: 10000 }, () => {
   it("are at most MAX_TAB_HOPS per tab; past that, a flood mark refuses by site", async () => {
     const { fake, clock, guard, tabIn } = setup();
@@ -2786,4 +3039,21 @@ function setup() {
   }
 
   return { fake, clock, groups, sessions, access, guard, tabIn, respond };
+}
+
+/**
+ * A setup where a load of `first`, a tab of the session s1, began at 1000, and a download of B's
+ * export, begun at 1004, was refused by it at 1010; `heard` collects what `onRefused` hears.
+ */
+async function refusedByLoad(item: { state?: string; exists?: boolean } = {}) {
+  const context = setup();
+  const { fake, clock, guard, tabIn } = context;
+  const first = await tabIn("s1");
+  const heard: unknown[][] = [];
+  guard.onRefused((...refusal) => heard.push(refusal));
+  hop(fake, { tabId: first.id, timeStamp: 1000 });
+  clock.now = 1010;
+  download(fake, { id: 1, started: 1004, ...item });
+  await idle(guard);
+  return { ...context, first, heard };
 }

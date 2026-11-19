@@ -4,7 +4,10 @@
 [0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md): its consequence
 on an answer that the other site's own service worker gives, and its rejected alternative
 "Cancelling and erasing through `downloads.onCreated`" (rejected as the only layer, accepted as
-the second).
+the second). Amended by
+[0096](0096-a-refused-download-is-reported-to-loads-heard-after-it.md), 2026-11-19: a refusal by
+a load is also recorded for each load of the download's address heard after it, begun before it
+and judged to refuse, once per tab and frame.
 
 ## Context
 
