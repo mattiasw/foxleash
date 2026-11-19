@@ -926,7 +926,12 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/api/xhr" || path === "/api/frame") {
       response.writeHead(200, { "Content-Type": "text/plain", "Cache-Control": "no-store" });
       response.end("ok");
-    } else if (path === "/api/beacon-top" || path === "/api/beacon-frame") {
+    } else if (
+      path === "/api/beacon-top" ||
+      path === "/api/beacon-frame" ||
+      path === "/api/beacon-armed-top" ||
+      path === "/api/beacon-armed-frame"
+    ) {
       response.writeHead(204, { "Cache-Control": "no-store" });
       response.end();
     } else if (path === "/network-burst") {
@@ -4032,12 +4037,14 @@ function networkHopPage(port: number): string {
 
 // On the other site, in a frame from the fixture site: both send a beacon to the fixture site as
 // they unload, which Firefox does after the next page in the tab committed.
+// Each reports to the fixture server once its listener is in place.
 function networkOldPage(port: number): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>Network old page</title></head>
 <body><iframe title="Fixture site" src="http://127.0.0.1:${port}/network-old-frame"></iframe>
 <script>
 window.addEventListener("pagehide", () => navigator.sendBeacon("http://127.0.0.1:${port}/api/beacon-top"));
+navigator.sendBeacon("http://127.0.0.1:${port}/api/beacon-armed-top");
 </script>
 </body></html>
 `;
@@ -4251,6 +4258,7 @@ const NETWORK_OLD_FRAME_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>Network old frame</title></head>
 <body><script>
 window.addEventListener("pagehide", () => navigator.sendBeacon("/api/beacon-frame"));
+navigator.sendBeacon("/api/beacon-armed-frame");
 </script></body></html>
 `;
 

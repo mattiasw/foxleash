@@ -7,7 +7,7 @@ import {
   type NetworkHeader,
   type NetworkRequestRead,
 } from "@foxleash/protocol";
-import type { Firefox } from "./firefox.ts";
+import { type Firefox, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
   NETWORK_BODIES,
@@ -196,15 +196,28 @@ describe("read_network in real Firefox", () => {
       const listed = tabsOf(await harness.ok(session, "tabs_list")).find(({ id }) => id === tab);
       return listed !== undefined && URL.parse(listed.url)?.origin === other;
     }, `tab ${tab} to show ${other}`);
+    await pollUntil(
+      async () => {
+        const top = fixtures.hits("/api/beacon-armed-top");
+        const frame = fixtures.hits("/api/beacon-armed-frame");
+        if (top > 0 && frame > 0) return true;
+        throw new Error(`armed-top ${top}, armed-frame ${frame}`);
+      },
+      POLL_LIMIT_MS,
+      "the unload listeners of the previous page",
+    );
     await harness.ok(session, "navigate", { tabId: tab, url: fixtures.url("/a") });
-    await waitFor(async () => {
-      const read = await readNetwork(tab);
-      return (
-        read.recording &&
-        fixtures.hits("/api/beacon-top") > 0 &&
-        fixtures.hits("/api/beacon-frame") > 0
-      );
-    }, "the beacons of the previous page");
+    await pollUntil(
+      async () => {
+        const top = fixtures.hits("/api/beacon-top");
+        const frame = fixtures.hits("/api/beacon-frame");
+        if (top > 0 && frame > 0) return true;
+        throw new Error(`beacon-top ${top}, beacon-frame ${frame}`);
+      },
+      POLL_LIMIT_MS,
+      "the beacons of the previous page",
+    );
+    await waitFor(async () => (await readNetwork(tab)).recording, `tab ${tab} to record`);
     const read = await readNetwork(tab);
     for (const path of ["/api/beacon-top", "/api/beacon-frame"]) {
       assert.equal(requestTo(read.requests, path), undefined, JSON.stringify(read.requests));
