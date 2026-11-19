@@ -485,21 +485,32 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       const files = listed();
       const url = fixtures.url("/foreign/worker-flood");
       const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+      // Whatever happens from here on, the tab closes before the next test, so that the frame it
+      // adds on the other site's file cannot load in a later one, where that site is approved.
+      t.after(async () => {
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+        // Its flood mark ends HOP_GRACE_MS later, before a later test's download.
+        await sleep(SAVE_WAIT_MS * 2);
+      });
       const found = (await firefox.contexts()).find((context) => context.url === url);
       assert.ok(found !== undefined, `no tab shows ${url}`);
-      await pollUntil(
-        async () =>
-          (await firefox.evaluate(found.context, "document.title")) === TITLES.foreignWorkerFlooded
-            ? true
-            : undefined,
-        PAGE_TIMEOUT_MS,
-        "the page to load the file",
-      );
+      try {
+        await pollUntil(
+          async () =>
+            (await firefox.evaluate(found.context, "document.title")) ===
+            TITLES.foreignWorkerFlooded
+              ? true
+              : undefined,
+          PAGE_TIMEOUT_MS,
+          "the page to load the file",
+        );
+      } catch (error: unknown) {
+        throw new Error(`${messageOf(error)}; ${await pageStates(found.context)}`, {
+          cause: error,
+        });
+      }
       await assertNothingSaved(files, false);
       report(t, watch.stop());
-      // Its flood mark ends HOP_GRACE_MS later, before a later test's download.
-      await harness.ok(session, "tab_close", { tabId: tab.id });
-      await sleep(SAVE_WAIT_MS * 2);
     });
 
     test("a page that loads a file the service worker builds again and again gets none of it uploaded", {
@@ -517,6 +528,9 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
           if (shown !== undefined) await firefox.evaluate(shown.context, "window.done = true");
         } finally {
           await harness.ok(session, "tab_close", { tabId: tab.id });
+          // A file already on its way when the tab closed is gone before the next test lists the
+          // folder.
+          await sleep(SAVE_WAIT_MS);
         }
       });
       const found = (await firefox.contexts()).find((context) => context.url === url);
