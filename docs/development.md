@@ -39,6 +39,10 @@ The repository is an npm workspaces monorepo run by Turborepo:
 | Release checks | `npm run check:release -- <subcommand>` |
 | End-to-end tests | `npm run e2e` |
 
+CI (`.github/workflows/ci.yml`) runs them on pushes to `main` and `gate/**` branches, on pull
+requests and on demand. A push to `main` of a commit whose CI already passed on a `gate/`
+branch skips them: a first job finds that green run, and the run passes without testing again.
+
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
 printed in full with the output the tests wrote, and a missed coverage floor prints the

@@ -12,7 +12,33 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # A commit pushed to main after it passed CI on a gate/ branch is not tested again.
+  gate-result:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: read
+    outputs:
+      passed: ${{ steps.find.outputs.passed }}
+    steps:
+      - name: Find a successful gate run of this commit
+        id: find
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+        # An answer that cannot be read runs the whole CI.
+        run: |
+          if ! PASSED=$(gh api "repos/$REPO/actions/runs?head_sha=$SHA&event=push&status=success&per_page=100" \
+            --jq '[.workflow_runs[] | select(.path == ".github/workflows/ci.yml" and (.head_branch | startswith("gate/")))] | length > 0'); then
+            PASSED=false
+          fi
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+
   validate:
+    needs: gate-result
+    if: ${{ !cancelled() && needs.gate-result.outputs.passed != 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -39,6 +65,8 @@ jobs:
 
   e2e:
     name: e2e (${{ matrix.firefox }}, ${{ matrix.shard }}/3)
+    needs: gate-result
+    if: ${{ !cancelled() && needs.gate-result.outputs.passed != 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
