@@ -221,9 +221,9 @@ defense is complete. Foxleash limits what a fooled agent can do:
 - In the agent's tabs, Foxleash stops a page or frame load whose answer is anything other than a
   web page, such as a file Firefox would save, and comes from a site you have not approved or
   that is on the blocklist, so a page on an approved site cannot get such a file saved into
-  your download folder. When that site's service worker answers, Foxleash cancels the download
-  and removes its file right after Firefox starts it, but does not stop an answer Firefox shows
-  instead, such as a PDF. This has
+  your download folder. When that site's service worker answers, or a page of that site builds a
+  file itself as a Blob, Foxleash cancels the download and removes its file right after Firefox
+  starts it, but does not stop an answer Firefox shows instead, such as a PDF. This has
   [limits](docs/security.md#files-a-page-loads-in-the-agents-tabs).
 - A recipe is saved, and a recipe's or a task's sites are allowed, only by your click on a
   Foxleash page in Firefox. Sites allowed this way are allowed for the session only.

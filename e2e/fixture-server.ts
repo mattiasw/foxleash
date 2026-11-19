@@ -106,6 +106,8 @@ export const TITLES = {
   foreignWorkerFlood: "Fixture foreign worker flood",
   foreignWorkerFlooded: "Fixture foreign worker flooded",
   foreignWorkerRetry: "Fixture foreign worker retry",
+  foreignBuilt: "Fixture foreign built",
+  foreignBuiltFrame: "Fixture foreign built frame",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -1169,6 +1171,14 @@ function sendForeign(
     sendHtml(response, foreignWorkerFloodPage(other));
   } else if (path === "/foreign/worker-retry") {
     sendHtml(response, foreignWorkerRetryPage(`${other}/foreign/${to}`));
+  } else if (path === "/foreign/built") {
+    sendHtml(response, FOREIGN_BUILT_PAGE);
+  } else if (path === "/foreign/built-frame") {
+    const query = new URL(request.url ?? "/", other).searchParams;
+    sendHtml(
+      response,
+      foreignBuiltFramePage(other, query.get("remove") === "1", query.get("sandbox") === "1"),
+    );
   } else if (path.startsWith("/foreign/sw/hang/")) {
     // Firefox gives up on a worker that never answers after a minute and asks the site itself.
     sendPage(response, TITLES.foreignPage);
@@ -3047,8 +3057,8 @@ addEventListener("message", async (event) => {
 }
 
 /**
- * On the approved site: from its load on, moves on to `target` every 30 ms until window.done is
- * set, and has the links page's file field, whose files' text it keeps in window.received.
+ * On the approved site: once window.go is set, moves on to `target` every 30 ms until window.done
+ * is set, and has the links page's file field, whose files' text it keeps in window.received.
  */
 function foreignWorkerRetryPage(target: string): string {
   return `<!doctype html>
@@ -3063,15 +3073,13 @@ const statement = document.getElementById("statement");
 statement.addEventListener("change", async () => {
   window.received = await Promise.all(Array.from(statement.files, (file) => file.text()));
 });
-addEventListener("load", () => {
-  const timer = setInterval(() => {
-    if (window.done) {
-      clearInterval(timer);
-      return;
-    }
+const timer = setInterval(() => {
+  if (window.done) {
+    clearInterval(timer);
+  } else if (window.go) {
     location.href = ${JSON.stringify(target)};
-  }, 30);
-});
+  }
+}, 30);
 </script>
 </body></html>
 `;
@@ -3094,6 +3102,59 @@ addEventListener("load", () => {
     "popup,width=400,height=300",
   );
 });
+</script>
+</body></html>
+`;
+}
+
+/**
+ * On the other site: builds a file of its own, a Blob, and saves it with a download link, by itself
+ * on its load; then sets window.saved and, in a frame, says "saved" to the page around it.
+ */
+const FOREIGN_BUILT_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignBuilt}</title></head>
+<body>
+<p>Building a file</p>
+<script>
+addEventListener("load", () => {
+  const link = document.createElement("a");
+  link.download = "built-page.csv";
+  link.href = URL.createObjectURL(new Blob([${JSON.stringify(FOREIGN_SECRET)}], { type: "text/csv" }));
+  document.body.append(link);
+  link.click();
+  window.saved = true;
+  if (parent !== window) parent.postMessage("saved", "*");
+});
+</script>
+</body></html>
+`;
+
+/**
+ * On the approved site: a frame on the other site's page that builds a file itself; window.saved
+ * is set once the frame says it saved it. With `remove`, the frame is removed 5 ms after its load
+ * and window.removed set: removed at once, Firefox starts no download at all. With `sandbox`, the
+ * frame is sandboxed, so its page has no origin of its own.
+ */
+function foreignBuiltFramePage(other: string, remove: boolean, sandbox: boolean): string {
+  const attributes = sandbox ? ' sandbox="allow-scripts allow-downloads"' : "";
+  const removal = remove
+    ? `frame.addEventListener("load", () => {
+  setTimeout(() => {
+    frame.remove();
+    window.removed = true;
+  }, 5);
+});`
+    : "";
+  return `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.foreignBuiltFrame}</title></head>
+<body>
+<iframe id="built" title="Built"${attributes} src="${other}/foreign/built"></iframe>
+<script>
+const frame = document.getElementById("built");
+addEventListener("message", (event) => {
+  if (event.data === "saved") window.saved = true;
+});
+${removal}
 </script>
 </body></html>
 `;

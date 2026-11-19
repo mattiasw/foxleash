@@ -259,20 +259,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
         const page = await openPage("/foreign/windows");
         const before = listed();
         const result = await click(page, 'button "Own file in a window"');
-        const saved = await pollUntil(
-          async () => {
-            const files = listed();
-            if (files.some((name) => name.endsWith(".part"))) return undefined;
-            const name = files.find((entry) => !before.includes(entry));
-            // Firefox reserves the name with an empty file before it writes the .part one.
-            if (name === undefined) return undefined;
-            return readFileSync(join(harness.downloads, name), "utf8") === "data"
-              ? name
-              : undefined;
-          },
-          PAGE_TIMEOUT_MS,
-          "a new file in the download folder",
-        );
+        const saved = await newFile(before, "data");
         assert.equal("refusedFiles" in result, false, JSON.stringify(result));
         // The folder's last check counts on the file a later test saves.
         rmSync(join(harness.downloads, saved));
@@ -318,7 +305,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
 
     for (const [answer, to] of WORKER_ANSWERS) {
       test(`a page that moves on to a file its service worker ${answer} saves nothing`, async (t) => {
-        const watch = watchFolder();
+        const watch = watchFolder(t);
         const files = listed();
         const hits = fixtures.hits(WORKER_EXPORT);
         const url = fixtures.url(`/foreign/script?to=${to}`);
@@ -341,7 +328,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       });
 
       test(`a click on a link to a file the service worker ${answer} saves nothing`, async (t) => {
-        const watch = watchFolder();
+        const watch = watchFolder(t);
         const page = await openLinks();
         const files = listed();
         const hits = fixtures.hits(WORKER_EXPORT);
@@ -356,7 +343,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       });
 
       test(`navigate to a file the service worker ${answer} fails at once and saves nothing`, async (t) => {
-        const watch = watchFolder();
+        const watch = watchFolder(t);
         const page = await openLinks();
         const files = listed();
         const hits = fixtures.hits(WORKER_EXPORT);
@@ -378,7 +365,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       test(`a click that opens a tab on a file the service worker ${answer} saves nothing`, async (t) => {
         await firefox.allowPopups(fixtures.site);
         try {
-          const watch = watchFolder();
+          const watch = watchFolder(t);
           const page = await openLinks();
           const files = listed();
           const hits = fixtures.hits(WORKER_EXPORT);
@@ -408,7 +395,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       ["built", "sw/built.csv"],
     ] as const) {
       test(`a frame on a file the service worker ${answer} saves nothing`, async (t) => {
-        const watch = watchFolder();
+        const watch = watchFolder(t);
         const files = listed();
         const hits = fixtures.hits("/foreign/sw/public.csv");
         const url = fixtures.url(`/foreign/worker-frame?to=${to}`);
@@ -430,8 +417,53 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       });
     }
 
+    test("a page of the other site that builds a file itself after a redirect saves nothing", async (t) => {
+      const watch = watchFolder(t);
+      const page = await openLinks();
+      const files = listed();
+      const result = await harness.call(session, "navigate", {
+        tabId: page.tabId,
+        url: fixtures.url("/foreign/go/built"),
+      });
+      // The file can be cancelled before navigate returns, which then fails.
+      if (result.isError) assert.equal(untrustedContent(result.text), refusal(page.tabId));
+      await savedIn(`${other}/foreign/built`, "window.saved === true");
+      await assertNothingSaved(files, false);
+      report(t, watch.stop());
+      await close(page);
+    });
+
+    for (const [name, query, saved] of [
+      [
+        "a frame on a page of the other site that builds a file itself saves nothing, and tab_open of the framing page succeeds",
+        "",
+        "window.saved === true",
+      ],
+      [
+        "a frame on a page of the other site that builds a file itself, removed right after its load, saves nothing",
+        "?remove=1",
+        "window.saved === true && window.removed === true",
+      ],
+      [
+        "a sandboxed frame on a page of the other site that builds a file itself saves nothing",
+        "?sandbox=1",
+        "window.saved === true",
+      ],
+    ] as const) {
+      test(name, async (t) => {
+        const watch = watchFolder(t);
+        const files = listed();
+        const url = fixtures.url(`/foreign/built-frame${query}`);
+        const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+        await savedIn(url, saved);
+        await assertNothingSaved(files, false);
+        report(t, watch.stop());
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+      });
+    }
+
     test("a page that keeps 300 loads waiting on the service worker, then loads a file it builds, saves nothing", async (t) => {
-      const watch = watchFolder();
+      const watch = watchFolder(t);
       const files = listed();
       const url = fixtures.url("/foreign/worker-flood");
       const tab = tabOf(await harness.ok(session, "tab_open", { url }));
@@ -455,51 +487,60 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     test("a page that loads a file the service worker builds again and again gets none of it uploaded", {
       timeout: 150_000,
     }, async (t) => {
-      const watch = watchFolder();
+      const watch = watchFolder(t);
       const files = listed();
       const url = fixtures.url("/foreign/worker-retry?to=sw/built.csv");
       const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+      // Whatever happens from here on, the page stops and its tab closes before the next test, so
+      // that none of its files reach a later one.
+      t.after(async () => {
+        try {
+          const shown = (await firefox.contexts()).find((context) => context.url === url);
+          if (shown !== undefined) await firefox.evaluate(shown.context, "window.done = true");
+        } finally {
+          await harness.ok(session, "tab_close", { tabId: tab.id });
+        }
+      });
       const found = (await firefox.contexts()).find((context) => context.url === url);
       assert.ok(found !== undefined, `no tab shows ${url}`);
       const read = await harness.call(session, "read_page", { tabId: tab.id });
       assert.equal(read.isError, false, read.text);
       const ref = refOf(untrustedContent(read.text) ?? "", 'button "Statement"');
+      // The page starts moving on only now: read_page refuses a tab that is still loading a page.
+      await firefox.evaluate(found.context, "window.go = true");
       const started = Date.now();
       let foundFiles = 0;
       let freshFiles = 0;
-      try {
-        for (let call = 0; call < RETRY_UPLOADS; call += 1) {
-          await sleep(Math.max(0, started + ((call + 1) * RETRY_MS) / RETRY_UPLOADS - Date.now()));
-          const saved = listed().filter(
-            (name) => /^built.*\.csv$/.test(name) && !name.endsWith(".part"),
-          );
-          if (saved.length > 0) foundFiles += 1;
-          const paths = (saved.length > 0 ? saved : ["built.csv"]).map((name) =>
-            join(harness.downloads, name),
-          );
-          const text = await harness.refused(session, "upload_file", {
-            tabId: tab.id,
-            ref,
-            paths,
-            view: false,
-          });
-          // Gone before it was opened, removed while it was read, or refused for its age.
-          assert.ok(
-            ["does not exist.", "changed while Foxleash read it", FRESH_REASON].some((reason) =>
-              text.includes(reason),
-            ),
-            text,
-          );
-          if (text.includes(FRESH_REASON)) freshFiles += 1;
-          // The page received no file at all.
-          assert.equal(
-            await firefox.evaluate(found.context, "JSON.stringify(window.received)"),
-            "[]",
-          );
-        }
-      } finally {
-        await firefox.evaluate(found.context, "window.done = true");
+      for (let call = 0; call < RETRY_UPLOADS; call += 1) {
+        await sleep(Math.max(0, started + ((call + 1) * RETRY_MS) / RETRY_UPLOADS - Date.now()));
+        const saved = listed().filter(
+          (name) => /^built.*\.csv$/.test(name) && !name.endsWith(".part"),
+        );
+        if (saved.length > 0) foundFiles += 1;
+        const paths = (saved.length > 0 ? saved : ["built.csv"]).map((name) =>
+          join(harness.downloads, name),
+        );
+        const text = await harness.refused(session, "upload_file", {
+          tabId: tab.id,
+          ref,
+          paths,
+          view: false,
+        });
+        // Gone before it was opened, removed while it was read, or refused for its age.
+        assert.ok(
+          ["does not exist.", "changed while Foxleash read it", FRESH_REASON].some((reason) =>
+            text.includes(reason),
+          ),
+          text,
+        );
+        if (text.includes(FRESH_REASON)) freshFiles += 1;
+        // The page received no file at all.
+        assert.equal(
+          await firefox.evaluate(found.context, "JSON.stringify(window.received)"),
+          "[]",
+        );
       }
+      await firefox.evaluate(found.context, "window.done = true");
       assert.ok(Date.now() - started >= RETRY_MS, "the calls were spread over too short a time");
       await assertNothingSaved(files, false);
       t.diagnostic(
@@ -507,7 +548,6 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
           `refused for its age: ${freshFiles}`,
       );
       report(t, watch.stop());
-      await harness.ok(session, "tab_close", { tabId: tab.id });
     });
   });
 
@@ -541,24 +581,38 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       const before = listed();
       const url = fixtures.url("/foreign/script?to=sw/built.csv");
       const tab = tabOf(await harness.ok(session, "tab_open", { url }));
-      const saved = await pollUntil(
-        async () => {
-          const files = listed();
-          if (files.some((name) => name.endsWith(".part"))) return undefined;
-          const name = files.find((entry) => !before.includes(entry));
-          // Firefox reserves the name with an empty file before it writes the .part one.
-          if (name === undefined) return undefined;
-          return readFileSync(join(harness.downloads, name), "utf8") === FOREIGN_SECRET
-            ? name
-            : undefined;
-        },
-        PAGE_TIMEOUT_MS,
-        "a new file in the download folder",
-      );
+      const saved = await newFile(before, FOREIGN_SECRET);
       // The folder's last check expects only the approved site's own file.
       rmSync(join(harness.downloads, saved));
       await harness.ok(session, "tab_close", { tabId: tab.id });
     });
+
+    test("a page of the other site that builds a file itself after a redirect still saves it", async () => {
+      const page = await openLinks();
+      const before = listed();
+      await harness.ok(session, "navigate", {
+        tabId: page.tabId,
+        url: fixtures.url("/foreign/go/built"),
+      });
+      const saved = await newFile(before, FOREIGN_SECRET);
+      rmSync(join(harness.downloads, saved));
+      await close(page);
+    });
+
+    for (const [how, query] of [
+      ["", ""],
+      [", also when the page removes the frame right after its load", "?remove=1"],
+      [", also when the frame is sandboxed", "?sandbox=1"],
+    ] as const) {
+      test(`a frame on the other site's page that builds a file itself still saves it${how}`, async () => {
+        const before = listed();
+        const url = fixtures.url(`/foreign/built-frame${query}`);
+        const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+        const saved = await newFile(before, FOREIGN_SECRET);
+        rmSync(join(harness.downloads, saved));
+        await harness.ok(session, "tab_close", { tabId: tab.id });
+      });
+    }
   });
 
   test("the download folder ends up holding only the approved site's own file", async () => {
@@ -721,11 +775,42 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     return readdirSync(harness.downloads).sort();
   }
 
+  /** Waits for a file not in `before` to be in the download folder, holding `content`; its name. */
+  async function newFile(before: string[], content: string): Promise<string> {
+    return pollUntil(
+      async () => {
+        const files = listed();
+        if (files.some((name) => name.endsWith(".part"))) return undefined;
+        const name = files.find((entry) => !before.includes(entry));
+        // Firefox reserves the name with an empty file before it writes the .part one.
+        if (name === undefined) return undefined;
+        return readFileSync(join(harness.downloads, name), "utf8") === content ? name : undefined;
+      },
+      PAGE_TIMEOUT_MS,
+      "a new file in the download folder",
+    );
+  }
+
+  /** Waits until a tab shows `url` and `saved`, evaluated in its page, is true. */
+  async function savedIn(url: string, saved: string): Promise<void> {
+    const found = await pollUntil(
+      async () => (await firefox.contexts()).find((context) => context.url === url),
+      PAGE_TIMEOUT_MS,
+      `a tab to show ${url}`,
+    );
+    await pollUntil(
+      async () => ((await firefox.evaluate(found.context, saved)) === true ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      `the page at ${url} to save its file`,
+    );
+  }
+
   /**
-   * Lists the download folder every millisecond until `stop`, which returns the longest time a new
-   * file, or Firefox's .part file, was there, and the share of lists that held one.
+   * Lists the download folder every millisecond until `stop` or the end of test `t`; `stop` returns
+   * the longest time a new file, or Firefox's .part file, was there, and the share of lists that
+   * held one.
    */
-  function watchFolder(): { stop(): { longestMs: number; share: number } } {
+  function watchFolder(t: TestContext): { stop(): { longestMs: number; share: number } } {
     const before = new Set(listed());
     const present = new Map<string, number>();
     let longestMs = 0;
@@ -743,6 +828,10 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
         present.delete(name);
       }
     }, 1);
+    // A test that fails before calling stop() must neither keep listing, also after the folder is
+    // removed, nor keep the test process alive.
+    t.after(() => clearInterval(timer));
+    timer.unref();
     return {
       stop: () => {
         clearInterval(timer);

@@ -12,7 +12,10 @@ session's group stay judged after a Firefox restart or an update or reload of th
 Amended by [0092](0092-file-guard-cancels-downloads-from-loads-whose-headers-never-came.md),
 2026-11-18: a download from a load whose headers never came, as when the other site's service
 worker answers it, is cancelled and its file removed after the fact, and `upload_file` refuses a
-file changed in the last 5 seconds.
+file changed in the last 5 seconds. Amended by
+[0094](0094-file-guard-and-files-a-page-builds-itself.md), 2026-11-19: a Blob file that a page of
+such a site builds itself in a session's tab or frame is cancelled and its file removed after the
+fact; a `data:` file is not.
 
 ## Context
 

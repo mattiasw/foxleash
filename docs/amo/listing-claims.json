@@ -165,6 +165,18 @@
           "file": "apps/extension/src/file-guard.ts",
           "contains": "export const MAX_TAB_HOPS = 200;"
         },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "browser.webNavigation.onHistoryStateUpdated.addListener("
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "export const MAX_TAB_SITES = 200;"
+        },
+        {
+          "file": "apps/extension/src/file-guard.ts",
+          "contains": "siteOf(URL.parse(item.url)?.origin"
+        },
         { "file": "apps/extension/src/wait-for-load.ts", "contains": "\"file_refused\"" },
         {
           "file": "apps/extension/src/act-settle.ts",

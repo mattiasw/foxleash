@@ -123,11 +123,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   before, and, while a page there keeps more than 200 loads waiting, every download from a site
   that session may not act on. Still saved are a download Firefox saves under another address than the load's, one
   whose load the worker held for more than 10 minutes, and a file Foxleash could not remove. The
-  request still reaches that site. An answer of such a worker that Firefox shows
-  rather than saves, such as a PDF, is still shown, and still saved are a file that a page of such
-  a site builds itself, and one that loads in the moment after Firefox starts or Foxleash is
-  updated, in a window opened from such a tab before that, or in a group made by an earlier
-  version of Foxleash.
+  request still reaches that site. When a page of such a site in the agent's tabs builds a file
+  itself as a Blob, Foxleash cancels that download and removes its file after the fact too, which
+  can also cancel a Blob file of your own from a site that the agent's tabs show, or showed in the
+  last minute. An answer of such a worker that Firefox shows rather than saves, such as a PDF, is
+  still shown, and still saved are a `data:` file that a page of such a site builds itself, and
+  one that loads in the moment after Firefox starts or Foxleash is updated, in a window opened
+  from such a tab before that, or in a group made by an earlier version of Foxleash.
 - The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an

@@ -585,6 +585,10 @@ What the agent learns:
   action opened, which Firefox closes, and sometimes one that began after the action's result was
   settled. A download cancelled during a flood (see below), and one whose file Foxleash could not
   remove, are in no result.
+- A file that a page built itself (see below), cancelled because of a frame, is reported the same
+  way for that frame's tab, by its site alone; one from the tab's top frame also fails `tab_open`
+  or `navigate` when it comes before the call returns. One that a sandboxed page built is in no
+  result.
 
 When such a site's own service worker answers the load, there is no answer from the network to
 stop, and Firefox starts saving the file. For that case Foxleash keeps each page and frame load
@@ -598,6 +602,17 @@ not hand such a file over in that moment; a program other than Foxleash that rea
 folder in a loop can read it, and so can `upload_file` of a Foxleash program from before this
 check. The download stays in Firefox's downloads panel, cancelled.
 
+When a page of such a site, in those tabs or a frame there, builds a file itself, as a Blob, and
+Firefox saves it, there is no load to stop either. Foxleash keeps, for each tab, the sites of the
+pages its frames showed in the last 60 seconds, and cancels such a download and removes its file
+after the fact, as for a worker's answer (ADR 0094), when the file comes from a site that session
+may not act on and a tab of the group shows a page of that site in any frame, or showed one in the
+last 60 seconds. A page with no origin of its own, such as one in a sandboxed frame or one opened
+from a file on your computer, gives its file no site: Foxleash then cancels it when a tab of the
+group shows, or showed in the last 60 seconds, a page of any site that session may not act on. The file exists for a moment, measured at
+about 10 to 85 ms while a page saves 33 files a second, and up to about 2.4 seconds in Firefox ESR
+with thousands of earlier downloads in its list; `upload_file` refuses it meanwhile.
+
 What counts as a web page: an answer with one `Content-Type` header of `text/html` or
 `application/xhtml+xml`, and no `Content-Disposition` header or one of the type `inline`.
 Everything else counts as a file, also where the headers are repeated or cannot be read as one
@@ -610,13 +625,17 @@ Exceptions and limits:
 
 - The request still reaches that site, with the cookies Firefox sends for it. Only its answer is
   stopped.
-- Still saved is a file that a page of such a site builds itself, when the tab or a frame shows
-  that page. An answer that such a site's service worker gives and that Firefox shows rather than
-  saves, such as a PDF, an image or text, is still shown: it starts no download.
+- Still saved is a `data:` file that a page of such a site builds itself, since Firefox tells
+  Foxleash nothing about where it came from, and a file such a page builds more than 60 seconds
+  after its last change of address, in a frame or window that is removed, closed or sent to
+  another page right then. An answer that such a site's service worker gives and that Firefox
+  shows rather than saves, such as a PDF, an image or text, is still shown: it starts no download.
 - A download whose address is not that of a load of the tab is not cancelled, such as one that a
   service worker answers with a redirect it builds. Neither is one whose load the worker held for
-  more than 10 minutes before answering, nor a file Foxleash could not remove: that is logged, and
-  `upload_file` refuses the file only for its first 5 seconds.
+  more than 10 minutes before answering. A file Foxleash could not remove, which is logged, or took
+  more than 5 seconds to remove, which is possible while a page saves files many times a second
+  and Firefox's download list holds thousands of entries, is refused by `upload_file` only for its
+  first 5 seconds.
 - A download of your own is cancelled and its file removed when a tab of an agent's group began a
   load of exactly that address in the 10 minutes before, on a site that session may not act on,
   that got no answer from the network and showed no page: one still waiting, or one whose own
@@ -626,6 +645,16 @@ Exceptions and limits:
   Foxleash cancel and remove every download that Foxleash did not start, in any tab, from every
   site that session may not act on, until 10 minutes after the last load over those 200, or 2
   seconds after its tab closed. Such a download is in no result.
+- A Blob file of your own from a site, in any tab, is cancelled and removed while a tab of an
+  agent's group shows a page of that site in any frame, for example a widget of that site embedded
+  in the approved page, and for 60 seconds after, also when another agent session may act on that
+  site. A Blob file that a page with no origin of its own saves, such as a sandboxed page or one
+  opened from a file on your computer, in any tab, is cancelled while a tab of an agent's group
+  shows, or in the last 60 seconds showed, a page of a site that session may not act on.
+- A page in the agent's tabs that shows pages of more than 200 sites within 60 seconds makes
+  Foxleash cancel and remove every Blob file from every site that session may not act on, in any
+  tab, until 60 seconds after the last one over those 200, or 2 seconds after its tab closed. Such
+  a file is in no result.
 - A window that a page in those tabs opens is not covered when the tab that opened it closes
   before Foxleash has looked that tab up, a matter of milliseconds, unless another tab of the
   group opened that tab. A page may be able to close its own tab that fast while the tab has

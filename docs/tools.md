@@ -130,9 +130,11 @@ address.
   redirect to such a site, Foxleash stops the load and `tab_open` or `navigate` fails at once,
   not after 30 seconds: the error names the site, says that nothing was saved and that the site
   must be approved first, which `tab_open` or `navigate` to that site asks you for, unless the
-  site is on the blocklist. That holds for a reload and for going back or forward too, and when
-  the page that loaded moves on to such an answer by itself before the call returns. `tab_open`
-  closes the tab it made, and a tab `navigate` used keeps its page.
+  site is on the blocklist. That holds for a reload and for going back or forward too, when the
+  page that loaded moves on to such an answer by itself before the call returns, and when a page
+  of such a site in the tab's top frame builds a file itself that Firefox saves before the call
+  returns, which Foxleash then cancels and removes. `tab_open` closes the tab it made, and a tab
+  `navigate` used keeps its page.
   [Security](security.md#files-a-page-loads-in-the-agents-tabs) has the limits.
 - When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
   to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that
@@ -507,9 +509,10 @@ file was saved, and it loads only once you approved its site, which `tab_open` o
 that site asks you for, unless the site is on the blocklist. The list holds what was stopped
 during the action and its wait, at most 20 sites; a load stopped later is in no result
 ([Security](security.md#files-a-page-loads-in-the-agents-tabs)). A download that Foxleash
-cancelled because the site's service worker answered the load can be missing from the list: most
-often a download in a tab the action opened, which Firefox closes, and sometimes one that began
-after the action's result was settled.
+cancelled because the site's service worker answered the load, or because a page of the site
+built the file itself, can be missing from the list: most often a download in a tab the action
+opened, which Firefox closes, and sometimes one that began after the action's result was settled.
+A file that a sandboxed page built is never listed.
 
 Foxleash watches the elements, attributes and text of the page's own document and its shadow
 roots, and its fields' values, not frames, canvas drawing, or CSS animations and transitions, so
@@ -595,7 +598,7 @@ the same call gets that refusal.
 cannot get a file from another site saved there for `upload_file` to hand over, Foxleash stops a
 load in the agent's tabs whose answer is a file from a site the session may not act on, and
 cancels, after the fact, the download of such a load that the site's service worker answered,
-removing its file;
+and of a file that a page of such a site in those tabs built itself, removing its file;
 [Security](security.md#files-a-page-loads-in-the-agents-tabs) says what that covers and what it
 does not.
 
