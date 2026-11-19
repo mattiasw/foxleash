@@ -58,7 +58,7 @@ What protects you:
 
 Each of these has limits, described below and in the privacy policy on this add-on's page.
 
-The project's README explains how to install the Foxleash program. When you install the extension, it opens a page that shows the command that installs the program and whether the program is connected, and the extension's settings show the same. The first-run page and the settings also say when the program is too old for the extension, or newer than it, and show the command that updates the part that is behind, and the Foxleash button in the toolbar then shows ! on tabs outside an agent session's group.
+The project's README explains how to install the Foxleash program. When you install the extension, it opens a page that shows the command that installs the program and whether the program is connected, and the extension's settings show the same. The first-run page and the settings also say when the program is too old for the extension, or newer than it, and say how to update the part that is behind, and the Foxleash button in the toolbar then shows ! on tabs outside an agent session's group.
 
 What the agent asks for goes from the extension to the Foxleash program on your computer and from there to the agent, which may send it on to its model provider. Apart from what the agent opens, downloads, types, uploads and submits in web pages on your behalf, Foxleash itself sends nothing anywhere else.
 

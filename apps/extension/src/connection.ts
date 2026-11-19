@@ -2,11 +2,13 @@ import {
   type HelloMessage,
   NATIVE_HOST_NAME,
   OLDEST_SERVED_PROTOCOL,
+  type PartInfo,
   PROTOCOL_VERSION,
   parseMessage,
   protocolMismatch,
   type RequestMessage,
   type ResponseMessage,
+  versionDifference,
   type WelcomeMessage,
 } from "@foxleash/protocol";
 import type { BrowserApi, MessageSender, Port, Timers } from "./browser-api.ts";
@@ -245,17 +247,18 @@ export function createConnection<Handle>({
     delay = FIRST_RECONNECT_DELAY_MS;
     const { protocol, version } = welcome;
     setProgramState(programStateOf(protocol));
-    const mismatch = protocolMismatch(
-      {
-        part: "extension",
-        protocol: PROTOCOL_VERSION,
-        version: browser.runtime.getManifest().version,
-        oldest: OLDEST_SERVED_PROTOCOL,
-      },
-      { part: "host", protocol, version },
-    );
+    const extension: PartInfo = {
+      part: "extension",
+      protocol: PROTOCOL_VERSION,
+      version: browser.runtime.getManifest().version,
+      oldest: OLDEST_SERVED_PROTOCOL,
+    };
+    const host: PartInfo = { part: "host", protocol, version };
+    const mismatch = protocolMismatch(extension, host);
     if (mismatch === null) {
       verdicts.set(current, { served: true, protocol, version });
+      const difference = versionDifference(extension, host);
+      if (difference !== null) warn({ event: "version_difference", message: difference });
       return;
     }
     verdicts.set(current, { served: false, protocol, version, mismatch });

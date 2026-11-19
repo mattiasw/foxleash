@@ -6,6 +6,7 @@ import {
   COMMANDS,
   type Command,
   type CommandOptions,
+  programOf,
   realDeps,
   runCli,
   USAGE,
@@ -48,7 +49,7 @@ describe("runCli usage", () => {
         "Commands:",
         "  mcp                      Run the MCP server (your MCP client starts it)",
         "  host                     Run the native messaging host (Firefox starts it)",
-        "  install [--no-claude] [--no-extension | --xpi <path>]",
+        "  setup [--no-claude] [--no-extension | --xpi <path>]",
         "                           Set up the native host, Claude Code and the extension",
         "  uninstall [--no-claude]  Remove the native host and Foxleash from Claude Code",
         "  doctor                   Check the installation and the connection to Firefox",
@@ -56,8 +57,8 @@ describe("runCli usage", () => {
         "                           Measure which synthetic input works on each page",
         "",
         "--no-claude leaves your Claude Code configuration unchanged.",
-        "install downloads this version's signed extension with gh and opens it in",
-        "Firefox; --xpi uses a local .xpi file instead, and --no-extension skips it.",
+        "setup names the add-on's page on Firefox Add-ons; --xpi opens a local .xpi",
+        "file in Firefox instead, and --no-extension skips it.",
         "probe writes <path>.json and .md, by default ./foxleash-probe-<date>-<time>.",
         "",
       ].join("\n"),
@@ -69,7 +70,7 @@ describe("runCli usage", () => {
 });
 
 describe("runCli subcommands", () => {
-  for (const name of ["install", "uninstall"]) {
+  for (const name of ["setup", "install", "uninstall"]) {
     it(`passes noClaude true to ${name} with --no-claude and returns its exit code`, async () => {
       const { deps, stdout, stderr, calls } = setup();
       assert.equal(await runCli([name, "--no-claude"], deps), 7);
@@ -103,14 +104,16 @@ describe("runCli subcommands", () => {
     [["--no-claude", "--no-extension"], { noClaude: true, noExtension: true }],
     [["--xpi", "./-P.xpi"], { noClaude: false, xpi: "./-P.xpi" }],
   ];
-  for (const [rest, options] of installCases) {
-    it(`passes install ${rest.join(" ")} as ${JSON.stringify(options)}`, async () => {
-      const { deps, stdout, stderr, calls } = setup();
-      assert.equal(await runCli(["install", ...rest], deps), 7);
-      assert.deepEqual(calls, [{ name: "install", options, deps }]);
-      assert.equal(stdout(), "");
-      assert.equal(stderr(), "");
-    });
+  for (const name of ["setup", "install"]) {
+    for (const [rest, options] of installCases) {
+      it(`passes ${name} ${rest.join(" ")} as ${JSON.stringify(options)}`, async () => {
+        const { deps, stdout, stderr, calls } = setup();
+        assert.equal(await runCli([name, ...rest], deps), 7);
+        assert.deepEqual(calls, [{ name, options, deps }]);
+        assert.equal(stdout(), "");
+        assert.equal(stderr(), "");
+      });
+    }
   }
 
   for (const rest of [
@@ -124,13 +127,15 @@ describe("runCli subcommands", () => {
     ["--xpi", "--no-extension"],
     ["--xpi", "-P"],
   ]) {
-    it(`refuses install ${JSON.stringify(rest)} with usage and 2`, async () => {
-      const { deps, stdout, stderr, calls } = setup();
-      assert.equal(await runCli(["install", ...rest], deps), 2);
-      assert.equal(stderr(), USAGE);
-      assert.equal(stdout(), "");
-      assert.deepEqual(calls, []);
-    });
+    for (const name of ["setup", "install"]) {
+      it(`refuses ${name} ${JSON.stringify(rest)} with usage and 2`, async () => {
+        const { deps, stdout, stderr, calls } = setup();
+        assert.equal(await runCli([name, ...rest], deps), 2);
+        assert.equal(stderr(), USAGE);
+        assert.equal(stdout(), "");
+        assert.deepEqual(calls, []);
+      });
+    }
   }
 
   for (const rest of [["--xpi", "a"], ["--no-extension"]]) {
@@ -275,6 +280,27 @@ describe("COMMANDS", () => {
   it("registers the probe command", () => {
     assert.equal(typeof COMMANDS.get("probe"), "function");
   });
+
+  it("registers setup, and install as another name for it", () => {
+    assert.equal(typeof COMMANDS.get("setup"), "function");
+    assert.equal(COMMANDS.get("install"), COMMANDS.get("setup"));
+  });
+});
+
+describe("programOf", () => {
+  it("runs the checkout's main.ts beside a TypeScript source file", () => {
+    assert.deepEqual(programOf("/src/fox leash/apps/server/src/cli.ts"), {
+      kind: "source",
+      main: "/src/fox leash/apps/server/src/main.ts",
+    });
+  });
+
+  it("copies the running file when it is the bundle", () => {
+    assert.deepEqual(programOf("/home/u/.npm/_npx/1/node_modules/foxleash/foxleash.mjs"), {
+      kind: "bundle",
+      file: "/home/u/.npm/_npx/1/node_modules/foxleash/foxleash.mjs",
+    });
+  });
 });
 
 interface Call {
@@ -289,7 +315,7 @@ function setup(overrides: Record<string, Command> = {}) {
   const writes: string[] = [];
   const calls: Call[] = [];
   const commands = new Map<string, Command>();
-  for (const name of ["mcp", "host", "install", "uninstall", "doctor", "probe"]) {
+  for (const name of ["mcp", "host", "setup", "install", "uninstall", "doctor", "probe"]) {
     commands.set(name, async (options, deps) => {
       calls.push({ name, options, deps });
       return 7;

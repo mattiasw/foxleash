@@ -1,10 +1,11 @@
 import { spawn } from "node:child_process";
 import { homedir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { SETUP_COMMAND } from "@foxleash/protocol";
 import { doctor } from "./doctor.ts";
 import { hostCommand } from "./host.ts";
-import { type ExtensionSource, install, uninstall } from "./install.ts";
+import { type ExtensionSource, install, type Program, programPath, uninstall } from "./install.ts";
 import { mcpCommand } from "./mcp.ts";
 import { probeCommand } from "./probe.ts";
 import { launchDetached, runCommand } from "./run-command.ts";
@@ -13,7 +14,7 @@ import { SERVER_VERSION } from "./version.ts";
 
 export interface CommandOptions {
   noClaude: boolean;
-  /** install's --xpi value, as given. */
+  /** setup's --xpi value, as given. */
   xpi?: string;
   noExtension?: boolean;
   /** probe's report path, without its extension. */
@@ -30,23 +31,25 @@ export interface CliDeps {
   commands: ReadonlyMap<string, Command>;
 }
 
-const MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
+const PROGRAM = programOf(fileURLToPath(import.meta.url));
 
 export const COMMANDS = new Map<string, Command>();
 COMMANDS.set("host", () => hostCommand(process));
 COMMANDS.set("mcp", () => mcpCommand(process));
-COMMANDS.set("install", (options, deps) =>
+const setup: Command = (options, deps) =>
   install({
     home: homedir(),
     node: process.execPath,
-    main: MAIN,
+    program: PROGRAM,
     claude: !options.noClaude,
     extension: extensionSource(options),
     run: runCommand,
     launch: launchDetached,
     out: deps.stdout,
-  }),
-);
+  });
+COMMANDS.set("setup", setup);
+// The name before setup, which existing scripts still call.
+COMMANDS.set("install", setup);
 COMMANDS.set("uninstall", (options, deps) =>
   uninstall({ home: homedir(), claude: !options.noClaude, run: runCommand, out: deps.stdout }),
 );
@@ -64,7 +67,8 @@ COMMANDS.set("doctor", (_options, deps) => {
     uid,
     version: SERVER_VERSION,
     node: process.execPath,
-    main: MAIN,
+    main: programPath(PROGRAM, homedir()),
+    setupCommand: PROGRAM.kind === "bundle" ? SETUP_COMMAND : "npm run setup",
     run: runCommand,
     spawn,
     out: deps.stdout,
@@ -85,7 +89,7 @@ export const USAGE = `Usage: foxleash <command>
 Commands:
   mcp                      Run the MCP server (your MCP client starts it)
   host                     Run the native messaging host (Firefox starts it)
-  install [--no-claude] [--no-extension | --xpi <path>]
+  setup [--no-claude] [--no-extension | --xpi <path>]
                            Set up the native host, Claude Code and the extension
   uninstall [--no-claude]  Remove the native host and Foxleash from Claude Code
   doctor                   Check the installation and the connection to Firefox
@@ -93,8 +97,8 @@ Commands:
                            Measure which synthetic input works on each page
 
 --no-claude leaves your Claude Code configuration unchanged.
-install downloads this version's signed extension with gh and opens it in
-Firefox; --xpi uses a local .xpi file instead, and --no-extension skips it.
+setup names the add-on's page on Firefox Add-ons; --xpi opens a local .xpi
+file in Firefox instead, and --no-extension skips it.
 probe writes <path>.json and .md, by default ./foxleash-probe-<date>-<time>.
 `;
 
@@ -118,6 +122,13 @@ export async function runCli(args: string[], deps: CliDeps): Promise<number> {
   return await command(options, deps);
 }
 
+/** The checkout's main.ts when this runs from the TypeScript source, else the running bundle. */
+export function programOf(self: string): Program {
+  return self.endsWith(".ts")
+    ? { kind: "source", main: join(dirname(self), "main.ts") }
+    : { kind: "bundle", file: self };
+}
+
 export function realDeps(): CliDeps {
   return { stdout: process.stdout, stderr: process.stderr, commands: COMMANDS };
 }
@@ -135,7 +146,7 @@ function parseOptions(name: string, rest: string[]): CommandOptions | undefined 
   if (name === "probe") {
     return probeOptions(rest);
   }
-  if (name === "install") {
+  if (name === "setup" || name === "install") {
     return installOptions(rest);
   }
   if (rest.length === 0) {
@@ -204,5 +215,5 @@ function extensionSource(options: CommandOptions): ExtensionSource {
     const initCwd = process.env.npm_lifecycle_event === "setup" ? process.env.INIT_CWD : undefined;
     return { kind: "file", path: resolve(initCwd ?? process.cwd(), options.xpi) };
   }
-  return { kind: "release", version: SERVER_VERSION };
+  return { kind: "page" };
 }

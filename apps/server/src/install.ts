@@ -1,23 +1,34 @@
-import { chmodSync, mkdirSync, rmdirSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  closeSync,
+  fchmodSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  rmdirSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, isAbsolute, join } from "node:path";
-import { EXTENSION_ID, NATIVE_HOST_NAME } from "@foxleash/protocol";
+import { ADDON_PAGE_URL, EXTENSION_ID, NATIVE_HOST_NAME } from "@foxleash/protocol";
 import type { Launch, Run, RunResult } from "./run-command.ts";
 
 const CLAUDE_SERVER_NAME = "foxleash";
 const CLAUDE_TIMEOUT_MS = 30_000;
 const REMOVE_ARGS = ["mcp", "remove", "-s", "user", CLAUDE_SERVER_NAME];
-const RELEASE_REPO = "github.com/mattiasw/foxleash";
-const GH_TIMEOUT_MS = 120_000;
 
-export type ExtensionSource =
-  | { kind: "release"; version: string }
-  | { kind: "file"; path: string }
-  | { kind: "none" };
+/** The program setup points Firefox and Claude Code at. */
+export type Program = { kind: "source"; main: string } | { kind: "bundle"; file: string };
+
+export type ExtensionSource = { kind: "page" } | { kind: "file"; path: string } | { kind: "none" };
 
 export interface InstallOptions {
   home: string;
   node: string;
-  main: string;
+  program: Program;
   claude: boolean;
   extension: ExtensionSource;
   run: Run;
@@ -35,16 +46,23 @@ export interface UninstallOptions {
 }
 
 export async function install(options: InstallOptions): Promise<number> {
-  const { home, node, main, claude, run, out, uid = process.getuid?.() } = options;
+  const { home, node, program, claude, run, out, uid = process.getuid?.() } = options;
   const refusal = homeRefusal(home, uid);
   if (refusal !== undefined) {
     out.write(refusal);
     return 1;
   }
-  const { launcher, manifest } = installPaths(home);
+  const paths = installPaths(home);
+  const { launcher, manifest } = paths;
   mkdirSync(dirname(launcher), { recursive: true, mode: 0o700 });
   // Only Foxleash uses this directory; the shared native-messaging-hosts one keeps its mode.
   chmodSync(dirname(launcher), 0o700);
+  if (program.kind === "bundle") {
+    // Before the launcher and the manifest, so they never name a missing file.
+    copyProgram(program.file, paths.program);
+    out.write(`wrote ${paths.program}\n`);
+  }
+  const main = programPath(program, home);
   writeFileSync(launcher, launcherScript(node, main), { mode: 0o700 });
   // writeFileSync's mode applies only when it creates the file; this repairs an existing one.
   chmodSync(launcher, 0o700);
@@ -77,23 +95,57 @@ export async function install(options: InstallOptions): Promise<number> {
       return 1;
     }
   }
+  out.write("For another MCP client, register this stdio server:\n");
+  out.write(
+    `${JSON.stringify({ mcpServers: { foxleash: { command: node, args: [main, "mcp"] } } })}\n`,
+  );
   if (!(await installExtension(options))) {
     return 1;
   }
-  out.write("Next: npm run doctor\n");
+  out.write(`Next: ${program.kind === "bundle" ? "npx foxleash doctor" : "npm run doctor"}\n`);
   return 0;
+}
+
+/**
+ * Writes `from`'s bytes to `to` at mode 0600: under a new random name in the same folder, then
+ * renamed onto `to`, so a host Firefox starts meanwhile runs the old file or the new one.
+ */
+function copyProgram(from: string, to: string): void {
+  // Read first: setup run from the installed copy replaces the file it runs from.
+  const bytes = readFileSync(from);
+  const temp = join(
+    dirname(to),
+    `.foxleash.mjs.${process.pid}.${randomBytes(6).toString("hex")}.tmp`,
+  );
+  // O_EXCL: never through a symlink at the name, and never over an existing file.
+  const fd = openSync(temp, "wx", 0o600);
+  try {
+    try {
+      writeFileSync(fd, bytes);
+      // The umask may have removed bits from the mode openSync created the file with.
+      fchmodSync(fd, 0o600);
+    } finally {
+      closeSync(fd);
+    }
+    // Replaces a file or a symlink at `to`, without following it.
+    renameSync(temp, to);
+  } catch (error) {
+    removeFile(temp);
+    throw error;
+  }
 }
 
 /** False after it printed why the extension step failed. */
 async function installExtension(options: InstallOptions): Promise<boolean> {
-  const { home, extension, run, launch, out } = options;
+  const { extension, launch, out } = options;
   if (extension.kind === "none") {
     return true;
   }
-  const path =
-    extension.kind === "release"
-      ? await downloadExtension(extension.version, home, run, out)
-      : localExtension(extension.path, out);
+  if (extension.kind === "page") {
+    out.write(`Install the Foxleash add-on in Firefox from ${ADDON_PAGE_URL}\n`);
+    return true;
+  }
+  const path = localExtension(extension.path, out);
   if (path === undefined) {
     return false;
   }
@@ -113,52 +165,6 @@ async function installExtension(options: InstallOptions): Promise<boolean> {
     `could not start firefox: ${launched.error}; open ${path} in Firefox to install the extension\n`,
   );
   return false;
-}
-
-async function downloadExtension(
-  version: string,
-  home: string,
-  run: Run,
-  out: NodeJS.WritableStream,
-): Promise<string | undefined> {
-  const path = extensionPath(home, version);
-  const dir = dirname(path);
-  // No chmod: an existing ~/.cache/foxleash may hold the development profile, and keeps its mode.
-  mkdirSync(dir, { recursive: true, mode: 0o700 });
-  const args = [
-    "release",
-    "download",
-    `v${version}`,
-    "--repo",
-    RELEASE_REPO,
-    "--pattern",
-    `foxleash-${version}.xpi`,
-    "--dir",
-    dir,
-    "--clobber",
-  ];
-  const result = await run("gh", args, { timeoutMs: GH_TIMEOUT_MS });
-  if (result.status === "ok") {
-    if (!isFile(path)) {
-      out.write(`gh release download did not write ${path}\n`);
-      return undefined;
-    }
-    out.write(`downloaded ${path}\n`);
-    return path;
-  }
-  if (result.status === "missing") {
-    out.write(
-      "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxleash .xpi\n",
-    );
-  } else if (result.status === "failed") {
-    out.write(`gh release download: ${detail(result)}\n`);
-    out.write(
-      `run gh auth login with an account that can read ${RELEASE_REPO}, pass --xpi <path> with a signed Foxleash .xpi, or skip the extension with --no-extension\n`,
-    );
-  } else {
-    out.write("gh release download did not finish in 120 s\n");
-  }
-  return undefined;
 }
 
 function localExtension(path: string, out: NodeJS.WritableStream): string | undefined {
@@ -184,8 +190,8 @@ export async function uninstall(options: UninstallOptions): Promise<number> {
     const result = await run("claude", REMOVE_ARGS, { timeoutMs: CLAUDE_TIMEOUT_MS });
     out.write(`${removeMessage(result)}\n`);
   }
-  const { launcher, manifest } = installPaths(home);
-  const removed = [manifest, launcher].filter((path) => removeFile(path));
+  const { launcher, manifest, program } = installPaths(home);
+  const removed = [manifest, launcher, program].filter((path) => removeFile(path));
   for (const path of removed) {
     out.write(`removed ${path}\n`);
   }
@@ -206,15 +212,21 @@ function homeRefusal(home: string, uid: number | undefined): string | undefined 
   return undefined;
 }
 
-export function installPaths(home: string): { launcher: string; manifest: string } {
+export function installPaths(home: string): {
+  launcher: string;
+  manifest: string;
+  program: string;
+} {
   return {
     launcher: join(home, ".local", "share", "foxleash", "foxleash-host"),
     manifest: join(home, ".mozilla", "native-messaging-hosts", `${NATIVE_HOST_NAME}.json`),
+    program: join(home, ".local", "share", "foxleash", "foxleash.mjs"),
   };
 }
 
-export function extensionPath(home: string, version: string): string {
-  return join(home, ".cache", "foxleash", `foxleash-${version}.xpi`);
+/** The file Firefox and Claude Code run: the checkout's main.ts, or the installed copy. */
+export function programPath(program: Program, home: string): string {
+  return program.kind === "source" ? program.main : installPaths(home).program;
 }
 
 export function launcherScript(node: string, main: string): string {

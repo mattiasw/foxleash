@@ -22,7 +22,7 @@
     "build:amo": "node bin/build-amo.ts",
     "check:release": "node bin/check-release.ts",
     "dev": "npm run dev -w @foxleash/extension",
-    "setup": "node apps/server/src/main.ts install",
+    "setup": "node apps/server/src/main.ts setup",
     "teardown": "node apps/server/src/main.ts uninstall",
     "doctor": "node apps/server/src/main.ts doctor",
     "probe": "node apps/server/src/main.ts probe",

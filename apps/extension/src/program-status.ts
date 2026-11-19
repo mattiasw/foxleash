@@ -1,5 +1,5 @@
 import {
-  EXTENSION_UPDATE_COMMAND,
+  ADDON_PAGE_URL,
   NODE_REQUIREMENT,
   SETUP_COMMAND,
   UPDATE_COMMAND,
@@ -19,7 +19,8 @@ export interface ProgramElements {
   updateCommand: Pick<HTMLElement, "textContent">;
   /** How to update the add-on; shown only while it is older than the program. */
   addonUpdate: Pick<HTMLElement, "hidden">;
-  addonUpdateCommand: Pick<HTMLElement, "textContent">;
+  /** The link to the add-on's page on Firefox Add-ons. */
+  addonUpdateCommand: Pick<HTMLElement, "textContent" | "setAttribute">;
 }
 
 /** The page's `document`, as far as the polling reads it. */
@@ -67,7 +68,8 @@ export function watchProgram<Handle>({
   elements.command.textContent = SETUP_COMMAND;
   elements.requirement.textContent = NODE_REQUIREMENT;
   elements.updateCommand.textContent = UPDATE_COMMAND;
-  elements.addonUpdateCommand.textContent = EXTENSION_UPDATE_COMMAND;
+  elements.addonUpdateCommand.textContent = ADDON_PAGE_URL;
+  elements.addonUpdateCommand.setAttribute("href", ADDON_PAGE_URL);
   page.addEventListener("visibilitychange", () => {
     if (page.visibilityState === "visible") ask();
   });

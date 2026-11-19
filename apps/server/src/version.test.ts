@@ -15,31 +15,28 @@ describe("SERVER_VERSION", () => {
 
 describe("parseVersion", () => {
   it("returns a valid version", () => {
-    assert.equal(parseVersion('{"name":"x","version":"1.2.3-beta+4"}'), "1.2.3-beta+4");
+    assert.equal(parseVersion({ name: "x", version: "1.2.3-beta+4" }), "1.2.3-beta+4");
     const longest = "1".repeat(64);
-    assert.equal(parseVersion(JSON.stringify({ version: longest })), longest);
+    assert.equal(parseVersion({ version: longest }), longest);
   });
 
-  it("throws on invalid JSON", () => {
-    assert.throws(() => parseVersion("{"), { name: "SyntaxError" });
-  });
-
-  const invalid = [
-    "null",
-    "5",
-    '"s"',
-    "[]",
-    "{}",
-    '{"version":1}',
-    '{"version":""}',
-    JSON.stringify({ version: "1".repeat(65) }),
-    '{"version":"1.0 beta"}',
-    '{"version":"0.1.0\\n"}',
-    '{"version":"\\n0.1.0"}',
+  const invalid: unknown[] = [
+    null,
+    undefined,
+    5,
+    "s",
+    [],
+    {},
+    { version: 1 },
+    { version: "" },
+    { version: "1".repeat(65) },
+    { version: "1.0 beta" },
+    { version: "0.1.0\n" },
+    { version: "\n0.1.0" },
   ];
-  for (const text of invalid) {
-    it(`throws for ${text}`, () => {
-      assert.throws(() => parseVersion(text), {
+  for (const value of invalid) {
+    it(`throws for ${JSON.stringify(value)}`, () => {
+      assert.throws(() => parseVersion(value), {
         name: "Error",
         message: "package.json has no valid version",
       });

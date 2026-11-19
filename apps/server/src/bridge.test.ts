@@ -45,7 +45,7 @@ const SHORT_HANDSHAKE_MS = 200;
 const REQUEST_MS = 100;
 const LIMIT = { timeout: 3000 };
 const NO_HOST =
-  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npx foxleash doctor` (in a Foxleash checkout, `npm run doctor`) if it still fails.";
 const TIMEOUT = "The Foxleash native host did not answer in time.";
 const CLOSING = "The connection to the Foxleash native host was lost: the MCP server is closing.";
 const HOST_CLOSED =
@@ -218,7 +218,7 @@ describe("Bridge, finding the host", () => {
     const sentence =
       `The Foxleash MCP server (version ${VERSION}, protocol ${PROTOCOL_VERSION}) is older than the ` +
       `Foxleash native host (version 9.9.9, protocol ${PROTOCOL_VERSION + 1}): your MCP client is ` +
-      "still running the old MCP server, so update Foxleash with `git pull && npm ci && npm run setup` " +
+      "still running the old MCP server, so update Foxleash with `npx foxleash@latest setup` " +
       "if you have not yet and then restart your MCP client.";
     await rejectsWith(h.bridge.call("tabs_list", {}), sentence);
     await rejectsWith(h.bridge.call("tabs_list", {}), sentence);

@@ -3,7 +3,7 @@ import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
-  EXTENSION_UPDATE_COMMAND,
+  ADDON_PAGE_URL,
   OLDEST_SERVED_PROTOCOL,
   PROTOCOL_VERSION,
   protocolMismatch,
@@ -21,7 +21,7 @@ import {
 
 // Copied from apps/server/src/bridge.ts, where it is private.
 const NO_HOST =
-  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npx foxleash doctor` (in a Foxleash checkout, `npm run doctor`) if it still fails.";
 
 // Copied from apps/extension/src/program-status.ts, which the e2e type check cannot load.
 const TOO_OLD =
@@ -168,7 +168,7 @@ describe("with an extension that speaks an older protocol", () => {
   test("the settings and the button say the add-on is older", { timeout: 120_000 }, async () => {
     const settings = await harness.settingsPage();
     const place = await waitForProgram(firefox, settings, ADDON_OLDER);
-    assert.equal(place.addonUpdateCommand, EXTENSION_UPDATE_COMMAND);
+    assert.equal(place.addonUpdateCommand, ADDON_PAGE_URL);
     assert.equal(place.addonUpdateHidden, false);
     assert.equal(place.setupHidden, true);
     assert.equal(place.updateHidden, true);

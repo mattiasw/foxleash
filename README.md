@@ -32,36 +32,33 @@ server, and from there to the agent.
   [one setting first](#firefox-from-snap-or-flatpak).
 - Node.js 24 or later
 - An MCP client. The setup command registers Foxleash with Claude Code if it is installed.
-- The GitHub CLI (`gh`), logged in (`gh auth login`) with an account that can read this
-  repository's releases, unless you install from a signed `.xpi` with `--xpi`.
 
 ## Install
 
 ```sh
-git clone <repository URL>
-cd foxleash
-npm ci
-npm run setup
+npx foxleash setup
 ```
 
-`npm run setup` does three things:
+`npx foxleash setup` does four things:
 
-1. It writes a small launcher script and registers it with Firefox as the native host
-   (`~/.mozilla/native-messaging-hosts/foxleash.json`).
-2. It registers the MCP server with Claude Code (`claude mcp add -s user foxleash`).
-3. It downloads the signed extension for this checkout's version from the repository's GitHub
-   releases into `~/.cache/foxleash/` and opens it in Firefox, where you confirm the
-   installation.
+1. It copies the Foxleash program to `~/.local/share/foxleash/`, where it stays when npm clears
+   its cache.
+2. It writes a small launcher script next to it and registers that with Firefox as the native
+   host (`~/.mozilla/native-messaging-hosts/foxleash.json`).
+3. It registers the MCP server with Claude Code (`claude mcp add -s user foxleash`).
+4. It names the add-on's page on Firefox Add-ons, where you install the extension.
 
 | Option | What it does |
 |---|---|
-| `npm run setup -- --no-claude` | Skips step 2. |
-| `npm run setup -- --xpi <path>` | Installs a signed `.xpi` you already have instead of downloading one. |
-| `npm run setup -- --no-extension` | Skips step 3. |
+| `npx foxleash setup --no-claude` | Skips step 3. |
+| `npx foxleash setup --xpi <path>` | Opens a signed `.xpi` you already have in Firefox instead of step 4. |
+| `npx foxleash setup --no-extension` | Skips step 4. |
 
 When `claude` is not on your PATH, setup prints the command to run yourself; when `firefox` is
-not, it prints the file to open in Firefox. For another MCP client, register the command
-`node <path to this checkout>/apps/server/src/main.ts mcp` as a stdio server.
+not, it prints the file to open in Firefox. For another MCP client, setup prints the stdio server
+to register: the absolute path of `node` and of `~/.local/share/foxleash/foxleash.mjs`, then
+`mcp`. Use the absolute paths setup prints, not `~`: MCP clients start the server without a
+shell, so nothing expands it.
 
 Once the extension is installed, Firefox opens a Foxleash page that shows whether the program on
 this computer is connected; the settings page shows the same. Both pages also say when the program
@@ -70,29 +67,42 @@ is too old for the add-on, or newer than it, and what to do.
 Then check that every part is connected:
 
 ```sh
-npm run doctor
+npx foxleash doctor
 ```
 
 It lists the Foxleash host of every running Firefox and whether the extension has access to
 all websites.
 
-- **Update:** `git pull && npm ci && npm run setup`, then confirm the installation in Firefox.
-- **Remove:** `npm run teardown`, then remove the extension in Firefox.
+- **Update:** `npx foxleash@latest setup`, then restart Firefox and your MCP client.
+- **Remove:** `npx foxleash uninstall`, then remove the extension in Firefox.
+
+### From a checkout
+
+```sh
+git clone <repository URL>
+cd foxleash
+npm ci
+npm run setup
+```
+
+This runs the program from the checkout instead of a copy, with the same options
+(`npm run setup -- --no-claude`). Check with `npm run doctor`, update with
+`git pull && npm ci && npm run setup`, and remove with `npm run teardown`.
 
 ### Firefox from Snap or Flatpak
 
 Both builds ask your desktop to start the Foxleash program for them. Ubuntu adds this to its
 desktop portal; on a system without it, neither build can start the program.
 
-If Firefox does not offer to add Foxleash when setup runs, copy
-`~/.cache/foxleash/foxleash-<version>.xpi` to your Downloads folder, open `about:addons` in
-Firefox, click the gear button, choose "Install Add-on From File" and pick the file.
+If Firefox does not offer to add Foxleash from a `.xpi` you gave setup, copy the file to your
+Downloads folder, open `about:addons` in Firefox, click the gear button, choose "Install Add-on
+From File" and pick the file.
 
 **Snap:** while the add-on installs, your desktop asks once "Allow Firefox to start WebExtension
 backend?". Click Allow.
 
-**Flatpak:** `npm run setup` is still needed, because your desktop reads the file it writes. Then
-give Firefox one setting:
+**Flatpak:** `npx foxleash setup` is still needed, because your desktop reads the file it
+writes. Then give Firefox one setting:
 
 1. In the Flatpak Firefox, type `about:config` in the address bar and press Enter.
 2. If Firefox shows "Proceed with Caution", click "Accept the Risk and Continue".
@@ -102,7 +112,7 @@ give Firefox one setting:
 4. Click the pencil button at the end of its row, replace `0` with `2`, and press Enter.
 5. Your desktop asks "Allow Mozilla Firefox to start WebExtension backend?". Click Allow. "Don't
    allow" is selected, so pressing Enter refuses.
-6. The Foxleash page shows the program as connected by itself, and `npm run doctor` passes.
+6. The Foxleash page shows the program as connected by itself, and `npx foxleash doctor` passes.
 
 The Flatpak Firefox keeps its own settings folder, so it does not see the file setup writes. With
 this setting it asks your desktop to start the program outside the Flatpak, and the value 2 makes

@@ -74,7 +74,7 @@ interface Pending {
 }
 
 const NO_HOST =
-  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npm run doctor` in your Foxleash folder if it still fails.";
+  "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npx foxleash doctor` (in a Foxleash checkout, `npm run doctor`) if it still fails.";
 const TIMEOUT = "The Foxleash native host did not answer in time.";
 const CLOSING = "the MCP server is closing";
 const HOST_CLOSED = "the host closed the connection";

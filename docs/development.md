@@ -54,9 +54,10 @@ running in it, or the test after which its hooks or teardown were running, then 
 so far. Set `FOXLEASH_TEST_REPORTER=spec` (or any other `--test-reporter` value) for Node's
 per-test output, for example `FOXLEASH_TEST_REPORTER=spec npm test`.
 
-The server's TypeScript runs directly on Node (type stripping), so it has no build step.
-Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
-refuses to strip types from files it sees under `node_modules`.
+In a checkout the server's TypeScript runs directly on Node (type stripping); `npm run build`
+also bundles it with `apps/server/build.ts` into `apps/server/dist`, the
+[npm package](#npm-package). Running Node with `--preserve-symlinks` breaks this for the
+workspace packages: Node refuses to strip types from files it sees under `node_modules`.
 
 ## End-to-end tests
 
@@ -389,25 +390,35 @@ tagged commit (ADR 0075).
 
 Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
 
-`npm run setup` (the `install` subcommand) writes the launcher to
+The `setup` subcommand (`npm run setup` in a checkout, `npx foxleash setup` from the npm
+package; `install` is another name for it) writes the launcher to
 `~/.local/share/foxleash/foxleash-host` and the native manifest to
 `~/.mozilla/native-messaging-hosts/foxleash.json`; both paths derive from `$HOME` only. The
-launcher runs this checkout's `main.ts` with the absolute path of the Node that ran setup,
-so rerun setup after moving or switching checkouts or Node versions.
-`npm run setup -- --no-claude` and `npm run teardown -- --no-claude` leave Claude Code's
-user configuration unchanged, for a checkout that should not touch it.
+program it points the launcher and Claude Code at depends on the file the command runs from:
 
-Setup's last step installs the extension. It runs
-`gh release download v<version> --repo github.com/mattiasw/foxleash --pattern foxleash-<version>.xpi`
-into `~/.cache/foxleash/foxleash-<version>.xpi` (from `$HOME` only, like the other paths) and
-opens that file in Firefox, which asks you to confirm the installation. The repository names
-its host, so `GH_HOST` or a gh login to another host cannot change where the file comes from.
-`<version>` is this checkout's version, not GitHub's latest release, so the extension matches
-the checkout's server and host, and a release that does not exist yet fails instead of
-installing an older extension. The file is kept, because Firefox reads it again when you
-confirm. `npm run setup -- --xpi <path>` opens a local file instead; a relative path resolves
-against the directory `npm run` was started from. `npm run setup -- --no-extension` skips the
-step. Firefox is started detached, so setup neither waits for it nor stops it.
+- From the TypeScript source (a checkout), it is this checkout's `main.ts`, so rerun setup
+  after moving or switching checkouts.
+- From the bundle (npx, or the installed copy itself), setup first copies the bundle to
+  `~/.local/share/foxleash/foxleash.mjs`, so the program does not live in npm's cache, which
+  npm may clear. It writes the bytes at mode 0600 under a new random name in that folder (an
+  exclusive create, which never follows a symlink), then renames the file onto
+  `foxleash.mjs`, so a host Firefox starts meanwhile runs the old file or the new one. A
+  failed copy leaves the launcher, the manifest and the registration as they were.
+
+The launcher names the absolute path of the Node that ran setup, so rerun setup after
+switching Node versions. Setup then prints the stdio server for other MCP clients as one line
+of JSON, `{"mcpServers":{"foxleash":{"command":"<node>","args":["<program>","mcp"]}}}`, unless
+the Claude Code registration failed, and ends with the doctor command of its route. It never
+runs doctor itself. `--no-claude` on setup and on uninstall (`npm run teardown -- --no-claude`
+in a checkout) leaves Claude Code's user configuration unchanged. Uninstall removes the
+manifest, the launcher and the copy, then their folder when it is empty.
+
+Setup's last step names the add-on's page on Firefox Add-ons (`ADDON_PAGE_URL` in
+`packages/protocol`); setup makes no network request. `--xpi <path>` opens a local file in
+Firefox instead, which asks you to confirm the installation; under `npm run setup` a relative
+path resolves against the directory `npm run` was started from, otherwise against the current
+directory. `--no-extension` skips the step. Firefox is started detached, so setup neither waits
+for it nor stops it.
 
 The host listens on `<socket directory>/<pid>.sock`. The socket directory is the first of
 `$XDG_RUNTIME_DIR/foxleash` and `/run/user/<uid>/foxleash` whose base directory (that is,
@@ -443,13 +454,51 @@ the way Firefox does, but with only `HOME`, `PATH=/usr/bin:/bin` and a private t
 `XDG_RUNTIME_DIR` in its environment, so the host it starts never joins the real socket
 directory: it sends one extension hello, expects a welcome, ends stdin and expects a clean
 exit, then removes the temporary directory. It runs `claude mcp get foxleash` and compares the
-registered command with this checkout. It checks the socket directory with the same rules as
-the host, and makes one `mcp` hello and welcome round trip over each socket of a running
-process, reading the extension's state from the welcome. The extension reports its access to
-all websites when it connects to the host and again whenever the user grants or revokes it, so
-that line shows the current state. When the socket directory does not exist or no host answered,
-and `~/.var/app/org.mozilla.firefox` is a folder, doctor prints the `about:config` step for
-Firefox from Flatpak under that FAIL line.
+registered command with the program of its route, as setup picks it; its hints name that
+route's setup command. It checks the socket directory with the same rules as the host, and
+makes one `mcp` hello and welcome round trip over each socket of a running process, reading the
+extension's state from the welcome. The extension reports its access to all websites when it
+connects to the host and again whenever the user grants or revokes it, so that line shows the
+current state. When the extension's version differs from its host's on protocols that work
+together, doctor warns and names the older part and its update; the host and the extension log
+the same sentence, and nothing is refused for it. When the socket directory does not exist or
+no host answered, and `~/.var/app/org.mozilla.firefox` is a folder, doctor prints the
+`about:config` step for Firefox from Flatpak under that FAIL line.
+
+### npm package
+
+`npm run build -w @foxleash/server` runs `apps/server/build.ts`, which writes the package
+`foxleash` into `apps/server/dist`, starting from an empty folder:
+
+- `foxleash.mjs`: `src/main.ts` and everything it imports, bundled by esbuild into one
+  unminified ES module for Node 24 that starts with `#!/usr/bin/env node`. Node refuses to strip
+  types under `node_modules`, so the TypeScript source cannot ship as it is. The version is
+  `apps/server/package.json`'s, inlined at build time.
+- `package.json`: the name, version, description, license, the `foxleash` bin entry, `engines`,
+  `os` and the repository, with no dependencies and no scripts, so npx installs nothing else.
+- `LICENSE` and `README.md`, copied from the repository root.
+- `THIRD_PARTY_NOTICES.md`: each package under `node_modules` whose code the bundle contains
+  (read from esbuild's metafile), with its version, its license and the text of its license
+  and NOTICE files.
+
+The build fails before it writes anything, naming the file or the package, when a bundled file
+is neither in a package under `node_modules` nor in `apps/server/` or `packages/`, when a
+package's `license` is not exactly one of MIT, ISC, BSD-2-Clause, BSD-3-Clause and Apache-2.0
+(an SPDX expression or a `licenses` array fails too), when it has no license file (`LICENSE` or
+`LICENCE`, bare or with `.md` or `.txt`, in any case), or when a license or NOTICE file is empty
+or not a regular file.
+
+The workspace `@foxleash/server` stays private; only the generated folder is published. By hand,
+at the release commit:
+
+1. `npm ci`, then `npm run build -w @foxleash/server`. This runs `build.ts` itself: turbo's
+   cached `build` keys on `apps/server`'s files only, so a change to the root `README.md`,
+   `LICENSE` or description alone could restore an old `dist`.
+2. `npm pack ./apps/server/dist` and check that the tarball holds exactly the five files above.
+3. `npm publish ./apps/server/dist --access public`.
+
+Setup's add-on page answers only once the add-on is listed on Firefox Add-ons; until then, a
+signed `.xpi` goes in with `--xpi`.
 
 ## Probing synthetic input
 

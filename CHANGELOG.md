@@ -16,6 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Foxleash is free software under the GNU General Public License, version 3 or later.
   `SECURITY.md` says how to report a vulnerability privately and `CONTRIBUTING.md` how to
   contribute.
+- Install the Foxleash program with `npx foxleash setup`, without cloning the repository.
+- Setup prints the command for MCP clients other than Claude Code to register.
+- `doctor`, the program's log and the add-on's log say when the program and the add-on differ in
+  version, and which one to update.
 
 ### Changed
 
@@ -33,6 +37,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `upload_file` refuses a file saved or changed in the last 5 seconds, saying to try again in a
   few seconds. A file the agent or the `download` tool saved a moment ago, also in the same
   `batch`, can be uploaded once those seconds have passed.
+- Setup run with `npx foxleash setup` installs the program into `~/.local/share/foxleash/`, so
+  it keeps working when npm clears its cache.
+- Setup no longer downloads the add-on and no longer needs the GitHub CLI: it names the add-on's
+  page on Firefox Add-ons. `--xpi <path>` still opens a signed `.xpi` you have.
+- The command that updates the program is now `npx foxleash@latest setup`.
+- The `install` command is now called `setup`; `install` still works.
+- When the add-on needs an update, the settings and first-run pages say to check for updates in
+  `about:addons` and link to the add-on's page, instead of naming a command.
 
 ### Removed
 

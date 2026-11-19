@@ -105,6 +105,33 @@ after(async () => {
 });
 
 describe("runHost, native side", () => {
+  it("logs a version difference with the extension at its hello", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h);
+    assert.deepEqual(
+      h.logs.filter((line) => line.message === "version difference with the extension"),
+      [
+        {
+          message: "version difference with the extension",
+          detail:
+            `The Foxleash extension (version ${EXTENSION_VERSION}) is older than the Foxleash ` +
+            `native host (version ${VERSION}): update the add-on in Firefox (open about:addons ` +
+            "and choose Check for Updates), or install it again from " +
+            "https://addons.mozilla.org/firefox/addon/foxleash/.",
+        },
+      ],
+    );
+    await finish(h);
+  });
+
+  it("logs no version difference when the versions are equal", LIMIT, async () => {
+    const h = start();
+    await greetExtension(h, { version: VERSION });
+    assert.ok(h.logs.some((line) => line.message === "extension connected"));
+    assert.ok(!h.logs.some((line) => line.message === "version difference with the extension"));
+    await finish(h);
+  });
+
   it("answers an extension hello with a welcome", LIMIT, async () => {
     const h = start();
     writeFrame(h.stdin, extensionHello());
@@ -663,7 +690,7 @@ describe("runHost, socket side", () => {
       `The Foxleash native host (version ${VERSION}, protocol ${PROTOCOL_VERSION}) is older ` +
       `than the Foxleash extension (version ${EXTENSION_VERSION}, protocol ${PROTOCOL_VERSION + 2}, ` +
       `which works with protocol ${PROTOCOL_VERSION + 1} and later): Firefox is still running ` +
-      "the old native host, so update Foxleash with `git pull && npm ci && npm run setup` if " +
+      "the old native host, so update Foxleash with `npx foxleash@latest setup` if " +
       "you have not yet and then restart Firefox.";
     const client = await greet(h);
     client.send(request("r1"));
@@ -686,7 +713,8 @@ describe("runHost, socket side", () => {
         const sentence =
           `The Foxleash extension (version ${EXTENSION_VERSION}, protocol ${PROTOCOL_VERSION - 1}) ` +
           `is older than the Foxleash native host (version ${VERSION}, protocol ${PROTOCOL_VERSION}): ` +
-          "run `npm run setup` in your Foxleash folder and confirm the extension update in Firefox.";
+          "update the add-on in Firefox (open about:addons and choose Check for Updates), or " +
+          "install it again from https://addons.mozilla.org/firefox/addon/foxleash/.";
         const client = await greet(h);
         client.send(request("r1"));
         assert.deepEqual(

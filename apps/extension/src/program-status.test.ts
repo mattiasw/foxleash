@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, it, type TestContext } from "node:test";
 import {
-  EXTENSION_UPDATE_COMMAND,
+  ADDON_PAGE_URL,
   NODE_REQUIREMENT,
   SETUP_COMMAND,
   UPDATE_COMMAND,
@@ -17,7 +17,8 @@ describe("watchProgram", { timeout: 10000 }, () => {
     assert.equal(elements.command.textContent, SETUP_COMMAND);
     assert.equal(elements.requirement.textContent, NODE_REQUIREMENT);
     assert.equal(elements.updateCommand.textContent, UPDATE_COMMAND);
-    assert.equal(elements.addonUpdateCommand.textContent, EXTENSION_UPDATE_COMMAND);
+    assert.equal(elements.addonUpdateCommand.textContent, ADDON_PAGE_URL);
+    assert.deepEqual(elements.addonUpdateCommand.attributes, { href: ADDON_PAGE_URL });
     assert.deepEqual(
       requests.map((request) => request.message),
       [{ type: "program_state" }],
@@ -205,7 +206,13 @@ function setup(t: TestContext, visible = true) {
     update: { hidden: true },
     updateCommand: { textContent: "" },
     addonUpdate: { hidden: true },
-    addonUpdateCommand: { textContent: "" },
+    addonUpdateCommand: {
+      textContent: "",
+      attributes: {} as Record<string, string>,
+      setAttribute(name: string, value: string): void {
+        this.attributes[name] = value;
+      },
+    },
   };
   const browser = {
     runtime: {

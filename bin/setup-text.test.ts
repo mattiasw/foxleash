@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, test } from "node:test";
 import {
-  EXTENSION_UPDATE_COMMAND,
+  ADDON_PAGE_URL,
   NODE_REQUIREMENT,
   SETUP_COMMAND,
   UPDATE_COMMAND,
@@ -22,13 +22,7 @@ describe("the setup command and the Node.js requirement", () => {
   for (const file of ["apps/extension/src/welcome.html", "apps/extension/src/options.html"]) {
     test(`${file} leaves the commands and the requirement to its script`, () => {
       const html = read(file);
-      const texts = [
-        SETUP_COMMAND,
-        UPDATE_COMMAND,
-        EXTENSION_UPDATE_COMMAND,
-        NODE_REQUIREMENT,
-        "Node.js",
-      ];
+      const texts = [SETUP_COMMAND, UPDATE_COMMAND, ADDON_PAGE_URL, NODE_REQUIREMENT, "Node.js"];
       for (const text of texts) {
         assert.ok(!html.includes(text), `${file} contains "${text}"`);
       }

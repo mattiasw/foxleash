@@ -13,8 +13,9 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 ## Project Structure
 
 - `apps/extension/` - Firefox MV3 extension (TypeScript, bundled with esbuild, unminified)
-- `apps/server/` - the `foxleash` CLI: `mcp`, `host`, `install`, `uninstall`, `doctor`, `probe`;
-  runs TypeScript directly on Node 24 (type stripping), no build step
+- `apps/server/` - the `foxleash` CLI: `mcp`, `host`, `setup`, `uninstall`, `doctor`, `probe`;
+  runs TypeScript directly on Node 24 (type stripping); `npm run build` also bundles it into the
+  npm package in `apps/server/dist`
 - `packages/protocol/` - messages and method contracts shared by both, plus the protocol
   version
 - `packages/tsconfig/` - shared TypeScript configuration
@@ -30,7 +31,7 @@ requests from MCP servers to the extension and routes the responses back. Firefo
 | Lint and format check | `npm run lint` |
 | Type check | `npm run typecheck` |
 | Unit tests (with coverage floors) | `npm test` |
-| Build the extension | `npm run build` |
+| Build the extension and the npm package | `npm run build` |
 | Build the AMO source archive | `npm run build:amo` |
 | Release checks | `npm run check:release -- <subcommand>` |
 | End-to-end tests | `npm run e2e` |

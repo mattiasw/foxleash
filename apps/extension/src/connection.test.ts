@@ -248,8 +248,9 @@ describe("connection welcome", { timeout: 10000 }, () => {
         event: "protocol_mismatch",
         message:
           `The Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}) is older than ` +
-          `the Foxleash native host (version 9.0.0, protocol ${PROTOCOL_VERSION + 1}): run ` +
-          "`npm run setup` in your Foxleash folder and confirm the extension update in Firefox.",
+          `the Foxleash native host (version 9.0.0, protocol ${PROTOCOL_VERSION + 1}): update ` +
+          "the add-on in Firefox (open about:addons and choose Check for Updates), or install it " +
+          "again from https://addons.mozilla.org/firefox/addon/foxleash/.",
       },
     ]);
     host.deliver(request);
@@ -271,6 +272,37 @@ describe("connection welcome", { timeout: 10000 }, () => {
     await flush();
     assert.deepEqual(warnings(), []);
   });
+
+  it("logs a version difference on a served port and still serves it", async (t) => {
+    const { open, warnings } = setup(t, async () => ({ tabs: [] }));
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL, version: "0.2.0" });
+    host.deliver(request);
+    await flush();
+    assert.deepEqual(warnings(), [
+      {
+        event: "version_difference",
+        message:
+          "The Foxleash extension (version 0.1.0) is older than the Foxleash native host " +
+          "(version 0.2.0): update the add-on in Firefox (open about:addons and choose Check " +
+          "for Updates), or install it again from https://addons.mozilla.org/firefox/addon/foxleash/.",
+      },
+    ]);
+    assert.deepEqual(host.posted.slice(1), [
+      { type: "response", id: "r1", ok: true, result: { tabs: [] } },
+    ]);
+  });
+
+  it("logs no version difference on a refused port", async (t) => {
+    const { open, warnings } = setup(t);
+    const host = await open();
+    host.deliver({ type: "welcome", protocol: OLDEST_SERVED_PROTOCOL - 1, version: "0.2.0" });
+    await flush();
+    assert.deepEqual(
+      warnings().map((warning) => fieldsOf(warning)?.event),
+      ["protocol_mismatch"],
+    );
+  });
 });
 
 describe("connection served protocols", { timeout: 10000 }, () => {
@@ -285,7 +317,7 @@ describe("connection served protocols", { timeout: 10000 }, () => {
         return { tabs: [] };
       });
       const host = await open();
-      host.deliver({ type: "welcome", protocol, version: "0.4.1" });
+      host.deliver({ type: "welcome", protocol, version: "0.1.0" });
       host.deliver(request);
       await flush();
       assert.deepEqual(seen, [["r1", protocol]]);
@@ -314,7 +346,7 @@ describe("connection served protocols", { timeout: 10000 }, () => {
       `The Foxleash native host (version 0.2.0, protocol ${OLDEST_SERVED_PROTOCOL - 1}) is ` +
       `older than the Foxleash extension (version 0.1.0, protocol ${PROTOCOL_VERSION}${clause}): ` +
       "Firefox is still running the old native host, so update Foxleash with " +
-      "`git pull && npm ci && npm run setup` if you have not yet and then restart Firefox.";
+      "`npx foxleash@latest setup` if you have not yet and then restart Firefox.";
     assert.deepEqual(seen, []);
     assert.deepEqual(host.posted.slice(1), [
       {

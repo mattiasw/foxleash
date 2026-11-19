@@ -13,25 +13,26 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { Writable } from "node:stream";
 import { afterEach, describe, it } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
+import { ADDON_PAGE_URL } from "@foxleash/protocol";
 import { type CliDeps, COMMANDS, type CommandOptions } from "./cli.ts";
 import {
   claudeAddArgs,
   type ExtensionSource,
-  extensionPath,
   install,
   installPaths,
   launcherScript,
   nativeManifest,
+  type Program,
+  programPath,
   shellQuote,
   uninstall,
 } from "./install.ts";
 import { type LaunchResult, type RunResult, runCommand } from "./run-command.ts";
-import { SERVER_VERSION } from "./version.ts";
 
 type Call = [string, string[], { timeoutMs: number }];
 
@@ -46,11 +47,11 @@ const ADD: Call = [
   { timeoutMs: 30000 },
 ];
 const OK: RunResult = { status: "ok", code: 0, stdout: "", stderr: "" };
-const RELEASE: ExtensionSource = { kind: "release", version: "1.2.3" };
-const GH_MISSING_HINT =
-  "GitHub CLI (gh) was not found on PATH; install it and run gh auth login, or pass --xpi <path> with a signed Foxleash .xpi";
-const GH_AUTH_HINT =
-  "run gh auth login with an account that can read github.com/mattiasw/foxleash, pass --xpi <path> with a signed Foxleash .xpi, or skip the extension with --no-extension";
+const PAGE: ExtensionSource = { kind: "page" };
+const MCP_HEADER = "For another MCP client, register this stdio server:";
+const MCP_CONFIG =
+  '{"mcpServers":{"foxleash":{"command":"/opt/my node/it\'s/node","args":["/src/fox \'hand\'/main.ts","mcp"]}}}';
+const PAGE_LINE = `Install the Foxleash add-on in Firefox from ${ADDON_PAGE_URL}`;
 const temps: string[] = [];
 
 afterEach(() => {
@@ -104,7 +105,12 @@ describe("install", () => {
     assert.deepEqual(JSON.parse(text), expected);
     assert.equal(text, `${JSON.stringify(expected, null, 2)}\n`);
     assert.equal(mode(t.manifest), 0o600);
-    assert.deepEqual(installPaths(home), { launcher: t.launcher, manifest: t.manifest });
+    assert.deepEqual(installPaths(home), {
+      launcher: t.launcher,
+      manifest: t.manifest,
+      program: join(home, ".local", "share", "foxleash", "foxleash.mjs"),
+    });
+    assert.deepEqual(readdirSync(join(home, ".local", "share", "foxleash")), ["foxleash-host"]);
   });
 
   it("replaces the Claude Code registration even when the remove fails", async () => {
@@ -113,7 +119,15 @@ describe("install", () => {
     assert.deepEqual(t.calls, [REMOVE, ADD]);
     assert.equal(
       t.output(),
-      `wrote ${t.launcher}\nwrote ${t.manifest}\nregistered Foxleash with Claude Code\nNext: npm run doctor\n`,
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        "registered Foxleash with Claude Code",
+        MCP_HEADER,
+        MCP_CONFIG,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -133,7 +147,17 @@ describe("install", () => {
     assert.deepEqual(t.calls, []);
     assert.ok(existsSync(t.launcher));
     assert.ok(existsSync(t.manifest));
-    assert.equal(t.output(), `wrote ${t.launcher}\nwrote ${t.manifest}\nNext: npm run doctor\n`);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        MCP_HEADER,
+        MCP_CONFIG,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
+    );
   });
 
   it("prints the command to run when claude is not on PATH", async () => {
@@ -147,6 +171,8 @@ describe("install", () => {
         `wrote ${t.manifest}`,
         "Claude Code (claude) was not found on PATH; to register Foxleash yourself, run:",
         `'claude' 'mcp' 'add' '-s' 'user' 'foxleash' '--' ${QUOTED_NODE} ${QUOTED_MAIN} 'mcp'`,
+        MCP_HEADER,
+        MCP_CONFIG,
         "Next: npm run doctor",
         "",
       ].join("\n"),
@@ -186,7 +212,8 @@ describe("install", () => {
     writeFileSync(t.launcher, "junk");
     writeFileSync(t.manifest, "junk");
     const second = setup(home, []);
-    const options = { ...second.options, node: "/usr/bin/node", main: "/other/main.ts" };
+    const program: Program = { kind: "source", main: "/other/main.ts" };
+    const options = { ...second.options, node: "/usr/bin/node", program };
     assert.equal(await install({ ...options, claude: false }), 0);
     assert.equal(mode(t.launcher), 0o700);
     assert.equal(mode(t.manifest), 0o600);
@@ -225,75 +252,29 @@ describe("install", () => {
 });
 
 describe("the extension step", () => {
-  it("downloads this version's release and opens it in Firefox", async () => {
+  it("names the add-on's page and launches nothing", async () => {
     const home = tempDir();
-    const t = setup(home, [OK, OK, writingGh(OK)]);
-    const xpi = extensionPath(home, "1.2.3");
-    assert.equal(await install({ ...t.options, extension: RELEASE }), 0);
-    assert.deepEqual(t.calls, [REMOVE, ADD, gh(home)]);
-    assert.deepEqual(t.launches, [["firefox", [xpi]]]);
+    const t = setup(home, [OK, OK]);
+    assert.equal(await install({ ...t.options, extension: PAGE }), 0);
+    assert.deepEqual(t.calls, [REMOVE, ADD]);
+    assert.deepEqual(t.launches, []);
     assert.equal(
       t.output(),
       [
         `wrote ${t.launcher}`,
         `wrote ${t.manifest}`,
         "registered Foxleash with Claude Code",
-        `downloaded ${xpi}`,
-        `opened ${xpi} in Firefox; confirm the installation there`,
+        MCP_HEADER,
+        MCP_CONFIG,
+        PAGE_LINE,
         "Next: npm run doctor",
         "",
       ].join("\n"),
     );
-    assert.equal(readFileSync(xpi, "utf8"), "signed");
-    assert.equal(mode(join(home, ".cache")), 0o700);
-    assert.equal(mode(join(home, ".cache", "foxleash")), 0o700);
+    assert.equal(existsSync(join(home, ".cache")), false);
   });
 
-  it("leaves the mode of an existing cache directory alone", async () => {
-    const home = tempDir();
-    const dir = join(home, ".cache", "foxleash");
-    mkdirSync(dir, { recursive: true });
-    chmodSync(dir, 0o755);
-    const t = setup(home, [writingGh(OK)]);
-    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 0);
-    assert.equal(mode(dir), 0o755);
-  });
-
-  const failures: [string, RunResult, string[]][] = [
-    ["missing", { status: "missing" }, [GH_MISSING_HINT]],
-    [
-      "failed",
-      { status: "failed", code: 1, stdout: "", stderr: "  release not found\n" },
-      ["gh release download: release not found", GH_AUTH_HINT],
-    ],
-    ["timeout", { status: "timeout" }, ["gh release download did not finish in 120 s"]],
-  ];
-  for (const [name, result, lines] of failures) {
-    it(`returns 1 without opening anything when gh is ${name}`, async () => {
-      const home = tempDir();
-      const t = setup(home, [result]);
-      assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
-      assert.deepEqual(t.calls, [gh(home)]);
-      assert.deepEqual(t.launches, []);
-      assert.equal(
-        t.output(),
-        [`wrote ${t.launcher}`, `wrote ${t.manifest}`, ...lines, ""].join("\n"),
-      );
-    });
-  }
-
-  it("returns 1 without opening anything when gh wrote no file", async () => {
-    const home = tempDir();
-    const t = setup(home, [OK]);
-    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
-    assert.deepEqual(t.launches, []);
-    assert.equal(
-      t.output(),
-      `wrote ${t.launcher}\nwrote ${t.manifest}\ngh release download did not write ${extensionPath(home, "1.2.3")}\n`,
-    );
-  });
-
-  it("opens a local file as given, without gh", async () => {
+  it("opens a local file as given", async () => {
     const xpi = join(tempDir(), "my foxleash.xpi");
     writeFileSync(xpi, "signed");
     const t = setup(tempDir(), []);
@@ -303,7 +284,15 @@ describe("the extension step", () => {
     assert.deepEqual(t.launches, [["firefox", [xpi]]]);
     assert.equal(
       t.output(),
-      `wrote ${t.launcher}\nwrote ${t.manifest}\nopened ${xpi} in Firefox; confirm the installation there\nNext: npm run doctor\n`,
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        MCP_HEADER,
+        MCP_CONFIG,
+        `opened ${xpi} in Firefox; confirm the installation there`,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
     );
   });
 
@@ -321,7 +310,17 @@ describe("the extension step", () => {
       assert.equal(await install({ ...t.options, claude: false, extension }), 1);
       assert.deepEqual(t.calls, []);
       assert.deepEqual(t.launches, []);
-      assert.equal(t.output(), `wrote ${t.launcher}\nwrote ${t.manifest}\nno file at ${xpi}\n`);
+      assert.equal(
+        t.output(),
+        [
+          `wrote ${t.launcher}`,
+          `wrote ${t.manifest}`,
+          MCP_HEADER,
+          MCP_CONFIG,
+          `no file at ${xpi}`,
+          "",
+        ].join("\n"),
+      );
       assert.ok(existsSync(t.launcher));
       assert.ok(existsSync(t.manifest));
     });
@@ -333,21 +332,31 @@ describe("the extension step", () => {
     assert.equal(await install({ ...t.options, claude: false }), 0);
     assert.deepEqual(t.calls, []);
     assert.deepEqual(t.launches, []);
-    assert.equal(t.output(), `wrote ${t.launcher}\nwrote ${t.manifest}\nNext: npm run doctor\n`);
-    assert.equal(existsSync(join(home, ".cache")), false);
-  });
-
-  it("prints the file to open and returns 0 when firefox is not on PATH", async () => {
-    const home = tempDir();
-    const t = setup(home, [writingGh(OK)], { status: "missing" });
-    const xpi = extensionPath(home, "1.2.3");
-    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 0);
     assert.equal(
       t.output(),
       [
         `wrote ${t.launcher}`,
         `wrote ${t.manifest}`,
-        `downloaded ${xpi}`,
+        MCP_HEADER,
+        MCP_CONFIG,
+        "Next: npm run doctor",
+        "",
+      ].join("\n"),
+    );
+  });
+
+  it("prints the file to open and returns 0 when firefox is not on PATH", async () => {
+    const xpi = localXpi();
+    const t = setup(tempDir(), [], { status: "missing" });
+    const extension: ExtensionSource = { kind: "file", path: xpi };
+    assert.equal(await install({ ...t.options, claude: false, extension }), 0);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        MCP_HEADER,
+        MCP_CONFIG,
         `Firefox (firefox) was not found on PATH; open ${xpi} in Firefox to install the extension`,
         "Next: npm run doctor",
         "",
@@ -356,16 +365,17 @@ describe("the extension step", () => {
   });
 
   it("returns 1 when firefox could not be started", async () => {
-    const home = tempDir();
-    const t = setup(home, [writingGh(OK)], { status: "failed", error: "EACCES" });
-    const xpi = extensionPath(home, "1.2.3");
-    assert.equal(await install({ ...t.options, claude: false, extension: RELEASE }), 1);
+    const xpi = localXpi();
+    const t = setup(tempDir(), [], { status: "failed", error: "EACCES" });
+    const extension: ExtensionSource = { kind: "file", path: xpi };
+    assert.equal(await install({ ...t.options, claude: false, extension }), 1);
     assert.equal(
       t.output(),
       [
         `wrote ${t.launcher}`,
         `wrote ${t.manifest}`,
-        `downloaded ${xpi}`,
+        MCP_HEADER,
+        MCP_CONFIG,
         `could not start firefox: EACCES; open ${xpi} in Firefox to install the extension`,
         "",
       ].join("\n"),
@@ -377,31 +387,184 @@ describe("the extension step", () => {
     ["the add fails", [OK, { status: "failed", code: 1, stdout: "", stderr: "x" }], [REMOVE, ADD]],
   ];
   for (const [name, results, calls] of claudeFailures) {
-    it(`skips the extension when ${name}`, async () => {
+    it(`skips the extension and the MCP configuration when ${name}`, async () => {
       const t = setup(tempDir(), results);
-      assert.equal(await install({ ...t.options, extension: RELEASE }), 1);
+      const extension: ExtensionSource = { kind: "file", path: localXpi() };
+      assert.equal(await install({ ...t.options, extension }), 1);
       assert.deepEqual(t.calls, calls);
       assert.deepEqual(t.launches, []);
+      assert.ok(!t.output().includes(MCP_HEADER), t.output());
     });
   }
 });
 
-describe("extensionPath", () => {
-  it("puts the version's file in the Foxleash cache directory under HOME", () => {
-    assert.equal(extensionPath("/home/u", "4.5.6"), "/home/u/.cache/foxleash/foxleash-4.5.6.xpi");
+describe("the MCP configuration", () => {
+  const routes: [string, Program, string][] = [
+    ["the source", { kind: "source", main: MAIN }, MAIN],
+    ["the bundle", { kind: "bundle", file: "" }, ""],
+  ];
+  for (const [name, given, expectedMain] of routes) {
+    for (const [claude, results] of [
+      ["without Claude Code", []],
+      ["after a registration", [OK, OK]],
+      ["when claude is not on PATH", [{ status: "missing" }, { status: "missing" }]],
+    ] as const) {
+      it(`names node and the program run from ${name} ${claude}`, async () => {
+        const home = tempDir();
+        const program: Program =
+          given.kind === "bundle" ? { kind: "bundle", file: bundleFile("x") } : given;
+        const main = expectedMain === "" ? installPaths(home).program : expectedMain;
+        const t = setup(home, [...results]);
+        assert.equal(await install({ ...t.options, claude: results.length > 0, program }), 0);
+        const lines = t.output().split("\n");
+        const config = lines[lines.indexOf(MCP_HEADER) + 1];
+        assert.ok(config !== undefined, t.output());
+        assert.deepEqual(JSON.parse(config), {
+          mcpServers: { foxleash: { command: NODE, args: [main, "mcp"] } },
+        });
+      });
+    }
+  }
+});
+
+describe("the bundle route", () => {
+  it("copies the bundle and points the launcher and Claude Code at the copy", async () => {
+    const home = tempDir();
+    const file = bundleFile("#!/usr/bin/env node\nconsole.log(1);\n");
+    const t = setup(home, [OK, OK]);
+    assert.equal(await install({ ...t.options, program: { kind: "bundle", file } }), 0);
+    const copy = installPaths(home).program;
+    assert.deepEqual(readFileSync(copy), readFileSync(file));
+    assert.equal(mode(copy), 0o600);
+    assert.equal(readFileSync(t.launcher, "utf8"), launcherScript(NODE, copy));
+    assert.deepEqual(t.calls, [
+      REMOVE,
+      ["claude", claudeAddArgs(NODE, copy), { timeoutMs: 30000 }],
+    ]);
+    assert.equal(
+      t.output(),
+      [
+        `wrote ${copy}`,
+        `wrote ${t.launcher}`,
+        `wrote ${t.manifest}`,
+        "registered Foxleash with Claude Code",
+        MCP_HEADER,
+        JSON.stringify({ mcpServers: { foxleash: { command: NODE, args: [copy, "mcp"] } } }),
+        "Next: npx foxleash doctor",
+        "",
+      ].join("\n"),
+    );
+    assert.deepEqual(readdirSync(dirname(copy)).sort(), ["foxleash-host", "foxleash.mjs"]);
+  });
+
+  it("makes the copy 0600 under a umask that removes the owner's write bit", async () => {
+    const home = tempDir();
+    const program: Program = { kind: "bundle", file: bundleFile("x") };
+    // The folders exist first: under this umask, mkdir would make ones no file can go into.
+    assert.equal(await install({ ...setup(home, []).options, claude: false }), 0);
+    const t = setup(home, []);
+    const previous = process.umask(0o277);
+    try {
+      assert.equal(await install({ ...t.options, claude: false, program }), 0);
+    } finally {
+      process.umask(previous);
+    }
+    assert.equal(mode(installPaths(home).program), 0o600);
+  });
+
+  it("closes the copy it wrote", async () => {
+    const home = tempDir();
+    const program: Program = { kind: "bundle", file: bundleFile("x") };
+    // The first run opens whatever Node opens once, so the second shows only what install leaks.
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program }), 0);
+    const before = readdirSync("/proc/self/fd").length;
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program }), 0);
+    assert.equal(readdirSync("/proc/self/fd").length, before);
+  });
+
+  it("replaces an existing copy", async () => {
+    const home = tempDir();
+    const first: Program = { kind: "bundle", file: bundleFile("old") };
+    const second: Program = { kind: "bundle", file: bundleFile("new") };
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program: first }), 0);
+    chmodSync(installPaths(home).program, 0o644);
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program: second }), 0);
+    assert.equal(readFileSync(installPaths(home).program, "utf8"), "new");
+    assert.equal(mode(installPaths(home).program), 0o600);
+  });
+
+  it("works when run from the installed copy itself", async () => {
+    const home = tempDir();
+    const first: Program = { kind: "bundle", file: bundleFile("same") };
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program: first }), 0);
+    const copy = installPaths(home).program;
+    const self: Program = { kind: "bundle", file: copy };
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program: self }), 0);
+    assert.equal(readFileSync(copy, "utf8"), "same");
+    assert.deepEqual(readdirSync(dirname(copy)).sort(), ["foxleash-host", "foxleash.mjs"]);
+  });
+
+  it("replaces a symlink at the copy's name without writing through it", async () => {
+    const home = tempDir();
+    const target = join(tempDir(), "target");
+    writeFileSync(target, "theirs");
+    const copy = installPaths(home).program;
+    mkdirSync(dirname(copy), { recursive: true });
+    symlinkSync(target, copy);
+    const program: Program = { kind: "bundle", file: bundleFile("ours") };
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program }), 0);
+    assert.ok(lstatSync(copy).isFile());
+    assert.equal(readFileSync(copy, "utf8"), "ours");
+    assert.equal(readFileSync(target, "utf8"), "theirs");
+  });
+
+  it("fails before the launcher when a directory holds the copy's name", async () => {
+    const home = tempDir();
+    const copy = installPaths(home).program;
+    mkdirSync(copy, { recursive: true });
+    const t = setup(home, []);
+    const program: Program = { kind: "bundle", file: bundleFile("x") };
+    await assert.rejects(install({ ...t.options, claude: false, program }), { code: "EISDIR" });
+    assert.deepEqual(readdirSync(dirname(copy)), ["foxleash.mjs"]);
+    assert.equal(existsSync(t.manifest), false);
+    assert.equal(t.output(), "");
+  });
+
+  it("copies nothing from the source", async () => {
+    const home = tempDir();
+    const t = setup(home, []);
+    assert.equal(await install({ ...t.options, claude: false }), 0);
+    assert.equal(existsSync(installPaths(home).program), false);
+    assert.equal(programPath({ kind: "source", main: MAIN }, home), MAIN);
+  });
+
+  it("removes the copy at uninstall", async () => {
+    const home = tempDir();
+    const program: Program = { kind: "bundle", file: bundleFile("x") };
+    assert.equal(await install({ ...setup(home, []).options, claude: false, program }), 0);
+    const t = setup(home, []);
+    assert.equal(await uninstall({ ...t.options, claude: false }), 0);
+    const copy = installPaths(home).program;
+    assert.equal(t.output(), `removed ${t.manifest}\nremoved ${t.launcher}\nremoved ${copy}\n`);
+    assert.equal(existsSync(dirname(copy)), false);
   });
 });
 
 describe("a HOME that is not absolute", () => {
   for (const home of ["", "relative/home"]) {
-    for (const name of ["install", "uninstall"]) {
+    for (const name of ["install", "install from the bundle", "uninstall"]) {
       it(`makes ${name} refuse ${JSON.stringify(home)}`, async () => {
         const cwd = tempDir();
         const previous = process.cwd();
+        const file = bundleFile("x");
         process.chdir(cwd);
         try {
           const t = setup(home, []);
-          const code = name === "install" ? await install(t.options) : await uninstall(t.options);
+          const program: Program = { kind: "bundle", file };
+          const code =
+            name === "uninstall"
+              ? await uninstall(t.options)
+              : await install(name === "install" ? t.options : { ...t.options, program });
           assert.equal(code, 1);
           assert.equal(t.output(), `HOME is not an absolute path: ${JSON.stringify(home)}\n`);
           assert.deepEqual(t.calls, []);
@@ -415,12 +578,16 @@ describe("a HOME that is not absolute", () => {
 });
 
 describe("a HOME owned by another user", () => {
-  for (const name of ["install", "uninstall"]) {
+  for (const name of ["install", "install from the bundle", "uninstall"]) {
     it(`makes ${name} refuse it`, async () => {
       const home = tempDir();
       const t = setup(home, []);
       const options = { ...t.options, uid: statSync(home).uid + 1 };
-      const code = name === "install" ? await install(options) : await uninstall(options);
+      const program: Program = { kind: "bundle", file: bundleFile("x") };
+      const code =
+        name === "uninstall"
+          ? await uninstall(options)
+          : await install(name === "install" ? options : { ...options, program });
       assert.equal(code, 1);
       assert.equal(t.output(), `HOME belongs to another user: ${JSON.stringify(home)}\n`);
       assert.deepEqual(t.calls, []);
@@ -532,14 +699,14 @@ describe("claudeAddArgs", () => {
   });
 });
 
-describe("the install and uninstall commands", () => {
-  it("install and uninstall under $HOME", async () => {
+describe("the setup and uninstall commands", () => {
+  it("setup and uninstall under $HOME", async () => {
     const home = tempDir();
     const previous = saveEnv();
     process.env.HOME = home;
     process.env.PATH = tempDir();
     try {
-      const installCommand = COMMANDS.get("install");
+      const installCommand = COMMANDS.get("setup");
       const uninstallCommand = COMMANDS.get("uninstall");
       assert.ok(installCommand !== undefined && uninstallCommand !== undefined);
       const out: string[] = [];
@@ -547,16 +714,25 @@ describe("the install and uninstall commands", () => {
       const launcher = join(home, ".local", "share", "foxleash", "foxleash-host");
       const manifest = join(home, ".mozilla", "native-messaging-hosts", "foxleash.json");
       assert.equal(await installCommand({ noClaude: true, noExtension: true }, deps), 0);
-      assert.equal(
-        readFileSync(launcher, "utf8"),
-        launcherScript(process.execPath, fileURLToPath(new URL("./main.ts", import.meta.url))),
-      );
+      const main = fileURLToPath(new URL("./main.ts", import.meta.url));
+      assert.equal(readFileSync(launcher, "utf8"), launcherScript(process.execPath, main));
       assert.equal(await uninstallCommand({ noClaude: true }, deps), 0);
       assert.equal(existsSync(launcher), false);
       assert.equal(existsSync(manifest), false);
       assert.equal(
         out.join(""),
-        `wrote ${launcher}\nwrote ${manifest}\nNext: npm run doctor\nremoved ${manifest}\nremoved ${launcher}\n`,
+        [
+          `wrote ${launcher}`,
+          `wrote ${manifest}`,
+          MCP_HEADER,
+          JSON.stringify({
+            mcpServers: { foxleash: { command: process.execPath, args: [main, "mcp"] } },
+          }),
+          "Next: npm run doctor",
+          `removed ${manifest}`,
+          `removed ${launcher}`,
+          "",
+        ].join("\n"),
       );
     } finally {
       restoreEnv(previous);
@@ -613,25 +789,22 @@ describe("the install and uninstall commands", () => {
     }
   });
 
-  it("downloads the release of this checkout's version by default", async () => {
+  it("names the add-on's page by default and runs neither gh nor firefox", async () => {
     const previous = saveEnv();
     const home = tempDir();
     const bin = tempDir();
-    writeFileSync(
-      join(bin, "gh"),
-      '#!/bin/sh\nprintf \'%s\\n\' "$@" > "$HOME/gh-args"\necho "not logged in" >&2\nexit 1\n',
-      { mode: 0o755 },
-    );
+    for (const name of ["gh", "firefox"]) {
+      writeFileSync(join(bin, name), `#!/bin/sh\n: > "$HOME/${name}-ran"\n`, { mode: 0o755 });
+    }
     process.env.HOME = home;
     process.env.PATH = bin;
     try {
       const { code, output } = await runInstallCommand({ noClaude: true });
-      assert.equal(code, 1);
-      assert.ok(output.endsWith(`gh release download: not logged in\n${GH_AUTH_HINT}\n`), output);
-      assert.equal(
-        readFileSync(join(home, "gh-args"), "utf8"),
-        `${gh(home, SERVER_VERSION)[1].join("\n")}\n`,
-      );
+      assert.equal(code, 0);
+      assert.ok(output.endsWith(`${PAGE_LINE}\nNext: npm run doctor\n`), output);
+      await sleep(200);
+      assert.equal(existsSync(join(home, "gh-ran")), false);
+      assert.equal(existsSync(join(home, "firefox-ran")), false);
     } finally {
       restoreEnv(previous);
     }
@@ -744,6 +917,7 @@ function setup(home: string, results: Scripted[], launchResult: LaunchResult = {
     return launchResult;
   }
   const extension: ExtensionSource = { kind: "none" };
+  const program: Program = { kind: "source", main: MAIN };
   return {
     calls,
     launches,
@@ -753,7 +927,7 @@ function setup(home: string, results: Scripted[], launchResult: LaunchResult = {
     options: {
       home,
       node: NODE,
-      main: MAIN,
+      program,
       claude: true,
       extension,
       run,
@@ -763,34 +937,16 @@ function setup(home: string, results: Scripted[], launchResult: LaunchResult = {
   };
 }
 
-/** A gh that writes the asset into the --dir it was given, then returns `result`. */
-function writingGh(result: RunResult): (args: readonly string[]) => RunResult {
-  return (args) => {
-    const dir = args[args.indexOf("--dir") + 1];
-    const pattern = args[args.indexOf("--pattern") + 1];
-    assert.ok(dir !== undefined && pattern !== undefined);
-    writeFileSync(join(dir, pattern), "signed");
-    return result;
-  };
+function localXpi(): string {
+  const xpi = join(tempDir(), "foxleash.xpi");
+  writeFileSync(xpi, "signed");
+  return xpi;
 }
 
-function gh(home: string, version = "1.2.3"): Call {
-  return [
-    "gh",
-    [
-      "release",
-      "download",
-      `v${version}`,
-      "--repo",
-      "github.com/mattiasw/foxleash",
-      "--pattern",
-      `foxleash-${version}.xpi`,
-      "--dir",
-      join(home, ".cache", "foxleash"),
-      "--clobber",
-    ],
-    { timeoutMs: 120000 },
-  ];
+function bundleFile(text: string): string {
+  const file = join(tempDir(), "foxleash.mjs");
+  writeFileSync(file, text);
+  return file;
 }
 
 function mode(path: string): number {

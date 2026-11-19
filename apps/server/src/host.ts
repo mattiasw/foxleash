@@ -4,12 +4,14 @@ import type { Readable, Writable } from "node:stream";
 import {
   type ExtensionStatus,
   type HelloMessage,
+  type PartInfo,
   PROTOCOL_VERSION,
   parseMessage,
   protocolMismatch,
   type RequestMessage,
   type ResponseMessage,
   type SessionEndMessage,
+  versionDifference,
   type WelcomeMessage,
 } from "@foxleash/protocol";
 import {
@@ -284,18 +286,21 @@ export function runHost(options: HostOptions): Host {
     };
     const welcome: WelcomeMessage = { type: "welcome", protocol: PROTOCOL_VERSION, version };
     stdout.write(encodeFrame(JSON.stringify(welcome)));
-    extensionMismatch = protocolMismatch(
-      { part: "host", protocol: PROTOCOL_VERSION, version },
-      {
-        part: "extension",
-        protocol: hello.protocol,
-        version: hello.version,
-        ...(hello.oldestProtocol === undefined ? {} : { oldest: hello.oldestProtocol }),
-      },
-    );
+    const hostPart: PartInfo = { part: "host", protocol: PROTOCOL_VERSION, version };
+    const extensionPart: PartInfo = {
+      part: "extension",
+      protocol: hello.protocol,
+      version: hello.version,
+      ...(hello.oldestProtocol === undefined ? {} : { oldest: hello.oldestProtocol }),
+    };
+    extensionMismatch = protocolMismatch(hostPart, extensionPart);
     log("extension connected", { version: hello.version, protocol: hello.protocol, ...oldest });
     if (extensionMismatch !== null) {
       log("protocol mismatch with the extension", extensionMismatch);
+    }
+    const difference = versionDifference(hostPart, extensionPart);
+    if (difference !== null) {
+      log("version difference with the extension", difference);
     }
   }
 

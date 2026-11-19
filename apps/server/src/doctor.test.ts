@@ -18,7 +18,14 @@ import path from "node:path";
 import { Writable } from "node:stream";
 import { after, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
-import { EXTENSION_ID, PROTOCOL_VERSION, protocolMismatch } from "@foxleash/protocol";
+import {
+  ADDON_PAGE_URL,
+  EXTENSION_ID,
+  PROTOCOL_VERSION,
+  protocolMismatch,
+  SETUP_COMMAND,
+  versionDifference,
+} from "@foxleash/protocol";
 import { type DoctorOptions, doctor, type Spawn } from "./doctor.ts";
 import { createFrameReader, encodeFrame, FRAME_LIMIT } from "./framing.ts";
 import { type ExtensionSource, install, installPaths } from "./install.ts";
@@ -61,7 +68,8 @@ const uid = currentUid();
 const root = mkdtempSync("/tmp/foxleash-test-");
 const VERSION = "1.2.3";
 const HOST_VERSION = "2.0.0";
-const EXTENSION_VERSION = "0.9.0";
+// The host's, so that only the tests about a version difference see its warning.
+const EXTENSION_VERSION = HOST_VERSION;
 const SH = "/bin/sh";
 const MAIN = fileURLToPath(new URL("./main.ts", import.meta.url));
 const LIMIT = { timeout: 10_000 };
@@ -85,7 +93,12 @@ after(async () => {
 describe("doctor, everything in order", () => {
   it("passes with the real host behind the launcher", REAL_LIMIT, async () => {
     const f = await fixture();
-    await install({ home: f.home, node: process.execPath, main: MAIN, ...quiet() });
+    await install({
+      home: f.home,
+      node: process.execPath,
+      program: { kind: "source", main: MAIN },
+      ...quiet(),
+    });
     const host = await fakeHost(f.socketDir, process.pid);
     const closed = once(host.events, "close");
     const claude = fakeRun(claudeOk(process.execPath, MAIN));
@@ -397,7 +410,7 @@ describe("doctor, running the launcher", () => {
     const result = await runDoctor(f, { spawn: recorder.spawn });
     assert.deepEqual(section(result, ["launcher"]), [
       `FAIL launcher: cannot run ${f.launcher}: ELOOP; ${SETUP}`,
-      `warn launcher: the launcher runs #!${f.launcher}; run npm run setup here to switch`,
+      `warn launcher: the launcher runs #!${f.launcher}; run npm run setup to switch`,
     ]);
     assert.equal(result.code, 1);
     assert.equal(existsSync(runtimeDir(recorder)), false);
@@ -496,7 +509,7 @@ describe("doctor, running the launcher", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["launcher"]), [
       `FAIL launcher: ${f.launcher} exited with code 0 before answering; ${SETUP}`,
-      "warn launcher: the launcher runs nothing; run npm run setup here to switch",
+      "warn launcher: the launcher runs nothing; run npm run setup to switch",
     ]);
   });
 
@@ -511,7 +524,7 @@ describe("doctor, running the launcher", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["launcher"]), [
       launcherOk(f),
-      `warn launcher: the launcher runs ${tail.slice(0, 200)}...; run npm run setup here to switch`,
+      `warn launcher: the launcher runs ${tail.slice(0, 200)}...; run npm run setup to switch`,
     ]);
     assert.equal(result.code, 0);
   });
@@ -526,7 +539,7 @@ describe("doctor, running the launcher", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["launcher"]), [
       launcherOk(f),
-      `warn launcher: the launcher runs ${tail}; run npm run setup here to switch`,
+      `warn launcher: the launcher runs ${tail}; run npm run setup to switch`,
     ]);
   });
 
@@ -548,13 +561,18 @@ describe("doctor, running the launcher", () => {
     const f = await fixture();
     const otherMain = path.join(f.home, "other main.sh");
     writeFileSync(otherMain, answering(launcherWelcome()));
-    await install({ home: f.home, node: SH, main: otherMain, ...quiet() });
+    await install({
+      home: f.home,
+      node: SH,
+      program: { kind: "source", main: otherMain },
+      ...quiet(),
+    });
     const host = await fakeHost(f.socketDir, process.pid);
     const result = await runDoctor(f);
     assert.deepEqual(result.lines, [
       `ok native manifest: ${f.manifest}`,
       launcherOk(f),
-      `warn launcher: the launcher runs '${SH}' '${otherMain}' host; run npm run setup here to switch`,
+      `warn launcher: the launcher runs '${SH}' '${otherMain}' host; run npm run setup to switch`,
       ...claudeLines(f),
       `ok socket directory: ${f.socketDir}`,
       hostOk(host, process.pid),
@@ -563,6 +581,41 @@ describe("doctor, running the launcher", () => {
       "8 checks, 0 failed",
     ]);
     assert.equal(result.code, 0);
+  });
+});
+
+describe("doctor, the setup command it names", () => {
+  it("names the setup command it is given", LIMIT, async () => {
+    const f = await fixture();
+    unlinkSync(f.manifest);
+    const result = await runDoctor(f, { setupCommand: SETUP_COMMAND });
+    assert.deepEqual(section(result, ["native manifest"]), [
+      `FAIL native manifest: ${f.manifest} does not exist; run ${SETUP_COMMAND}`,
+    ]);
+  });
+
+  it("expects the installed copy after a setup from the bundle", LIMIT, async () => {
+    const f = await fixture();
+    const bundle = path.join(f.home, "bundle.sh");
+    writeFileSync(bundle, answering(launcherWelcome()));
+    await install({
+      home: f.home,
+      node: SH,
+      program: { kind: "bundle", file: bundle },
+      ...quiet(),
+    });
+    const copy = installPaths(f.home).program;
+    const result = await runDoctor(f, {
+      main: copy,
+      setupCommand: SETUP_COMMAND,
+      run: fakeRun(claudeOk(SH, copy)).run,
+    });
+    assert.deepEqual(section(result, ["launcher", "claude code"]), [
+      launcherOk(f),
+      "ok claude code: foxleash is registered",
+      `  Command: ${SH}`,
+      `  Args: ${copy} mcp`,
+    ]);
   });
 });
 
@@ -909,6 +962,10 @@ describe("doctor, the hosts", () => {
       PERMISSION_OK,
       hostOk(older, process.ppid),
       `ok extension: version 0.8.0, protocol ${PROTOCOL_VERSION}`,
+      `warn extension: ${versionDifference(
+        { part: "extension", protocol: PROTOCOL_VERSION, version: "0.8.0" },
+        { part: "host", protocol: PROTOCOL_VERSION, version: HOST_VERSION },
+      )}`,
       "warn extension permissions: not reported by this extension version",
     ]);
     assert.equal(result.code, 0);
@@ -999,7 +1056,7 @@ describe("doctor, the extension", () => {
     const window = `version ${EXTENSION_VERSION}, protocol ${newer}, which works with protocol ${oldest} and later`;
     assert.deepEqual(section(result, ["extension"]), [
       `ok extension: ${window}`,
-      `FAIL extension: The Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}) is older than the Foxleash extension (${window}): Firefox is still running the old native host, so update Foxleash with \`git pull && npm ci && npm run setup\` if you have not yet and then restart Firefox.`,
+      `FAIL extension: The Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}) is older than the Foxleash extension (${window}): Firefox is still running the old native host, so update Foxleash with \`npx foxleash@latest setup\` if you have not yet and then restart Firefox.`,
       PERMISSION_OK,
     ]);
     assert.equal(result.code, 1);
@@ -1022,10 +1079,51 @@ describe("doctor, the extension", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["extension"]), [
       `ok extension: version ${EXTENSION_VERSION}, protocol ${older}`,
-      `FAIL extension: The Foxleash extension (version ${EXTENSION_VERSION}, protocol ${older}) is older than the Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}): run \`npm run setup\` in your Foxleash folder and confirm the extension update in Firefox.`,
+      `FAIL extension: The Foxleash extension (version ${EXTENSION_VERSION}, protocol ${older}) is older than the Foxleash native host (version ${HOST_VERSION}, protocol ${PROTOCOL_VERSION}): update the add-on in Firefox (open about:addons and choose Check for Updates), or install it again from ${ADDON_PAGE_URL}.`,
       PERMISSION_OK,
     ]);
     assert.equal(result.code, 1);
+  });
+
+  it(
+    "warns that an extension of another version on the same protocol is older",
+    LIMIT,
+    async () => {
+      const f = await fixture();
+      await fakeHost(
+        f.socketDir,
+        process.pid,
+        hostWelcome({
+          connected: true,
+          protocol: PROTOCOL_VERSION,
+          version: "1.9.0",
+          allUrls: true,
+        }),
+      );
+      const result = await runDoctor(f);
+      assert.deepEqual(section(result, ["extension"]), [
+        `ok extension: version 1.9.0, protocol ${PROTOCOL_VERSION}`,
+        `warn extension: The Foxleash extension (version 1.9.0) is older than the Foxleash native host (version ${HOST_VERSION}): update the add-on in Firefox (open about:addons and choose Check for Updates), or install it again from ${ADDON_PAGE_URL}.`,
+        PERMISSION_OK,
+      ]);
+      assert.equal(result.code, 0);
+    },
+  );
+
+  it("warns that a host older than its extension needs a program update", LIMIT, async () => {
+    const f = await fixture();
+    await fakeHost(
+      f.socketDir,
+      process.pid,
+      hostWelcome({ connected: true, protocol: PROTOCOL_VERSION, version: "2.1.0", allUrls: true }),
+    );
+    const result = await runDoctor(f);
+    assert.deepEqual(section(result, ["extension"]), [
+      `ok extension: version 2.1.0, protocol ${PROTOCOL_VERSION}`,
+      `warn extension: The Foxleash native host (version ${HOST_VERSION}) is older than the Foxleash extension (version 2.1.0): Firefox is still running the old native host, so update Foxleash with \`npx foxleash@latest setup\` if you have not yet and then restart Firefox.`,
+      PERMISSION_OK,
+    ]);
+    assert.equal(result.code, 0);
   });
 
   it("fails an extension without access to all websites", LIMIT, async () => {
@@ -1091,6 +1189,7 @@ async function runDoctor(f: Fixture, overrides: Partial<DoctorOptions> = {}): Pr
     version: VERSION,
     node: SH,
     main: f.main,
+    setupCommand: "npm run setup",
     run: fakeRun(claudeOk(SH, f.main)).run,
     spawn,
     out,
@@ -1147,7 +1246,7 @@ async function fixture(script = answering(launcherWelcome())): Promise<Fixture> 
   const home = privateDir();
   const main = path.join(home, "fake-main.sh");
   writeFileSync(main, script);
-  await install({ home, node: SH, main, ...quiet() });
+  await install({ home, node: SH, program: { kind: "source", main }, ...quiet() });
   const { launcher, manifest } = installPaths(home);
   return { home, main, manifest, launcher, socketDir: privateDir() };
 }

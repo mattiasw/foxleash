@@ -14,6 +14,7 @@ import {
   PROTOCOL_VERSION,
   parseMessage,
   protocolMismatch,
+  versionDifference,
   versionsOf,
   type WelcomeMessage,
 } from "@foxleash/protocol";
@@ -37,6 +38,8 @@ export interface DoctorOptions {
   version: string;
   node: string;
   main: string;
+  /** The setup command of the route this runs from, which the hints name. */
+  setupCommand: string;
   run: Run;
   spawn: Spawn;
   out: NodeJS.WritableStream;
@@ -74,7 +77,6 @@ type Probe =
   | { ok: true; welcome: WelcomeMessage }
   | { ok: false; code: string | undefined; message: string };
 
-const SETUP = "run npm run setup";
 const NO_FIREFOX = "is Firefox running with the Foxleash extension?";
 const FLATPAK_FIREFOX = ".var/app/org.mozilla.firefox";
 const PORTAL_SETTING = "widget.use-xdg-desktop-portal.native-messaging";
@@ -85,7 +87,7 @@ const OTHER_LIMIT = 200;
 
 export async function doctor(options: DoctorOptions): Promise<number> {
   const report = createReport(options.out);
-  const launcher = checkManifest(options.home, report);
+  const launcher = checkManifest(options, report);
   if (launcher !== undefined) {
     await checkLauncher(launcher, options, report);
   }
@@ -129,10 +131,10 @@ function escapeControls(text: string): string {
   );
 }
 
-function checkManifest(home: string, report: Report): string | undefined {
-  const { manifest } = installPaths(home);
+function checkManifest(options: DoctorOptions, report: Report): string | undefined {
+  const { manifest } = installPaths(options.home);
   const fail = (detail: string): void =>
-    report.line("FAIL", "native manifest", `${manifest} ${detail}; ${SETUP}`);
+    report.line("FAIL", "native manifest", `${manifest} ${detail}; run ${options.setupCommand}`);
   const read = readRegularFile(manifest);
   if (!read.ok) {
     fail(read.reason);
@@ -198,7 +200,8 @@ async function checkLauncher(
   options: DoctorOptions,
   report: Report,
 ): Promise<void> {
-  const fail = (detail: string): void => report.line("FAIL", "launcher", `${detail}; ${SETUP}`);
+  const fail = (detail: string): void =>
+    report.line("FAIL", "launcher", `${detail}; run ${options.setupCommand}`);
   const read = readRegularFile(launcher);
   if (!read.ok) {
     fail(`${launcher} ${read.reason}`);
@@ -250,7 +253,7 @@ async function checkLauncher(
     report.line(
       "warn",
       "launcher",
-      `the launcher runs ${launcherCommand(read.text)}; run npm run setup here to switch`,
+      `the launcher runs ${launcherCommand(read.text)}; run ${options.setupCommand} to switch`,
     );
   }
 }
@@ -421,7 +424,7 @@ async function checkClaude(options: DoctorOptions, report: Report): Promise<void
         report.line(
           "warn",
           "claude code",
-          `registered as ${command} ${args}, expected ${expected}; ${SETUP}`,
+          `registered as ${command} ${args}, expected ${expected}; run ${options.setupCommand}`,
         );
         return;
       }
@@ -435,7 +438,7 @@ async function checkClaude(options: DoctorOptions, report: Report): Promise<void
       return;
     }
     case "failed":
-      report.line("FAIL", "claude code", `not registered; ${SETUP}`);
+      report.line("FAIL", "claude code", `not registered; run ${options.setupCommand}`);
       return;
     case "missing":
       report.line("warn", "claude code", "claude is not on PATH; skipped");
@@ -597,13 +600,14 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     ...(oldestProtocol === undefined ? {} : { oldest: oldestProtocol }),
   };
   report.line("ok", "extension", versionsOf(part));
-  const mismatch = protocolMismatch(part, {
-    part: "host",
-    protocol: welcome.protocol,
-    version: welcome.version,
-  });
+  const host: PartInfo = { part: "host", protocol: welcome.protocol, version: welcome.version };
+  const mismatch = protocolMismatch(part, host);
   if (mismatch !== null) {
     report.line("FAIL", "extension", mismatch);
+  }
+  const difference = versionDifference(part, host);
+  if (difference !== null) {
+    report.line("warn", "extension", difference);
   }
   if (allUrls === false) {
     report.line(
