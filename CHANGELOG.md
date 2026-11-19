@@ -83,6 +83,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_network` showed a urlencoded form body of 1 MiB or more as a form with no fields, as if
   the form had sent nothing. It now shows it as `other`, since Firefox gives Foxleash none of its
   fields. An empty form body now shows as `other` too.
+- When Foxleash asks you something in a Firefox window that is not in front, for example because
+  your desktop kept it behind your other windows, the agent now hears so after about 2 seconds
+  instead of 30 and can tell you where to answer.
 
 ### Security
 

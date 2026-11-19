@@ -8,6 +8,8 @@ import { hasPlainHost, MAX_SITE_HOST } from "./site.ts";
 import {
   APPROVAL_WAIT_MS,
   approvalPending,
+  FRONT_CHECK_MS,
+  type FrontCheck,
   fieldsOf,
   portShowsPage,
   post,
@@ -32,7 +34,10 @@ const READ_FAILED = "Firefox could not read the stored recipes. Reload the page 
 
 export interface RecipePromptsDeps<Handle> {
   browser: Pick<BrowserApi, "runtime" | "tabs" | "windows" | "storage">;
-  groups: Pick<SessionGroups, "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow">;
+  groups: Pick<
+    SessionGroups,
+    "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow" | "windowInFront"
+  >;
   access: Pick<
     SiteAccess,
     "openPrompt" | "siteStates" | "allowForSession" | "refuseIfStoppedAsking" | "stopped"
@@ -106,6 +111,7 @@ interface RunWaiter<Handle> {
   resolve(result: Result<"recipe_run">): void;
   reject(error: ToolError): void;
   timer: Handle;
+  front: FrontCheck<Handle> | undefined;
 }
 
 interface PageState {
@@ -305,7 +311,7 @@ export function createRecipePrompts<Handle>({
       detached: false,
     };
     open.set(session, prompt);
-    const answer = wait(prompt);
+    const { answer, waiter } = wait(prompt);
     let shown: Tab;
     try {
       await groups.ensureGroup(session, tab);
@@ -320,11 +326,11 @@ export function createRecipePrompts<Handle>({
     }
     // Stopped while the page loaded: no window comes to the front for it.
     if (access.stopped(session)) return answer;
-    await groups.showPromptWindow(
-      session,
-      shown.windowId,
-      () => !access.stopped(session) && generationOf(session) === generation,
-    );
+    const wanted = () => !access.stopped(session) && generationOf(session) === generation;
+    await groups.showPromptWindow(session, shown.windowId, wanted);
+    if (wanted() && isLive(prompt) && prompt.waiters.includes(waiter) && !prompt.answering) {
+      armFront(prompt, waiter, shown.windowId);
+    }
     return answer;
   }
 
@@ -378,7 +384,7 @@ export function createRecipePrompts<Handle>({
     prompt: RunPrompt<Handle>,
     generation: number,
   ): Promise<Result<"recipe_run">> {
-    const answer = wait(prompt);
+    const { answer } = wait(prompt);
     // Only attention: activating the tab would move the page's buttons under the cursor.
     try {
       const tab = await browser.tabs.get(prompt.tabId);
@@ -389,7 +395,10 @@ export function createRecipePrompts<Handle>({
     return answer;
   }
 
-  function wait(prompt: RunPrompt<Handle>): Promise<Result<"recipe_run">> {
+  function wait(prompt: RunPrompt<Handle>): {
+    answer: Promise<Result<"recipe_run">>;
+    waiter: RunWaiter<Handle>;
+  } {
     const { promise, resolve, reject } = Promise.withResolvers<Result<"recipe_run">>();
     // A caller that stopped listening must not leave an unhandled rejection behind.
     promise.catch(() => {});
@@ -397,9 +406,43 @@ export function createRecipePrompts<Handle>({
       resolve,
       reject,
       timer: timers.setTimeout(() => timeOut(prompt, waiter), APPROVAL_WAIT_MS),
+      front: undefined,
     };
     prompt.waiters.push(waiter);
-    return promise;
+    return { answer: promise, waiter };
+  }
+
+  function armFront(prompt: RunPrompt<Handle>, waiter: RunWaiter<Handle>, windowId: number): void {
+    waiter.front = {
+      windowId,
+      timer: timers.setTimeout(() => frontDue(prompt, waiter), FRONT_CHECK_MS),
+    };
+  }
+
+  function frontDue(prompt: RunPrompt<Handle>, waiter: RunWaiter<Handle>): void {
+    if (!prompt.waiters.includes(waiter) || waiter.front === undefined) return;
+    waiter.front.timer = undefined;
+    // A page that has not connected yet runs the check from `connect`.
+    if (prompt.seen) void checkFront(prompt, waiter);
+  }
+
+  async function checkFront(prompt: RunPrompt<Handle>, waiter: RunWaiter<Handle>): Promise<void> {
+    const front = waiter.front;
+    if (front === undefined) return;
+    waiter.front = undefined;
+    const inFront = await groups.windowInFront(front.windowId);
+    const index = prompt.waiters.indexOf(waiter);
+    if (inFront || !isLive(prompt) || prompt.answering || index === -1) return;
+    prompt.waiters.splice(index, 1);
+    timers.clearTimeout(waiter.timer);
+    waiter.reject(
+      new ToolError(
+        "approval_timeout",
+        prompt.recipe === undefined
+          ? `Foxleash is asking the user in tab ${prompt.tabId} to allow the sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call request_sites with the same sites again.`
+          : `Foxleash is asking the user in tab ${prompt.tabId} to allow the recipe's sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call start_recipe with the same name again.`,
+      ),
+    );
   }
 
   function timeOut(prompt: RunPrompt<Handle>, waiter: RunWaiter<Handle>): void {
@@ -411,6 +454,7 @@ export function createRecipePrompts<Handle>({
       rejectWaiters(prompt, recipePageClosed(prompt));
     } else {
       prompt.waiters.splice(index, 1);
+      stopFront(waiter);
       waiter.reject(
         new ToolError(
           "approval_timeout",
@@ -429,8 +473,14 @@ export function createRecipePrompts<Handle>({
   ): void {
     for (const waiter of prompt.waiters.splice(0)) {
       timers.clearTimeout(waiter.timer);
+      stopFront(waiter);
       settle(waiter);
     }
+  }
+
+  function stopFront(waiter: RunWaiter<Handle>): void {
+    if (waiter.front?.timer !== undefined) timers.clearTimeout(waiter.front.timer);
+    waiter.front = undefined;
   }
 
   function rejectWaiters(prompt: RunPrompt<Handle>, error: ToolError): void {
@@ -493,6 +543,13 @@ export function createRecipePrompts<Handle>({
     }
     prompt.port = port;
     prompt.seen = true;
+    if (prompt.kind === "run") {
+      for (const waiter of [...prompt.waiters]) {
+        if (waiter.front !== undefined && waiter.front.timer === undefined) {
+          void checkFront(prompt, waiter);
+        }
+      }
+    }
     prompt.committed = true;
     port.onMessage.addListener((message) => receive(prompt, port, message));
     port.onDisconnect.addListener(() => {
@@ -627,7 +684,10 @@ export function createRecipePrompts<Handle>({
     if (prompt.answering) return;
     prompt.answering = true;
     // The answer is in time even when reading the settings is slow.
-    for (const waiter of prompt.waiters) timers.clearTimeout(waiter.timer);
+    for (const waiter of prompt.waiters) {
+      timers.clearTimeout(waiter.timer);
+      stopFront(waiter);
+    }
     let before: Map<string, SiteState>;
     let granted: string[];
     try {

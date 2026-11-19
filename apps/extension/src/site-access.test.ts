@@ -18,6 +18,7 @@ import {
   APPROVAL_WAIT_MS,
   type Approval,
   createSiteAccess,
+  FRONT_CHECK_MS,
   portShowsPage,
   type SessionMemory,
   type SessionState,
@@ -831,23 +832,6 @@ describe("ask", () => {
     assert.deepEqual(fake.windowUpdates, []);
   });
 
-  /** A prompt tab made as tab_open makes it, with the session's window on. */
-  async function ownWindowPrompt(
-    fake: FakeBrowser,
-    access: SiteAccess,
-    groups: SessionGroups,
-  ): Promise<{ tab: Tab; promptUrl: string }> {
-    await fake.browser.storage.local.set({ sessionWindow: true });
-    const promptUrl = access.newPromptUrl();
-    const tab = await groups.createTab(
-      "s1",
-      { url: promptUrl, active: false, discarded: true },
-      PASS,
-    );
-    await groups.ensureGroup("s1", tab);
-    return { tab, promptUrl };
-  }
-
   it("refuses a site whose host is not a domain name or an IP address, showing nothing", async () => {
     const { fake, access, sessions, ask } = setup();
     for (const site of NOT_PLAIN_SITES) {
@@ -1451,6 +1435,317 @@ describe("waiting for the answer", () => {
     };
     await ask("s1", "https://a.example/page");
     assert.equal(access.openPrompt("s1")?.waiting, true);
+  });
+});
+
+describe("a question whose window is not in front", () => {
+  it("ends the wait once the page connected and the check finds the window behind, keeping the prompt", async () => {
+    const { fake, access, sessions, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    const page = connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS - 1);
+    await flush();
+    assert.equal(answer.state, "pending");
+    timers.advance(1);
+    await flush();
+    assertRejected(answer, "approval_timeout", behind(tab.id));
+    assert.deepEqual(access.openPrompt("s1"), {
+      tabId: tab.id,
+      site: "https://a.example",
+      url: "https://a.example/page",
+      waiting: false,
+    });
+    assert.deepEqual(page.posted, []);
+    assert.equal(sessions.get("s1")?.closed ?? 0, 0);
+    assert.equal(timers.pending(), 0);
+    page.deliver({ type: "answer", answer: "once" });
+    await flush();
+    assert.deepEqual(page.posted, [{ type: "done", answer: "once", loadsHere: false, late: true }]);
+  });
+
+  it("ends the wait when the desktop refuses to bring the session's own window to the front", async () => {
+    const { fake, access, groups, timers } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    fake.focusRefused = true;
+    const answer = track(
+      access
+        .ask("s1", "https://a.example/page", tab.id, {
+          generation: access.generation("s1"),
+          promptUrl,
+        })
+        .then((approval) => approval.answer),
+    );
+    await flush();
+    assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, focused: true }]);
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", behind(tab.id));
+  });
+
+  it("keeps waiting the full time when the session's own window came to the front", async () => {
+    const { fake, access, groups, timers } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    const approval = await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
+    const answer = track(approval.answer);
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(answer.state, "pending");
+    timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", timedOut(tab.id));
+  });
+
+  it("checks when the page connects after the check was due", async () => {
+    const { fake, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    timers.advance(FRONT_CHECK_MS * 2);
+    await flush();
+    assert.equal(answer.state, "pending");
+    connect(fake, tab.id);
+    await flush();
+    assertRejected(answer, "approval_timeout", behind(tab.id));
+  });
+
+  it("still drops a page that never connected at the end of the wait, without counting it", async () => {
+    const { fake, access, sessions, timers, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(answer, "approval_closed");
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.equal(sessions.get("s1")?.closed ?? 0, 0);
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("does not check after an answer given before the check", async () => {
+    for (const given of ["once", "always"] as const) {
+      const { fake, timers, tab, ask } = setup();
+      fake.currentWindowId = 2;
+      const reads = countWindowReads(fake);
+      const { answer } = await ask();
+      const page = connect(fake, tab.id);
+      page.deliver({ type: "answer", answer: given });
+      await flush();
+      assert.equal(answer.state, "resolved", given);
+      timers.advance(FRONT_CHECK_MS);
+      await flush();
+      assert.equal(reads(), 0, given);
+      assert.equal(timers.pending(), 0, given);
+    }
+  });
+
+  it("does not check while a slow Always allow is saved, and settles with the answer", async () => {
+    const { fake, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const { answer } = await ask();
+    const page = connect(fake, tab.id);
+    const writes = holdWrites(fake);
+    page.deliver({ type: "answer", answer: "always" });
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(answer.state, "pending");
+    assert.equal(reads(), 0);
+    writes.release();
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("does not end the wait for an answer given while the window is read", async () => {
+    for (const given of ["once", "always"] as const) {
+      const { fake, timers, tab, ask } = setup();
+      fake.currentWindowId = 2;
+      const { answer } = await ask();
+      const page = connect(fake, tab.id);
+      const read = holdWindowReads(fake);
+      timers.advance(FRONT_CHECK_MS);
+      await flush();
+      assert.equal(read.calls(), 1, given);
+      const writes = holdWrites(fake);
+      page.deliver({ type: "answer", answer: given });
+      read.release();
+      await flush();
+      writes.release();
+      await flush();
+      assert.equal(answer.state, "resolved", given);
+      assert.deepEqual(
+        page.posted,
+        [{ type: "done", answer: given, loadsHere: true, late: false }],
+        given,
+      );
+    }
+  });
+
+  it("does not end the wait for a prompt closed while the window is read", async () => {
+    const { fake, access, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    const page = connect(fake, tab.id);
+    const read = holdWindowReads(fake);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    fake.removeTab(tab.id);
+    read.release();
+    await flush();
+    assertRejected(answer, "approval_closed");
+    assert.equal(access.openPrompt("s1"), undefined);
+    assert.deepEqual(page.posted, [{ type: "ended" }]);
+  });
+
+  it("keeps waiting when the window cannot be read", async () => {
+    const { fake, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    fake.browser.windows.get = async () => {
+      throw new Error("Invalid window ID");
+    };
+    const { answer } = await ask();
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(answer.state, "pending");
+  });
+
+  it("checks once per showing, also when the page connects again", async () => {
+    const { fake, timers, tab, ask } = setup();
+    const reads = countWindowReads(fake);
+    const { answer } = await ask();
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    connect(fake, tab.id);
+    await flush();
+    assert.equal(reads(), 1);
+    assert.equal(answer.state, "pending");
+  });
+
+  it("lets a request joining the question after an early end wait the full time", async () => {
+    const { fake, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", behind(tab.id));
+    const joined = await ask("s1", "https://a.example/page");
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(joined.answer.state, "pending");
+    timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
+    await flush();
+    assertRejected(joined.answer, "approval_timeout", timedOut(tab.id));
+  });
+
+  it("does not check for a session stopped while the prompt loaded", async () => {
+    const { fake, access, timers, tab } = setup();
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const update = fake.browser.tabs.update;
+    fake.browser.tabs.update = (tabId, properties) => {
+      access.stop("s1");
+      return update(tabId, properties);
+    };
+    const approval = await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+    });
+    const answer = track(approval.answer);
+    assert.equal(timers.pending(), 0);
+    connect(fake, tab.id);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "session_stopped");
+    assert.equal(reads(), 0);
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("does not check for an answer being saved when its window was shown", async () => {
+    const { fake, access, timers, tab } = setup();
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const asking = access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+    });
+    await flush();
+    const page = connect(fake, tab.id);
+    const writes = holdWrites(fake);
+    page.deliver({ type: "answer", answer: "always" });
+    held.resolve();
+    const answer = track((await asking).answer);
+    assert.equal(timers.pending(), 0);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(reads(), 0);
+    writes.release();
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("does not check for a prompt closed while its window was shown", async () => {
+    const { fake, access, timers, tab } = setup();
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const asking = access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+    });
+    await flush();
+    fake.removeTab(tab.id);
+    held.resolve();
+    const answer = track((await asking).answer);
+    assert.equal(timers.pending(), 0);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_closed");
+    assert.equal(reads(), 0);
+  });
+
+  it("leaves a request that joined while the window was read waiting", async () => {
+    const { fake, access, timers, tab, ask } = setup();
+    fake.currentWindowId = 2;
+    const { answer } = await ask();
+    connect(fake, tab.id);
+    const read = holdWindowReads(fake);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", timedOut(tab.id));
+    const joined = await ask("s1", "https://a.example/page");
+    read.release();
+    await flush();
+    assert.equal(joined.answer.state, "pending");
+    assert.equal(access.openPrompt("s1")?.waiting, true);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(joined.answer, "approval_timeout", timedOut(tab.id));
+  });
+
+  it("stops a check not yet due when the wait ends first", async () => {
+    const { fake, access, timers, tab } = setup();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const asking = access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+    });
+    await flush();
+    connect(fake, tab.id);
+    timers.advance(APPROVAL_WAIT_MS - 1_000);
+    held.resolve();
+    const answer = track((await asking).answer);
+    timers.advance(1_000);
+    await flush();
+    assertRejected(answer, "approval_timeout", timedOut(tab.id));
+    assert.equal(timers.pending(), 0);
   });
 });
 
@@ -2378,6 +2673,55 @@ function holdWrites(fake: FakeBrowser): { release(): void; calls(): number } {
     calls += 1;
     await held.promise;
     return set(items);
+  };
+  return { release: () => held.resolve(), calls: () => calls };
+}
+
+/** A prompt tab made as tab_open makes it, with the session's window on. */
+async function ownWindowPrompt(
+  fake: FakeBrowser,
+  access: SiteAccess,
+  groups: SessionGroups,
+): Promise<{ tab: Tab; promptUrl: string }> {
+  await fake.browser.storage.local.set({ sessionWindow: true });
+  const promptUrl = access.newPromptUrl();
+  const tab = await groups.createTab(
+    "s1",
+    { url: promptUrl, active: false, discarded: true },
+    PASS,
+  );
+  await groups.ensureGroup("s1", tab);
+  return { tab, promptUrl };
+}
+
+function behind(tabId: number): string {
+  return `Foxleash is asking the user in tab ${tabId} whether to allow https://a.example, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`;
+}
+
+function timedOut(tabId: number): string {
+  return `Foxleash is still asking the user in tab ${tabId} whether to allow https://a.example. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`;
+}
+
+/** Counts `windows.get` calls from here on. */
+function countWindowReads(fake: FakeBrowser): () => number {
+  const get = fake.browser.windows.get;
+  let calls = 0;
+  fake.browser.windows.get = (windowId) => {
+    calls += 1;
+    return get(windowId);
+  };
+  return () => calls;
+}
+
+/** Replaces `windows.get` with one that waits for `release`. */
+function holdWindowReads(fake: FakeBrowser): { release(): void; calls(): number } {
+  const held = Promise.withResolvers<void>();
+  const get = fake.browser.windows.get;
+  let calls = 0;
+  fake.browser.windows.get = async (windowId) => {
+    calls += 1;
+    await held.promise;
+    return get(windowId);
   };
   return { release: () => held.resolve(), calls: () => calls };
 }

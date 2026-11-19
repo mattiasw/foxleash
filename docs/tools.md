@@ -7,7 +7,10 @@ overview, and [security.md](security.md) describes the safeguards.
 
 Before a session opens a page on a site you have not approved, with `tab_open` or `navigate`,
 Foxleash asks you in that tab whether to allow it: this session, always, or not at all. The
-agent's call waits up to 30 seconds for your answer. After three refused or closed prompts, a
+agent's call waits up to 30 seconds for your answer. When the question's window is not in front
+about 2 seconds after Foxleash shows it (for example, your desktop kept it behind another window),
+the call returns then, so the agent can tell you where to answer. The question stays open, and the
+agent's next call about it waits the full 30 seconds. After three refused or closed prompts, a
 session stops asking.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme, host
@@ -56,7 +59,9 @@ The setting "Open each agent session in its own window" is off by default. With 
   bring that window to the front when it opens it.
 - A page in it that asks you something (whether to allow a site, to save or run a recipe, or to
   allow the sites a task needs) brings that window to the front if your desktop allows it, so
-  the question does not wait unseen behind your window.
+  the question does not wait unseen behind your window. When your desktop keeps the window
+  behind, a call waiting for your answer returns after about 2 seconds, so the agent can tell you
+  where the question is.
 - The blank tab Firefox opens the window with closes once another tab in it is selected, and the
   window closes at once if the session's first tab cannot be opened.
 - When the session ends, Foxleash closes that window if it holds only blank tabs and is not your
@@ -665,8 +670,10 @@ never always.
 
 - Sites already allowed, on the blocklist or refused in the session are not asked: the blocklist
   and your earlier answers still win.
-- The call waits up to 30 seconds for your answer and returns the sites now allowed, blocked and
-  refused; when no site needs asking, it returns at once without a page.
+- The call waits up to 30 seconds for your answer, or returns after about 2 seconds when the page's
+  window is not in front, for example when your desktop kept it behind another window; the page
+  stays open. It returns the sites now allowed, blocked and refused; when no site needs asking, it
+  returns at once without a page.
 - The page is a recipe page, so the rules under `propose_recipe` apply to it: one recipe page or
   page asking for sites at a time, and none after three discarded, refused or closed without an
   answer.
@@ -687,8 +694,9 @@ always.
 
 - Sites already allowed, on the blocklist or refused in the session are not asked, and when no
   site needs asking the call returns at once without a page.
-- The call waits up to 30 seconds for your answer and returns the sites now allowed, blocked and
-  refused.
+- The call waits up to 30 seconds for your answer, or returns after about 2 seconds when the page's
+  window is not in front, for example when your desktop kept it behind another window; the page
+  stays open. It returns the sites now allowed, blocked and refused.
 - Don't allow, or closing the page, fails the call and refuses nothing: each site still asks on
   its own when the agent opens it.
 - The same limits as for recipe pages apply: one such page or recipe page at a time, none beside

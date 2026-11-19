@@ -58,6 +58,11 @@ export interface FakeBrowser {
   windowCreations: { url: string; focused: boolean }[];
   /** Every `windows.remove` call's window id, in order. */
   windowRemovals: number[];
+  /**
+   * A desktop that refuses to bring a window to the front: `windows.update` with `focused: true`
+   * is recorded but leaves `currentWindowId` as it is.
+   */
+  focusRefused: boolean;
   /** Makes the next `windows.create` reject with `error`, once. */
   failNextWindowCreate(error: unknown): void;
   /**
@@ -594,7 +599,7 @@ export function createFakeBrowser(): FakeBrowser {
       update: async (windowId, updateInfo) => {
         fake.windowUpdates.push({ windowId, ...updateInfo });
         // As in Firefox, the focused window becomes the current one.
-        if (updateInfo.focused === true) fake.currentWindowId = windowId;
+        if (updateInfo.focused === true && !fake.focusRefused) fake.currentWindowId = windowId;
         const size = sizeOf(windowId);
         fake.windowSizes.set(windowId, {
           width: updateInfo.width ?? size.width,
@@ -603,6 +608,7 @@ export function createFakeBrowser(): FakeBrowser {
       },
       get: async (windowId): Promise<BrowserWindow> => ({
         id: windowId,
+        focused: windowId === fake.currentWindowId,
         state: "normal",
         ...sizeOf(windowId),
       }),
@@ -765,6 +771,7 @@ export function createFakeBrowser(): FakeBrowser {
     windowSizes: new Map(),
     windowCreations: [],
     windowRemovals: [],
+    focusRefused: false,
     failNextWindowCreate: (error) => {
       windowCreateFailure = { error };
     },

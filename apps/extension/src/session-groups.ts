@@ -63,6 +63,11 @@ export interface SessionGroups {
    * Never rejects.
    */
   showPromptWindow(session: string, windowId: number, wanted: () => boolean): Promise<void>;
+  /**
+   * Whether Firefox reports the window as focused; true when it cannot read the window, as after
+   * it closed. Never rejects.
+   */
+  windowInFront(windowId: number): Promise<boolean>;
 }
 
 /**
@@ -114,6 +119,7 @@ export function createSessionGroups(
     sessionOf,
     rememberedSessionOf,
     showPromptWindow,
+    windowInFront,
   };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
@@ -245,6 +251,14 @@ export function createSessionGroups(
         state === "minimized" ? { focused: true, state: "normal" } : { focused: true },
       );
     } catch {}
+  }
+
+  function windowInFront(windowId: number): Promise<boolean> {
+    // Only a definite false ends a wait early; a closed prompt has its own close paths.
+    return browser.windows.get(windowId).then(
+      (window) => window.focused !== false,
+      () => true,
+    );
   }
 
   /** Runs the task after every task already queued for the session has settled. */

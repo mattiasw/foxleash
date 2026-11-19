@@ -15,7 +15,12 @@ import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
 import { readRecipes } from "./recipes.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, SESSION_GROUPS_KEY } from "./settings.ts";
-import { APPROVAL_WAIT_MS, createSiteAccess, type SessionMemory } from "./site-access.ts";
+import {
+  APPROVAL_WAIT_MS,
+  createSiteAccess,
+  FRONT_CHECK_MS,
+  type SessionMemory,
+} from "./site-access.ts";
 
 const RECIPE: RecipeFields = {
   name: "Receipt",
@@ -1923,6 +1928,223 @@ describe("waiting for a run page", { timeout: 10000 }, () => {
   });
 });
 
+describe("a run page whose window is not in front", { timeout: 10000 }, () => {
+  it("ends a request_sites call once the check finds the page's window behind, keeping the page", async () => {
+    const { fake, recipes, timers } = setup();
+    const { page, answer, tabId } = await shownRequest(fake, recipes);
+    fake.currentWindowId = 2;
+    timers.advance(FRONT_CHECK_MS - 1);
+    await flush();
+    assert.equal(answer.state, "pending");
+    timers.advance(1);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxleash is asking the user in tab ${tabId} to allow the sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call request_sites with the same sites again.`,
+    );
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+    assert.equal(timers.pending(), 0);
+    page.deliver({ type: "answer", answer: "allow" });
+    await flush();
+    assert.deepEqual(page.posted.at(-1), { type: "done", answer: "allow", late: true });
+  });
+
+  it("ends a start_recipe call the same way, charging no budget", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { page, answer, tabId } = await shownRun(fake, recipes);
+    fake.currentWindowId = 2;
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxleash is asking the user in tab ${tabId} to allow the recipe's sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call start_recipe with the same name again.`,
+    );
+    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    page.deliver({ type: "answer", answer: "no" });
+    await flush();
+    fake.currentWindowId = 1;
+    await spend(fake, recipes, 1);
+    await openRun(fake, recipes);
+  });
+
+  it("keeps waiting the full time when the page's window is in front", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { answer, tabId } = await shownRun(fake, recipes);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(answer.state, "pending");
+    timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxleash is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+    );
+  });
+
+  it("checks when the page connects after the check was due", async () => {
+    const { fake, recipes, timers } = setup();
+    const { answer, tabId } = await openRequest(fake, recipes);
+    fake.currentWindowId = 2;
+    timers.advance(FRONT_CHECK_MS * 2);
+    await flush();
+    assert.equal(answer.state, "pending");
+    connect(fake, tabId);
+    await flush();
+    assertRejected(answer, "approval_timeout");
+  });
+
+  it("checks once per showing, also when the page connects again", async () => {
+    const { fake, recipes, timers } = setup();
+    const reads = countWindowReads(fake);
+    const { answer, tabId } = await shownRequest(fake, recipes);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    connect(fake, tabId);
+    await flush();
+    assert.equal(reads(), 1);
+    assert.equal(answer.state, "pending");
+  });
+
+  it("lets a call joining the page after an early end wait the full time", async () => {
+    const { fake, recipes, timers } = setup();
+    await seed(fake, TRIP);
+    const { answer } = await shownRun(fake, recipes);
+    fake.currentWindowId = 2;
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout");
+    const joined = track(recipes.run("s1", "Trip"));
+    await flush();
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(joined.state, "pending");
+    timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
+    await flush();
+    assertRejected(joined, "approval_timeout");
+  });
+
+  it("does not check while an Allow is handled", async () => {
+    const { fake, recipes, timers } = setup();
+    const { page, answer } = await shownRequest(fake, recipes);
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const settings = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(reads(), 0);
+    settings.release();
+    await flush();
+    assert.equal(answer.state, "resolved");
+  });
+
+  it("settles with the answer for an Allow given while the window is read", async () => {
+    for (const slow of [false, true]) {
+      const { fake, recipes, timers } = setup();
+      const { page, answer } = await shownRequest(fake, recipes);
+      fake.currentWindowId = 2;
+      const read = holdWindowReads(fake);
+      timers.advance(FRONT_CHECK_MS);
+      await flush();
+      assert.equal(read.calls(), 1);
+      const settings = slow ? holdReads(fake) : undefined;
+      page.deliver({ type: "answer", answer: "allow" });
+      read.release();
+      await flush();
+      settings?.release();
+      await flush();
+      assert.deepEqual(
+        answer.value,
+        { asked: true, allowed: SITES, blocked: [], refused: [] },
+        `slow ${slow}`,
+      );
+    }
+  });
+
+  it("does not check for a session stopped while the page's window was shown", async () => {
+    const { fake, access, recipes, timers } = setup();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const requesting = track(recipes.request("s1", SITES));
+    for (let turn = 0; turn < 50 && fake.tabUpdates.length === 0; turn += 1) await flush();
+    await flush();
+    access.stop("s1");
+    held.resolve();
+    await flush();
+    const reads = countWindowReads(fake);
+    connect(fake, recipes.openPrompt("s1")?.tabId ?? 0);
+    fake.currentWindowId = 2;
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(reads(), 0);
+    assert.equal(requesting.state, "pending");
+  });
+
+  it("does not check for a page answered while its window was shown", async () => {
+    const { fake, recipes, timers } = setup();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const requesting = track(recipes.request("s1", SITES));
+    for (let turn = 0; turn < 50 && fake.tabUpdates.length === 0; turn += 1) await flush();
+    await flush();
+    const page = connect(fake, recipes.openPrompt("s1")?.tabId ?? 0);
+    page.deliver({ type: "answer", answer: "no" });
+    held.resolve();
+    await flush();
+    const reads = countWindowReads(fake);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assertRejected(requesting, "sites_refused");
+    assert.equal(reads(), 0);
+    assert.equal(timers.pending(), 0);
+  });
+
+  it("does not check for an Allow being handled when its window was shown", async () => {
+    const { fake, recipes, timers } = setup();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const requesting = track(recipes.request("s1", SITES));
+    for (let turn = 0; turn < 50 && fake.tabUpdates.length === 0; turn += 1) await flush();
+    await flush();
+    const page = connect(fake, recipes.openPrompt("s1")?.tabId ?? 0);
+    fake.currentWindowId = 2;
+    const reads = countWindowReads(fake);
+    const settings = holdReads(fake);
+    page.deliver({ type: "answer", answer: "allow" });
+    held.resolve();
+    await flush();
+    assert.equal(timers.pending(), 0);
+    timers.advance(FRONT_CHECK_MS);
+    await flush();
+    assert.equal(reads(), 0);
+    settings.release();
+    await flush();
+    assert.equal(requesting.state, "resolved");
+  });
+
+  it("stops a check not yet due when the wait ends first", async () => {
+    const { fake, recipes, timers } = setup();
+    const held = Promise.withResolvers<void>();
+    fake.browser.windows.update = () => held.promise;
+    const requesting = track(recipes.request("s1", SITES));
+    for (let turn = 0; turn < 50 && fake.tabUpdates.length === 0; turn += 1) await flush();
+    await flush();
+    connect(fake, recipes.openPrompt("s1")?.tabId ?? 0);
+    timers.advance(APPROVAL_WAIT_MS - 1_000);
+    held.resolve();
+    await flush();
+    timers.advance(1_000);
+    await flush();
+    assertRejected(requesting, "approval_timeout");
+    assert.equal(timers.pending(), 0);
+  });
+});
+
 describe("ending a run page", { timeout: 10000 }, () => {
   it("rejects every call when its tab closes, charging once the page connected", async () => {
     const { fake, recipes, timers } = setup();
@@ -2566,6 +2788,30 @@ function holdReads(fake: FakeBrowser): { release(): void } {
     return get(keys);
   };
   return { release: () => held.resolve() };
+}
+
+/** Counts `windows.get` calls from here on. */
+function countWindowReads(fake: FakeBrowser): () => number {
+  const get = fake.browser.windows.get;
+  let calls = 0;
+  fake.browser.windows.get = (windowId) => {
+    calls += 1;
+    return get(windowId);
+  };
+  return () => calls;
+}
+
+/** Replaces `windows.get` with one that waits for `release`. */
+function holdWindowReads(fake: FakeBrowser): { release(): void; calls(): number } {
+  const held = Promise.withResolvers<void>();
+  const get = fake.browser.windows.get;
+  let calls = 0;
+  fake.browser.windows.get = async (windowId) => {
+    calls += 1;
+    await held.promise;
+    return get(windowId);
+  };
+  return { release: () => held.resolve(), calls: () => calls };
 }
 
 /** Holds `tabs.group` until the returned release runs. */

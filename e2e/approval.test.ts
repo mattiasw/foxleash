@@ -849,11 +849,16 @@ describe("the approval prompt, in real Firefox", () => {
     assert.equal(await firefox.evaluate(prompt, state), unfocused);
     await sleep(ARMING_DELAY_MS + 500);
     assert.equal(await firefox.evaluate(prompt, state), unfocused);
+    // The question's window is not in front, so the call ends early and the question stays open.
+    const text = await navigating;
+    assert.ok(text.includes("window is not in front"), text);
 
     // The click focuses the window and lands at once.
     await firefox.click(prompt, ANSWER.once);
     await waitForStatus(prompt, UNARMED);
-    await stillPending(navigating, PENDING_MS);
+    // Still unanswered: a call on the prompt's tab joins the question and waits.
+    const joined = pending(harness.refused(session, "navigate", { tabId, url: site.url("/a") }));
+    await stillPending(joined, PENDING_MS);
     assert.equal(site.hits("/a"), hits);
   });
 

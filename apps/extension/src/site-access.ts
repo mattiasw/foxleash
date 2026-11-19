@@ -20,6 +20,8 @@ export interface SessionState {
 
 /** How long a request waits for the user's answer. */
 export const APPROVAL_WAIT_MS = 30_000;
+/** How long after a question's window was shown Foxleash checks that it is in front. */
+export const FRONT_CHECK_MS = 2_000;
 /** The extension page that asks the user. */
 export const PROMPT_PAGE = "approve.html";
 /** The settings page, the only page that may read or forget session answers. */
@@ -28,6 +30,13 @@ export const OPTIONS_PAGE = "options.html";
 const PORT_NAME = "approve";
 // Refused and closed prompts a session may have before Foxleash stops asking.
 const PROMPT_BUDGET = 3;
+
+/** The check whether a shown question's window is in front, from arming until it runs. */
+export interface FrontCheck<Handle> {
+  windowId: number;
+  /** Its delay; undefined once the delay passed while the page had not connected. */
+  timer: Handle | undefined;
+}
 
 /** What a session may do with a site: load it, never, never in this session, or ask the user. */
 export type SiteState = "allowed" | "blocked" | "refused" | "askable";
@@ -59,7 +68,7 @@ export interface OpenPrompt {
 
 export interface SiteAccessDeps<Handle> {
   browser: Pick<BrowserApi, "storage" | "runtime" | "tabs" | "windows">;
-  groups: Pick<SessionGroups, "groupOf" | "showPromptWindow">;
+  groups: Pick<SessionGroups, "groupOf" | "showPromptWindow" | "windowInFront">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
   /**
@@ -225,6 +234,7 @@ interface Waiter<Handle> {
   resolve(): void;
   reject(error: ToolError): void;
   timer: Handle;
+  front: FrontCheck<Handle> | undefined;
 }
 
 export function createSiteAccess<Handle>({
@@ -618,7 +628,7 @@ export function createSiteAccess<Handle>({
     tabId: number,
     generation: number,
   ): Promise<Approval> {
-    const answer = wait(prompt, tabId);
+    const { answer } = wait(prompt, tabId);
     // Only attention: activating the tab would move the prompt's buttons under the cursor.
     try {
       const tab = await browser.tabs.get(prompt.tabId);
@@ -650,7 +660,7 @@ export function createSiteAccess<Handle>({
       waiter: undefined,
     };
     prompts.set(session, prompt);
-    const answer = wait(prompt, tabId);
+    const { answer, waiter } = wait(prompt, tabId);
     let tab: Tab;
     try {
       tab = await browser.tabs.update(
@@ -669,11 +679,16 @@ export function createSiteAccess<Handle>({
       throw error;
     }
     // Stopped or ended while the page loaded: no window comes to the front for it.
-    await groups.showPromptWindow(
-      session,
-      tab.windowId,
-      () => !stoppedSessions.has(session) && generationOf(session) === generation,
-    );
+    const wanted = () => !stoppedSessions.has(session) && generationOf(session) === generation;
+    await groups.showPromptWindow(session, tab.windowId, wanted);
+    if (
+      wanted() &&
+      prompts.get(session) === prompt &&
+      prompt.waiter === waiter &&
+      !prompt.answering
+    ) {
+      armFront(prompt, waiter, tab.windowId);
+    }
     return { answer, promptInTab: true };
   }
 
@@ -681,7 +696,10 @@ export function createSiteAccess<Handle>({
     return `${browser.runtime.getURL(PROMPT_PAGE)}?id=${crypto.randomUUID()}`;
   }
 
-  function wait(prompt: Prompt<Handle>, tabId: number): Promise<void> {
+  function wait(
+    prompt: Prompt<Handle>,
+    tabId: number,
+  ): { answer: Promise<void>; waiter: Waiter<Handle> } {
     const { promise, resolve, reject } = Promise.withResolvers<void>();
     // A caller that stopped listening must not leave an unhandled rejection behind.
     promise.catch(() => {});
@@ -690,9 +708,46 @@ export function createSiteAccess<Handle>({
       resolve,
       reject,
       timer: timers.setTimeout(() => timeOut(prompt, waiter), APPROVAL_WAIT_MS),
+      front: undefined,
     };
     prompt.waiter = waiter;
-    return promise;
+    return { answer: promise, waiter };
+  }
+
+  function armFront(prompt: Prompt<Handle>, waiter: Waiter<Handle>, windowId: number): void {
+    waiter.front = {
+      windowId,
+      timer: timers.setTimeout(() => frontDue(prompt, waiter), FRONT_CHECK_MS),
+    };
+  }
+
+  function frontDue(prompt: Prompt<Handle>, waiter: Waiter<Handle>): void {
+    if (prompt.waiter !== waiter || waiter.front === undefined) return;
+    waiter.front.timer = undefined;
+    // A page that has not connected yet runs the check from `connect`.
+    if (prompt.seen) void checkFront(prompt, waiter);
+  }
+
+  async function checkFront(prompt: Prompt<Handle>, waiter: Waiter<Handle>): Promise<void> {
+    const front = waiter.front;
+    if (front === undefined) return;
+    waiter.front = undefined;
+    const inFront = await groups.windowInFront(front.windowId);
+    if (
+      inFront ||
+      prompts.get(prompt.session) !== prompt ||
+      prompt.waiter !== waiter ||
+      prompt.answering
+    ) {
+      return;
+    }
+    stopWaiting(prompt);
+    waiter.reject(
+      new ToolError(
+        "approval_timeout",
+        `Foxleash is asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
+      ),
+    );
   }
 
   function timeOut(prompt: Prompt<Handle>, waiter: Waiter<Handle>): void {
@@ -700,7 +755,7 @@ export function createSiteAccess<Handle>({
     // The page never showed, perhaps because the user left the tab before it loaded.
     if (!prompt.seen) drop(prompt, false);
     else {
-      prompt.waiter = undefined;
+      stopWaiting(prompt);
       waiter.reject(
         new ToolError(
           "approval_timeout",
@@ -714,8 +769,16 @@ export function createSiteAccess<Handle>({
   function stopWaiting(prompt: Prompt<Handle>): Waiter<Handle> | undefined {
     const waiter = prompt.waiter;
     prompt.waiter = undefined;
-    if (waiter !== undefined) timers.clearTimeout(waiter.timer);
+    if (waiter !== undefined) {
+      timers.clearTimeout(waiter.timer);
+      stopFront(waiter);
+    }
     return waiter;
+  }
+
+  function stopFront(waiter: Waiter<Handle>): void {
+    if (waiter.front?.timer !== undefined) timers.clearTimeout(waiter.front.timer);
+    waiter.front = undefined;
   }
 
   function connect(port: RuntimePort): void {
@@ -731,6 +794,9 @@ export function createSiteAccess<Handle>({
     }
     prompt.port = port;
     prompt.seen = true;
+    if (prompt.waiter?.front !== undefined && prompt.waiter.front.timer === undefined) {
+      void checkFront(prompt, prompt.waiter);
+    }
     prompt.committed = true;
     port.onMessage.addListener((message) => receive(prompt, port, message));
     port.onDisconnect.addListener(() => {
@@ -784,7 +850,10 @@ export function createSiteAccess<Handle>({
     if (prompt.answering) return;
     prompt.answering = true;
     // The answer is in time even when saving it is slow.
-    if (prompt.waiter !== undefined) timers.clearTimeout(prompt.waiter.timer);
+    if (prompt.waiter !== undefined) {
+      timers.clearTimeout(prompt.waiter.timer);
+      stopFront(prompt.waiter);
+    }
     if (given === "always") {
       try {
         // Not added to the session's memory, so a revocation applies to the next request.

@@ -2043,7 +2043,49 @@ describe("showPromptWindow", { timeout: 10000 }, () => {
   });
 });
 
+describe("windowInFront", { timeout: 10000 }, () => {
+  it("is true for the focused window and false for any other", async () => {
+    const fake = createFakeBrowser();
+    const groups = createSessionGroups(fake.browser);
+    fake.openTab({ url: "https://user.example/", active: true });
+    fake.openTab({ url: "https://user.example/a", windowId: 2 });
+    assert.equal(await groups.windowInFront(1), true);
+    assert.equal(await groups.windowInFront(2), false);
+    fake.currentWindowId = 2;
+    assert.equal(await groups.windowInFront(1), false);
+    assert.equal(await groups.windowInFront(2), true);
+  });
+
+  it("is true when Firefox reports no focus or cannot read the window", async () => {
+    const fake = createFakeBrowser();
+    const groups = createSessionGroups(fake.browser);
+    fake.browser.windows.get = async (windowId) => ({ id: windowId });
+    assert.equal(await groups.windowInFront(2), true);
+    fake.browser.windows.get = async () => {
+      throw new Error("No window with id");
+    };
+    assert.equal(await groups.windowInFront(2), true);
+  });
+});
+
 describe("the fake's windows", { timeout: 10000 }, () => {
+  it("reports a window focused in windows.get as in getAll, unless the desktop refuses focus", async () => {
+    const fake = createFakeBrowser();
+    fake.openTab({ url: "https://user.example/", active: true });
+    fake.openTab({ url: "https://user.example/a", windowId: 2 });
+    assert.equal((await fake.browser.windows.get(1)).focused, true);
+    assert.equal((await fake.browser.windows.get(2)).focused, false);
+    fake.focusRefused = true;
+    await fake.browser.windows.update(2, { focused: true });
+    assert.deepEqual(fake.windowUpdates, [{ windowId: 2, focused: true }]);
+    assert.equal(fake.currentWindowId, 1);
+    assert.equal((await fake.browser.windows.get(2)).focused, false);
+    fake.focusRefused = false;
+    await fake.browser.windows.update(2, { focused: true });
+    assert.equal(fake.currentWindowId, 2);
+    assert.equal((await fake.browser.windows.get(2)).focused, true);
+  });
+
   it("opens a window on one selected tab, and lists every window with its tabs", async () => {
     const fake = createFakeBrowser();
     const user = fake.openTab({ url: "https://user.example/", active: true });

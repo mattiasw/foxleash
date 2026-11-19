@@ -264,6 +264,47 @@ describe("each agent session in its own window, in real Firefox", () => {
     await closeWindow(kept);
   });
 
+  test("a question in a window that is not in front ends the agent's wait early", {
+    timeout: 120_000,
+  }, async (t) => {
+    await run("browser.storage.local.set({ sessionWindow: false })");
+    const asking = await connected();
+    try {
+      const page = tabOf(await harness.ok(asking, "tab_open", { url: fixtures.url("/a?behind") }));
+      assert.equal((await windowOf(page.id)).id, userWindow);
+      await run("browser.windows.create({ url: 'about:blank' })");
+      const front = await pollUntil(
+        async () => (await windows()).find((window) => window.id !== userWindow)?.id,
+        PAGE_TIMEOUT_MS,
+        "the second window",
+      );
+      if (!(await windowFocused(front))) {
+        await run(`browser.windows.update(${front}, { focused: true })`);
+      }
+      // What the check reads, not getLastFocused(), which names a window even when none has focus.
+      await pollUntil(
+        async () =>
+          !(await windowFocused(userWindow)) && (await windowFocused(front)) ? true : undefined,
+        PAGE_TIMEOUT_MS,
+        "the second window to be focused",
+      );
+      // Nothing may select the prompt's tab over WebDriver before the result: that focuses its
+      // window.
+      const started = Date.now();
+      const text = await harness.refused(asking, "tab_open", { url: other.url("/a") });
+      const elapsed = Date.now() - started;
+      t.diagnostic(`tab_open returned after ${elapsed} ms`);
+      assert.ok(elapsed < 15_000, `tab_open returned after ${elapsed} ms`);
+      assert.ok(text.includes("window is not in front"), text);
+      const promptTab = Number(/tab (\d+)/.exec(text)?.[1]);
+      assert.ok(Number.isInteger(promptTab), text);
+      assert.equal((await windowOf(promptTab)).id, userWindow);
+    } finally {
+      await asking.close();
+    }
+    await closeOtherWindows();
+  });
+
   async function connected(): Promise<Session> {
     const connection = await harness.connect();
     await harness.waitUntilReady(connection);
@@ -393,6 +434,15 @@ describe("each agent session in its own window, in real Firefox", () => {
         settings,
         `browser.windows.get(${windowId}).then((window) => window.state)`,
       ),
+    );
+  }
+
+  async function windowFocused(windowId: number): Promise<boolean> {
+    return (
+      (await firefox.evaluate(
+        settings,
+        `browser.windows.get(${windowId}).then((window) => window.focused)`,
+      )) === true
     );
   }
 
