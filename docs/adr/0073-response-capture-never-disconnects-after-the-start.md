@@ -1,6 +1,6 @@
 # 0073: A response capture never disconnects its stream filter after the start
 
-**Status:** Accepted, 2026-11-17. Supersedes the capture rule ("disconnects the filter" at the cap and on release) and measurement M4 of [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md).
+**Status:** Accepted, 2026-11-17. Supersedes the capture rule ("disconnects the filter" at the cap and on release) and measurement M4 of [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md). Its `onstart` disconnect is superseded by [0097](0097-a-response-capture-never-disconnects-its-stream-filter.md), 2026-11-19.
 
 ## Context
 

@@ -505,9 +505,9 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
   Shift_JIS, GBK, gb18030, Big5, EUC-KR) is not kept, since it could hide a token from the
   redaction.
 - Foxleash writes each chunk of the response on to the page, in the order it arrives, before it
-  copies anything, and never changes one. At the copy limit and on any fault, redirect, error or
-  end of recording it stops copying and keeps passing the rest of the response on until it ends;
-  a capture that ends before the response starts hands the response back to Firefox. When
+  copies anything, and never changes one. At the copy limit, for a type it does not keep, and on
+  any fault, redirect, error or end of recording, it stops copying and keeps passing the rest of
+  the response on until it ends, also when that happens before the response starts. When
   Foxleash's background stops in the middle of a response, the page still gets all of it.
 - Nothing from before recording began, and nothing from a gap: a response still arriving when
   recording stops is never kept.

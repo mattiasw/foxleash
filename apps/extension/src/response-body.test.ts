@@ -475,8 +475,12 @@ describe("captureResponse", () => {
     early.capture.check();
     assert.equal(early.ends.count, 1);
     early.filter.start();
-    assert.equal(early.filter.disconnects, 1);
-    assert.equal(early.filter.status, "disconnected");
+    assert.equal(early.filter.disconnects, 0);
+    early.filter.data("{}");
+    early.filter.stop();
+    assert.equal(early.filter.writtenText(), "{}");
+    assert.equal(early.filter.closes, 1);
+    assert.equal(early.ends.count, 1);
   });
 
   it("releases at the next chunk once it is no longer wanted or the answer is unknown", () => {
@@ -535,14 +539,26 @@ describe("captureResponse", () => {
     assert.equal(ends.count, 1);
   });
 
-  it("disconnects at the start when released before it, and passes everything on", () => {
-    const { filter, capture, ends } = captured();
-    capture.release();
-    assert.equal(ends.count, 1);
-    assert.equal(filter.disconnects, 0);
-    filter.start();
-    assert.equal(filter.disconnects, 1);
-    assert.equal(filter.status, "disconnected");
+  it("passes everything on and closes at the stop when it ends before the start", () => {
+    const ways: Record<string, (capture: ResponseCapture) => void> = {
+      release: (capture) => capture.release(),
+      headers: (capture) =>
+        capture.headers([{ name: "Content-Type", value: "application/octet-stream" }]),
+    };
+    for (const [way, end] of Object.entries(ways)) {
+      const { filter, capture, ends, hooks } = captured();
+      end(capture);
+      assert.equal(ends.count, 1, way);
+      filter.start();
+      for (const chunk of ["a", "b", "c"]) filter.data(chunk);
+      filter.stop();
+      assert.equal(filter.disconnects, 0, way);
+      assert.equal(filter.writtenText(), "abc", way);
+      assert.equal(filter.closes, 1, way);
+      assert.equal(ends.count, 1, way);
+      // Nothing more is copied once the capture ended.
+      assert.equal(hooks.asked, 0, way);
+    }
   });
 
   it("never disconnects once the response started, and writes every later chunk on in order", () => {
@@ -600,21 +616,6 @@ describe("captureResponse", () => {
     assert.equal(filter.writtenText(), "ab");
     assert.equal(filter.closes, 1);
     assert.equal(filter.disconnects, 0);
-  });
-
-  it("keeps writing and closes at the stop when no disconnect works", () => {
-    const { filter, capture, hooks } = captured();
-    capture.release();
-    filter.disconnect = () => {
-      throw new Error("NS_ERROR_FAILURE");
-    };
-    filter.data("a");
-    filter.data("b");
-    filter.stop();
-    assert.equal(filter.writtenText(), "ab");
-    assert.equal(filter.closes, 1);
-    // Nothing more is copied once the capture ended.
-    assert.equal(hooks.asked, 0);
   });
 
   it("ignores headers, checks and releases after it ended", () => {

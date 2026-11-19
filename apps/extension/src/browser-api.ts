@@ -208,9 +208,10 @@ export interface Cancel {
 
 /**
  * Firefox's webRequest StreamFilter: once attached, the page gets only what `write` passes on,
- * until `close` or `disconnect`. `disconnect` hands the rest of the response back to Firefox; it
- * throws before the filter started. After data has flowed, chunks still on their way can then reach
- * the page out of order or not at all.
+ * until `close` or `disconnect`. Foxleash never calls `disconnect`, which hands the rest of the
+ * response back to Firefox: chunks still on their way can then reach the page out of order or
+ * not at all, measured after the start (ADR 0073) and at it (ADR 0097). It throws before the
+ * filter started.
  */
 export interface StreamFilter {
   onstart: (() => void) | null;

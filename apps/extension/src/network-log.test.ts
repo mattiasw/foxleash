@@ -2422,9 +2422,16 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     assert.equal(holdsOf(fake).length, 1);
     assert.deepEqual(read(tab.id), NONE);
     assert.deepEqual(holdsOf(fake), []);
-    assert.equal(filterFor(fake, id)?.status, "uninitialized");
-    filterFor(fake, id)?.start();
-    assert.equal(filterFor(fake, id)?.status, "disconnected");
+    const filter = filterFor(fake, id);
+    assert.equal(filter?.status, "uninitialized");
+    filter?.start();
+    assert.equal(filter?.status, "transferringdata");
+    assert.equal(filter?.disconnects, 0);
+    assert.ok(released(filter));
+    filter?.data("{}");
+    filter?.stop();
+    assert.equal(filter?.writtenText(), "{}");
+    assert.equal(filter?.closes, 1);
   });
 
   it("keeps one hold when access to the page starts again and releases the old captures", async (t) => {
