@@ -615,16 +615,21 @@ agent can move it from there.
 
 - The file is saved even where Firefox would open it in another application, such as a PDF set
   to open in a PDF viewer.
-- The URL, and the address the file comes from after any redirects, must be on sites you
-  approved, and `download` never asks. A redirect on the way can still make Firefox request an
-  address on a site you have not approved or on the blocklist, with all your cookies for that
-  site, including those that a link from another site would not carry; no file from such a site
-  is saved.
+- The URL, and every address it redirects to, must be on sites you approved that are not on
+  the blocklist, and `download` never asks. A redirect to any other site is cancelled before
+  Firefox requests it, and the error names only that site: "The link led to `<site>`, which
+  Foxleash is not allowed on in this session; nothing was requested there and nothing was
+  saved." or, for a blocklisted site, "The link led to `<site>`, which is on Foxleash's
+  blocklist; nothing was requested there and nothing was saved." A redirect that leads through
+  another site and back to an approved one fails too. Firefox hides requests to a few sites,
+  such as addons.mozilla.org, from add-ons, so a redirect to one of them is not cancelled.
+- `download` needs Foxleash's access to all websites (about:addons, Foxleash, Permissions) and
+  refuses without it, since Firefox would not show it the redirects to sites outside that access.
 - An `http://` address is fetched over plain http, as the page's own requests to it are, so the
   file and your cookies for the site travel unencrypted. Only where Firefox itself requires https
   for the host, as HTTPS-Only Mode does for a host name or a site can ask it to, does the request
-  go to `https://`, as the page would; nothing is then saved unless you approved that `https://`
-  site too.
+  go to `https://`, as the page would; that upgraded request is cancelled before Firefox sends
+  it unless you approved that `https://` site too.
 - The name must not contain a slash or backslash, control or formatting characters, or start
   with a dot, and Firefox refuses some others, such as names ending in `.desktop`. Firefox adds
   a number when the name is taken, so an existing file is never replaced.

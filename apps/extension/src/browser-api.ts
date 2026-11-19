@@ -130,14 +130,19 @@ export interface BrowserApi {
     onCreatedNavigationTarget: BrowserEvent<(details: CreatedNavigationTargetDetails) => void>;
   };
   /**
-   * Listeners never change a request, and block in two places only. A recorded tab's hold is
+   * Listeners never change a request, and block in three places only. A recorded tab's hold is
    * registered "blocking" so Firefox lets Foxleash filter that tab's fetch and XHR responses, and
    * returns at once (ADR 0071). The file guard's `onHeadersReceived` listener cancels a page or
    * frame load, in a tab of a session's group or in a tab or window opened from one, that is not a
-   * web page and comes from a site the session may not act on (ADR 0081).
+   * web page and comes from a site the session may not act on (ADR 0081). While a download runs,
+   * its listener on requests that belong to no tab cancels a redirect hop of the download's own
+   * fetch to a site the session may not act on (ADR 0099).
    */
   webRequest: {
-    onBeforeRequest: WebRequestEvent<(details: RequestDetails) => void>;
+    onBeforeRequest: WebRequestEvent<
+      | ((details: RequestDetails) => void)
+      | ((details: RequestDetails) => Promise<Cancel | undefined> | Cancel | undefined)
+    >;
     onSendHeaders: WebRequestEvent<(details: SendHeadersDetails) => void>;
     onHeadersReceived: WebRequestEvent<
       | ((details: HeadersReceivedDetails) => void)

@@ -1,6 +1,6 @@
 # 0019: download fetches the file in the background page and saves it through browser.downloads
 
-**Status:** Accepted, 2026-10-23.
+**Status:** Accepted, 2026-10-23. Amended by [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19: a redirect hop of the fetch to a site the session may not act on is cancelled before it is sent, so the rejected alternative "`webRequestBlocking`" and the consequence that redirect hops are requested with their own sites' cookies no longer hold.
 
 ## Context
 

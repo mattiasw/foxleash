@@ -1,6 +1,6 @@
 # 0016: read_network records each live document's requests with non-blocking webRequest listeners
 
-**Status:** Accepted, 2026-10-22. Its rule "Non-blocking listeners only" and its rejected alternative "Response bodies" are superseded by [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md), 2026-11-17.
+**Status:** Accepted, 2026-10-22. Its rule "Non-blocking listeners only" and its rejected alternative "Response bodies" are superseded by [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md), 2026-11-17. Amended by [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19: while a download runs, a blocking listener on requests that belong to no tab cancels a redirect hop of the download's own fetch to a site the session may not act on.
 
 ## Context
 

@@ -159,6 +159,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Screenshots no longer show the option Firefox previews in a drop-down, such as a country or a
   card's expiry month, while you highlight a saved address or card in Firefox's menu. They also
   hide the option of a drop-down Firefox filled in from your saved addresses or cards.
+- `download` now cancels a redirect to a site the session may not act on, or one on the
+  blocklist, before Firefox requests it, so that site gets no request and none of your cookies; a
+  download whose redirects pass through such a site, also on the way back to an approved one, now
+  fails. `download` also refuses while Foxleash lacks access to all websites.
 
 ## [0.5.0] - 2026-11-17
 

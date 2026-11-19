@@ -1,6 +1,6 @@
 # 0084: download fetches an http address over http
 
-**Status:** Accepted, 2026-11-18. Extends [0019](0019-download-fetches-in-the-background-and-saves-through-downloads.md).
+**Status:** Accepted, 2026-11-18. Extends [0019](0019-download-fetches-in-the-background-and-saves-through-downloads.md). Amended by [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19: an HTTPS-Only Mode or HSTS upgrade to an https site that is not approved, and a redirect step to any site the session may not act on, are cancelled before Firefox sends them.
 
 ## Context
 

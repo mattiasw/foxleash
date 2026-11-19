@@ -4,7 +4,10 @@
 rejected alternative "Response bodies" of
 [0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md). Its capture rule
 ("disconnects the filter" at the cap and on release) and measurement M4 are superseded by
-[0073](0073-response-capture-never-disconnects-after-the-start.md), 2026-11-17.
+[0073](0073-response-capture-never-disconnects-after-the-start.md), 2026-11-17. Amended by
+[0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19:
+"it never blocks or changes a request" gains the exception of a download's redirect hop to a site
+the session may not act on, which is cancelled.
 
 ## Context
 

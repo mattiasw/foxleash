@@ -72,18 +72,14 @@ asking include:
 - a page on an approved site that loads an address on another site that the agent gave it, for
   example one typed into a search field, while the tab stays on the approved site, such as by
   showing that address as an image; the other site gets the address with whatever the agent put
-  in it, and no page script is needed,
-- a `download` of an address on an approved site that redirects to another site: Firefox
-  requests that site's address, with all your cookies for it, including those that a link from
-  another site would not carry, before Foxleash checks the final address, and the file is saved
-  when a further redirect leads back to an approved site (see [Downloads](#downloads)).
+  in it, and no page script is needed.
 
 In the first two, the agent then sees only that site's address, and when that site answers with
 anything other than a web page, such as a file Firefox would save, Foxleash stops the load in the
 agent's tabs, so nothing of it is saved or shown (see
 [Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)). When an address
-the agent opens or downloads answers with a redirect to another site, Firefox sends that site all
-your cookies for it, including those that a link from another site would not carry. A page's own
+the agent opens answers with a redirect to another site, Firefox sends that site all your cookies
+for it, including those that a link from another site would not carry. A page's own
 scripts can also open an email address. Whatever the agent puts in an address, types or submits in
 a page goes to that site, and to wherever that page sends it, as it would if you did it yourself.
 
@@ -525,7 +521,11 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
   tens to hundreds of milliseconds when Firefox had suspended it. That listener holds no other
   tab. From the first agent session on, a second blocking listener sees the answers to page and
   frame loads in every tab, and answers at once unless the answer is a file (see
-  [Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)).
+  [Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)). A third
+  exists only while a download runs: it sees the requests that belong to no tab, answers at once
+  for every one but the redirect steps of the download's own request, and cancels a step to a site
+  the session may not act on (see [Downloads](#downloads)). After a download that timed out while
+  its request was under way, it stays for up to 5 minutes, cancelling only that request's steps.
 
 Exceptions and limits:
 
@@ -549,8 +549,9 @@ rule (see [The risk](#the-risk)).
 
 ## Downloads
 
-Downloads save only a file served by a site you approved, after any redirects: Foxleash checks the
-address before the request, and the final address before it reads or saves anything. The request
+Downloads request and save only from sites you approved that are not on the blocklist: Foxleash
+checks the address before the request, every address a redirect leads to before Firefox requests
+it, and the final address again before it reads and before it saves anything. The request
 carries all your cookies for the site, as a request from that site's own page would. An `http://`
 address is requested over plain http, so the file and your cookies for the site that are not
 marked Secure travel unencrypted. Downloads go only into your Firefox download folder, under a
@@ -561,11 +562,23 @@ reads the file with its own tools, outside Foxleash's untrusted marking.
 page links to. Foxleash hides and redacts nothing in it, so the file can hold a value the server
 put in a protected field, and sign-in tokens that `read_network` would redact.
 
-On the way to the final address, a redirect can make Firefox request an address on a site you
-have not approved or on the blocklist, also with all your cookies for that site, including those
-that a link from another site would not carry; no file from such a site is saved (see [Site
-approval](#site-approval)). Such a step to an `http://` address goes over plain http, also on the
-way from one `https://` address to another.
+A redirect step to a site you have not approved, one on the blocklist, or an address that is not
+http(s) is cancelled before Firefox sends it, so that site gets no request and none of your
+cookies, and nothing is saved. So a download whose redirects pass through another site fails, also
+when they lead back to an approved site, such as a sign-in that bounces through another site. An
+upgrade Firefox makes itself, in HTTPS-Only Mode or for a site that asked for https only (HSTS), is
+such a step too: it is cancelled unless you approved the `https://` site as well. A step to an
+`http://` address on an approved site goes over plain http, also on the way from one `https://`
+address to another.
+
+Firefox hides requests to some sites from add-ons: its restricted domains, such as
+addons.mozilla.org, accounts.firefox.com and support.mozilla.org, and any site Mozilla
+quarantines. Foxleash does not see a redirect step to one of them, so it cannot cancel it and
+Firefox sends that request; the file is not saved when such a step is the last one.
+
+`download` refuses while Foxleash lacks access to all websites in Firefox's add-on settings
+(about:addons, Foxleash, Permissions): Firefox would then not show it the redirect steps to sites
+outside that access.
 
 ### Files a page loads in the agent's tabs
 

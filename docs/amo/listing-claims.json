@@ -76,7 +76,7 @@
       ]
     },
     {
-      "listing": "Downloads save only a file served by a site you approved, after any redirects",
+      "listing": "Downloads request only addresses on sites you approved that are not on the blocklist",
       "evidence": [
         {
           "file": "apps/extension/src/downloads.ts",
@@ -88,6 +88,19 @@
         },
         { "file": "apps/extension/src/downloads.ts", "contains": "if (view.blocked(url))" },
         { "file": "apps/extension/src/downloads.ts", "contains": "if (!view.allowed(url))" },
+        {
+          "file": "apps/extension/src/downloads.ts",
+          "contains": "browser.webRequest.onBeforeRequest.addListener("
+        },
+        { "file": "apps/extension/src/downloads.ts", "contains": "[\"blocking\"]," },
+        {
+          "file": "apps/extension/src/downloads.ts",
+          "contains": "if (!view.allowed(url)) return hopNotApproved(site);"
+        },
+        {
+          "file": "apps/extension/src/downloads.ts",
+          "contains": "if (final !== hops.start && final !== hops.passed) throw fetchFailed();"
+        },
         { "file": "apps/extension/src/downloads.ts", "contains": "conflictAction: \"uniquify\"" },
         { "file": "apps/extension/src/downloads.ts", "contains": "!/[/\\\\]/.test(value)" },
         { "file": "apps/extension/src/handlers.ts", "contains": "downloadNameProblem(filename)" }

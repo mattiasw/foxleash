@@ -1,10 +1,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
+import type { RequestDetails } from "./browser-api.ts";
 import {
   createDownloads,
   DOWNLOAD_TIMEOUT_MS,
   downloadNameProblem,
+  LATE_HOP_MS,
   MAX_DOWNLOAD_NAME_BYTES,
 } from "./downloads.ts";
 import {
@@ -116,24 +119,98 @@ describe("download", { timeout: 10000 }, () => {
     assert.equal(fake.downloadCalls.length, 1);
   });
 
-  it("refuses a redirect to a site the session may not act on before reading the body", async () => {
+  it("refuses a redirect to a site withdrawn after its hop, before reading the body", async () => {
     const { fake, downloads, fetchCalls, respondWith } = await setup();
     const body = stream([BYTES]);
-    respondWith(() => response(`${UNAPPROVED}/elsewhere`, body.body));
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x`);
+      await revokeSite(fake.browser, OTHER);
+      return response(`${OTHER}/x`, body.body);
+    });
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "site_not_approved",
-      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
+      message: `The link led to ${OTHER}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
     assert.equal(body.pulled(), 0);
     assert.deepEqual(fake.downloadCalls, []);
     assert.equal(fetchCalls[0]?.init.signal.aborted, true);
   });
 
-  it("refuses a redirect to a blocked site", async () => {
-    const { fake, downloads, respondWith } = await setup();
+  it("cancels a redirect hop to a site the session may not act on", async () => {
+    const { fake, downloads, requests, respondWith } = await setup();
+    respondWith(async (_init, redirect) => {
+      await redirect(`${UNAPPROVED}/x?q=1`);
+      return response(`${UNAPPROVED}/x?q=1`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
+      code: "site_not_approved",
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
+    assert.deepEqual(await Promise.all(requests[1]?.answers ?? []), [{ cancel: true }]);
+    assert.deepEqual(fake.downloadCalls, []);
+  });
+
+  it("cancels a redirect hop to a blocked site, approved or not", async () => {
+    const { fake, downloads, requests, respondWith } = await setup();
+    respondWith(async (_init, redirect) => {
+      await redirect(`${BLOCKED}/x`);
+      return response(`${BLOCKED}/x`, BYTES);
+    });
+    const refusal = {
+      code: "site_blocked",
+      message: `The link led to ${BLOCKED}, which is on Foxleash's blocklist; nothing was requested there and nothing was saved.`,
+    };
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), refusal);
     await grantSite(fake.browser, BLOCKED);
-    respondWith(() => response(`${BLOCKED}/x`, BYTES));
-    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), { code: "site_blocked" });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), refusal);
+    assert.deepEqual(await Promise.all(requests[3]?.answers ?? []), [{ cancel: true }]);
+    assert.deepEqual(fake.downloadCalls, []);
+  });
+
+  it("cancels a redirect hop to an address that is not http(s)", async () => {
+    const { fake, downloads, requests, respondWith } = await setup();
+    for (const hop of ["ftp://a.example/x", "data:,x"]) {
+      respondWith(async (_init, redirect) => {
+        await redirect(hop);
+        return response(hop, BYTES);
+      });
+      await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
+      assert.deepEqual(await Promise.all(requests.at(-1)?.answers ?? []), [{ cancel: true }]);
+    }
+    assert.deepEqual(fake.downloadCalls, []);
+  });
+
+  it("cancels a redirect hop when the site check fails", async () => {
+    const { fake, downloads, access, requests, respondWith, failView } = await setup();
+    failView(2, new Error("storage is gone"));
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x`);
+      return response(`${OTHER}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
+    assert.deepEqual(await Promise.all(requests[1]?.answers ?? []), [{ cancel: true }]);
+    respondWith(async (_init, redirect) => {
+      access.stop("s1");
+      await redirect(`${OTHER}/x`);
+      return response(`${OTHER}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), { code: "session_stopped" });
+    assert.deepEqual(await Promise.all(requests[3]?.answers ?? []), [{ cancel: true }]);
+    assert.deepEqual(fake.downloadCalls, []);
+  });
+
+  it("reads the site view anew for each redirect hop", async () => {
+    const { fake, downloads, respondWith } = await setup();
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/a`);
+      await revokeSite(fake.browser, OTHER);
+      await redirect(`${OTHER}/b`);
+      return response(`${OTHER}/b`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
+      code: "site_not_approved",
+      message: `The link led to ${OTHER}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
     assert.deepEqual(fake.downloadCalls, []);
   });
 
@@ -145,11 +222,125 @@ describe("download", { timeout: 10000 }, () => {
   });
 
   it("saves after a redirect on the same site or to another approved site", async () => {
-    const { fake, downloads, respondWith } = await setup();
+    const { fake, downloads, requests, respondWith } = await setup();
     for (const final of [`${SITE}/other`, `${OTHER}/x`]) {
-      respondWith(() => response(final, BYTES));
+      respondWith(async (_init, redirect) => {
+        await redirect(final);
+        return response(final, BYTES);
+      });
       assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
     }
+    assert.deepEqual(await Promise.all(requests[3]?.answers ?? []), [undefined]);
+    assert.equal(fake.downloadCalls.length, 2);
+  });
+
+  it("saves nothing that came through a redirect the listener did not see", async () => {
+    const { fake, downloads, respondWith } = await setup();
+    const body = stream([BYTES]);
+    respondWith(() => response(`${OTHER}/x`, body.body));
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), FETCH_FAILED);
+    assert.equal(body.pulled(), 0);
+    assert.deepEqual(fake.downloadCalls, []);
+  });
+
+  it("answers the fetch's first request, and every other request, at once with nothing", async () => {
+    const { fake, downloads, background, requests, respondWith, holdView, views } = await setup();
+    const release = holdView(1);
+    respondWith(async (_init, redirect) => {
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
+    await until(() => views() === 1);
+    // A site's service worker asks for the same address first; it is not the download's fetch.
+    const worker = fake.emitWebRequest("onBeforeRequest", request(URL_A, "w", `${SITE}/sw.js`));
+    assert.equal(worker.length, 1);
+    assert.equal(worker[0], undefined);
+    // An own request before the fetch began is not the fetch either.
+    const early = fake.emitWebRequest("onBeforeRequest", request(URL_A, "e", background));
+    assert.equal(early.length, 1);
+    assert.equal(early[0], undefined);
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", request(URL_A, "t", background, 5)),
+      [],
+    );
+    release();
+    await assert.rejects(saving, {
+      code: "site_not_approved",
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
+    assert.equal(requests[0]?.answers.length, 1);
+    assert.equal(requests[0]?.answers[0], undefined);
+  });
+
+  it("never takes a site's request during the fetch for the download's own", async () => {
+    const { fake, downloads, respondWith, missFirstRequest } = await setup();
+    missFirstRequest();
+    let worker: unknown[] = [];
+    respondWith(async (_init, redirect) => {
+      worker = fake.emitWebRequest("onBeforeRequest", request(URL_A, "w", `${SITE}/sw.js`));
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
+      code: "site_not_approved",
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
+    assert.equal(worker.length, 1);
+    assert.equal(worker[0], undefined);
+  });
+
+  it("judges only the fetch's own requests once it has seen one", async () => {
+    const { fake, downloads, background, respondWith } = await setup();
+    let other: unknown[] = [];
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x`);
+      other = fake.emitWebRequest("onBeforeRequest", request(`${SITE}/y`, "2", background));
+      return response(`${OTHER}/x`, BYTES);
+    });
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
+    assert.equal(other.length, 1);
+    assert.equal(other[0], undefined);
+  });
+
+  it("judges the first hop when the fetch's first request was not seen", async () => {
+    const { fake, downloads, respondWith, missFirstRequest } = await setup();
+    missFirstRequest();
+    respondWith(async (_init, redirect) => {
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
+      code: "site_not_approved",
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x`);
+      return response(`${OTHER}/x`, BYTES);
+    });
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
+    assert.equal(fake.downloadCalls.length, 1);
+  });
+
+  it("compares the fetch's addresses without their fragment", async () => {
+    const { fake, downloads, requests, respondWith } = await setup();
+    assert.equal((await downloads.save("s1", `${URL_A}#page=2`, "x.pdf", 0)).bytes, BYTES.length);
+    assert.equal(requests[0]?.url, `${URL_A}#page=2`);
+    // The first request, not judged as a hop.
+    assert.equal(requests[0]?.answers.length, 1);
+    assert.equal(requests[0]?.answers[0], undefined);
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x#top`);
+      return response(`${OTHER}/x`, BYTES);
+    });
+    assert.equal((await downloads.save("s1", `${URL_A}#page=2`, "x.pdf", 0)).bytes, BYTES.length);
+    respondWith(async (_init, redirect) => {
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", `${URL_A}#page=2`, "x.pdf", 0), {
+      code: "site_not_approved",
+    });
     assert.equal(fake.downloadCalls.length, 2);
   });
 
@@ -214,11 +405,15 @@ describe("download", { timeout: 10000 }, () => {
   });
 
   it("names the site, not the status, for a failure on a site the session may not act on", async () => {
-    const { downloads, respondWith } = await setup();
-    respondWith(() => response(`${UNAPPROVED}/missing`, "no", { status: 404 }));
+    const { fake, downloads, respondWith } = await setup();
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/missing`);
+      await revokeSite(fake.browser, OTHER);
+      return response(`${OTHER}/missing`, "no", { status: 404 });
+    });
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
       code: "site_not_approved",
-      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was saved.`,
+      message: `The link led to ${OTHER}, which Foxleash is not allowed on in this session; nothing was saved.`,
     });
   });
 
@@ -406,6 +601,146 @@ describe("download", { timeout: 10000 }, () => {
     await assert.rejects(fake.browser.downloads.cancel(1), /cannot be canceled/);
   });
 
+  it("listens to requests that belong to no tab, blocking, only while a download runs", async () => {
+    const { fake, downloads, fetchCalls, respondWith, holdView, views, timers, missFirstRequest } =
+      await setup();
+    const listening = [
+      {
+        event: "onBeforeRequest",
+        filter: { urls: ["<all_urls>"], tabId: -1 },
+        extraInfoSpec: ["blocking"],
+      },
+    ];
+    let atFetch: unknown[] = [];
+    respondWith(() => {
+      atFetch = fake.activeWebRequestRegistrations();
+      return response(URL_A, BYTES);
+    });
+    await downloads.save("s1", URL_A, "x.pdf", 0);
+    assert.deepEqual(atFetch, listening);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    await assert.rejects(downloads.save("s1", `${UNAPPROVED}/x`, "x.pdf", 0));
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    respondWith(async (_init, redirect) => {
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0));
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    // A timeout during the first site check.
+    const before = views();
+    const release = holdView(before + 1);
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
+    await until(() => views() === before + 1);
+    timers.advance(DOWNLOAD_TIMEOUT_MS);
+    await assert.rejects(saving, TIMED_OUT);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    release();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    assert.equal(timers.pending(), 0);
+    // A timeout before the listener saw any of the fetch's requests.
+    missFirstRequest();
+    respondWith((init) => never(init.signal));
+    const fetched = fetchCalls.length;
+    const unseen = downloads.save("s1", URL_A, "x.pdf", 0);
+    await until(() => fetchCalls.length === fetched + 1);
+    timers.advance(DOWNLOAD_TIMEOUT_MS);
+    await assert.rejects(unseen, TIMED_OUT);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+  });
+
+  it("cancels a hop whose judgement was still pending when the download timed out", async () => {
+    const { fake, downloads, background, fetchCalls, respondWith, holdView, timers } =
+      await setup();
+    const release = holdView(2);
+    respondWith((init) => never(init.signal));
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
+    await until(() => fetchCalls.length === 1);
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request(`${OTHER}/x`, "1", background));
+    timers.advance(DOWNLOAD_TIMEOUT_MS);
+    await assert.rejects(saving, TIMED_OUT);
+    release();
+    assert.deepEqual(await answer, { cancel: true });
+  });
+
+  it("keeps cancelling a timed-out fetch's requests for a while, and only those", async () => {
+    const {
+      fake,
+      downloads,
+      background,
+      fetchCalls,
+      requests,
+      respondWith,
+      timers,
+      missFirstRequest,
+    } = await setup();
+    respondWith((init) => never(init.signal));
+    const saving = downloads.save("s1", URL_A, "x.pdf", 0);
+    await until(() => fetchCalls.length === 1);
+    timers.advance(DOWNLOAD_TIMEOUT_MS);
+    await assert.rejects(saving, TIMED_OUT);
+    assert.equal(fake.activeWebRequestRegistrations().length, 1);
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", request(`${OTHER}/x`, "1", background)),
+      [{ cancel: true }],
+    );
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", request(`${OTHER}/x`, "9", background)),
+      [undefined],
+    );
+    // The next download is judged by its own listener alone, and never takes the timed-out
+    // fetch's request, which reaches it first, for its own.
+    missFirstRequest();
+    let lateAnswers: unknown[] = [];
+    respondWith(async (_init, redirect) => {
+      lateAnswers = fake.emitWebRequest(
+        "onBeforeRequest",
+        request(`${OTHER}/next`, "1", background),
+      );
+      await redirect(`${UNAPPROVED}/x`);
+      return response(`${UNAPPROVED}/x`, BYTES);
+    });
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), {
+      code: "site_not_approved",
+      message: `The link led to ${UNAPPROVED}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    });
+    assert.deepEqual(lateAnswers, [{ cancel: true }, undefined]);
+    const answers = requests.at(-1)?.answers ?? [];
+    assert.equal(answers.length, 2);
+    assert.equal(answers[0], undefined);
+    assert.deepEqual(await answers[1], { cancel: true });
+    respondWith(async (_init, redirect) => {
+      await redirect(`${OTHER}/x`);
+      return response(`${OTHER}/x`, BYTES);
+    });
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
+    assert.equal(fake.activeWebRequestRegistrations().length, 1);
+    timers.advance(LATE_HOP_MS - 1);
+    assert.equal(fake.activeWebRequestRegistrations().length, 1);
+    timers.advance(1);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+  });
+
+  it("refuses to download without access to all websites, before any request", async () => {
+    const { fake, downloads, fetchCalls } = await setup();
+    const refusal = {
+      code: "download_failed",
+      message:
+        "Foxleash needs access to all websites to download a file: open about:addons, Foxleash, Permissions, and allow it. Nothing was saved.",
+    };
+    fake.allUrls = false;
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), refusal);
+    const contains = fake.browser.permissions.contains;
+    fake.allUrls = true;
+    fake.browser.permissions.contains = () => Promise.reject(new Error("no answer"));
+    await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), refusal);
+    assert.deepEqual(fetchCalls, []);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    fake.browser.permissions.contains = contains;
+    assert.equal((await downloads.save("s1", URL_A, "x.pdf", 0)).bytes, BYTES.length);
+  });
+
   it("refuses a second download while one is in progress, and takes one after it ends", async () => {
     const { fake, downloads, fetchCalls } = await setup();
     fake.downloadTiming = "held";
@@ -489,25 +824,35 @@ async function setup() {
   await grantSite(fake.browser, SITE);
   await grantSite(fake.browser, OTHER);
   const fetchCalls: { url: string; init: FetchInit }[] = [];
-  let respond: (init: FetchInit) => Response | Promise<Response> = () => response(URL_A, BYTES);
+  let respond: Answer = () => response(URL_A, BYTES);
   const blobs = new Map<string, Blob>();
   const revoked: string[] = [];
   const holds = new Map<number, Promise<void>>();
+  const failures = new Map<number, unknown>();
   let viewCount = 0;
+  const background = fake.browser.runtime.getURL("_generated_background_page.html");
+  // What each listener answered for each request the fake fetch sent, as returned.
+  const requests: { url: string; requestId: string; answers: unknown[] }[] = [];
+  let missFirst = false;
   const downloads = createDownloads({
     browser: fake.browser,
     access: {
       view: async (session: string): Promise<SiteView> => {
         viewCount += 1;
         await holds.get(viewCount);
+        if (failures.has(viewCount)) throw failures.get(viewCount);
         return access.view(session);
       },
       generation: (session: string) => access.generation(session),
     },
     timers,
+    // As Firefox does: the first request and each redirect hop reach the listeners first, with
+    // one request id, and a cancelled one rejects the fetch.
     fetch: async (url, init) => {
       fetchCalls.push({ url, init });
-      return respond(init);
+      const requestId = String(fetchCalls.length);
+      if (!missFirst) await send(url, requestId);
+      return respond(init, (hop) => send(hop, requestId));
     },
     objectUrls: {
       create: (blob) => {
@@ -521,8 +866,18 @@ async function setup() {
     },
   });
 
-  /** What the fetch answers from now on. */
-  function respondWith(answer: (init: FetchInit) => Response | Promise<Response>): void {
+  /** Sends a request of the fetch past the listeners; rejects as Firefox's fetch when cancelled. */
+  async function send(url: string, requestId: string): Promise<void> {
+    const answers = fake.emitWebRequest("onBeforeRequest", request(url, requestId, background));
+    requests.push({ url, requestId, answers });
+    const settled = await Promise.all(answers);
+    if (settled.some((answer) => isDeepStrictEqual(answer, { cancel: true }))) {
+      throw new TypeError("NetworkError when attempting to fetch resource.");
+    }
+  }
+
+  /** What the fetch answers from now on, after any hops it asks for with `redirect`. */
+  function respondWith(answer: Answer): void {
     respond = answer;
   }
 
@@ -531,6 +886,16 @@ async function setup() {
     const { promise, resolve } = Promise.withResolvers<void>();
     holds.set(nth, promise);
     return () => resolve();
+  }
+
+  /** Makes the `nth` site check, counted from 1, reject with `error`. */
+  function failView(nth: number, error: unknown): void {
+    failures.set(nth, error);
+  }
+
+  /** From now on, the fetch's first request reaches no listener. */
+  function missFirstRequest(): void {
+    missFirst = true;
   }
 
   return {
@@ -542,9 +907,34 @@ async function setup() {
     fetchCalls,
     blobs,
     revoked,
+    background,
+    requests,
     respondWith,
     holdView,
+    failView,
+    missFirstRequest,
     views: () => viewCount,
+  };
+}
+
+/** A fetch's answer; `redirect` sends a hop first, and rejects when it was cancelled. */
+type Answer = (
+  init: FetchInit,
+  redirect: (url: string) => Promise<void>,
+) => Response | Promise<Response>;
+
+/** A request that belongs to no tab, unless `tabId` says otherwise. */
+function request(url: string, requestId: string, originUrl: string, tabId = -1): RequestDetails {
+  return {
+    requestId,
+    tabId,
+    timeStamp: 0,
+    frameId: 0,
+    url,
+    method: "GET",
+    type: "xmlhttprequest",
+    originUrl,
+    documentUrl: originUrl,
   };
 }
 

@@ -1,7 +1,7 @@
 import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
-import type { BrowserApi, DownloadDelta, Timers } from "./browser-api.ts";
+import type { BrowserApi, Cancel, DownloadDelta, RequestDetails, Timers } from "./browser-api.ts";
 import { refuseIfEnded, ToolError } from "./handlers.ts";
-import { siteOf } from "./site.ts";
+import { siteOf, withoutFragment } from "./site.ts";
 import { type SiteAccess, siteBlocked } from "./site-access.ts";
 
 /** Saves files from approved sites into Firefox's download folder (ADR 0019). */
@@ -16,7 +16,7 @@ export interface Downloads {
 }
 
 export interface DownloadsDeps<Handle> {
-  browser: Pick<BrowserApi, "downloads">;
+  browser: Pick<BrowserApi, "downloads" | "webRequest" | "runtime" | "permissions">;
   access: Pick<SiteAccess, "view" | "generation">;
   timers: Timers<Handle>;
   fetch: (
@@ -28,8 +28,29 @@ export interface DownloadsDeps<Handle> {
 
 /** Bounds a whole download, below the host's 60 s request timeout. */
 export const DOWNLOAD_TIMEOUT_MS = 50_000;
+/**
+ * How long a download that timed out during its fetch keeps cancelling that fetch's requests:
+ * Firefox stops waiting for a response after 300 s by default (`network.http.response.timeout`).
+ */
+export const LATE_HOP_MS = 300_000;
 /** File systems cap a name at 255 bytes; this leaves room for the number Firefox adds. */
 export const MAX_DOWNLOAD_NAME_BYTES = 200;
+
+/** One download's fetch, as its `onBeforeRequest` listener sees it (ADR 0099). */
+interface Hops {
+  session: string;
+  /** The start URL without its fragment. */
+  start: string;
+  /** The fetch's: the first own request the listener saw while the fetch ran. */
+  requestId?: string;
+  /** The last address, without its fragment, the listener let a hop through to. */
+  passed?: string;
+  /** Why a hop was cancelled. */
+  refusal?: ToolError;
+  /** From just before `fetch` until it settles. */
+  fetching: boolean;
+  ended: boolean;
+}
 
 const BAD_NAME = `download needs filename to be a plain file name such as receipt.pdf: at most ${MAX_DOWNLOAD_NAME_BYTES} bytes in UTF-8, no slash or backslash, no control or formatting characters, not starting with a dot.`;
 
@@ -42,6 +63,8 @@ export function createDownloads<Handle>({
 }: DownloadsDeps<Handle>): Downloads {
   // Each download holds its whole file in memory until Firefox has written it.
   let busy = false;
+  // The fetches of downloads that timed out mid-fetch, whose listeners still cancel them.
+  const lateRequests = new Set<string>();
   return { save };
 
   async function save(
@@ -57,6 +80,8 @@ export function createDownloads<Handle>({
       );
     }
     busy = true;
+    const hops: Hops = { session, start: withoutFragment(url), fetching: false, ended: false };
+    const listener = (details: RequestDetails) => onRequest(hops, details);
     const controller = new AbortController();
     const { promise: timedOut, reject } = Promise.withResolvers<never>();
     const timer = timers.setTimeout(() => {
@@ -68,15 +93,81 @@ export function createDownloads<Handle>({
       );
     }, DOWNLOAD_TIMEOUT_MS);
     try {
+      browser.webRequest.onBeforeRequest.addListener(
+        listener,
+        { urls: ["<all_urls>"], tabId: -1 },
+        ["blocking"],
+      );
       return await Promise.race([
-        fetchAndSave(session, url, filename, controller.signal, generation),
+        fetchAndSave(session, url, filename, controller.signal, generation, hops),
         timedOut,
       ]);
     } finally {
       timers.clearTimeout(timer);
+      const late = hops.fetching ? hops.requestId : undefined;
+      hops.ended = true;
       // Stops a fetch or body still arriving after a refusal or the timeout, and a save in progress.
       controller.abort();
+      const remove = () => browser.webRequest.onBeforeRequest.removeListener(listener);
+      if (late === undefined) remove();
+      else {
+        lateRequests.add(late);
+        timers.setTimeout(() => {
+          lateRequests.delete(late);
+          remove();
+        }, LATE_HOP_MS);
+      }
       busy = false;
+    }
+  }
+
+  /** Judges the redirect hops of the download's own fetch; answers anything else at once. */
+  function onRequest(
+    hops: Hops,
+    details: RequestDetails,
+  ): Promise<Cancel | undefined> | Cancel | undefined {
+    if (hops.ended) return details.requestId === hops.requestId ? { cancel: true } : undefined;
+    if (hops.requestId === undefined) {
+      if (
+        !hops.fetching ||
+        details.originUrl?.startsWith(browser.runtime.getURL("")) !== true ||
+        lateRequests.has(details.requestId)
+      ) {
+        return undefined;
+      }
+      hops.requestId = details.requestId;
+      // The start gate checked the first request.
+      if (withoutFragment(details.url) === hops.start) return undefined;
+    } else if (details.requestId !== hops.requestId) {
+      return undefined;
+    }
+    return judgeHop(hops, details.url);
+  }
+
+  /** Never rejects. */
+  async function judgeHop(hops: Hops, url: string): Promise<Cancel | undefined> {
+    const refusal = await hopRefusal(hops.session, url);
+    // An aborted fetch still sends a hop let through late (ADR 0099).
+    if (hops.ended) return { cancel: true };
+    if (refusal !== undefined) {
+      hops.refusal = refusal;
+      return { cancel: true };
+    }
+    hops.passed = withoutFragment(url);
+    return undefined;
+  }
+
+  /** Why a hop to `url` may not be requested, from the session's view read anew. Never rejects. */
+  async function hopRefusal(session: string, url: string): Promise<ToolError | undefined> {
+    try {
+      const site = siteOf(url);
+      if (site === undefined) return fetchFailed();
+      const view = await access.view(session);
+      if (view.blocked(url)) return hopBlocked(site);
+      if (!view.allowed(url)) return hopNotApproved(site);
+      return undefined;
+    } catch (error: unknown) {
+      return error instanceof ToolError ? error : fetchFailed();
     }
   }
 
@@ -86,15 +177,24 @@ export function createDownloads<Handle>({
     filename: string,
     signal: AbortSignal,
     generation: number,
+    hops: Hops,
   ): Promise<{ path: string; bytes: number }> {
+    // Firefox fires webRequest events only for sites the add-on has host permission for.
+    if (!(await mayReachAllSites())) throw noAccessToAllSites();
     await downloadGate(session, url, notApproved);
     refuseIfEnded(access, session, generation);
     let response: Response;
+    hops.fetching = true;
     try {
       response = await fetch(url, { credentials: "include", cache: "no-store", signal });
     } catch {
-      throw fetchFailed();
+      throw hops.refusal ?? fetchFailed();
+    } finally {
+      hops.fetching = false;
     }
+    // An answer that came through a redirect the listener did not see was never judged.
+    const final = withoutFragment(response.url);
+    if (final !== hops.start && final !== hops.passed) throw fetchFailed();
     // Before the status or a byte of the body is read: a redirect may have left the site.
     await downloadGate(session, response.url, ledElsewhere);
     if (!response.ok) {
@@ -112,6 +212,14 @@ export function createDownloads<Handle>({
     refuseIfEnded(access, session, generation);
     const path = await saveFile(blob, filename, signal);
     return { path, bytes };
+  }
+
+  async function mayReachAllSites(): Promise<boolean> {
+    try {
+      return await browser.permissions.contains({ origins: ["<all_urls>"] });
+    } catch {
+      return false;
+    }
   }
 
   /** Refuses a URL that is not on a site the session may already act on. Never asks. */
@@ -220,6 +328,27 @@ function ledElsewhere(site: string): ToolError {
   return new ToolError(
     "site_not_approved",
     `The link led to ${site}, which Foxleash is not allowed on in this session; nothing was saved.`,
+  );
+}
+
+function hopNotApproved(site: string): ToolError {
+  return new ToolError(
+    "site_not_approved",
+    `The link led to ${site}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+  );
+}
+
+function hopBlocked(site: string): ToolError {
+  return new ToolError(
+    "site_blocked",
+    `The link led to ${site}, which is on Foxleash's blocklist; nothing was requested there and nothing was saved.`,
+  );
+}
+
+function noAccessToAllSites(): ToolError {
+  return new ToolError(
+    "download_failed",
+    "Foxleash needs access to all websites to download a file: open about:addons, Foxleash, Permissions, and allow it. Nothing was saved.",
   );
 }
 

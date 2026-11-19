@@ -6,6 +6,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { gzipSync } from "node:zlib";
+import { LAN_HOST } from "./firefox.ts";
 
 export const TITLES = {
   a: "Fixture page A",
@@ -948,7 +949,11 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       request.resume();
       response.writeHead(204, { "Cache-Control": "no-store" });
       response.end();
-    } else if (path === "/download/receipt.pdf") {
+    } else if (
+      path === "/download/receipt.pdf" ||
+      path === "/download/hop-and-back-final" ||
+      path === "/download/hop-lan-file"
+    ) {
       response.writeHead(200, {
         "Content-Type": "application/pdf",
         "Content-Disposition": 'attachment; filename="Receipt-1234.pdf"',
@@ -984,6 +989,26 @@ export async function startFixtureServer(): Promise<FixtureServer> {
     } else if (path === "/download/same") {
       response.writeHead(302, { Location: "/download/receipt.pdf" });
       response.end();
+    } else if (path === "/download/hop-away") {
+      // Each redirect leads to a path of its own, so a test counts the requests that reached it.
+      redirectTo(response, `http://localhost:${request.socket.localPort}/download/hop-away-target`);
+    } else if (path === "/download/hop-and-back") {
+      redirectTo(
+        response,
+        `http://localhost:${request.socket.localPort}/download/hop-and-back-middle`,
+      );
+    } else if (path === "/download/hop-and-back-middle") {
+      redirectTo(
+        response,
+        `http://127.0.0.1:${request.socket.localPort}/download/hop-and-back-final`,
+      );
+    } else if (path === "/download/hop-blocked") {
+      redirectTo(
+        response,
+        `http://localhost:${request.socket.localPort}/download/hop-blocked-target`,
+      );
+    } else if (path === "/download/hop-lan") {
+      redirectTo(response, `http://${LAN_HOST}:${request.socket.localPort}/download/hop-lan-file`);
     } else if (path === "/before-unload") {
       sendHtml(response, BEFORE_UNLOAD_PAGE);
     } else if (path === "/sign-in") {
@@ -1338,6 +1363,11 @@ function sendPage(
       `<body><h1>${title}</h1></body></html>\n`,
     headers,
   );
+}
+
+function redirectTo(response: ServerResponse, location: string): void {
+  response.writeHead(302, { Location: location });
+  response.end();
 }
 
 function sendHtml(

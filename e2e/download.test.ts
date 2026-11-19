@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { DEFAULT_BLOCKLIST } from "../apps/extension/src/default-blocklist.ts";
 import { LAN_HOST } from "./firefox.ts";
 import {
   DOWNLOAD_SECRET,
@@ -96,9 +97,64 @@ describe("download in real Firefox", () => {
     });
     assert.equal(
       untrustedContent(text),
-      `The link led to ${other}, which Foxleash is not allowed on in this session; nothing was saved.`,
+      `The link led to ${other}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
     );
     assert.deepEqual(listed(), files);
+  });
+
+  test("sends no request to the site a redirect leads to when the session may not act on it", async () => {
+    const files = listed();
+    const text = await harness.refused(session, "download", {
+      url: fixtures.url("/download/hop-away"),
+      filename: "hop-away.pdf",
+    });
+    assert.equal(
+      untrustedContent(text),
+      `The link led to ${other}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    );
+    assert.equal(fixtures.hits("/download/hop-away-target"), 0);
+    assert.deepEqual(listed(), files);
+  });
+
+  test("refuses a redirect through another site back to an approved one", async () => {
+    const files = listed();
+    const text = await harness.refused(session, "download", {
+      url: fixtures.url("/download/hop-and-back"),
+      filename: "hop-and-back.pdf",
+    });
+    assert.equal(
+      untrustedContent(text),
+      `The link led to ${other}, which Foxleash is not allowed on in this session; nothing was requested there and nothing was saved.`,
+    );
+    assert.equal(fixtures.hits("/download/hop-and-back-middle"), 0);
+    assert.equal(fixtures.hits("/download/hop-and-back-final"), 0);
+    assert.deepEqual(listed(), files);
+  });
+
+  test("sends no request to a blocklisted site a redirect leads to", async () => {
+    const files = listed();
+    await harness.seedSettings({ blocklist: ["localhost"] });
+    try {
+      const text = await harness.refused(session, "download", {
+        url: fixtures.url("/download/hop-blocked"),
+        filename: "hop-blocked.pdf",
+      });
+      assert.equal(
+        untrustedContent(text),
+        `The link led to ${other}, which is on Foxleash's blocklist; nothing was requested there and nothing was saved.`,
+      );
+    } finally {
+      await harness.seedSettings({ blocklist: [...DEFAULT_BLOCKLIST] });
+    }
+    assert.equal(fixtures.hits("/download/hop-blocked-target"), 0);
+    assert.deepEqual(listed(), files);
+  });
+
+  test("saves after a redirect to another approved site", async () => {
+    const saved = await save("/download/hop-lan", "hop-lan.pdf");
+    assert.equal(saved.path, join(harness.downloads, "hop-lan.pdf"));
+    assert.equal(readFileSync(saved.path, "utf8"), receiptPdf());
+    assert.equal(fixtures.hits("/download/hop-lan-file"), 1);
   });
 
   test("saves after a redirect on the same site", async () => {
