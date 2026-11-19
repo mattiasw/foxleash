@@ -48,7 +48,8 @@ export const KEY = {
 const HELPER_TIMEOUT_MS = 20_000;
 // How long discardTab waits for the session store to hold the tab's page, below HELPER_TIMEOUT_MS.
 const SESSION_STORE_TIMEOUT_MS = 10_000;
-// How long fillCreditCard waits for Firefox to identify the card form, below HELPER_TIMEOUT_MS.
+// How long fillCreditCard and previewCreditCard wait for Firefox to identify the card form, below
+// HELPER_TIMEOUT_MS.
 const IDENTIFY_TIMEOUT_MS = 10_000;
 const POLL_MS = 100;
 // The WebDriver web element identifier, the key of an element reference.
@@ -62,11 +63,12 @@ const login = Cc["@mozilla.org/login-manager/loginInfo;1"].createInstance(Ci.nsI
 login.init(origin, "", null, username, password, "", "");
 return Services.logins.addLoginAsync(login).then(() => null);`;
 const REMOVE_LOGINS = "return Services.logins.removeAllUserFacingLoginsAsync().then(() => null);";
-// Fills a card through the tab's form autofill actor with autofillFields, which is what a pick
-// from Firefox's card pop-up calls. A stored card's number is encrypted with the OS key store:
-// none on a machine without a keyring, the developer's own one otherwise. The profile has a stored
-// card's fields, the number unencrypted.
-const FILL_CREDIT_CARD = `const [url, card, timeoutMs] = arguments;
+// Fills or previews a card through the tab's form autofill actor with `method`: autofillFields is
+// what a pick from Firefox's card pop-up calls, previewFields what highlighting an entry in it
+// calls. A stored card's number is encrypted with the OS key store: none on a machine without a
+// keyring, the developer's own one otherwise. The profile has a stored card's fields, the number
+// unencrypted.
+const AUTOFILL_CREDIT_CARD = `const [url, card, timeoutMs, method] = arguments;
 const { setTimeout } = ChromeUtils.importESModule("resource://gre/modules/Timer.sys.mjs");
 const { CreditCardRecord } = ChromeUtils.importESModule(
   "resource://gre/modules/shared/CreditCardRecord.sys.mjs",
@@ -93,7 +95,7 @@ const profile = {
   "cc-exp-year": card.expiryYear,
 };
 CreditCardRecord.computeFields(profile);
-return numberField().then((field) => actor.autofillFields(field.elementId, profile)).then(() => null);`;
+return numberField().then((field) => actor[method](field.elementId, profile)).then(() => null);`;
 // The permission a user's pop-up exception for a site stores.
 const ALLOW_POPUPS = `const [origin] = arguments;
 const principal = Services.scriptSecurityManager.createContentPrincipalFromOrigin(origin);
@@ -283,6 +285,12 @@ export interface Firefox {
    * Firefox stores no card.
    */
   fillCreditCard(context: string, numberSelector: string, card: CreditCard): Promise<void>;
+  /**
+   * Previews `card` in the card form of the tab's page as Firefox does while the user highlights
+   * a saved card in the card number field's pop-up: nothing is filled in. It first focuses that
+   * field, `numberSelector`, as fillCreditCard does. Firefox stores no card.
+   */
+  previewCreditCard(context: string, numberSelector: string, card: CreditCard): Promise<void>;
   /** Allows pop-ups for `origin`, as a user's pop-up exception for a site does. */
   allowPopups(origin: string): Promise<void>;
   /** Removes the pop-up exception for `origin`, so Firefox's pop-up blocker applies again. */
@@ -578,6 +586,18 @@ export async function launchFirefox({
     }
   }
 
+  async function autofillCard(
+    context: string,
+    numberSelector: string,
+    card: CreditCard,
+    method: "autofillFields" | "previewFields",
+  ): Promise<void> {
+    const url = (await contexts()).find((candidate) => candidate.context === context)?.url;
+    if (url === undefined) throw new Error(`no tab ${context}`);
+    await clickElement(context, numberSelector);
+    await chrome(AUTOFILL_CREDIT_CARD, [url, card, IDENTIFY_TIMEOUT_MS, method]);
+  }
+
   async function quitAndTearDown(): Promise<void> {
     let failure: unknown;
     try {
@@ -783,14 +803,16 @@ export async function launchFirefox({
     },
     fillCreditCard(context, numberSelector, card) {
       return withDeadline(
-        (async () => {
-          const url = (await contexts()).find((candidate) => candidate.context === context)?.url;
-          if (url === undefined) throw new Error(`no tab ${context}`);
-          await clickElement(context, numberSelector);
-          await chrome(FILL_CREDIT_CARD, [url, card, IDENTIFY_TIMEOUT_MS]);
-        })(),
+        autofillCard(context, numberSelector, card, "autofillFields"),
         HELPER_TIMEOUT_MS,
         `fillCreditCard ${context} ${numberSelector}`,
+      );
+    },
+    previewCreditCard(context, numberSelector, card) {
+      return withDeadline(
+        autofillCard(context, numberSelector, card, "previewFields"),
+        HELPER_TIMEOUT_MS,
+        `previewCreditCard ${context} ${numberSelector}`,
       );
     },
     allowPopups(origin) {

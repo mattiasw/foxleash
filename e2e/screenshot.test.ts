@@ -12,6 +12,7 @@ import {
   AUTOFILL_COLOURS,
   AUTOFILL_LOGIN,
   CARD_AUTOFILL_COLOURS,
+  CARD_PREVIEW_COLOURS,
   COPY_OFFSET,
   type FixtureServer,
   SHOT_ADDON_COLOURS,
@@ -466,6 +467,42 @@ describe("screenshot in real Firefox", () => {
     const png = await shotOf({ tabId });
     assertNone(png, CARD_AUTOFILL_COLOURS.filled, "autofilled card number");
     assertDrawn(png, CARD_AUTOFILL_COLOURS.plain, "plain");
+  });
+
+  test("a screenshot hides the option Firefox previews in a drop-down from a saved card", async () => {
+    const previewing = 'document.getElementById("preview-month").matches(":autofill")';
+    const values =
+      'JSON.stringify([document.getElementById("preview-month").value, document.getElementById("preview-year").value])';
+    const tabId = await open(session, "/card-preview", TITLES.cardPreview);
+    const context = await contextOf(fixtures.url("/card-preview"));
+    // Firefox paints a drop-down's arrow in its text fill colour, so the drop-downs draw a little
+    // of that colour before the preview; the capture after it must draw more.
+    const beforePreview = countColour(
+      decodePng(await firefox.captureViewport(context)),
+      CARD_PREVIEW_COLOURS.previewed,
+    );
+    await firefox.previewCreditCard(context, "#preview-number", AUTOFILL_CARD);
+    await pollUntil(
+      async () => ((await firefox.evaluate(context, previewing)) === true ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      "Firefox to preview the card",
+    );
+    assert.equal(await firefox.evaluate(context, values), '["",""]');
+    // Firefox draws the previewed options in the page's colour without Foxleash.
+    const duringPreview = countColour(
+      decodePng(await firefox.captureViewport(context)),
+      CARD_PREVIEW_COLOURS.previewed,
+    );
+    assert.ok(
+      duringPreview >= beforePreview + DRAWN,
+      `only ${duringPreview - beforePreview} more pixels of the previewed option colour`,
+    );
+    const png = await shotOf({ tabId });
+    assertNone(png, CARD_PREVIEW_COLOURS.previewed, "previewed option");
+    assertDrawn(png, CARD_PREVIEW_COLOURS.plain, "plain drop-down");
+    // The preview was still live when Foxleash captured the page.
+    assert.equal(await firefox.evaluate(context, previewing), true);
+    assert.equal(await firefox.evaluate(context, values), '["",""]');
   });
 
   test("a page holding another add-on's frame is captured with every frame of its document blank", async () => {

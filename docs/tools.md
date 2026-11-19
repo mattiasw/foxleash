@@ -227,8 +227,10 @@ started in, normally the agent's working folder:
 
 Screenshots hide the text of password fields, of one-time code and card number fields that the
 page marks as such for autofill, and of text fields that Firefox filled in from your saved
-logins, addresses or cards, until you edit them (see
-[Protected fields](security.md#protected-fields)).
+logins, addresses or cards, until you edit them. They also hide the option of a drop-down that
+Firefox filled in from your saved addresses or cards, or shows in it while you highlight one of
+them in Firefox's menu (see [Protected fields](security.md#protected-fields) and
+[Screenshots](security.md#screenshots)).
 
 Some pages and frames cannot be captured:
 

@@ -303,9 +303,10 @@ Text results never return the values of these fields, only whether they are fill
   them.
 
 Firefox fills saved passwords into login pages when they load, and a page you approved could
-otherwise hand yours to the agent. A field that is none of these still shows its value. A drop-down
-that Firefox filled in from your saved addresses or cards, such as a card's expiry month or a
-country, also shows the option Firefox chose. The text of a network response that `read_network`
+otherwise hand yours to the agent. A field that is none of these still shows its value. In text
+results, a drop-down that Firefox filled in from your saved addresses or cards, such as a card's
+expiry month or a country, also shows the option Firefox chose; screenshots hide it (see
+[Screenshots](#screenshots)). The text of a network response that `read_network`
 returns, and a file that `download` saves, can still contain a protected field's value when the site
 sends it back (see [Response bodies](#response-bodies) and [Downloads](#downloads)).
 
@@ -421,6 +422,12 @@ it, such as a PDF in a frame. There are two exceptions:
 - a frame of another add-on, such as a password manager's menu, which Foxleash hides together
   with every other frame of the same page or frame, so none of their content is in the
   screenshot.
+
+A screenshot also hides the text of a drop-down that Firefox filled in from your saved addresses
+or cards, until its option changes, and the option Firefox shows in a drop-down while you
+highlight a saved address or card in Firefox's menu without choosing it. Text results give the
+option of a filled drop-down (see [Protected fields](#protected-fields)) and never a previewed
+one.
 
 When the page turns a password field into another kind of field after the agent read the page,
 took a screenshot of it or acted in it while it was a password field, a screenshot hides the

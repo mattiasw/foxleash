@@ -32,7 +32,10 @@ const MASK_DECLARATIONS: readonly string[] = [
   "transition: none !important",
 ];
 const MASK_BODY = `{ ${MASK_DECLARATIONS.join("; ")}; }`;
-/** read_page's protected fields (ADR 0010, 0021), but for the remembered password fields. */
+/**
+ * read_page's protected fields (ADR 0010, 0021), but for the remembered password fields, and the
+ * drop-downs Firefox filled in or previews, whose filled option read_page shows.
+ */
 const FIELD_SELECTORS: readonly string[] = [
   'input[type="password" i]',
   ...CREDENTIAL_TOKENS.flatMap((token) => [
@@ -41,6 +44,7 @@ const FIELD_SELECTORS: readonly string[] = [
   ]),
   "input:autofill",
   "textarea:autofill",
+  "select:autofill",
 ];
 
 /**

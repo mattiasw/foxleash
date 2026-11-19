@@ -156,6 +156,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an
   agent can no longer resize the window while Foxleash is asking you something for it.
+- Screenshots no longer show the option Firefox previews in a drop-down, such as a country or a
+  card's expiry month, while you highlight a saved address or card in Firefox's menu. They also
+  hide the option of a drop-down Firefox filled in from your saved addresses or cards.
 
 ## [0.5.0] - 2026-11-17
 

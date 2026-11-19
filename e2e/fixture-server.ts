@@ -81,6 +81,7 @@ export const TITLES = {
   autofill: "Fixture autofill",
   autofillFramed: "Fixture autofill framed",
   cardAutofill: "Fixture card autofill",
+  cardPreview: "Fixture card preview",
   protectedForm: "Fixture protected form",
   protectedSent: "Fixture protected sent",
   beforeUnload: "Fixture before unload",
@@ -334,6 +335,8 @@ export const PROTECTED_FORM_SECRETS = {
 } as const;
 /** The text colours of the card autofill page: the card number field's fill colour, and a plain field's. */
 export const CARD_AUTOFILL_COLOURS = { filled: [0, 112, 64], plain: [128, 0, 96] } as const;
+/** The text colours of the card preview page: the expiry drop-downs' and a plain drop-down's. */
+export const CARD_PREVIEW_COLOURS = { previewed: [208, 32, 0], plain: [0, 80, 112] } as const;
 /** The card the card autofill tests have Firefox fill into its page, digits only as Firefox fills it. */
 export const AUTOFILL_CARD = {
   name: "Ada Lovelace",
@@ -762,6 +765,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.end(AUTOFILL_FRAME_PAGE);
     } else if (path === "/card-autofill") {
       sendHtml(response, CARD_AUTOFILL_PAGE);
+    } else if (path === "/card-preview") {
+      sendHtml(response, CARD_PREVIEW_PAGE);
     } else if (path === "/protected-get") {
       sendHtml(response, PROTECTED_GET_PAGE);
     } else if (path === "/protected-get-handled") {
@@ -2653,6 +2658,46 @@ const CARD_AUTOFILL_PAGE = `<!doctype html>
 </form>
 <label for="plain-name">Plain name</label>
 <input id="plain-name" type="text" value="MMMM WWWW">
+</body></html>
+`;
+
+// A card form whose expiry drop-downs Firefox's form autofill identifies by their autocomplete
+// tokens. Their first, selected option is empty, so they draw no text until Firefox previews into
+// them. Firefox forces `color` on a field it fills or previews, so their colour is a
+// `-webkit-text-fill-color`. The plain drop-down outside the form is the control.
+const CARD_PREVIEW_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.cardPreview}</title>
+<style>${SHOT_FIELD_STYLE}
+select {
+  display: block; box-sizing: border-box; width: 320px; height: 44px; margin: 0 0 6px;
+  font: bold 24px monospace;
+}
+#preview-month, #preview-year { -webkit-text-fill-color: ${rgb(CARD_PREVIEW_COLOURS.previewed)}; }
+#plain-pick {
+  color: ${rgb(CARD_PREVIEW_COLOURS.plain)};
+  -webkit-text-fill-color: ${rgb(CARD_PREVIEW_COLOURS.plain)};
+}
+</style></head>
+<body>
+<form action="/a" method="post">
+<label for="preview-number">Card number</label>
+<input id="preview-number" type="text" autocomplete="cc-number">
+<label for="preview-month">Expiry month</label>
+<select id="preview-month" autocomplete="cc-exp-month">
+<option value="" selected></option>
+<option value="1">01</option><option value="2">02</option><option value="3">03</option>
+<option value="4">04</option><option value="5">05</option><option value="6">06</option>
+<option value="7">07</option><option value="8">08</option><option value="9">09</option>
+<option value="10">10</option><option value="11">11</option><option value="12">12</option>
+</select>
+<label for="preview-year">Expiry year</label>
+<select id="preview-year" autocomplete="cc-exp-year">
+<option value="" selected></option>
+<option>2038</option><option>2039</option><option>2040</option><option>2041</option>
+<option>2042</option>
+</select>
+</form>
+<select id="plain-pick" aria-label="Plain pick"><option>MMMM WWWW</option></select>
 </body></html>
 `;
 

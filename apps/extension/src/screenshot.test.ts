@@ -217,9 +217,11 @@ describe("the mask style sheets", () => {
       ]),
       "input:autofill",
       "textarea:autofill",
+      "select:autofill",
     ];
     assert.ok(fields.includes('input[*|autocomplete~="cc-number" i]'));
     assert.ok(fields.includes("input:autofill"));
+    assert.ok(fields.includes("select:autofill"));
     assert.deepEqual(rulesOf(FIELD_MASK_CSS), [
       { selectors: fields, declarations: DECLARATIONS },
       { selectors: fields.map((field) => `${field}::selection`), declarations: DECLARATIONS },
