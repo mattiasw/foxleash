@@ -7,7 +7,7 @@
 #      bin/check-test-markers.ts parses the base and head version of each changed one and
 #      refuses the markers the head adds; its header holds the rules. It needs node and the
 #      @babel/parser devDependency, and gate 2 fails without either.
-# BASE_REF=none skips the check (CI uses it for the first push of a branch).
+# BASE_REF=none skips the check.
 
 set -e
 

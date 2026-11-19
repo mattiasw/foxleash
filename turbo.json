@@ -39,6 +39,7 @@
         ".npmrc",
         "apps/extension/manifest.json",
         ".github/workflows/dependabot-automerge.yml",
+        ".github/workflows/ci.yml",
         "apps/server/src/**",
         "docs/amo/**",
         "README.md",

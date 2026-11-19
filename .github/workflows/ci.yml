@@ -39,6 +39,9 @@ jobs:
   validate:
     needs: gate-result
     if: ${{ !cancelled() && needs.gate-result.outputs.passed != 'true' }}
+    permissions:
+      contents: read
+      actions: read
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -53,10 +56,22 @@ jobs:
       - run: npm run check:release -- changelog
       - run: npm run check:release -- listing
       - run: npm run check:release -- protocol
+      # A pull request compares with its base branch. Every other run compares with the newest commit
+      # in its history that has a successful CI run, so a cancelled run or a gate branch's first push
+      # leaves no commit unchecked (github.event.before does not).
+      - name: Find the commit the test integrity check compares with
+        id: integrity-base
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          BASE=$(node bin/ci-integrity-base.ts)
+          echo "sha=$BASE" >> "$GITHUB_OUTPUT"
       - name: Test integrity
         run: npm run check:test-integrity
         env:
-          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'none' }}
+          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || steps.integrity-base.outputs.sha }}
       - run: npm run typecheck
       - run: npm test
       - run: npm run build

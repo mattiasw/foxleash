@@ -42,6 +42,10 @@ The repository is an npm workspaces monorepo run by Turborepo:
 CI (`.github/workflows/ci.yml`) runs them on pushes to `main` and `gate/**` branches, on pull
 requests and on demand. A push to `main` of a commit whose CI already passed on a `gate/`
 branch skips them: a first job finds that green run, and the run passes without testing again.
+The test-integrity check compares a pull request with its base branch, and every other run with
+the newest commit in its history that has a successful CI run, read from the GitHub API, so a
+cancelled run or a `gate/` branch's first push leaves no commit unchecked. The step fails when it
+cannot find that commit among the newest 100 successful runs.
 
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
