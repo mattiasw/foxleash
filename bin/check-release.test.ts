@@ -186,6 +186,10 @@ const FIXTURE_MANIFEST = {
 const FIXTURE_LISTING = [
   "# AMO listing",
   "",
+  "## Summary",
+  "",
+  "Lets an agent use Firefox.",
+  "",
   "## Description",
   "",
   "Foxleash lets an agent use Firefox.",
@@ -1559,6 +1563,15 @@ describe("listing", () => {
     return structuredClone(FIXTURE_CLAIMS);
   }
 
+  /** Pads `line` with 🦊, one character but two UTF-16 code units, to a `length`-character body. */
+  function padSection(heading: string, line: string, length: number) {
+    return (text: string): string => {
+      const start = text.indexOf(`${heading}\n`) + heading.length + 1;
+      const body = text.slice(start, text.indexOf("\n## ", start)).trim();
+      return text.replace(line, `${line} ${"🦊".repeat(length - [...body].length - 1)}`);
+    };
+  }
+
   const notJson = /^listing claims: docs\/amo\/listing-claims\.json is not JSON: /;
   const missingCookies =
     'the manifest requests "cookies", but the Permissions section of docs/amo/listing.md has no "- cookies:" bullet';
@@ -1599,7 +1612,7 @@ describe("listing", () => {
     assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
       'docs/amo/listing-claims.json: the capability "open windows" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
       'docs/amo/listing-claims.json: "acts only on approved tabs" does not occur in docs/amo/listing.md',
-      'docs/amo/listing.md line 9 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 13 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1610,8 +1623,8 @@ describe("listing", () => {
         .replace("as untrusted.", "as untrusted.\n- Uploads are limited."),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 11 "take screenshots." has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 17 "Uploads are limited." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 15 "take screenshots." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 21 "Uploads are limited." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1622,7 +1635,7 @@ describe("listing", () => {
     read.listing = "lets an agent use Firefox";
     assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
       'docs/amo/listing-claims.json: the capability "lets an agent use Firefox" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
-      'docs/amo/listing.md line 10 "read pages." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 14 "read pages." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1642,8 +1655,8 @@ describe("listing", () => {
         .replace("as untrusted.", "as untrusted.\n- It can read pages only in approved tabs."),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 11 "acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 17 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 15 "acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 21 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1652,7 +1665,7 @@ describe("listing", () => {
       text.replace("as untrusted.", "as untrusted.\n* It can run code from any page."),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 16 "It can run code from any page." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 20 "It can run code from any page." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1671,7 +1684,7 @@ describe("listing", () => {
       ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 12 "run code from the page." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 16 "run code from the page." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -2031,7 +2044,7 @@ describe("listing", () => {
       missingCookies,
       'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
       'the manifest requests "downloads", but the Permissions section of docs/amo/listing.md has no "- downloads:" bullet',
-      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
       'the manifest declares the data collection category "locationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(locationInfo)"',
       'the manifest declares the data collection category "authenticationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(authenticationInfo)"',
     ]);
@@ -2073,6 +2086,35 @@ describe("listing", () => {
     ]);
   });
 
+  test("the Summary, the add-on's summary, holds at most 250 characters", () => {
+    const padded = (length: number) =>
+      padSection("## Summary", "Lets an agent use Firefox.", length);
+    assertClean(listing(withListing(firstReleaseTree(), padded(250))));
+    assert.deepEqual(texts(listing(withListing(firstReleaseTree(), padded(251))), "FAIL"), [
+      "the Summary section of docs/amo/listing.md is 251 characters, but AMO takes at most 250 as the add-on's summary: shorten it",
+    ]);
+  });
+
+  test("the Description, the add-on's description, holds at most 15000 characters", () => {
+    const padded = (length: number) =>
+      padSection("## Description", "Foxleash lets an agent use Firefox.", length);
+    assertClean(listing(withListing(firstReleaseTree(), padded(15000))));
+    assert.deepEqual(texts(listing(withListing(firstReleaseTree(), padded(15001))), "FAIL"), [
+      "the Description section of docs/amo/listing.md is 15001 characters, but AMO takes at most 15000 as the add-on's description: shorten it",
+    ]);
+  });
+
+  test("a listing without a Summary or a Description section fails", () => {
+    for (const heading of ["## Summary", "## Description"]) {
+      const tree = withListing(firstReleaseTree(), (text) =>
+        text.replace(`${heading}\n`, `${heading} here\n`),
+      );
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        `docs/amo/listing.md has no "${heading}" section`,
+      ]);
+    }
+  });
+
   test("a bullet outside the Permissions section explains no permission", () => {
     const tree = withListing(
       withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] }),
@@ -2094,9 +2136,9 @@ describe("listing", () => {
       "apps/extension/manifest.json: host_permissions must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.required must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.optional must be absent or an array of strings",
-      'docs/amo/listing.md line 21 explains the permission "tabs", which the manifest does not request',
-      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
-      'docs/amo/listing.md line 23 explains the permission "<all_urls>", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "tabs", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 27 explains the permission "<all_urls>", which the manifest does not request',
     ]);
   });
 
@@ -2146,8 +2188,8 @@ describe("listing", () => {
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       "registered tools: no tools scripted in the test",
       'docs/amo/listing-claims.json: the capability "open every tab" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
-      'docs/amo/listing.md line 9 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 11 "take screenshots." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 13 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 15 "take screenshots." has no claim in docs/amo/listing-claims.json',
       'safeguard "The approval can only come from your click" has no evidence in the build yet',
       missingCookies,
     ]);
@@ -4414,7 +4456,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     const findings = listingAt(dir);
     assert.deepEqual(texts(findings, "FAIL"), [
-      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
     const lines = texts(findings, "INFO");
@@ -4445,7 +4487,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     git(dir, "update-ref", "refs/v0.1.0", "HEAD");
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });
@@ -4459,7 +4501,7 @@ describe("real git", () => {
     assert.ok(texts(findings, "INFO").includes('-    "storage"'));
     write(dir, { [LISTING]: FIXTURE_LISTING });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 22 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });

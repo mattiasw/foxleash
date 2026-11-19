@@ -137,7 +137,11 @@ const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
 const PERMISSIONS_HEADING = "## Permissions";
-const APPROVAL_NOTES_MAX = 3000;
+const SECTION_CAPS = [
+  { heading: "## Summary", max: 250, field: "the add-on's summary" },
+  { heading: "## Description", max: 15000, field: "the add-on's description" },
+  { heading: PERMISSIONS_HEADING, max: 3000, field: "a version's notes to reviewers" },
+];
 const DATA_HEADING = "## Data collection and handling";
 const PERMISSION_KEYS = [
   "permissions",
@@ -394,7 +398,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   if (listing !== undefined && manifest !== undefined) {
     checkPermissionsExplained(listing, manifest, findings);
   }
-  if (listing !== undefined) checkApprovalNotesLength(listing, findings);
+  if (listing !== undefined) checkSectionLengths(listing, findings);
   checkListingDrift(env, tag, manifest, findings);
 }
 
@@ -741,23 +745,27 @@ function sectionLines(
   return section;
 }
 
-/** The Permissions body is each version's approval_notes, which AMO caps in characters. */
-function checkApprovalNotesLength(listing: string, findings: Finding[]): void {
-  // A missing section is already a FAIL of checkPermissionsExplained.
-  const section = sectionLines(listing.split(/\r?\n/), PERMISSIONS_HEADING, []);
-  if (section === undefined) return;
-  const length = [
-    ...section
-      .map((line) => line.text)
-      .join("\n")
-      .trim(),
-  ].length;
-  if (length > APPROVAL_NOTES_MAX) {
-    findings.push(
-      fail(
-        `the Permissions section of ${LISTING} is ${length} characters, but AMO takes at most ${APPROVAL_NOTES_MAX} as a version's notes to reviewers: shorten it`,
-      ),
-    );
+/** Each pasted section fills an AMO field that AMO caps in characters (code points). */
+function checkSectionLengths(listing: string, findings: Finding[]): void {
+  const all = listing.split(/\r?\n/);
+  for (const cap of SECTION_CAPS) {
+    // A missing Permissions section is already a FAIL of checkPermissionsExplained.
+    const missing = cap.heading === PERMISSIONS_HEADING ? [] : findings;
+    const section = sectionLines(all, cap.heading, missing);
+    if (section === undefined) continue;
+    const length = [
+      ...section
+        .map((line) => line.text)
+        .join("\n")
+        .trim(),
+    ].length;
+    if (length > cap.max) {
+      findings.push(
+        fail(
+          `the ${cap.heading.slice(3)} section of ${LISTING} is ${length} characters, but AMO takes at most ${cap.max} as ${cap.field}: shorten it`,
+        ),
+      );
+    }
   }
 }
 

@@ -1,10 +1,13 @@
 # Foxleash
 
-Let an AI agent on your computer, such as Claude Code, use your own Firefox.
+Let an AI agent on your computer, such as Claude Code, use your own Firefox for you.
 
-Foxleash gives the agent tools to open tabs, read pages, click, type, fill in forms, take
-screenshots and read the console and network activity, in your normal Firefox profile with
-your logins. It works with any MCP client; it contains no AI model itself.
+The agent opens tabs and, on the sites you approve, reads pages, clicks, types, fills in
+forms, takes screenshots and reads the console and network activity, in your normal Firefox
+profile with your logins. Foxleash contains no AI model and does nothing on its own: its
+Firefox extension works together with the Foxleash program, which you install separately
+and which needs Node.js 24 or later, and with an AI agent, all on the same computer. It
+works with any MCP client.
 
 **Status:** in development, not released yet. Linux only.
 
