@@ -48,9 +48,11 @@ line of counts (and, where coverage is measured, a line of coverage totals), a f
 printed in full with the output the tests wrote, and a missed coverage floor prints the
 per-file coverage table. Every run also prints the diagnostics tests report with
 `t.diagnostic` (the end-to-end tests use them for timings); one from a test inside a
-`describe` or another test starts with its test file's name. Set `FOXLEASH_TEST_REPORTER=spec`
-(or any other `--test-reporter` value) for Node's per-test output, for example
-`FOXLEASH_TEST_REPORTER=spec npm test`.
+`describe` or another test starts with its test file's name. A run ended by SIGINT or SIGTERM
+(Ctrl-C, or CI's time limit) prints each test file that was running with the test that was
+running in it, or the test after which its hooks or teardown were running, then the failures
+so far. Set `FOXLEASH_TEST_REPORTER=spec` (or any other `--test-reporter` value) for Node's
+per-test output, for example `FOXLEASH_TEST_REPORTER=spec npm test`.
 
 The server's TypeScript runs directly on Node (type stripping), so it has no build step.
 Running Node with `--preserve-symlinks` breaks this for the workspace packages: Node
@@ -87,9 +89,10 @@ validates".
 `FOXLEASH_E2E_SHARD=<index>/<total> npm run e2e`, for example `FOXLEASH_E2E_SHARD=2/3`, runs
 only that shard of the test files, through Node's `--test-shard`, which sorts the test files
 and deals them out round-robin. CI runs the suite on both pins, as three shards each, in six
-parallel jobs. The shard must go through the variable: `npm run e2e -- --test-shard=2/3` puts
-the flag after the test file pattern, where Node reads it as one more pattern and runs every
-file.
+parallel jobs. Each job's end-to-end step stops itself after 15 minutes, inside the job's
+20-minute limit, so a hung run ends with the report above of what was running. The shard must
+go through the variable: `npm run e2e -- --test-shard=2/3` puts the flag after the test file
+pattern, where Node reads it as one more pattern and runs every file.
 
 The tests also act in the extension's own pages, which WebDriver reaches only with system
 access, so the test Firefox starts with `--marionette` and `--remote-allow-system-access`

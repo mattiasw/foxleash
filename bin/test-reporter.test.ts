@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { once } from "node:events";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 
 // Each case runs a real `node --test` with this reporter over fixture test files in a temp
 // directory, as the package test scripts do.
@@ -84,6 +86,72 @@ describe("test reporter", () => {
         "",
       ].join("\n"),
     );
+    writeFileSync(
+      join(dir, "hung-test.test.ts"),
+      [
+        'import assert from "node:assert/strict";',
+        'import { describe, test } from "node:test";',
+        'describe("hung suite", () => {',
+        '  test("fails first", () => {',
+        '    assert.fail("failed before the hang");',
+        "  });",
+        '  test("never ends", async () => {',
+        "    setInterval(() => {}, 1000);",
+        "    await new Promise(() => {});",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "hung-hook.test.ts"),
+      [
+        'import { after, describe, test } from "node:test";',
+        'describe("hooked suite", () => {',
+        "  after(async () => {",
+        "    setInterval(() => {}, 1000);",
+        "    await new Promise(() => {});",
+        "  });",
+        '  test("passes", () => {});',
+        "});",
+        "",
+      ].join("\n"),
+    );
+    writeFileSync(
+      join(dir, "hung-loud.test.ts"),
+      [
+        'import assert from "node:assert/strict";',
+        'import { describe, test } from "node:test";',
+        'describe("loud suite", () => {',
+        "  for (let i = 0; i < 300; i += 1) {",
+        '    test("fails " + i, () => {',
+        '      console.log("x".repeat(2000));',
+        '      assert.fail("failure " + i);',
+        "    });",
+        "  }",
+        '  test("never ends", async () => {',
+        "    setInterval(() => {}, 1000);",
+        "    await new Promise(() => {});",
+        "  });",
+        "});",
+        "",
+      ].join("\n"),
+    );
+    // A second reporter, fed by the same parent process: once a line is in its file, the reporter
+    // under test has seen that event too.
+    writeFileSync(
+      join(dir, "progress.mjs"),
+      [
+        "export default async function* progress(source) {",
+        "  for await (const event of source) {",
+        '    if (event.type === "test:dequeue" || event.type === "test:complete") {',
+        '      yield event.type + " " + event.data.name + "\\n";',
+        "    }",
+        "  }",
+        "}",
+        "",
+      ].join("\n"),
+    );
   });
 
   after(() => {
@@ -91,12 +159,54 @@ describe("test reporter", () => {
   });
 
   function run(...args: string[]) {
-    const { NODE_TEST_CONTEXT: _, ...env } = process.env;
     return spawnSync(process.execPath, ["--test", `--test-reporter=${REPORTER}`, ...args], {
       cwd: dir,
       encoding: "utf8",
-      env,
+      env: testEnv(),
     });
+  }
+
+  /** Runs `fixture`, sends SIGTERM once the run has reported `line`, and returns its stdout. */
+  async function interrupted(line: string, fixture: string): Promise<string> {
+    const progress = join(dir, `${fixture}.progress`);
+    const child = spawn(
+      process.execPath,
+      [
+        "--test",
+        `--test-reporter=${REPORTER}`,
+        "--test-reporter-destination=stdout",
+        "--test-reporter=./progress.mjs",
+        `--test-reporter-destination=${progress}`,
+        fixture,
+      ],
+      { cwd: dir, env: testEnv(), timeout: 30_000 },
+    );
+    let stdout = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    const closed = once(child, "close");
+    try {
+      await waitForLine(progress, line);
+    } finally {
+      child.kill("SIGTERM");
+      await closed;
+    }
+    return stdout;
+  }
+
+  async function waitForLine(file: string, line: string): Promise<void> {
+    const deadline = Date.now() + 20_000;
+    while (!existsSync(file) || !readFileSync(file, "utf8").split("\n").includes(line)) {
+      if (Date.now() > deadline) throw new Error(`no "${line}" in ${file}`);
+      await sleep(20);
+    }
+  }
+
+  function testEnv(): NodeJS.ProcessEnv {
+    const { NODE_TEST_CONTEXT: _, ...env } = process.env;
+    return env;
   }
 
   test("a green run prints only the counts and the coverage totals", () => {
@@ -184,5 +294,37 @@ describe("test reporter", () => {
       /✖ Error: 50\.00% function coverage does not meet threshold of 90%\.\n/,
     );
     assert.doesNotMatch(result.stdout, /captured test output|chatter/);
+  });
+
+  test("a run ended by a signal prints the failures so far and the test that was running", async () => {
+    const stdout = await interrupted("test:dequeue never ends", "hung-test.test.ts");
+    const file = join(dir, "hung-test.test.ts");
+    assert.match(stdout, new RegExp(`✖ hung suite > fails first \\(${file}`));
+    assert.match(stdout, /failed before the hang/);
+    assert.ok(
+      stdout.startsWith(
+        "\nInterrupted while running:\n  hung-test.test.ts: hung suite > never ends\n\n✖ ",
+      ),
+      stdout,
+    );
+  });
+
+  test("a run ended by a signal names the running test even when its failures fill the pipe", async () => {
+    const stdout = await interrupted("test:dequeue never ends", "hung-loud.test.ts");
+    assert.ok(
+      stdout.startsWith(
+        "\nInterrupted while running:\n  hung-loud.test.ts: loud suite > never ends\n",
+      ),
+      stdout.slice(0, 2000),
+    );
+    assert.match(stdout, /✖ loud suite > fails 0 \(/);
+  });
+
+  test("a run ended by a signal in a suite's after hook points at the hooks after its last test", async () => {
+    const stdout = await interrupted("test:complete passes", "hung-hook.test.ts");
+    assert.equal(
+      stdout,
+      "\nInterrupted while running:\n  hung-hook.test.ts: after hooked suite > passes, a hook or the file's teardown (the file did not exit)\n",
+    );
   });
 });

@@ -87,7 +87,9 @@ jobs:
           key: firefox-${{ runner.os }}-${{ matrix.firefox }}-${{ hashFiles(matrix.firefox == 'esr' && 'bin/firefox-esr-version.json' || 'bin/firefox-version.json') }}
       # The shard goes through the environment: npm appends arguments after the test file glob.
       # The 3 is the shard count per Firefox, not strategy.job-total, which counts both pins' jobs.
-      - run: npm run e2e
+      # A limit of its own, inside the job's 20 minutes, ends a hung run with SIGTERM so that the
+      # test reporter prints what was running.
+      - run: timeout --signal=TERM --kill-after=30s 15m npm run e2e
         env:
           FOXLEASH_E2E_FIREFOX: ${{ matrix.firefox }}
           FOXLEASH_E2E_SHARD: ${{ matrix.shard }}/3

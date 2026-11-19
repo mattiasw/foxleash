@@ -5,6 +5,10 @@
 //
 // Test stdout and stderr are replayed only when something failed: a test file that crashes
 // while loading reaches the reporter as a bare "test failed", with the real error on stderr.
+//
+// A run ended by SIGINT or SIGTERM prints, at once, for each running file, the test that was
+// running or the test after which its hooks or teardown were running, then the failures so far:
+// the runner exits before the run's events end, so the end-of-run output never comes.
 import { relative } from "node:path";
 import { Readable } from "node:stream";
 import { spec, type TestEvent } from "node:test/reporters";
@@ -12,16 +16,21 @@ import { inspect } from "node:util";
 
 type Failure = Extract<TestEvent, { type: "test:fail" }>["data"];
 type Coverage = Extract<TestEvent, { type: "test:coverage" }>;
+type Failed = { path: string; failure: Failure };
+// `running` holds the tests that started and have not ended, outermost first; `ended` the path of
+// the test that ended last, while no test has started after it.
+type Progress = { running: string[]; ended: string | undefined };
 
 // The closing counts arrive as one diagnostic each ("tests 812", "pass 812", ...).
 const COUNT = /^(tests|suites|pass|fail|cancelled|skipped|todo|duration_ms) \S+$/;
 
 export default async function* report(source: AsyncIterable<TestEvent>): AsyncGenerator<string> {
-  const failures: { path: string; failure: Failure }[] = [];
+  const failures: Failed[] = [];
   const counts: string[] = [];
   const notes: string[] = [];
   const output: string[] = [];
   const running = new Map<string, string[]>();
+  const progress = new Map<string, Progress>();
   let rootError = false;
   let coverage: Coverage | undefined;
   for await (const event of source) {
@@ -32,6 +41,22 @@ export default async function* report(source: AsyncIterable<TestEvent>): AsyncGe
         running.set(event.data.file ?? "", names);
         break;
       }
+      case "test:dequeue": {
+        const file = progressOf(progress, event.data.file ?? "");
+        file.running = [...file.running.slice(0, event.data.nesting), event.data.name];
+        file.ended = undefined;
+        break;
+      }
+      case "test:complete": {
+        const file = progressOf(progress, event.data.file ?? "");
+        file.ended = [...file.running.slice(0, event.data.nesting), event.data.name].join(" > ");
+        break;
+      }
+      case "test:interrupted":
+        // Nothing arrives after this event, and the runner exits after one turn of the event loop.
+        // A pipe takes only the first 64 to 128 KiB by then, so what was running comes first.
+        yield interruptReport(event.data.tests, progress) + failureReport(failures, output);
+        break;
       case "test:stdout":
       case "test:stderr":
         output.push(event.data.message);
@@ -68,18 +93,48 @@ export default async function* report(source: AsyncIterable<TestEvent>): AsyncGe
         break;
     }
   }
-  for (const { path, failure } of failures) {
-    yield `\n✖ ${path}${location(failure)}\n`;
-    yield `${inspect(failure.details.error, { depth: 6, colors: false })}\n`;
-  }
-  if (failures.length > 0 && output.length > 0) {
-    yield `\n--- captured test output (stdout and stderr) ---\n${output.join("")}`;
-  }
-  if (failures.length > 0) yield "\n";
+  yield failureReport(failures, output);
   if (coverage !== undefined && rootError) yield await coverageTable(coverage);
   yield* notes;
   yield `ℹ ${counts.join(", ")}\n`;
   if (coverage !== undefined) yield `ℹ ${coverageTotals(coverage)}\n`;
+}
+
+function progressOf(progress: Map<string, Progress>, file: string): Progress {
+  const known = progress.get(file);
+  if (known !== undefined) return known;
+  const started: Progress = { running: [], ended: undefined };
+  progress.set(file, started);
+  return started;
+}
+
+function failureReport(failures: Failed[], output: string[]): string {
+  const parts: string[] = [];
+  for (const { path, failure } of failures) {
+    parts.push(`\n✖ ${path}${location(failure)}\n`);
+    parts.push(`${inspect(failure.details.error, { depth: 6, colors: false })}\n`);
+  }
+  if (failures.length > 0 && output.length > 0) {
+    parts.push(`\n--- captured test output (stdout and stderr) ---\n${output.join("")}`);
+  }
+  if (failures.length > 0) parts.push("\n");
+  return parts.join("");
+}
+
+function interruptReport(
+  tests: readonly { file?: string | undefined }[],
+  progress: Map<string, Progress>,
+): string {
+  const lines = tests.map(({ file = "" }) => {
+    const shown = relative(process.cwd(), file);
+    const at = progress.get(file);
+    if (at === undefined) return `  ${shown}\n`;
+    if (at.ended !== undefined) {
+      return `  ${shown}: after ${at.ended}, a hook or the file's teardown (the file did not exit)\n`;
+    }
+    return `  ${shown}: ${at.running.join(" > ")}\n`;
+  });
+  return `\nInterrupted while running:\n${lines.join("")}`;
 }
 
 function failureType(error: Error): unknown {
