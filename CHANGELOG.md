@@ -164,6 +164,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   blocklist, before Firefox requests it, so that site gets no request and none of your cookies; a
   download whose redirects pass through such a site, also on the way back to an approved one, now
   fails. `download` also refuses while Foxleash lacks access to all websites.
+- When the agent opens, reloads, or goes back or forward to an address that answers with a
+  redirect to a site on the blocklist, Foxleash now stops that redirect before Firefox sends it, so
+  the blocked site gets no request and none of your cookies, and the agent's call fails saying the
+  site is on the blocklist. A redirect to a site you have only not approved still loads, as before.
 
 ## [0.5.0] - 2026-11-17
 

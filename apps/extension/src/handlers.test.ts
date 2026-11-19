@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
+import { isDeepStrictEqual } from "node:util";
 import {
   DEFAULT_NETWORK_LIMIT,
   MAX_NETWORK_HEADER,
@@ -57,6 +58,7 @@ import {
   VIEW_READ_MS,
   VIEW_START_LIMIT_MS,
 } from "./handlers.ts";
+import { createLoadHops } from "./load-hops.ts";
 import { createNetworkLog, type NetworkReadOptions } from "./network-log.ts";
 import { PAGE_INJECTION_MS, PAGE_REPLY_MS } from "./page-scripts.ts";
 import { READ_PAGE_MAX_CHARS } from "./page-tree.ts";
@@ -3941,6 +3943,139 @@ describe("a load that ends in a file the file guard refuses", { timeout: 10000 }
   });
 });
 
+describe("a load redirected to a site on the blocklist", { timeout: 10000 }, () => {
+  it("fails tab_open at once, and closes the tab it made", async () => {
+    const { fake, timers, open, grant } = setup();
+    await grant("https://a.example");
+    const first = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const opening = open("s1", "https://a.example/go");
+    opening.catch(() => {});
+    const tabId = await begun(loads);
+    assert.notEqual(tabId, first.id);
+    await assertHopCancelled(fake, timers, tabId, opening);
+    await flush();
+    assert.deepEqual([...fake.tabs.keys()], [first.id]);
+  });
+
+  it("fails navigate to a URL at once, and keeps the tab on its page", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads = loadNothing(fake);
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/go" });
+    navigated.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(fake, timers, tab.id, navigated);
+    assert.deepEqual([...fake.tabs.keys()], [tab.id]);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/");
+  });
+
+  it("fails navigate reload at once", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads: number[] = [];
+    fake.browser.tabs.reload = async (tabId) => {
+      loads.push(tabId);
+      fake.emitStatus(tabId, "loading");
+    };
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails navigate reload of a tab Firefox unloaded at once", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/page");
+    await open("s1", "https://a.example/");
+    const fakeTab = fake.tabs.get(tab.id);
+    assert.ok(fakeTab);
+    fakeTab.discarded = true;
+    const loads = loadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails the load in place of a blank that a reload landed on at once", async () => {
+    const { fake, timers, call, open, sessions } = setup();
+    sessions.set("s1", state(["https://a.example"]));
+    const tab = await open("s1", "https://a.example/page");
+    reloadToBlank(fake);
+    const loads = loadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(fake, timers, tab.id, reloaded);
+  });
+
+  it("fails a step back at once", async () => {
+    const context = setup();
+    const tab = await historyTab(context);
+    const loads: number[] = [];
+    context.fake.browser.tabs.goBack = async (tabId) => {
+      loads.push(tabId);
+      context.fake.emitStatus(tabId, "loading");
+    };
+    const stepped = context.call("s1", "navigate", { tabId: tab.id, action: "back" });
+    stepped.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(context.fake, context.timers, tab.id, stepped);
+  });
+
+  it("fails the load of the address a step back did not load again at once", async () => {
+    const context = setup();
+    const tab = await historyTab(context);
+    const loads = loadNothing(context.fake);
+    recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const stepped = context.call("s1", "navigate", { tabId: tab.id, action: "back" });
+    stepped.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(context.fake, context.timers, tab.id, stepped);
+  });
+
+  it("fails the load that follows the user's approval at once", async () => {
+    const { fake, timers, call, open, page } = setup();
+    const tab = await open("s1");
+    const navigated = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/go" });
+    navigated.catch(() => {});
+    const shown = await page("s1");
+    const loads = loadNothing(fake);
+    shown.deliver({ type: "answer", answer: "once" });
+    assert.equal(await begun(loads), tab.id);
+    await assertHopCancelled(fake, timers, tab.id, navigated);
+  });
+
+  it("lets a redirect to a site that is only unapproved load, and returns that site only", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const update = fake.browser.tabs.update;
+    const answers: unknown[] = [];
+    fake.browser.tabs.update = async (tabId, properties) => {
+      const first = { ...pageRequest(tabId, "https://a.example/go"), requestId: "load" };
+      fake.emitWebRequest("onBeforeRequest", first);
+      const hop = { ...first, url: "https://c.example/landing?id=7" };
+      answers.push(...(await Promise.all(fake.emitWebRequest("onBeforeRequest", hop))));
+      return update(tabId, { ...properties, url: hop.url });
+    };
+    const result = await call("s1", "navigate", { tabId: tab.id, url: "https://a.example/go" });
+    assert.ok(answers.length > 0);
+    assert.ok(answers.every((answer) => answer === undefined));
+    assert.ok("tab" in result);
+    assert.deepEqual(result.tab, {
+      id: tab.id,
+      url: "https://c.example",
+      title: "",
+      active: true,
+    });
+  });
+});
+
 describe("a load that waits on Firefox's sign-in dialog", { timeout: 10000 }, () => {
   it("fails tab_open on a sign-in, and keeps the tab without selecting it", async () => {
     const { fake, timers, open, grant } = setup();
@@ -4142,6 +4277,35 @@ async function assertFileRefused(
   await assert.rejects(call, {
     code: "file_refused",
     message: `Tab ${tabId}'s load ended in a file from https://c.example, a site this session may not act on. Foxleash stopped it; nothing was saved. To get the file, the site must be approved first: tab_open or navigate to it asks the user, unless it is on the blocklist.`,
+  });
+  assert.equal(timers.now(), before);
+}
+
+/**
+ * The tab's top-level request, then a redirect hop of it to a blocklisted site: the hop is
+ * cancelled, and `call` fails saying so, naming the site only, with no time passed.
+ */
+async function assertHopCancelled(
+  fake: FakeBrowser,
+  timers: { now(): number },
+  tabId: number,
+  call: Promise<unknown>,
+): Promise<void> {
+  const before = timers.now();
+  const first = { ...pageRequest(tabId, "https://a.example/go"), requestId: "load" };
+  assert.deepEqual(fake.emitWebRequest("onBeforeRequest", first).filter(Boolean), []);
+  const answers = fake.emitWebRequest("onBeforeRequest", {
+    ...first,
+    url: "https://www.paypal.com/signin?return=1",
+  });
+  // A watch of an earlier load of the tab that saw no request, as no load of the fake sends one,
+  // judges it too.
+  const judged = await Promise.all(answers.filter(Boolean));
+  assert.ok(judged.length > 0);
+  assert.ok(judged.every((answer) => isDeepStrictEqual(answer, { cancel: true })));
+  await assert.rejects(call, {
+    code: "site_blocked",
+    message: `Tab ${tabId}'s load was redirected to https://www.paypal.com, which is on Foxleash's blocklist; Foxleash stopped it before anything was requested there.`,
   });
   assert.equal(timers.now(), before);
 }
@@ -10799,6 +10963,10 @@ function setup({
     access,
     now: () => timers.now(),
   });
+  // Its own clock: a wait that saw no request, as every load of the fake is, leaves a timer that
+  // would count among the handlers' pending ones.
+  const hopTimers = createFakeTimers();
+  const hops = createLoadHops({ browser: fake.browser, access, timers: hopTimers });
   const settle = createActSettle({
     browser: fake.browser,
     groups,
@@ -10823,6 +10991,7 @@ function setup({
     recordings,
     network,
     files,
+    hops,
     downloads,
     recipes,
     settle,

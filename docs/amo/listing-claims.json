@@ -62,6 +62,24 @@
       ]
     },
     {
+      "listing": "When the agent opens, reloads, or goes back or forward to an address that answers with a redirect to one of them, directly or after other redirects, Foxleash cancels that step before Firefox requests it",
+      "evidence": [
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "browser.webRequest.onBeforeRequest.addListener(onRequest, filter, [\"blocking\"]);"
+        },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "return view.blocked(url) ? hopBlocked(tabId, site) : undefined;"
+        },
+        {
+          "file": "apps/extension/src/wait-for-load.ts",
+          "contains": "const stopWatchingHops = hops?.watch(tabId, fail);"
+        },
+        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session)" }
+      ]
+    },
+    {
       "listing": "File uploads only read from allowed folders",
       "evidence": [
         { "file": "apps/server/src/upload-policy.ts", "contains": "/proc/self/fd/" },

@@ -52,7 +52,10 @@ export const SIGN_IN_GRACE_MS = 2000;
  * tab as it is. With `files`, every kind of wait fails at once with `file_refused` when the file
  * guard refuses a response in the tab's top frame while it runs: such a load commits no document,
  * so nothing else would tell the wait. That holds after the tab arrived too: a page that moves on
- * to such a file before the wait ends is reported, since no later result would say so. With a URL,
+ * to such a file before the wait ends is reported, since no later result would say so. With
+ * `hops`, every kind of wait fails at once with the error `hops` refuses with when it cancels a
+ * redirect hop of a top-level load in the tab while the wait runs, since such a load commits no
+ * document; `hops` is told to stop when the wait settles. With a URL,
  * the wait also fails with `sign_in_needed` `SIGN_IN_GRACE_MS` after a response to a top-level
  * request of the tab is a sign-in challenge (a 401 with WWW-Authenticate, a 407 with
  * Proxy-Authenticate) when no top-frame document commits, no new top-frame navigation starts and
@@ -73,12 +76,14 @@ export function waitForLoad<Handle>(
     commit = false,
     ready,
     files,
+    hops,
   }: {
     timeoutMs?: number;
     unloaded?: boolean;
     commit?: boolean;
     ready?: Pick<TabNavigations, "settled"> | undefined;
     files?: Pick<FileGuard, "onRefused">;
+    hops?: { watch(tabId: number, refuse: (error: ToolError) => void): () => void };
   } = {},
 ): Promise<Tab> {
   return new Promise((resolve, reject) => {
@@ -186,6 +191,7 @@ export function waitForLoad<Handle>(
         ),
       );
     });
+    const stopWatchingHops = hops?.watch(tabId, fail);
     let graceTimer = armGrace();
     // The load can finish before the navigation's promise settles, so nothing waits for it.
     (async () => navigate())().catch(fail);
@@ -297,6 +303,7 @@ export function waitForLoad<Handle>(
       browser.webNavigation.onCommitted.removeListener(onCommitted);
       browser.webRequest.onHeadersReceived.removeListener(onHeadersReceived);
       stopHearingRefusals?.();
+      stopWatchingHops?.();
       timers.clearTimeout(graceTimer);
       if (timeoutTimer !== undefined) timers.clearTimeout(timeoutTimer);
       if (readyTimer !== undefined) timers.clearTimeout(readyTimer);

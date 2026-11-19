@@ -79,7 +79,9 @@ anything other than a web page, such as a file Firefox would save, Foxleash stop
 agent's tabs, so nothing of it is saved or shown (see
 [Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)). When an address
 the agent opens answers with a redirect to another site, Firefox sends that site all your cookies
-for it, including those that a link from another site would not carry. A page's own
+for it, including those that a link from another site would not carry; Foxleash cancels such a
+redirect step to a site on the blocklist before it is sent (see [The blocklist](#the-blocklist)).
+A page's own
 scripts can also open an email address. Whatever the agent puts in an address, types or submits in
 a page goes to that site, and to wherever that page sends it, as it would if you did it yourself.
 
@@ -132,11 +134,32 @@ per line; a domain blocks itself and its subdomains. While your saved list diffe
 built-in one, Foxleash keeps it as it is: sites that a later version adds to the built-in list
 are not added to yours. The settings page's "Fill in the built-in list" button fills in the
 current built-in list for you to save. Foxleash checks the blocklist before it opens or reloads
-a page, and shows the agent a tab on a blocked site only as the site's address.
+a page and before each redirect step of a load the agent started, and shows the agent a tab on a
+blocked site only as the site's address.
+
+A load the agent started is one of `navigate` to an address, a reload, back or forward, and
+`tab_open`, also after you approved its site. When a redirect step of such a load leads to a
+blocked site, even one you approved, Foxleash cancels it before Firefox sends it, so that site
+gets no request and none of your cookies, and the call fails with `site_blocked`, naming only the
+site. This also covers a redirect that a site's service worker builds and Firefox's own upgrade of
+an address to `https://`. While the call waits, the redirect steps of a navigation the page starts
+by itself in that tab are checked the same way. Its limits:
+
+- A redirect step that comes after the call returned is still cancelled when it belongs to a load
+  that was under way then, however late it comes. When no load had started by then, as when a
+  page holds back the start of a reload, the tab's next load in the following 5 minutes is checked
+  as the agent's; a load held back longer is not.
+- Without Foxleash's access to all websites in Firefox's add-on settings, Firefox shows Foxleash
+  no request to a site outside the ones it may reach, so no such redirect step is cancelled.
+- Firefox hides requests to a few sites, such as addons.mozilla.org, from add-ons, so a redirect
+  step to one of them is not cancelled.
+- A redirect step to a site that is only not approved still loads; the agent then sees only that
+  site's address.
 
 Content a page on an approved site embeds from a blocked site can still show up in what the agent
 reads, and the ways that still reach a site you have not approved without asking can also reach
-a blocked site, even one you approved (see [Site approval](#site-approval)).
+a blocked site, even one you approved, except a redirect step of a load the agent started,
+described above (see [Site approval](#site-approval)).
 
 An entry is a domain or an IPv4 address; an IPv6 address cannot be entered. An IPv4 entry also
 covers the same address written as an IPv4-mapped IPv6 address, such as `[::ffff:192.168.1.1]`,

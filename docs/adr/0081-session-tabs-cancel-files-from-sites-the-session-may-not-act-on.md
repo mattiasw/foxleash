@@ -15,7 +15,11 @@ worker answers it, is cancelled and its file removed after the fact, and `upload
 file changed in the last 5 seconds. Amended by
 [0094](0094-file-guard-and-files-a-page-builds-itself.md), 2026-11-19: a Blob file that a page of
 such a site builds itself in a session's tab or frame is cancelled and its file removed after the
-fact; a `data:` file is not.
+fact; a `data:` file is not. Amended by
+[0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: the
+consequence "The request still reaches the other site, with the cookies Firefox sends for it" no
+longer holds for a redirect hop to a blocklisted site in a load the agent started, which is
+cancelled before it is sent.
 
 ## Context
 

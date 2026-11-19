@@ -136,6 +136,15 @@ address.
   returns, which Foxleash then cancels and removes. `tab_open` closes the tab it made, and a tab
   `navigate` used keeps its page.
   [Security](security.md#files-a-page-loads-in-the-agents-tabs) has the limits.
+- When the tab's load is redirected to a site on the blocklist, Foxleash cancels that redirect
+  step before Firefox sends it, and `tab_open` or `navigate` fails at once with `site_blocked`,
+  naming only that site. That holds for a reload and for going back or forward too, and for a
+  navigation the page starts by itself while the call waits. `tab_open` closes the tab it made,
+  unless it showed Foxleash's question about the site in that tab, which then stays on the
+  answered question; a tab `navigate` used keeps its page. A redirect to a site that is only not
+  approved still loads, and the tab comes back with only that site's address. Without
+  Foxleash's access to all websites, no such redirect step is seen or cancelled.
+  [Security](security.md#the-blocklist) has the limits.
 - When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
   to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that
   names the tab. The tab stays open with the dialog: Firefox selects it to show the dialog, even

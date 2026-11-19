@@ -4,7 +4,10 @@
 [0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md),
 [0019](0019-download-fetches-in-the-background-and-saves-through-downloads.md),
 [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md) and
-[0084](0084-download-fetches-an-http-address-over-http.md).
+[0084](0084-download-fetches-an-http-address-over-http.md). Amended by
+[0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: its
+hop cancelling is extended to the loads the agent starts in a session tab, for blocklisted sites
+only.
 
 ## Context
 

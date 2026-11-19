@@ -595,7 +595,7 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       { timeout: 60_000 },
     );
 
-    threeWays();
+    threeWays({ blocklisted: true });
   });
 
   describe("while the other site is approved", () => {
@@ -654,8 +654,11 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     assert.deepEqual(listed(), ["data.bin"]);
   });
 
-  /** The three ways a page of the approved site gets the other site's file loaded in its tab. */
-  function threeWays(): void {
+  /**
+   * The three ways a page of the approved site gets the other site's file loaded in its tab. With
+   * `blocklisted`, navigate's redirect step to the other site is cancelled before it is sent.
+   */
+  function threeWays({ blocklisted = false } = {}): void {
     test("a click on a link that redirects to the other site's file saves nothing, and its result says so", async () => {
       const page = await openLinks();
       const files = listed();
@@ -679,9 +682,16 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       });
       const elapsed = Date.now() - started;
       const message = untrustedContent(text);
-      assert.ok(fixtures.hits(EXPORT) > hits, "the other site was not asked for its file");
-      await assertNothingSaved(files, message === refusal(page.tabId));
-      assert.equal(message, refusal(page.tabId));
+      if (blocklisted) {
+        assert.equal(message, blockedHop(page.tabId));
+        // A redirect step Firefox sent after all would reach the server after the refusal.
+        await assertNothingSaved(files, false);
+        assert.equal(fixtures.hits(EXPORT), hits, "the other site was asked for its file");
+      } else {
+        assert.ok(fixtures.hits(EXPORT) > hits, "the other site was not asked for its file");
+        await assertNothingSaved(files, message === refusal(page.tabId));
+        assert.equal(message, refusal(page.tabId));
+      }
       assert.ok(elapsed < 10_000, `navigate took ${elapsed} ms`);
       // The tab kept its page.
       await assertNothingToUpload(page);
@@ -797,6 +807,11 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
   /** What navigate and tab_open say when the tab's load ended in the other site's file. */
   function refusal(tab: number | string): string {
     return `Tab ${tab}'s load ended in a file from ${other}, a site this session may not act on. Foxleash stopped it; nothing was saved. To get the file, the site must be approved first: tab_open or navigate to it asks the user, unless it is on the blocklist.`;
+  }
+
+  /** What navigate says when it cancelled its load's redirect step to the other site. */
+  function blockedHop(tab: number): string {
+    return `Tab ${tab}'s load was redirected to ${other}, which is on Foxleash's blocklist; Foxleash stopped it before anything was requested there.`;
   }
 
   async function tabIds(): Promise<number[]> {

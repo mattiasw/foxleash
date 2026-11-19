@@ -42,6 +42,7 @@ import { type Downloads, downloadNameProblem } from "./downloads.ts";
 import type { FileGuard } from "./file-guard.ts";
 import { foreignFramePlan } from "./foreign-frames.ts";
 import { watchFrameErrors } from "./frame-errors.ts";
+import type { LoadHops } from "./load-hops.ts";
 import type { NetworkLog, NetworkReadOptions } from "./network-log.ts";
 import {
   clickOptions,
@@ -130,6 +131,8 @@ export interface HandlerDeps<Handle> {
   downloads: Pick<Downloads, "save">;
   /** Tells a load's wait that its response was refused as a file. */
   files: Pick<FileGuard, "onRefused">;
+  /** Cancels a redirect hop to a blocklisted site in a load the agent started (ADR 0101). */
+  hops: Pick<LoadHops, "watch">;
   /** The session's recipe pages; `import type`, since it imports this file. */
   recipes: Pick<RecipePrompts, "propose" | "run" | "openPrompt" | "request">;
   /** Watches the page after an act; `import type`, since it imports this file. */
@@ -286,6 +289,7 @@ export function createHandlers<Handle>({
   network,
   downloads,
   files,
+  hops,
   recipes,
   settle,
   views,
@@ -437,7 +441,7 @@ export function createHandlers<Handle>({
           tab.id,
           url,
           () => browser.tabs.update(tab.id, { url, loadReplace: true }),
-          { unloaded: true, ready: navigations, files },
+          { unloaded: true, ready: navigations, files, hops: hopsOf(session) },
         ),
       );
     } catch (error) {
@@ -448,6 +452,13 @@ export function createHandlers<Handle>({
       throw error;
     }
     return selectNewTab(session, tab.id, generation);
+  }
+
+  /** What a load's wait needs to have the session's redirect hops judged (ADR 0101). */
+  function hopsOf(session: string): {
+    watch(tabId: number, refuse: (error: ToolError) => void): () => void;
+  } {
+    return { watch: (tabId, refuse) => hops.watch(session, tabId, refuse) };
   }
 
   /**
@@ -587,7 +598,12 @@ export function createHandlers<Handle>({
                 tabId,
                 target.kind === "url" ? target.url : undefined,
                 () => startNavigation(tabId, target),
-                { unloaded: tab.discarded === true, ready: navigations, files },
+                {
+                  unloaded: tab.discarded === true,
+                  ready: navigations,
+                  files,
+                  hops: hopsOf(session),
+                },
               );
         noteReturned(loaded);
         const shown =
@@ -831,7 +847,7 @@ export function createHandlers<Handle>({
         fragment
           ? () => browser.tabs.reload(tabId, { bypassCache: true })
           : () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true, files },
+        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true, files, hops: hopsOf(session) },
       );
     }
     return loaded;
@@ -1825,6 +1841,7 @@ export function createHandlers<Handle>({
               unloaded: tab.discarded === true,
               ready: target.kind === "url" ? navigations : undefined,
               files,
+              hops: hopsOf(session),
             },
           );
     noteReturned(loaded);
@@ -1861,7 +1878,7 @@ export function createHandlers<Handle>({
         tabId,
         url,
         () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { unloaded: true, files },
+        { unloaded: true, files, hops: hopsOf(session) },
       );
     }
     // No URL to wait for: the reload loads whichever entry Firefox reloads.
@@ -1871,7 +1888,7 @@ export function createHandlers<Handle>({
       tabId,
       undefined,
       () => browser.tabs.reload(tabId, { bypassCache: true }),
-      { files },
+      { files, hops: hopsOf(session) },
     );
     // A reload cut off by its timeout gets no second wait.
     if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;
@@ -1897,7 +1914,7 @@ export function createHandlers<Handle>({
       tabId,
       url,
       () => browser.tabs.update(tabId, { url, loadReplace: true }),
-      { timeoutMs: BLANK_RELOAD_TIMEOUT_MS, files },
+      { timeoutMs: BLANK_RELOAD_TIMEOUT_MS, files, hops: hopsOf(session) },
     );
   }
 

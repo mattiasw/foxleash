@@ -7,7 +7,10 @@ rejected alternative "Response bodies" of
 [0073](0073-response-capture-never-disconnects-after-the-start.md), 2026-11-17. Amended by
 [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19:
 "it never blocks or changes a request" gains the exception of a download's redirect hop to a site
-the session may not act on, which is cancelled.
+the session may not act on, which is cancelled. Amended by
+[0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: it
+also gains the exception of a redirect hop to a blocklisted site in a load the agent started in a
+session tab, which is cancelled.
 
 ## Context
 

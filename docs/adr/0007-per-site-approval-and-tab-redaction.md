@@ -1,6 +1,8 @@
 # 0007: A session acts only on sites the user approved, and sees other tabs redacted to their site
 
-**Status:** Accepted, 2026-10-19.
+**Status:** Accepted, 2026-10-19. Amended by [0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: a redirect from an approved page
+to a site on the blocklist, in a load the agent started, is cancelled before it is sent rather
+than accepted with redaction.
 
 ## Context
 

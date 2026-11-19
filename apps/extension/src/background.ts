@@ -7,6 +7,7 @@ import { createFileGuard } from "./file-guard.ts";
 import { watchInstall } from "./first-run.ts";
 import { createHandlers } from "./handlers.ts";
 import { createIndicator } from "./indicator.ts";
+import { createLoadHops } from "./load-hops.ts";
 import { createNetworkLog } from "./network-log.ts";
 import { createPageScripts } from "./page-scripts.ts";
 import { createPageViews } from "./page-view.ts";
@@ -59,6 +60,7 @@ const recordings = createConsoleRecording({
 });
 const network = createNetworkLog({ browser, groups, access, now: () => Date.now() });
 const files = createFileGuard({ browser, groups, access, now: () => Date.now() });
+const hops = createLoadHops({ browser, access, timers });
 const views = createPageViews({ browser, groups, access });
 const navigations = createTabNavigations({ browser, timers });
 const pages = createPageScripts({ browser, groups, access, timers, navigations });
@@ -97,6 +99,7 @@ const handleRequest = createHandlers({
   recordings,
   network,
   files,
+  hops,
   downloads,
   recipes,
   settle,

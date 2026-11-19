@@ -30,6 +30,7 @@ apps/extension/src/handlers.ts
 apps/extension/src/indicator.ts
 apps/extension/src/line-diff.ts
 apps/extension/src/live-documents.ts
+apps/extension/src/load-hops.ts
 apps/extension/src/log.ts
 apps/extension/src/network-log.ts
 apps/extension/src/options.html

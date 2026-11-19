@@ -1711,6 +1711,102 @@ describe("waitForLoad", { timeout: 10000 }, () => {
     });
   });
 
+  describe("with the redirect hop watch", () => {
+    const blocked = new ToolError("site_blocked", "Tab 1's load was redirected.");
+    const waits: [string, string | undefined, { commit?: boolean }][] = [
+      ["a load of a URL", "https://a.example/next", {}],
+      ["a load whose URL is not known", undefined, {}],
+      ["a load that must commit", undefined, { commit: true }],
+    ];
+    for (const [name, url, options] of waits) {
+      it(`fails ${name} at once with the error of a cancelled hop`, async () => {
+        const { fake, timers, tab } = setup();
+        const { hops, refuse, watched, stops } = hopWatch();
+        const wait = track(
+          waitForLoad(
+            fake.browser,
+            timers,
+            tab.id,
+            url,
+            async () => fake.emitStatus(tab.id, "loading"),
+            { ...options, hops },
+          ),
+        );
+        await flush();
+        assert.equal(wait.done(), false);
+        assert.deepEqual(watched, [tab.id]);
+        refuse(blocked);
+        await assert.rejects(wait.promise, blocked);
+        assert.equal(stops(), 1);
+        assertCleanedUp(fake, timers);
+      });
+    }
+
+    it("watches the tab before the navigation starts", async () => {
+      const { fake, timers, tab } = setup();
+      const { hops, watched } = hopWatch();
+      const seen: number[][] = [];
+      await waitForLoad(
+        fake.browser,
+        timers,
+        tab.id,
+        "https://b.example/",
+        async () => {
+          seen.push([...watched]);
+          await fake.browser.tabs.update(tab.id, { url: "https://b.example/" });
+        },
+        { hops },
+      );
+      assert.deepEqual(seen, [[tab.id]]);
+    });
+
+    it("stops the watch once when the wait ends with the tab", async () => {
+      const { fake, timers, tab } = setup();
+      const { hops, stops } = hopWatch();
+      await waitForLoad(
+        fake.browser,
+        timers,
+        tab.id,
+        "https://b.example/",
+        () => fake.browser.tabs.update(tab.id, { url: "https://b.example/" }),
+        { hops },
+      );
+      assert.equal(stops(), 1);
+    });
+
+    it("stops the watch once when the navigation fails", async () => {
+      const { fake, timers, tab } = setup();
+      const { hops, stops } = hopWatch();
+      const error = new Error("No tab with id");
+      await assert.rejects(
+        waitForLoad(fake.browser, timers, tab.id, undefined, () => Promise.reject(error), {
+          hops,
+        }),
+        error,
+      );
+      assert.equal(stops(), 1);
+    });
+
+    it("stops the watch once when the wait ends at its timeout", async () => {
+      const { fake, timers, tab } = setup();
+      const { hops, stops } = hopWatch();
+      const wait = waitForLoad(
+        fake.browser,
+        timers,
+        tab.id,
+        "https://a.example/next",
+        async () => fake.emitStatus(tab.id, "loading"),
+        { hops },
+      );
+      wait.catch(() => {});
+      await flush();
+      assert.equal(stops(), 0);
+      timers.advance(LOAD_TIMEOUT_MS);
+      await assert.rejects(wait, { code: "navigation_timeout" });
+      assert.equal(stops(), 1);
+    });
+  });
+
   describe("with Firefox's sign-in dialog", () => {
     const url = "https://a.example/private";
 
@@ -2064,6 +2160,27 @@ function signInRegistrations(fake: FakeBrowser) {
   return fake
     .activeWebRequestRegistrations()
     .filter((registration) => registration.event === "onHeadersReceived");
+}
+
+/** A redirect hop watch whose cancels a test fires. */
+function hopWatch() {
+  const watched: number[] = [];
+  let refuse: (error: ToolError) => void = () => assert.fail("not watching");
+  let stops = 0;
+  return {
+    hops: {
+      watch: (tabId: number, onRefuse: (error: ToolError) => void) => {
+        watched.push(tabId);
+        refuse = onRefuse;
+        return () => {
+          stops += 1;
+        };
+      },
+    },
+    refuse: (error: ToolError) => refuse(error),
+    watched,
+    stops: () => stops,
+  };
 }
 
 /** A file guard's `onRefused` whose refusals a test fires. */

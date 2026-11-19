@@ -257,7 +257,8 @@ gave it, for example as an image. In the first two, the agent then sees only tha
 and Foxleash stops the load when that site answers with anything other than a web page; the request
 still reaches that site. When an address the agent opens answers with a redirect to another site,
 Firefox sends that site all your cookies for it, including those that a link from another site
-would not carry.
+would not carry, unless that site is on the blocklist: Foxleash then cancels that step before it
+is sent.
 Asking before opening a site you have not approved and refusing clicks that lead to another site
 cover where the tab goes: they make it harder to send what the agent read to another site, not
 impossible.

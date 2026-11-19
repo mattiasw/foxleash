@@ -12,6 +12,7 @@ import {
 } from "./fake-browser.ts";
 import { createFileGuard } from "./file-guard.ts";
 import { createHandlers, NAVIGATION_WAIT_MS, ToolError } from "./handlers.ts";
+import { createLoadHops } from "./load-hops.ts";
 import {
   handlePageMessage,
   MAX_PAGE_REPLY_CHARS,
@@ -1750,6 +1751,8 @@ function setup() {
   const access = createSiteAccess({ browser: fake.browser, groups, sessions, timers });
   const navigations = createTabNavigations({ browser: fake.browser, timers });
   const files = createFileGuard({ browser: fake.browser, groups, access, now: () => Date.now() });
+  // Its own clock, so the timer a wait that saw no request leaves is not among the pending ones.
+  const hops = createLoadHops({ browser: fake.browser, access, timers: createFakeTimers() });
   const pages = createPageScripts({ browser: fake.browser, groups, access, timers, navigations });
   const network = {
     read: () => ({ recording: false, requests: [], truncated: false }),
@@ -1778,6 +1781,7 @@ function setup() {
     recordings: { liveRecording: () => undefined },
     network,
     files,
+    hops,
     downloads: { save: async () => ({ path: "", bytes: 0 }) },
     recipes: {
       propose: () => Promise.reject(new Error("unused")),

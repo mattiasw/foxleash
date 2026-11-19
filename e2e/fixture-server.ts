@@ -12,6 +12,8 @@ export const TITLES = {
   a: "Fixture page A",
   b: "Fixture page B",
   slow: "Fixture slow page",
+  loadHop: "Fixture load hop",
+  loadHopTarget: "Fixture load hop target",
   probe: "Fixture probe page",
   readForm: "Fixture read form",
   readLandmarks: "Fixture read landmarks",
@@ -1016,6 +1018,19 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       );
     } else if (path === "/download/hop-lan") {
       redirectTo(response, `http://${LAN_HOST}:${request.socket.localPort}/download/hop-lan-file`);
+    } else if (path === "/load-hop/blocked" || path === "/load-hop/away") {
+      // To the same server under another site; each redirect leads to a path of its own, so a
+      // test counts the requests that reached it.
+      redirectTo(response, `http://localhost:${request.socket.localPort}${path}-target`);
+    } else if (path === "/load-hop/reload" || path === "/load-hop/held") {
+      // The page on the first request, then a redirect to another site, as a reload finds it.
+      if (hits.get(path) === 1) {
+        sendHtml(response, path === "/load-hop/held" ? LOAD_HOP_HELD_PAGE : LOAD_HOP_PAGE);
+      } else {
+        redirectTo(response, `http://localhost:${request.socket.localPort}${path}-target`);
+      }
+    } else if (path.startsWith("/load-hop/") && path.endsWith("-target")) {
+      sendPage(response, TITLES.loadHopTarget);
     } else if (path === "/before-unload") {
       sendHtml(response, BEFORE_UNLOAD_PAGE);
     } else if (path === "/sign-in") {
@@ -1449,6 +1464,24 @@ window.onbeforeunload = (event) => {
   event.preventDefault();
   event.returnValue = "";
 };
+</script>
+</body></html>
+`;
+
+const LOAD_HOP_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.loadHop}</title></head>
+<body><h1>${TITLES.loadHop}</h1></body></html>
+`;
+
+// Holds back the start of the tab's next load for 1.5 s, past a wait's grace for a load to start.
+const LOAD_HOP_HELD_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.loadHop}</title></head>
+<body><h1>${TITLES.loadHop}</h1>
+<script>
+window.addEventListener("beforeunload", () => {
+  const end = Date.now() + 1500;
+  while (Date.now() < end) {}
+});
 </script>
 </body></html>
 `;
