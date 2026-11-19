@@ -86,6 +86,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When Foxleash asks you something in a Firefox window that is not in front, for example because
   your desktop kept it behind your other windows, the agent now hears so after about 2 seconds
   instead of 30 and can tell you where to answer.
+- On a desktop whose download folder is not `~/Downloads`, such as one in another language,
+  `upload_file` now reads from that download folder, where Firefox saves downloads, instead of
+  from `~/Downloads`, so a file the `download` tool saved can be uploaded.
 
 ### Security
 

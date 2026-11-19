@@ -153,11 +153,18 @@ an agent can find out which sites are on your list.
 
 ## Uploads
 
-File uploads only read from allowed folders: the agent's working folder and `~/Downloads` by
-default.
+File uploads only read from allowed folders: the agent's working folder and your desktop's
+download folder by default.
 
-- The working folder is not an upload folder when it is your home folder or contains it, or lies
-  in a folder whose name starts with a dot.
+- The download folder is the one `XDG_DOWNLOAD_DIR` names in `~/.config/user-dirs.dirs`, or in
+  `$XDG_CONFIG_HOME/user-dirs.dirs` when `XDG_CONFIG_HOME` is set to an absolute folder in the
+  environment your MCP client starts `foxleash mcp` with, read when `foxleash mcp` starts. When
+  that file names none, it is `~/Downloads`.
+- The working folder or the download folder is not an upload folder when it is your home folder
+  or contains it, or lies in a folder whose name starts with a dot. A download folder left out
+  this way is not replaced by `~/Downloads`.
+- A download folder you chose in Firefox's settings is not an upload folder unless you add it
+  with `FOXLEASH_UPLOAD_DIRS`.
 - To choose the folders yourself, set `FOXLEASH_UPLOAD_DIRS` to absolute folders separated by
   `:` (a leading `~` stands for your home folder) in the environment your MCP client starts
   `foxleash mcp` with: for Claude Code, `claude mcp add -e FOXLEASH_UPLOAD_DIRS=~/uploads ...`

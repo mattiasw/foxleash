@@ -1,4 +1,4 @@
-import { constants, realpathSync } from "node:fs";
+import { closeSync, constants, fstatSync, openSync, readSync, realpathSync } from "node:fs";
 import { open, readlink, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import { codeOf, hasDotPart, isInside } from "./save-file.ts";
@@ -75,6 +75,9 @@ const PRIVATE_KEY_MARKERS = [
 const MIN_KEY_BODY = 40;
 // O_NONBLOCK: opening a FIFO swapped in after the pre-check would otherwise hang the server.
 const OPEN_FLAGS = constants.O_RDONLY | constants.O_NOCTTY | constants.O_NONBLOCK;
+// xdg-user-dirs writes well under 1 KiB.
+const MAX_USER_DIRS_BYTES = 64 * 1024;
+const DOWNLOAD_LINE = /^[ \t]*XDG_DOWNLOAD_DIR[ \t]*=[ \t]*"/;
 const TYPES = new Map([
   ["pdf", "application/pdf"],
   ["png", "image/png"],
@@ -114,8 +117,9 @@ const TOO_LARGE = "would bring this upload over 10 MB, the most Foxleash uploads
 /**
  * The folders uploads may read from, and a note for each folder left out. `FOXLEASH_UPLOAD_DIRS`
  * replaces the defaults, also when none of its entries is usable; the defaults are the folder
- * Foxleash was started in and `~/Downloads`, each unless it covers the whole home folder or lies
- * in a folder whose name starts with a dot.
+ * Foxleash was started in and the desktop's download folder (`XDG_DOWNLOAD_DIR` in
+ * `user-dirs.dirs`, else `~/Downloads`), each unless it covers the whole home folder or lies in a
+ * folder whose name starts with a dot.
  */
 export function uploadFolders(ctx: {
   env: NodeJS.ProcessEnv;
@@ -126,7 +130,7 @@ export function uploadFolders(ctx: {
   if (configured !== undefined && configured !== "") {
     return configuredFolders(configured, ctx.home);
   }
-  return defaultFolders(ctx.cwd, ctx.home);
+  return defaultFolders(ctx.env, ctx.cwd, ctx.home);
 }
 
 /**
@@ -192,7 +196,11 @@ function configuredFolders(configured: string, home: string): UploadFolders {
   return { folders, notes };
 }
 
-function defaultFolders(cwd: string | undefined, home: string): UploadFolders {
+function defaultFolders(
+  env: NodeJS.ProcessEnv,
+  cwd: string | undefined,
+  home: string,
+): UploadFolders {
   const folders: string[] = [];
   const notes: UploadFolders["notes"] = [];
   const candidates: string[] = [];
@@ -201,7 +209,7 @@ function defaultFolders(cwd: string | undefined, home: string): UploadFolders {
   } else {
     candidates.push(path.resolve(cwd));
   }
-  candidates.push(path.join(home, "Downloads"));
+  candidates.push(downloadFolder(env, home));
   const realHome = realOrResolved(home);
   for (const candidate of candidates) {
     const real = realOrResolved(candidate);
@@ -218,6 +226,70 @@ function defaultFolders(cwd: string | undefined, home: string): UploadFolders {
     }
   }
   return { folders, notes };
+}
+
+/**
+ * `XDG_DOWNLOAD_DIR` from xdg-user-dirs' `user-dirs.dirs`, read as its reference lookup reads it,
+ * which Firefox's own lookup follows: the last valid line wins, `~/Downloads` when none is valid.
+ */
+function downloadFolder(env: NodeJS.ProcessEnv, home: string): string {
+  const configured = env.XDG_CONFIG_HOME;
+  const config =
+    configured !== undefined && path.isAbsolute(configured)
+      ? configured
+      : path.join(home, ".config");
+  const text = readUserDirs(path.join(config, "user-dirs.dirs"));
+  let found: string | undefined;
+  for (const line of text?.split("\n") ?? []) {
+    const folder = downloadLine(line.split("\0")[0] ?? "", home);
+    if (folder !== undefined) found = folder;
+  }
+  return found === undefined ? path.join(home, "Downloads") : path.resolve(found);
+}
+
+/** The whole file, or undefined when it is not a regular file, too large or cannot be read. */
+function readUserDirs(file: string): string | undefined {
+  let fd: number;
+  try {
+    fd = openSync(file, OPEN_FLAGS);
+  } catch {
+    return undefined;
+  }
+  try {
+    if (!fstatSync(fd).isFile()) return undefined;
+    const buffer = Buffer.alloc(MAX_USER_DIRS_BYTES + 1);
+    let length = 0;
+    while (length < buffer.length) {
+      const bytesRead = readSync(fd, buffer, length, buffer.length - length, length);
+      if (bytesRead === 0) break;
+      length += bytesRead;
+    }
+    // Not TextDecoder, which drops a leading BOM that the reference lookup sees.
+    return length > MAX_USER_DIRS_BYTES ? undefined : buffer.toString("utf8", 0, length);
+  } catch {
+    return undefined;
+  } finally {
+    closeSync(fd);
+  }
+}
+
+/** The folder a valid `XDG_DOWNLOAD_DIR="..."` line names, by string, not path, joining. */
+function downloadLine(line: string, home: string): string | undefined {
+  const start = DOWNLOAD_LINE.exec(line);
+  if (start === null) return undefined;
+  const rest = line.slice(start[0].length);
+  if (rest.startsWith("$HOME/")) return `${home}/${unquoted(rest.slice("$HOME/".length))}`;
+  return rest.startsWith("/") ? unquoted(rest) : undefined;
+}
+
+/** Up to the first unescaped quote or the end; a backslash makes the next character literal. */
+function unquoted(value: string): string {
+  let result = "";
+  for (let i = 0; i < value.length && value[i] !== '"'; i += 1) {
+    if (value[i] === "\\" && i + 1 < value.length) i += 1;
+    result += value[i];
+  }
+  return result;
 }
 
 /** The real path, or the path as given when it cannot be resolved, such as one not made yet. */

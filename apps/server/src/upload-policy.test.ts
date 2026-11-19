@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { constants } from "node:fs";
+import { constants, readdirSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -77,7 +77,7 @@ after(async () => {
 });
 
 describe("uploadFolders", () => {
-  it("defaults to the working folder and ~/Downloads", () => {
+  it("defaults to the working folder and ~/Downloads when no user-dirs.dirs names one", () => {
     assert.deepEqual(uploadFolders({ env: {}, cwd: work, home }), {
       folders: [work, join(home, "Downloads")],
       notes: [],
@@ -162,6 +162,180 @@ describe("uploadFolders", () => {
         { folder: "b", reason: "is not an absolute path" },
       ],
     });
+  });
+
+  it("uses the desktop's download folder instead of ~/Downloads", LIMIT, async () => {
+    const own = join(root, "home-translated");
+    for (const folder of ["Hämtningar", "Downloads"]) {
+      await mkdir(join(own, folder), { recursive: true });
+      await writeFile(join(own, folder, "check.txt"), "saved");
+    }
+    const env = await userDirs('XDG_DOWNLOAD_DIR="$HOME/Hämtningar"\n');
+    const { folders, notes } = uploadFolders({ env, cwd: work, home: own });
+    assert.deepEqual({ folders, notes }, { folders: [work, join(own, "Hämtningar")], notes: [] });
+    const saved = await read(join(own, "Hämtningar", "check.txt"), folders, { home: own });
+    assert.equal(saved.ok && saved.bytes.toString(), "saved");
+    assert.match(
+      reasonOf(await read(join(own, "Downloads", "check.txt"), folders, { home: own })),
+      /^is outside the upload folders/,
+    );
+  });
+
+  it("takes an absolute download folder as written and joins $HOME/ by string", async () => {
+    const elsewhere = join(root, "elsewhere", "dl");
+    assert.deepEqual(await downloadFolders(`XDG_DOWNLOAD_DIR="${elsewhere}/"\n`), [
+      work,
+      elsewhere,
+    ]);
+    assert.deepEqual(await downloadFolders('XDG_DOWNLOAD_DIR="$HOME//dl"\n'), [
+      work,
+      join(home, "dl"),
+    ]);
+  });
+
+  it("reads ~/.config/user-dirs.dirs unless XDG_CONFIG_HOME is absolute", async () => {
+    const own = join(root, "home-config");
+    await mkdir(join(own, ".config"), { recursive: true });
+    await writeFile(join(own, ".config", "user-dirs.dirs"), 'XDG_DOWNLOAD_DIR="$HOME/own"\n');
+    for (const env of [{}, { XDG_CONFIG_HOME: "" }, { XDG_CONFIG_HOME: "rel/config" }]) {
+      assert.deepEqual(
+        uploadFolders({ env, cwd: work, home: own }).folders,
+        [work, join(own, "own")],
+        JSON.stringify(env),
+      );
+    }
+    const env = await userDirs('XDG_DOWNLOAD_DIR="$HOME/configured"\n');
+    assert.deepEqual(uploadFolders({ env, cwd: work, home: own }).folders, [
+      work,
+      join(own, "configured"),
+    ]);
+  });
+
+  it("reads XDG_DOWNLOAD_DIR lines as xdg-user-dirs writes and reads them", async () => {
+    const cases: [string, string][] = [
+      ['# XDG_DOWNLOAD_DIR="$HOME/c"\nXDG_DOWNLOAD_DIR="$HOME/d"\n', "d"],
+      [' \t XDG_DOWNLOAD_DIR="$HOME/indented"\n', "indented"],
+      ['XDG_DOWNLOAD_DIR \t= \t"$HOME/spaced"\n', "spaced"],
+      ['XDG_DESKTOP_DIR="$HOME/Skrivbord"\nXDG_DOWNLOAD_DIR="$HOME/d"\n', "d"],
+      ['XDG_DOWNLOAD_DIR="$HOME/d"\nXDG_DESKTOP_DIR="$HOME/Skrivbord"\n', "d"],
+      ['XDG_DOWNLOAD_DIRS="$HOME/s"\nXDG_DOWNLOAD_DIR="$HOME/d"\n', "d"],
+      ['XDG_DOWNLOAD_DIR="$HOME/a\\"b\\\\c"\n', 'a"b\\c'],
+      ['XDG_DOWNLOAD_DIR="$HOME/d" # "$HOME/after"\n', "d"],
+      ['XDG_DOWNLOAD_DIR="$HOME/first"\nXDG_DOWNLOAD_DIR="$HOME/last"\n', "last"],
+      ['XDG_DOWNLOAD_DIR="$HOME/valid"\nXDG_DOWNLOAD_DIR="relative"\n', "valid"],
+      ['﻿XDG_DOWNLOAD_DIR="$HOME/bom"\n', "Downloads"],
+      ['﻿XDG_DOWNLOAD_DIR="$HOME/bom"\nXDG_DOWNLOAD_DIR="$HOME/d"\n', "d"],
+      ['XDG_DOWNLOAD_DIR="$HOME/open\n', "open"],
+      ['XDG_DOWNLOAD_DIR="$HOME/end\\', "end\\"],
+      ['XDG_DOWNLOAD_DIR="$HOME/a\0b"\n', "a"],
+      ['XDG_DESKTOP_DIR="$HOME/x"\r\nXDG_DOWNLOAD_DIR="$HOME/crlf"\r\n', "crlf"],
+      ['XDG_DOWNLOAD_DIR="$HOME/line sep"\n', "line sep"],
+    ];
+    const folders: string[] = [];
+    for (const [text] of cases) folders.push((await downloadFolders(text))[1] ?? "none");
+    assert.deepEqual(
+      folders,
+      cases.map(([, folder]) => join(home, folder)),
+    );
+  });
+
+  it("falls back to ~/Downloads when no line names a valid download folder", async () => {
+    const files = [
+      "XDG_DOWNLOAD_DIR=$HOME/unquoted\n",
+      'XDG_DOWNLOAD_DIR="Downloads"\n',
+      'XDG_DOWNLOAD_DIR="$HOMEX/x"\n',
+      'XDG_DOWNLOAD_DIR="$HOME"\n',
+      'XDG_DOWNLOAD_DIR="~/x"\n',
+      'XDG_DOWNLOAD_DIR=""\n',
+      'XDG_DOWNLOAD_DIR_="$HOME/x"\n',
+      'XDG_DOWNLOAD_DIRx="$HOME/x"\n',
+      'XDG_DESKTOP_DIR="$HOME/Desktop"\n',
+      "",
+    ];
+    const folders: string[] = [];
+    for (const text of files) folders.push((await downloadFolders(text))[1] ?? "none");
+    assert.deepEqual(
+      folders,
+      files.map(() => join(home, "Downloads")),
+    );
+  });
+
+  it("falls back to ~/Downloads when user-dirs.dirs is not a small regular file", async () => {
+    const line = 'XDG_DOWNLOAD_DIR="$HOME/big"\n';
+    const directory = await userDirs("");
+    await rm(join(directory.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    await mkdir(join(directory.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    const device = await userDirs("");
+    await rm(join(device.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    await symlink("/dev/zero", join(device.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    const large = await userDirs(`${"#".repeat(64 * 1024 - line.length)}\n${line}`);
+    for (const env of [directory, device, large]) {
+      assert.deepEqual(uploadFolders({ env, cwd: work, home }).folders, [
+        work,
+        join(home, "Downloads"),
+      ]);
+    }
+    const largest = await userDirs(`${"#".repeat(64 * 1024 - 1 - line.length)}\n${line}`);
+    assert.deepEqual(uploadFolders({ env: largest, cwd: work, home }).folders, [
+      work,
+      join(home, "big"),
+    ]);
+  });
+
+  it("closes user-dirs.dirs after reading it", async () => {
+    const file = await userDirs('XDG_DOWNLOAD_DIR="$HOME/d"\n');
+    const folder = await userDirs("");
+    await rm(join(folder.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    await mkdir(join(folder.XDG_CONFIG_HOME, "user-dirs.dirs"));
+    const open = readdirSync("/proc/self/fd").length;
+    for (let i = 0; i < 20; i += 1) {
+      for (const env of [file, folder]) uploadFolders({ env, cwd: work, home });
+    }
+    assert.equal(readdirSync("/proc/self/fd").length, open);
+  });
+
+  it("falls back to ~/Downloads without waiting when user-dirs.dirs is a FIFO", async () => {
+    const config = join(root, "config-fifo");
+    await mkdir(config);
+    assert.equal(spawnSync("mkfifo", [join(config, "user-dirs.dirs")]).status, 0);
+    const policy = new URL("./upload-policy.ts", import.meta.url).href;
+    // In a child: a blocking open would freeze this thread, timers and all.
+    const script = `import { uploadFolders } from ${JSON.stringify(policy)};
+      const [config, cwd, home] = process.argv.slice(1);
+      const env = { XDG_CONFIG_HOME: config };
+      process.stdout.write(JSON.stringify(uploadFolders({ env, cwd, home }).folders));`;
+    const child = spawnSync(
+      process.execPath,
+      ["--input-type=module", "-e", script, config, work, home],
+      { timeout: 5000, encoding: "utf8" },
+    );
+    assert.equal(child.signal, null);
+    assert.equal(child.status, 0, child.stderr);
+    assert.deepEqual(JSON.parse(child.stdout), [work, join(home, "Downloads")]);
+  });
+
+  it("leaves out a download folder that is home or under a dot folder, with no fallback", async () => {
+    for (const [text, folder, reason] of [
+      ['XDG_DOWNLOAD_DIR="$HOME/"\n', home, HOME_NOTE],
+      ['XDG_DOWNLOAD_DIR="$HOME/.."\n', root, HOME_NOTE],
+      ['XDG_DOWNLOAD_DIR="/"\n', "/", HOME_NOTE],
+      ['XDG_DOWNLOAD_DIR="$HOME/.cache/dl"\n', join(home, ".cache", "dl"), DOT_NOTE],
+    ] as const) {
+      const env = await userDirs(text);
+      assert.deepEqual(
+        uploadFolders({ env, cwd: work, home }),
+        { folders: [work], notes: [{ folder, reason }] },
+        text,
+      );
+    }
+  });
+
+  it("replaces a download folder from user-dirs.dirs with FOXLEASH_UPLOAD_DIRS", async () => {
+    const env = {
+      ...(await userDirs('XDG_DOWNLOAD_DIR="$HOME/Hämtningar"\n')),
+      FOXLEASH_UPLOAD_DIRS: outside,
+    };
+    assert.deepEqual(uploadFolders({ env, cwd: work, home }), { folders: [outside], notes: [] });
   });
 });
 
@@ -907,6 +1081,22 @@ function read(
     now: () => Date.now() + 2 * FRESH_FILE_MS,
     ...ctx,
   });
+}
+
+let configs = 0;
+
+/** A fresh config folder holding `text` as its user-dirs.dirs, as the env that names it. */
+async function userDirs(text: string): Promise<{ XDG_CONFIG_HOME: string }> {
+  configs += 1;
+  const config = join(root, `config-${configs}`);
+  await mkdir(config);
+  await writeFile(join(config, "user-dirs.dirs"), text);
+  return { XDG_CONFIG_HOME: config };
+}
+
+/** The upload folders with the working folder `work`, in the shared home, for a user-dirs.dirs. */
+async function downloadFolders(text: string): Promise<string[]> {
+  return uploadFolders({ env: await userDirs(text), cwd: work, home }).folders;
 }
 
 /** Writes each file into `work` and compares every outcome at once, so the diff names each miss. */

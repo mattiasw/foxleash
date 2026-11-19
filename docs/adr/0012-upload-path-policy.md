@@ -1,6 +1,6 @@
 # 0012: Uploads read only allowed folders, checked on the open descriptor, and travel in chunks
 
-**Status:** Accepted, 2026-10-20. Its consequence that a key with a plain name is read is superseded by [0060](0060-uploads-refuse-files-that-hold-a-private-key.md), 2026-11-14.
+**Status:** Accepted, 2026-10-20. Its consequence that a key with a plain name is read is superseded by [0060](0060-uploads-refuse-files-that-hold-a-private-key.md), 2026-11-14. Its default folder `~/Downloads` is superseded by [0095](0095-uploads-default-to-the-desktop-download-folder.md), 2026-11-19.
 
 ## Context
 

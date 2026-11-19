@@ -594,11 +594,12 @@ a few seconds. So the agent cannot upload a file that it, the `download` tool or
 moment ago until those seconds have passed, and a `batch` that downloads a file and uploads it in
 the same call gets that refusal.
 
-`~/Downloads` is an upload folder by default, and it is where Firefox saves files. So that a page
-cannot get a file from another site saved there for `upload_file` to hand over, Foxleash stops a
-load in the agent's tabs whose answer is a file from a site the session may not act on, and
-cancels, after the fact, the download of such a load that the site's service worker answered,
-and of a file that a page of such a site in those tabs built itself, removing its file;
+Your desktop's download folder is an upload folder by default, and it is where Firefox saves
+files unless you chose another folder in its settings. So that a page cannot get a file from
+another site saved there for `upload_file` to hand over, Foxleash stops a load in the agent's tabs
+whose answer is a file from a site the session may not act on, and cancels, after the fact, the
+download of such a load that the site's service worker answered, and of a file that a page of such
+a site in those tabs built itself, removing its file;
 [Security](security.md#files-a-page-loads-in-the-agents-tabs) says what that covers and what it
 does not.
 

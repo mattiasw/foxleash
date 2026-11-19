@@ -489,7 +489,8 @@ function fakeProcess(
     stdin: new PassThrough(),
     stdout: new PassThrough(),
     stderr,
-    env,
+    // Keeps the upload policy off the developer's own user-dirs.dirs.
+    env: { XDG_CONFIG_HOME: emptyConfig(), ...env },
     cwd,
     text: () => Buffer.concat(chunks).toString("utf8"),
   };
@@ -497,6 +498,13 @@ function fakeProcess(
     proc.getuid = () => uid;
   }
   return proc;
+}
+
+function emptyConfig(): string {
+  counter += 1;
+  const config = path.join(root, `config-${counter}`);
+  mkdirSync(config);
+  return config;
 }
 
 function errnoError(code: string): NodeJS.ErrnoException {

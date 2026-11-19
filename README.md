@@ -212,8 +212,8 @@ defense is complete. Foxleash limits what a fooled agent can do:
   add it to the list in the settings. Proposals for more sites are welcome, as an issue or as a
   pull request that edits [the built-in list](apps/extension/src/default-blocklist.ts).
 - File uploads only read from [allowed folders](docs/security.md#uploads) (the agent's working
-  folder and `~/Downloads` by default), never dotfiles or key files, and no file saved or changed
-  in the last 5 seconds.
+  folder and your desktop's download folder, such as `~/Downloads`, by default), never dotfiles or
+  key files, and no file saved or changed in the last 5 seconds.
 - Downloads save only a file served by a site you approved, into your Firefox download folder,
   never over an existing file. The file is saved as the site sent it, with nothing hidden or
   redacted. The agent reads a downloaded file with its own tools, outside Foxleash's untrusted

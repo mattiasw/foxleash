@@ -1,6 +1,6 @@
 # 0002: The safeguards live in Foxleash, not in the MCP client
 
-**Status:** Accepted, 2026-10-17.
+**Status:** Accepted, 2026-10-17. Its default upload folder `~/Downloads` is superseded by [0095](0095-uploads-default-to-the-desktop-download-folder.md), 2026-11-19.
 
 ## Context
 

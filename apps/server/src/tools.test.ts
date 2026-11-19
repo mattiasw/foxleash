@@ -290,7 +290,7 @@ describe("tools", () => {
     for (const words of [
       "With ref of a file field, Foxleash sets the field's files; any other element gets the files dropped on it",
       "by default the folder Foxleash was started in",
-      "(unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and ~/Downloads",
+      "(unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and the desktop's download folder (XDG_DOWNLOAD_DIR in user-dirs.dirs, or ~/Downloads when that names none)",
       "FOXLEASH_UPLOAD_DIRS in the MCP client's configuration; no tool can change them",
       "Files and folders whose names start with a dot, and files named like keys",
       "and so is a file that holds a PEM, OpenSSH, PuTTY, PGP or age private key, whatever its name",
