@@ -37,6 +37,7 @@ const RULE_ERROR = /Add a ship or exclude rule/;
 const SHIPPED = [
   ".npmrc",
   ".nvmrc",
+  "LICENSE",
   "apps/extension/build.ts",
   "apps/extension/icons/foxleash.svg",
   "apps/extension/manifest.json",
@@ -51,7 +52,9 @@ const SHIPPED = [
 
 const EXCLUDED = [
   "AGENTS.md",
+  "CONTRIBUTING.md",
   "README.md",
+  "SECURITY.md",
   "apps/extension/dev.ts",
   "apps/extension/src/fake-browser.ts",
   "apps/extension/src/handlers.test.ts",

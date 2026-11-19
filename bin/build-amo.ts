@@ -26,6 +26,7 @@ export const DOT_OR_EMPTY_SEGMENT = /(?:^|\/)\.\.?(?:\/|$)|\/\//;
 const TOP_LEVEL_SHIP = new Set([
   ".npmrc",
   ".nvmrc",
+  "LICENSE",
   "package-lock.json",
   "package.json",
   "turbo.json",
@@ -35,7 +36,9 @@ const TOP_LEVEL_EXCLUDE = new Set([
   "AGENTS.md",
   "CHANGELOG.md",
   "CLAUDE.md",
+  "CONTRIBUTING.md",
   "README.md",
+  "SECURITY.md",
   "biome.json",
 ]);
 const EXCLUDED_TREES = ["apps/server/", "e2e/", "docs/", ".github/", ".husky/", "bin/"];

@@ -1,5 +1,6 @@
 .npmrc
 .nvmrc
+LICENSE
 README.md
 apps/extension/build.ts
 apps/extension/icons/foxleash.svg

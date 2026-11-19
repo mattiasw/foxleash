@@ -294,3 +294,10 @@ noun for foxes: a leash of foxes.
 - [docs/development.md](docs/development.md): building, testing and running a development copy
 - [AGENTS.md](AGENTS.md): the project's conventions
 - [docs/adr/](docs/adr/): architecture decisions
+- [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute
+- [SECURITY.md](SECURITY.md): how to report a vulnerability privately
+
+## License
+
+Foxleash is free software under the GNU General Public License, version 3 or later
+(GPL-3.0-or-later). See [LICENSE](LICENSE).

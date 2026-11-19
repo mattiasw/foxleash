@@ -13,6 +13,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   start the Foxleash program after one `about:config` setting, and the README, the first-run and
   settings pages and `npm run doctor` say how. Firefox from Snap works there too: your desktop
   asks once whether Firefox may start the program.
+- Foxleash is free software under the GNU General Public License, version 3 or later.
+  `SECURITY.md` says how to report a vulnerability privately and `CONTRIBUTING.md` how to
+  contribute.
 
 ### Changed
 
