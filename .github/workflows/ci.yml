@@ -56,9 +56,10 @@ jobs:
       - run: npm run check:release -- changelog
       - run: npm run check:release -- listing
       - run: npm run check:release -- protocol
-      # A pull request compares with its base branch. Every other run compares with the newest commit
-      # in its history that has a successful CI run, so a cancelled run or a gate branch's first push
-      # leaves no commit unchecked (github.event.before does not).
+      # A pull request compares with its base branch. Every other run compares with the nearest
+      # commit in its history (topological order) whose successful CI run ran this check, or with a
+      # pinned start commit, so a cancelled run or a gate branch's first push leaves no commit
+      # unchecked (github.event.before does not).
       - name: Find the commit the test integrity check compares with
         id: integrity-base
         if: github.event_name != 'pull_request'

@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync }
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, test } from "node:test";
-import { integrityBase } from "./ci-integrity-base.ts";
+import { integrityBase, workflowRunsTheCheck } from "./ci-integrity-base.ts";
 
 const SCRIPT = path.resolve(import.meta.dirname, "ci-integrity-base.ts");
 const CI_FILE = ".github/workflows/ci.yml";
@@ -14,9 +14,26 @@ const H = "1".repeat(40);
 const C2 = "2".repeat(40);
 const C1 = "3".repeat(40);
 const X = "4".repeat(40);
+const C0 = "d".repeat(40);
 const HISTORY = [H, C2, C1];
+const START = "c".repeat(40);
+const ABSENT_START = "7".repeat(40);
+const LIVE_BASE = "          BASE=$(node bin/ci-integrity-base.ts)";
+const LIVE_BASE_REF =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+  "          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || steps.integrity-base.outputs.sha }}";
+const OLD_BASE_REF =
+  // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+  "          BASE_REF: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || (github.event_name == 'push' && github.event.before != '0000000000000000000000000000000000000000' && github.event.before) || 'none' }}";
+const OLD_WORKFLOW = [
+  "      - name: Test integrity",
+  "        run: npm run check:test-integrity",
+  "        env:",
+  OLD_BASE_REF,
+  "",
+].join("\n");
 
-describe("integrityBase: the newest commit in HEAD's history with a successful CI run", () => {
+describe("integrityBase: the nearest commit in HEAD's history whose run ran the check, or the start", () => {
   test("the commit nearest HEAD wins, not the newest run", () => {
     // A re-run of an older commit comes first in the answer.
     assert.equal(base([ciRun(C1), ciRun(C2)]), C2, "expected the run nearer HEAD to be the base");
@@ -70,7 +87,13 @@ describe("integrityBase: the newest commit in HEAD's history with a successful C
   }
 
   test("a head_sha that is not a string does not vouch", () => {
-    const vouched = integrityBase({ workflow_runs: [ciRun(2), ciRun(C1)] }, REPO, [H, C1]);
+    const vouched = integrityBase(
+      { workflow_runs: [ciRun(2), ciRun(C1)] },
+      REPO,
+      [H, C1],
+      () => true,
+      ABSENT_START,
+    );
     assert.equal(vouched, C1, "a numeric head_sha must be skipped, not thrown on");
   });
 
@@ -130,9 +153,122 @@ describe("integrityBase: the newest commit in HEAD's history with a successful C
   ]) {
     test(`throws for the answer ${JSON.stringify(response)}`, () => {
       assert.throws(
-        () => integrityBase(response, REPO, HISTORY),
+        () => integrityBase(response, REPO, HISTORY, () => true, ABSENT_START),
         /the runs API answer has no workflow_runs list of runs/,
         "an answer of the wrong shape must be refused",
+      );
+    });
+  }
+
+  test("a run of a commit whose workflow does not run the check does not vouch", () => {
+    assert.equal(
+      choose([ciRun(C2), ciRun(C1)], HISTORY, (sha) => sha !== C2),
+      C1,
+      "a run of C2, whose workflow skips the check, was taken as the base",
+    );
+  });
+
+  test("a merged side commit listed before main's checked tip does not vouch when it skipped the check", () => {
+    const M = "8".repeat(40);
+    const S = "9".repeat(40);
+    const M0 = "a".repeat(40);
+    const P = "b".repeat(40);
+    assert.equal(
+      choose([ciRun(S), ciRun(M0)], [M, S, M0, P], (sha) => sha !== S),
+      M0,
+      "the merged side commit S, whose run skipped the check, was taken as the base",
+    );
+  });
+
+  test("the start commit vouches with no run", () => {
+    assert.equal(
+      choose([ciRun(X)], [H, START, C1], () => true, START),
+      START,
+      "the start commit in history must be the base when no run in history vouches",
+    );
+  });
+
+  test("a vouched commit nearer HEAD than the start commit wins over it", () => {
+    assert.equal(
+      choose([ciRun(C2)], [H, C2, START, C1], () => true, START),
+      C2,
+      "a checked commit after the start commit must be the base",
+    );
+  });
+
+  test("the start commit wins over a vouched commit older than it", () => {
+    assert.equal(
+      choose([ciRun(C1)], [H, START, C1], () => true, START),
+      START,
+      "a checked commit before the start commit was taken as the base",
+    );
+  });
+
+  test("a failing workflow lookup fails, never counts as not vouching", () => {
+    const failing = (): boolean => {
+      throw new Error("cat-file failed");
+    };
+    assert.throws(
+      () => choose([ciRun(C2), ciRun(C1)], HISTORY, failing),
+      /cat-file failed/,
+      "an error reading the workflow must reach the caller",
+    );
+  });
+
+  test("the workflow is read only for commits with a run, once each, nearest first", () => {
+    const asked: string[] = [];
+    const carriesCheck = (sha: string): boolean => {
+      asked.push(sha);
+      return sha !== C2;
+    };
+    assert.equal(
+      choose([ciRun(X), ciRun(C2), ciRun(C1), ciRun(C0)], [H, C2, C2, C1, C0], carriesCheck),
+      C1,
+      "expected the nearest commit whose workflow runs the check",
+    );
+    assert.deepEqual(asked, [C2, C1], "the workflow was read for the wrong commits");
+  });
+
+  test("throws when the only run in history skipped the check and the start is absent", () => {
+    assert.throws(
+      () => choose([ciRun(C2)], HISTORY, () => false),
+      new RegExp(
+        "none of the newest 1 successful CI runs is for a commit in HEAD's history.*" +
+          `does not hold the start commit ${ABSENT_START}`,
+      ),
+      "a history with no checked run and no start commit must fail, never fall back",
+    );
+  });
+});
+
+describe("workflowRunsTheCheck: a run vouches only when its ci.yml runs the check", () => {
+  const notTheCheck: Array<[string, string[]]> = [
+    ["the workflow from before the base step", OLD_WORKFLOW.split("\n")],
+    [
+      "both step lines only as comments",
+      [
+        "          # BASE=$(node bin/ci-integrity-base.ts)",
+        // biome-ignore lint/suspicious/noTemplateCurlyInString: a GitHub Actions expression
+        "          # BASE_REF: ${{ steps.integrity-base.outputs.sha }}",
+      ],
+    ],
+    [
+      "the base step with BASE_REF only as a comment",
+      [LIVE_BASE, `          # ${LIVE_BASE_REF.trim()}`],
+    ],
+    [
+      "BASE_REF with the base step only as a comment",
+      [`          # ${LIVE_BASE.trim()}`, LIVE_BASE_REF],
+    ],
+    ["the base step with the old BASE_REF", [LIVE_BASE, OLD_BASE_REF]],
+    ["a base step that falls back to none", [`${LIVE_BASE} || BASE=none`, LIVE_BASE_REF]],
+  ];
+  for (const [name, lines] of notTheCheck) {
+    test(`${name} does not run the check`, () => {
+      assert.equal(
+        workflowRunsTheCheck(["jobs:", ...lines, ""].join("\n")),
+        false,
+        `${name} was taken as a workflow that runs the check`,
       );
     });
   }
@@ -150,7 +286,16 @@ function ciRun(sha: unknown, overrides: Record<string, unknown> = {}): Record<st
 }
 
 function base(runs: unknown[], history: readonly string[] = HISTORY, repo = REPO): string {
-  return integrityBase({ workflow_runs: runs }, repo, history);
+  return integrityBase({ workflow_runs: runs }, repo, history, () => true, ABSENT_START);
+}
+
+function choose(
+  runs: unknown[],
+  history: readonly string[],
+  carriesCheck: (sha: string) => boolean,
+  start = ABSENT_START,
+): string {
+  return integrityBase({ workflow_runs: runs }, REPO, history, carriesCheck, start);
 }
 
 const EXPECTED_GH_PATH =
@@ -175,17 +320,12 @@ type ScriptRun = { status: number | null; stdout: string; stderr: string; ghCall
 
 describe("ci-integrity-base.ts end to end, with a fake gh and a real git repository", () => {
   test("prints the base, and fails closed when gh, REPO or the answer is wrong", () => {
-    const dir = mkdtempSync(path.join(tmpdir(), "ci-integrity-base-"));
+    const { dir, repo, bin } = scratchRepo();
     try {
-      const repo = path.join(dir, "repo");
-      const bin = path.join(dir, "bin");
-      mkdirSync(repo);
-      mkdirSync(bin);
-      writeFileSync(path.join(bin, "gh"), `#!${process.execPath}\n${FAKE_GH}`, { mode: 0o755 });
-      git(repo, "init", "-q", "-b", "main");
-      for (const message of ["A", "B", "C"]) commit(repo, message);
-      const [shaA, shaB] = ["HEAD~2", "HEAD~1"].map((rev) => git(repo, "rev-parse", rev).trim());
-      assert.ok(shaA !== undefined && shaB !== undefined, "could not read the commits' shas");
+      writeWorkflow(repo, CI_SOURCE);
+      const shaA = commit(repo, "A");
+      const shaB = commit(repo, "B");
+      commit(repo, "C");
 
       const fixture = path.join(dir, "runs.json");
       const padding = ciRun(X, { path: ".github/workflows/other.yml", pad: "x".repeat(1100000) });
@@ -254,7 +394,107 @@ describe("ci-integrity-base.ts end to end, with a fake gh and a real git reposit
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  test("a merged side commit whose run skipped the check is not the base", () => {
+    const { dir, repo, bin } = scratchRepo();
+    try {
+      writeWorkflow(repo, OLD_WORKFLOW);
+      commit(repo, "P", dated("2026-01-01T00:00:00Z"));
+      git(repo, ["branch", "side"]);
+      writeWorkflow(repo, CI_SOURCE);
+      const m0 = commit(repo, "M0", dated("2026-01-02T00:00:00Z"));
+      git(repo, ["switch", "-q", "side"]);
+      writeFileSync(path.join(repo, "side.txt"), "side\n");
+      git(repo, ["add", "side.txt"]);
+      const s = commit(repo, "S", dated("2026-01-03T00:00:00Z"));
+      git(repo, ["switch", "-q", "main"]);
+      merge(repo, "side", dated("2026-01-04T00:00:00Z"));
+      const order = revList(repo, "--topo-order");
+      assert.ok(order.indexOf(s) < order.indexOf(m0), "the setup must list S before M0");
+
+      const fixture = path.join(dir, "runs.json");
+      writeFileSync(fixture, JSON.stringify({ workflow_runs: [ciRun(s), ciRun(m0)] }));
+      const result = runScript(dir, repo, bin, { REPO, FAKE_GH_FIXTURE: fixture });
+      assert.equal(result.stderr, "", "the script wrote to stderr on success");
+      assert.equal(result.status, 0, "the script failed on a valid answer");
+      assert.equal(result.stdout, `${m0}\n`, "expected main's checked tip M0, not the side commit");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a parent dated after its child does not come before the child", () => {
+    const { dir, repo, bin } = scratchRepo();
+    try {
+      writeWorkflow(repo, CI_SOURCE);
+      commit(repo, "A", dated("2026-01-01T00:00:00Z"));
+      const b = commit(repo, "B", dated("2026-01-05T00:00:00Z"));
+      git(repo, ["branch", "side"]);
+      const y = commit(repo, "Y", dated("2026-01-02T00:00:00Z"));
+      git(repo, ["switch", "-q", "side"]);
+      commit(repo, "S", dated("2026-01-10T00:00:00Z"));
+      git(repo, ["switch", "-q", "main"]);
+      merge(repo, "side", dated("2026-01-11T00:00:00Z"));
+      const byDate = revList(repo);
+      assert.ok(byDate.indexOf(b) < byDate.indexOf(y), "the setup must date-order B before Y");
+
+      const fixture = path.join(dir, "runs.json");
+      writeFileSync(fixture, JSON.stringify({ workflow_runs: [ciRun(b), ciRun(y)] }));
+      const result = runScript(dir, repo, bin, { REPO, FAKE_GH_FIXTURE: fixture });
+      assert.equal(result.stderr, "", "the script wrote to stderr on success");
+      assert.equal(result.status, 0, "the script failed on a valid answer");
+      assert.equal(result.stdout, `${y}\n`, "expected Y, the child, not its later-dated parent B");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("a run of a commit with no ci.yml fails the script", () => {
+    const { dir, repo, bin } = scratchRepo();
+    try {
+      const sha = commit(repo, "A");
+      const fixture = path.join(dir, "runs.json");
+      writeFileSync(fixture, JSON.stringify({ workflow_runs: [ciRun(sha)] }));
+      const result = runScript(dir, repo, bin, { REPO, FAKE_GH_FIXTURE: fixture });
+      assert.equal(result.status, 1, "a missing ci.yml must fail the script");
+      assert.equal(result.stdout, "", "a missing ci.yml must print no base");
+      assert.match(
+        result.stderr,
+        /^ci-integrity-base: git cat-file blob [0-9a-f]{40}:\.github\/workflows\/ci\.yml failed/m,
+        "expected the failing git cat-file to be the error",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });
+
+// A temporary directory with an empty git repository on main and a bin directory holding the
+// fake gh.
+function scratchRepo(): { dir: string; repo: string; bin: string } {
+  const dir = mkdtempSync(path.join(tmpdir(), "ci-integrity-base-"));
+  const repo = path.join(dir, "repo");
+  const bin = path.join(dir, "bin");
+  mkdirSync(repo);
+  mkdirSync(bin);
+  writeFileSync(path.join(bin, "gh"), `#!${process.execPath}\n${FAKE_GH}`, { mode: 0o755 });
+  git(repo, ["init", "-q", "-b", "main"]);
+  return { dir, repo, bin };
+}
+
+function writeWorkflow(repo: string, text: string): void {
+  mkdirSync(path.join(repo, path.dirname(CI_FILE)), { recursive: true });
+  writeFileSync(path.join(repo, CI_FILE), text);
+  git(repo, ["add", CI_FILE]);
+}
+
+function dated(iso: string): Record<string, string> {
+  return { GIT_AUTHOR_DATE: iso, GIT_COMMITTER_DATE: iso };
+}
+
+function revList(repo: string, ...options: string[]): string[] {
+  return git(repo, ["rev-list", ...options, "HEAD"]).split("\n");
+}
 
 function runScript(
   dir: string,
@@ -287,31 +527,34 @@ function runScript(
   return { status: result.status, stdout: result.stdout, stderr: result.stderr, ghCalls };
 }
 
-function commit(cwd: string, message: string): void {
-  git(
-    cwd,
-    "-c",
-    "user.name=Test",
-    "-c",
-    "user.email=test@example.invalid",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-q",
-    "--allow-empty",
-    "-m",
-    message,
-  );
+const IDENTITY = [
+  "-c",
+  "user.name=Test",
+  "-c",
+  "user.email=test@example.invalid",
+  "-c",
+  "commit.gpgsign=false",
+];
+
+// Returns the new commit's sha.
+function commit(cwd: string, message: string, extraEnv: Record<string, string> = {}): string {
+  git(cwd, [...IDENTITY, "commit", "-q", "--allow-empty", "-m", message], extraEnv);
+  return git(cwd, ["rev-parse", "HEAD"]).trim();
 }
 
-function git(cwd: string, ...args: string[]): string {
-  const result = spawnSync("git", args, { cwd, env: gitEnv(), encoding: "utf8" });
+function merge(cwd: string, branch: string, extraEnv: Record<string, string>): void {
+  git(cwd, [...IDENTITY, "merge", "-q", "--no-ff", "--no-edit", branch], extraEnv);
+}
+
+function git(cwd: string, args: readonly string[], extraEnv: Record<string, string> = {}): string {
+  const env = { ...gitEnv(), ...extraEnv };
+  const result = spawnSync("git", args, { cwd, env, encoding: "utf8" });
   assert.equal(result.status, 0, `git ${args.join(" ")} failed: ${result.stderr}`);
   return result.stdout;
 }
 
 // Every GIT_ variable goes: a hook run from a linked worktree exports GIT_DIR and others, and a
-// spawned git that keeps them works on the real repository.
+// spawned git that keeps them works on the real repository. The dates a test sets come after.
 function gitEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
   for (const key of Object.keys(env)) {
@@ -359,6 +602,49 @@ describe("ci.yml: non-PR runs check test integrity against a vouched base", () =
     ]) {
       assert.ok(trimmed.includes(expected), `the integrity-base step lacks the line ${expected}`);
     }
+  });
+
+  // A successful run vouches for later runs, so these must fail in a run that skips the check.
+  test("the base step only runs ci-integrity-base.ts and records its output", () => {
+    const runAt = baseStep.findIndex((line) => /^\s*run: \|\s*$/.test(line));
+    assert.ok(runAt >= 0, "the integrity-base step has no `run: |` block");
+    const runIndent = required(baseStep[runAt], "no run line").search(/\S/);
+    const script: string[] = [];
+    for (const line of baseStep.slice(runAt + 1)) {
+      if (line.trim() === "") continue;
+      if (line.search(/\S/) <= runIndent) break;
+      script.push(line.trim());
+    }
+    assert.deepEqual(
+      script,
+      ["BASE=$(node bin/ci-integrity-base.ts)", 'echo "sha=$BASE" >> "$GITHUB_OUTPUT"'],
+      "the integrity-base step's script must be exactly these two lines",
+    );
+  });
+
+  test("validate cannot pass with Test integrity skipped or failing", () => {
+    const tolerated = validate.filter((line) => /^\s*(?:- )?continue-on-error:/.test(line));
+    assert.deepEqual(tolerated, [], "validate must not continue past a failing step");
+    const conditions = (step: string[]): string[] =>
+      step.filter((line) => /^\s*(?:- )?if:/.test(line)).map((line) => line.trim());
+    assert.deepEqual(conditions(integrity), [], "Test integrity must run on every validate run");
+    assert.deepEqual(
+      conditions(baseStep),
+      ["if: github.event_name != 'pull_request'"],
+      "the integrity-base step must be skipped only for a pull request",
+    );
+    assert.deepEqual(
+      integrity.filter((line) => /^\s*(?:- )?run:/.test(line)).map((line) => line.trim()),
+      ["run: npm run check:test-integrity"],
+      "Test integrity must run the check script",
+    );
+  });
+
+  test("workflowRunsTheCheck recognises this workflow, so its runs vouch", () => {
+    assert.ok(
+      workflowRunsTheCheck(CI_SOURCE),
+      "workflowRunsTheCheck no longer recognises ci.yml: no run of this workflow would vouch",
+    );
   });
 
   test("the base step comes before Test integrity", () => {

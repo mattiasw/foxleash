@@ -1,5 +1,6 @@
-// Prints the commit CI's test integrity check compares HEAD with: the newest commit in HEAD's
-// history that has a successful push or workflow_dispatch run of ci.yml in this repository.
+// Prints the commit CI's test integrity check compares HEAD with: the nearest commit in HEAD's
+// history, in topological order, that has a successful push or workflow_dispatch run of ci.yml in
+// this repository whose workflow runs this check, or the pinned start commit.
 // Reads REPO (owner/name) from the environment; needs `gh` (with GH_TOKEN) and `git`.
 import { spawnSync } from "node:child_process";
 
@@ -7,6 +8,8 @@ const WORKFLOW = ".github/workflows/ci.yml";
 const SHA = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 const REPO_SLUG = /^[A-Za-z0-9._-]+\/[A-Za-z0-9._-]+$/;
 const COMMAND_TIMEOUT_MS = 60_000;
+// Checked by hand against an earlier checked commit, so it counts as a base without a run.
+const START = "8f75f1f021bc64f4b7b71ab2c82a0522d69b1fde";
 
 function main(): void {
   try {
@@ -26,10 +29,17 @@ function main(): void {
       const reason = error instanceof Error ? error.message : String(error);
       throw new Error(`the gh api answer is not JSON: ${reason}`);
     }
-    const history = run("git", ["rev-list", "HEAD"])
+    const history = run("git", ["rev-list", "--topo-order", "HEAD"])
       .split("\n")
       .filter((line) => line !== "");
-    process.stdout.write(`${integrityBase(response, repo, history)}\n`);
+    const base = integrityBase(
+      response,
+      repo,
+      history,
+      (sha) => workflowRunsTheCheck(run("git", ["cat-file", "blob", `${sha}:${WORKFLOW}`])),
+      START,
+    );
+    process.stdout.write(`${base}\n`);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     process.stderr.write(`ci-integrity-base: ${message}\n`);
@@ -55,7 +65,13 @@ function run(command: string, args: readonly string[]): string {
   throw new Error(`${[command, ...args].join(" ")} failed (${cause})${detail}`);
 }
 
-export function integrityBase(response: unknown, repo: string, history: readonly string[]): string {
+export function integrityBase(
+  response: unknown,
+  repo: string,
+  history: readonly string[],
+  carriesCheck: (sha: string) => boolean,
+  start: string,
+): string {
   const runs = isRecord(response) ? response.workflow_runs : undefined;
   if (!Array.isArray(runs) || !runs.every(isRecord)) {
     throw new Error("the runs API answer has no workflow_runs list of runs");
@@ -64,16 +80,17 @@ export function integrityBase(response: unknown, repo: string, history: readonly
   for (const ciRun of runs) {
     if (vouches(ciRun, repo)) vouched.add(ciRun.head_sha);
   }
-  const base = history.find((sha) => vouched.has(sha));
+  // Deleting a sha asks carriesCheck about it once, however often history lists it.
+  for (const sha of history) {
+    if (sha === start || (vouched.delete(sha) && carriesCheck(sha))) return sha;
+  }
   // No fallback (none, github.event.before, origin/main): a run that passes without a real base
   // becomes a base for later runs.
-  if (base === undefined) {
-    throw new Error(
-      `none of the newest ${runs.length} successful CI runs is for a commit in HEAD's history ` +
-        "(only that one page of runs is read)",
-    );
-  }
-  return base;
+  throw new Error(
+    `none of the newest ${runs.length} successful CI runs is for a commit in HEAD's history ` +
+      `whose workflow runs the test integrity check, and HEAD's history does not hold the start ` +
+      `commit ${start} (only that one page of runs is read)`,
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -92,6 +109,14 @@ function vouches(ciRun: Record<string, unknown>, repo: string): boolean {
     headRepository.full_name.toLowerCase() === repo.toLowerCase() &&
     typeof ciRun.head_sha === "string" &&
     SHA.test(ciRun.head_sha)
+  );
+}
+
+export function workflowRunsTheCheck(text: string): boolean {
+  const lines = text.split("\n");
+  return (
+    lines.some((line) => line.trim() === "BASE=$(node bin/ci-integrity-base.ts)") &&
+    lines.some((line) => /^\s*BASE_REF:.*steps\.integrity-base\.outputs\.sha/.test(line))
   );
 }
 

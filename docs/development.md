@@ -43,9 +43,13 @@ CI (`.github/workflows/ci.yml`) runs them on pushes to `main` and `gate/**` bran
 requests and on demand. A push to `main` of a commit whose CI already passed on a `gate/`
 branch skips them: a first job finds that green run, and the run passes without testing again.
 The test-integrity check compares a pull request with its base branch, and every other run with
-the newest commit in its history that has a successful CI run, read from the GitHub API, so a
-cancelled run or a `gate/` branch's first push leaves no commit unchecked. The step fails when it
-cannot find that commit among the newest 100 successful runs.
+the nearest commit in its history, in topological order, whose successful CI run ran this check
+(read from the GitHub API), or with a start commit pinned in `bin/ci-integrity-base.ts`, so a
+cancelled run or a `gate/` branch's first push leaves no commit unchecked. The start commit counts
+even when it is outside the newest 100 successful runs. The step fails when it cannot read the
+runs or the history, and when HEAD's history holds neither a recognised run among the newest 100
+nor that commit. A merge of two lines that each passed CI since they forked is compared with only
+one of them: the one topological order lists first.
 
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
