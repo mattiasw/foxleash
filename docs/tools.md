@@ -138,16 +138,17 @@ address.
   [Security](security.md#files-a-page-loads-in-the-agents-tabs) has the limits.
 - When the tab's load is redirected to a site on the blocklist, Foxleash cancels that redirect
   step before Firefox sends it, and `tab_open` or `navigate` fails at once with `site_blocked`,
-  naming only that site. That holds for a reload and for going back or forward too, and for a
-  navigation the page starts by itself while the call waits. `tab_open` closes the tab it made,
-  unless it showed Foxleash's question about the site in that tab, which then stays on the
-  answered question; a tab `navigate` used keeps its page. The redirect steps of every load in
+  naming only that site. A redirect step Foxleash cannot check is cancelled the same way, and the
+  call fails with `redirect_unchecked`. That holds for a reload and for going back or forward too,
+  and for a navigation the page starts by itself while the call waits. `tab_open` closes the tab
+  it made, unless it showed Foxleash's question about the site in that tab, which then stays on
+  the answered question; a tab `navigate` used keeps its page. The redirect steps of every load in
   that tab in the 5 minutes after the call returns are cancelled the same way, whoever starts the
   load, with no error, since the call has returned. So a reload or step back that the page holds
-  back past the call can return with the page the tab kept, and a load that a click or another
-  act starts there is cancelled with nothing about it in the act's result. A redirect to a site
-  that is only not approved still loads, and the tab comes back with only that site's address.
-  Without Foxleash's access to all websites, no such redirect step is seen or cancelled.
+  back past the call can return with the page the tab kept, and a load that a click or another act
+  starts there is cancelled with nothing about it in the act's result. A redirect to a site that
+  is only not approved still loads, and the tab comes back with only that site's address. Without
+  Foxleash's access to all websites, no such redirect step is seen or cancelled.
   [Security](security.md#the-blocklist) has the limits.
 - When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
   to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that
@@ -643,10 +644,10 @@ agent can move it from there.
 - `download` needs Foxleash's access to all websites (about:addons, Foxleash, Permissions) and
   refuses without it, since Firefox would not show it the redirects to sites outside that access.
 - An `http://` address is fetched over plain http, as the page's own requests to it are, so the
-  file and your cookies for the site travel unencrypted. Only where Firefox itself requires https
-  for the host, as HTTPS-Only Mode does for a host name or a site can ask it to, does the request
-  go to `https://`, as the page would; that upgraded request is cancelled before Firefox sends
-  it unless you approved that `https://` site too.
+  file and your cookies for the site that are not marked Secure travel unencrypted. Only where
+  Firefox itself requires https for the host, as HTTPS-Only Mode does for a host name or a site
+  can ask it to, does the request go to `https://`, as the page would; that upgraded request is
+  cancelled before Firefox sends it unless you approved that `https://` site too.
 - The name must not contain a slash or backslash, control or formatting characters, or start
   with a dot, and Firefox refuses some others, such as names ending in `.desktop`. Firefox adds
   a number when the name is taken, so an existing file is never replaced.

@@ -136,6 +136,7 @@ const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
+const PROTECTIONS_INTRO = "What protects you:";
 const PERMISSIONS_HEADING = "## Permissions";
 const SECTION_CAPS = [
   { heading: "## Summary", max: 250, field: "the add-on's summary" },
@@ -383,6 +384,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   const tools = attempt(findings, "registered tools", () => env.listTools());
   const capabilityBullets = bulletList(listing, CAPABILITIES_INTRO, findings);
   const safeguardBullets = bulletList(listing, SAFEGUARDS_INTRO, findings);
+  const protectionBullets = bulletList(listing, PROTECTIONS_INTRO, findings);
   if (claims !== undefined) {
     const capabilities = claims.capabilities.map((claim) => claim.listing);
     const safeguards = claims.safeguards.map((claim) => claim.listing);
@@ -392,6 +394,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
     if (listing !== undefined) checkClaimsOccur(listing, safeguards, findings);
     checkBulletsClaimed(capabilityBullets ?? [], capabilities, findings);
     checkBulletsClaimed(safeguardBullets ?? [], safeguards, findings);
+    checkBulletsClaimed(protectionBullets ?? [], safeguards, findings);
     if (tools !== undefined) checkToolsClaimed(tools, claims.capabilities, findings);
     checkSafeguards(env, claims.safeguards, findings);
   }

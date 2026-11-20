@@ -204,6 +204,10 @@ const FIXTURE_LISTING = [
   "- The approval can only come from your click.",
   "- Tool results mark page content as untrusted.",
   "",
+  "What protects you:",
+  "",
+  "- it acts only on tabs in its group.",
+  "",
   "## Permissions",
   "",
   "Why Foxleash requests each permission in its manifest:",
@@ -1613,6 +1617,7 @@ describe("listing", () => {
       'docs/amo/listing-claims.json: the capability "open windows" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
       'docs/amo/listing-claims.json: "acts only on approved tabs" does not occur in docs/amo/listing.md',
       'docs/amo/listing.md line 13 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 23 "it acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1657,6 +1662,18 @@ describe("listing", () => {
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       'docs/amo/listing.md line 15 "acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
       'docs/amo/listing.md line 21 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
+    ]);
+  });
+
+  test("a bullet of the first-screen protections needs a safeguard claim", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        "- it acts only on tabs in its group.",
+        "- it acts only on tabs in its group,\n- it can read pages only on approved sites.",
+      ),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md line 24 "it can read pages only on approved sites." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1843,6 +1860,21 @@ describe("listing", () => {
     ]);
   });
 
+  test("a missing protections intro and one with no bullets fail in the check", () => {
+    const missing = withListing(firstReleaseTree(), (text) =>
+      text.replace("What protects you:", "What protects:"),
+    );
+    assert.deepEqual(texts(listing(missing), "FAIL"), [
+      'docs/amo/listing.md has no line ending with "What protects you:"',
+    ]);
+    const empty = withListing(firstReleaseTree(), (text) =>
+      text.replace("- it acts only on tabs in its group.", "It acts only on tabs in its group."),
+    );
+    assert.deepEqual(texts(listing(empty), "FAIL"), [
+      'docs/amo/listing.md: no bullet list follows "What protects you:"',
+    ]);
+  });
+
   test("a claims file that is not JSON fails, and the permission checks still run", () => {
     const tree = withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] });
     tree.files[CLAIMS] = "{";
@@ -1976,6 +2008,10 @@ describe("listing", () => {
             { file: "apps/extension/src/approval.ts", lacks: "eval" },
           ],
         },
+        {
+          listing: "acts only on tabs in its group",
+          evidence: [{ file: "apps/extension/src/tools.ts", contains: "group" }],
+        },
       ],
     };
     const tree = withClaims(firstReleaseTree(), claims);
@@ -2044,7 +2080,7 @@ describe("listing", () => {
       missingCookies,
       'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
       'the manifest requests "downloads", but the Permissions section of docs/amo/listing.md has no "- downloads:" bullet',
-      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
       'the manifest declares the data collection category "locationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(locationInfo)"',
       'the manifest declares the data collection category "authenticationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(authenticationInfo)"',
     ]);
@@ -2136,9 +2172,9 @@ describe("listing", () => {
       "apps/extension/manifest.json: host_permissions must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.required must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.optional must be absent or an array of strings",
-      'docs/amo/listing.md line 25 explains the permission "tabs", which the manifest does not request',
-      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
-      'docs/amo/listing.md line 27 explains the permission "<all_urls>", which the manifest does not request',
+      'docs/amo/listing.md line 29 explains the permission "tabs", which the manifest does not request',
+      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 31 explains the permission "<all_urls>", which the manifest does not request',
     ]);
   });
 
@@ -4456,7 +4492,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     const findings = listingAt(dir);
     assert.deepEqual(texts(findings, "FAIL"), [
-      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
     const lines = texts(findings, "INFO");
@@ -4487,7 +4523,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     git(dir, "update-ref", "refs/v0.1.0", "HEAD");
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });
@@ -4501,7 +4537,7 @@ describe("real git", () => {
     assert.ok(texts(findings, "INFO").includes('-    "storage"'));
     write(dir, { [LISTING]: FIXTURE_LISTING });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 26 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });

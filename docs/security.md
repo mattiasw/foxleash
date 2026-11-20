@@ -141,9 +141,12 @@ A load the agent started is one of `navigate` to an address, a reload, back or f
 `tab_open`, also after you approved its site. When a redirect step of such a load leads to a
 blocked site, even one you approved, Foxleash cancels it before Firefox sends it, so that site
 gets no request and none of your cookies, and the call fails with `site_blocked`, naming only the
-site. This also covers a redirect that a site's service worker builds and Firefox's own upgrade of
-an address to `https://`. While the call waits, the redirect steps of a navigation the page starts
-by itself in that tab are checked the same way. Its limits:
+site. A redirect step to an `http://` or `https://` address that Foxleash cannot check is
+cancelled the same way, and the call fails with `redirect_unchecked`: a step whose host Foxleash
+cannot read as a site, and every such step while Foxleash cannot read its settings. This also
+covers a redirect that a site's service worker builds and Firefox's own upgrade of an address to
+`https://`. While the call waits, the redirect steps of a navigation the page starts by itself in
+that tab are checked the same way. Its limits:
 
 - A redirect step that comes after the call returned is still cancelled when it belongs to a load
   that was under way then, however late it comes. For 5 minutes after the call returns, every load
@@ -151,8 +154,10 @@ by itself in that tab are checked the same way. Its limits:
   the call. A load still under way at the end of those 5 minutes is checked until it ends, and a
   load started later is not, for example a reload that waits behind a leave-page question you
   answer later.
-- After you stop the session, these loads are still checked, against the blocklist only, and
-  nothing else about them is stopped.
+- When you stop the session while the call still waits, every redirect step to an `http://` or
+  `https://` address of a load in that tab is cancelled from then until the call returns, and the
+  call fails with `session_stopped`. After the call returns, these loads are still checked,
+  against the blocklist only, and nothing else about them is stopped.
 - A call can return before its step's redirect is cancelled, with the page the tab kept, when the
   page's own navigations ended the wait first.
 - A load you start yourself in that tab in those 5 minutes also stops at a redirect step to a
@@ -563,7 +568,12 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
   exists only while a download runs: it sees the requests that belong to no tab, answers at once
   for every one but the redirect steps of the download's own request, and cancels a step to a site
   the session may not act on (see [Downloads](#downloads)). After a download that timed out while
-  its request was under way, it stays for up to 5 minutes, cancelling only that request's steps.
+  its request was under way, it stays for up to 5 minutes, cancelling only that request's steps. A
+  fourth exists for a tab while a call waits for a load the agent started there, until 5 minutes
+  after the last such call returns, and for a load under way then until it ends: it sees that
+  tab's page loads, answers at once for a load's first address, and holds each redirect step until
+  Foxleash has read its settings, cancelling the steps that [The blocklist](#the-blocklist) says
+  it cancels.
 
 Exceptions and limits:
 
@@ -656,16 +666,15 @@ What the agent learns:
   result.
 
 When such a site's own service worker answers the load, there is no answer from the network to
-stop, and Firefox starts saving the file. For that case Foxleash keeps each page and frame load
-of every tab whose answer has not come, and when Firefox starts a download that Foxleash did not
+stop, and Firefox starts saving the file. For that case Foxleash keeps each page and frame load of
+every tab whose answer has not come, and when Firefox starts a download that Foxleash did not
 start, at the address of such a load in a tab it covers, begun before the download, on a site that
 session may not act on, Foxleash cancels the download and removes its file (ADR 0092). This is
-after the fact: the request reached that site, and the file exists for a moment, measured at
-about 15 to 50 ms for one load and at most about half a second while a page loads the file 33
-times a second. `upload_file` refuses a file saved or changed in the last 5 seconds, so it does
-not hand such a file over in that moment; a program other than Foxleash that reads the download
-folder in a loop can read it, and so can `upload_file` of a Foxleash program from before this
-check. The download stays in Firefox's downloads panel, cancelled.
+after the fact: the request reached that site, and the file exists for a moment, measured at about
+15 to 50 ms for one load and at most about half a second while a page loads the file 33 times a
+second. `upload_file` refuses a file saved or changed in the last 5 seconds, so it does not hand
+such a file over in that moment; a program other than Foxleash that reads the download folder in a
+loop can read it. The download stays in Firefox's downloads panel, cancelled.
 
 When a page of such a site, in those tabs or a frame there, builds a file itself, as a Blob, and
 Firefox saves it, there is no load to stop either. Foxleash keeps, for each tab, the sites of the

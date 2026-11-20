@@ -236,18 +236,19 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
 - `listing`: `docs/amo/listing-claims.json` maps each capability and safeguard that
   `docs/amo/listing.md` states to the tools and code that provide it. Every capability claim
   occurs in a bullet of the listing's capability list and every safeguard claim in the
-  listing, and every bullet of the capability list has a capability claim and every bullet
-  of the safeguard list a safeguard claim; the tools the server registers are exactly the
-  claimed ones; each safeguard's evidence holds (a tracked file contains, or lacks, a
-  string), and a safeguard with no evidence fails, because it is not built yet; every
-  permission and data collection category in the manifest is explained in the listing, and
-  every permission the listing explains is in the manifest; the Summary, the Description
-  and the Permissions section, which go to AMO as the add-on's summary and description and
-  as each version's notes to reviewers, hold at most the 250, 15,000 and 3,000 characters
-  AMO takes for them. With a previous tag, it prints the diffs of the manifest, the listing
-  and `bin/amo-source-files.txt` between that tag and the working tree, and fails when the
-  manifest's permissions, content script matches or data declarations changed but the
-  listing did not.
+  listing, and every bullet of the capability list has a capability claim and every bullet of
+  the safeguard list and of the Description's first-screen list of protections ("What
+  protects you:") a safeguard claim; the tools the server registers are exactly the claimed
+  ones; each safeguard's evidence holds (a tracked file contains, or lacks, a string), and a
+  safeguard with no evidence fails, because it is not built yet; every permission and data
+  collection category in the manifest is explained in the listing, and every permission the
+  listing explains is in the manifest; the Summary, the Description and the Permissions
+  section, which go to AMO as the add-on's summary and description and as each version's
+  notes to reviewers, hold at most the 250, 15,000 and 3,000 characters AMO takes for them.
+  With a previous tag, it prints the diffs of the manifest, the listing and
+  `bin/amo-source-files.txt` between that tag and the working tree, and fails when the
+  manifest's permissions, content script matches or data declarations changed but the listing
+  did not.
 - `protocol`: the extension still serves the server of the latest release (see
   [Protocol versions](#protocol-versions)). It reads `PROTOCOL_VERSION` and
   `OLDEST_SERVED_PROTOCOL` from `packages/protocol/src/index.ts` in the working tree and

@@ -131,7 +131,8 @@ whether to allow it: this session, always, or not at all. The agent's call waits
 seconds for your answer. After three refused or closed prompts, a session stops asking.
 
 At the start of a task, the agent can also ask you on one page to allow the sites the task
-needs, for that session only.
+needs, for that session only. After three such pages or recipe pages that you discarded,
+refused or closed, Foxleash opens no more in that session.
 
 ### The agent's tabs
 

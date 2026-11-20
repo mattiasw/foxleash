@@ -38,6 +38,41 @@
   ],
   "safeguards": [
     {
+      "listing": "only on sites you approved with your own click",
+      "evidence": [
+        { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
+        { "file": "apps/extension/src/site-access.ts", "contains": "sender.url" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "access.ask(" }
+      ]
+    },
+    {
+      "listing": "Foxleash acts only on tabs in the agent's own orange tab group",
+      "evidence": [
+        { "file": "apps/extension/src/handlers.ts", "contains": "tab_not_in_group" },
+        { "file": "apps/extension/src/session-groups.ts", "contains": "color: \"orange\"" }
+      ]
+    },
+    {
+      "listing": "do not show it the values of password fields, or of the text fields that Firefox fills in",
+      "evidence": [
+        { "file": "apps/extension/src/page-tree.ts", "contains": "isProtectedField" },
+        { "file": "apps/extension/src/page-tree.ts", "contains": "autofilled ||" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "browser.scripting.insertCSS(mask)"
+        },
+        { "file": "apps/extension/src/screenshot.ts", "contains": "input:autofill" }
+      ]
+    },
+    {
+      "listing": "you can stop an agent session at any time in the extension's settings",
+      "evidence": [
+        { "file": "apps/extension/src/site-access.ts", "contains": "session_stopped" },
+        { "file": "apps/extension/src/handlers.ts", "contains": "access.admit(" },
+        { "file": "apps/extension/src/options.ts", "contains": "type: \"stop\"" }
+      ]
+    },
+    {
       "listing": "The approval can only come from your click",
       "evidence": [
         { "file": "apps/extension/src/page-ui.ts", "contains": "isTrusted" },
@@ -54,7 +89,7 @@
       ]
     },
     {
-      "listing": "A built-in list of common financial and health sites is blocked by default",
+      "listing": "built-in list of common financial and health sites is blocked by default",
       "evidence": [
         { "file": "apps/extension/src/default-blocklist.ts", "contains": "DEFAULT_BLOCKLIST" },
         { "file": "apps/extension/src/site-access.ts", "contains": "site_blocked" },
