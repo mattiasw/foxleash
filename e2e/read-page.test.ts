@@ -1526,7 +1526,7 @@ describe("read_page in real Firefox", () => {
   });
 
   test("going back to a page whose frame a form sent with POST loads it again from its address and sends that form no second time", async () => {
-    // ADR 0052: the frame's POST does not stop the GET load. Firefox fills no saved login into a
+    // ADR 0025: the frame's POST does not stop the GET load. Firefox fills no saved login into a
     // frame from another site (ADR 0025), so the test sets the values a fill or the user would
     // leave.
     const page = "/autofill-framed-unload";
@@ -1602,7 +1602,7 @@ describe("read_page in real Firefox", () => {
     timeout: 120_000,
   }, async () => {
     // The load of the page's address never arrives, and the wait for it no longer ends at the
-    // stopped load's complete (ADR 0054). A stop before the request reaches the server leaves no
+    // stopped load's complete (ADR 0025). A stop before the request reaches the server leaves no
     // request.
     const answer = await backToTypedFrame("/autofill-framed-stop", "/a?stop");
     assert.deepEqual(

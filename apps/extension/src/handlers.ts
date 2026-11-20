@@ -229,7 +229,7 @@ export const NAVIGATION_WAIT_MS = 10_000;
  * How long `navigate` waits, once going back or forward has loaded a page, for that page's own
  * request: Firefox can report it after the commit (ADR 0016 measured 211 ms). A page Firefox kept
  * in memory is told by its commit's `documentId` and waits only KEPT_GRACE_MS, within this wait
- * (ADR 0049); one Foxleash cannot tell makes no request and waits this long.
+ * (ADR 0025); one Foxleash cannot tell makes no request and waits this long.
  */
 export const HISTORY_REQUEST_TIMEOUT_MS = 1000;
 /**
@@ -240,8 +240,8 @@ export const HISTORY_REQUEST_TIMEOUT_MS = 1000;
 export const KEPT_GRACE_MS = 200;
 /**
  * The top-level documents remembered per tab to tell a page kept in memory, the least recently
- * committed dropped first. A page whose document was dropped waits HISTORY_REQUEST_TIMEOUT_MS, and
- * is not reloaded.
+ * committed dropped first. A page whose document was dropped waits HISTORY_REQUEST_TIMEOUT_MS and
+ * is decided as a page loaded again.
  */
 export const KNOWN_DOCUMENTS_PER_TAB = 50;
 /**
@@ -629,11 +629,11 @@ export function createHandlers<Handle>({
    * the last top-level request started by the tab's last top-level commit is for the commit's URL,
    * and no top-level request that started from that request on, or was reported after it, was not
    * a GET, counting only those that started no later than the commit current when it is asked;
-   * `topPosted` tells whether one started after it (ADR 0053), `framePosted` whether a frame
-   * request was not a GET (ADR 0052). A commit of a document the tab committed before the step was
+   * `topPosted` tells whether one started after it (ADR 0025), `framePosted` whether a frame
+   * request was not a GET. A commit of a document the tab committed before the step was
    * kept in memory: it reloads nothing once KEPT_GRACE_MS passed with no top-level navigation begun
    * after it, by the order Firefox reports them. The grace starts when `navigate` decides, or at a
-   * later such commit (ADR 0049).
+   * later such commit.
    */
   function watchHistoryLoad(tabId: number): HistoryLoad {
     // A copy: the record hears each commit before the listener below does.
@@ -788,13 +788,13 @@ export function createHandlers<Handle>({
    * it from the back-forward cache: Firefox puts field values back into such a page without its
    * autofill mark (ADR 0025). The load is a GET that replaces the history entry, so it restores no
    * field value and sends no form again, also not a frame's; an address with a fragment would be a
-   * fragment navigation, so it is reloaded without the cache instead (ADR 0051). Only in the
+   * fragment navigation, so it is reloaded without the cache instead. Only in the
    * session's group, off its prompt, on a site it may act on, unless the tab shows a document from
    * before the step that no commit during the step named, never after a top-level request that was
    * not a GET by the commit, and for an address with a fragment also never after a frame's, a
-   * top-level one after the commit, or a load its timeout cut off (ADR 0052, 0053). A page kept in
+   * top-level one after the commit, or a load its timeout cut off. A page kept in
    * memory waits KEPT_GRACE_MS for a navigation of its own, which is then decided on as a page
-   * loaded again, also one the tab commits while it is read before the load (ADR 0049).
+   * loaded again, also one the tab commits while it is read before the load.
    */
   async function reloadHistoryLoad(
     session: string,

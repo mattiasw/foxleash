@@ -124,7 +124,7 @@ export function createLiveDocuments({
     // The tab's own group on every update, so a move is seen even without a groupId change. A
     // late event for the grouping the entry was made in carries the same id.
     const groupId = changeInfo.groupId ?? tab.groupId;
-    // A site change without a commit: Firefox commits a page it restores from memory (ADR 0049).
+    // A site change without a commit: Firefox commits a page it restores from memory (ADR 0025).
     const moved = changeInfo.url !== undefined && siteOf(changeInfo.url) !== entry.site;
     if (groupId !== entry.groupId) {
       // It may have joined another session's group.

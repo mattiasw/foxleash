@@ -84,7 +84,7 @@ in to. The cost is that a real sign-in answers 2 seconds after the challenge ins
 still far below the 30-second timeout.
 
 Waits without a URL (a reload of the page the tab shows, back, forward, and the load of the page's
-address that follows a history step, [0051](0051-history-steps-load-the-page-again-with-get.md))
+address that follows a history step, [0025](0025-history-loads-and-autofilled-fields.md))
 do not listen; they never failed on the timeout, they return the tab as it is after it. The loads
 that carry a URL do listen: the load of the address in a tab Firefox unloaded or in place of a
 blank entry a reload landed on, and a reload on a site question the user answered.

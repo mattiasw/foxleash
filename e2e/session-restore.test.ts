@@ -97,7 +97,7 @@ describe("a login field Firefox restores after a restart, in real Firefox", () =
   );
 
   test("stays protected while the login is still saved", { timeout: CASE_TIMEOUT_MS }, () =>
-    // ADR 0033: Firefox fills the saved login in again, marked, in both restored tabs.
+    // ADR 0025: Firefox fills the saved login in again, marked, in both restored tabs.
     restoreCase("kept", "protected"),
   );
 
@@ -105,7 +105,7 @@ describe("a login field Firefox restores after a restart, in real Firefox", () =
     "shows its value unmarked when the login was removed before the restart",
     { timeout: CASE_TIMEOUT_MS },
     () =>
-      // Accepted in ADR 0033: Firefox's session store puts the value back without the mark.
+      // Accepted in ADR 0025: Firefox's session store puts the value back without the mark.
       restoreCase("removed", "shown"),
   );
 

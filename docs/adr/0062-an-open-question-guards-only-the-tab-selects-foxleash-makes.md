@@ -38,7 +38,7 @@ the user leaves, Firefox does not select the question's tab again. The end-to-en
 that does not ask leave the question's tab selected. Two things seen on the way, not asserted: a
 reload, back or forward returns after its one-second load wait with the page still shown while the
 dialog holds the load, and the load of the page's address that follows a history step
-([0051](0051-history-steps-load-the-page-again-with-get.md)) can raise the same dialog.
+([0025](0025-history-loads-and-autofilled-fields.md)) can raise the same dialog.
 
 ## Decision
 
