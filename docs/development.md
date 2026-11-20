@@ -156,7 +156,7 @@ it with `harness.restartFirefox(EXTENSION_DIST, { restoreSession: true })`. That
 File > Quit does, then starts Firefox on the same profile and installs the extension again.
 After a restart the test connects a new MCP session: sessions end with the Firefox that quit.
 The extension's `storage.local`, and so the settings, carries over the restart, though the add-on
-is installed again (measured, ADR 0091); `e2e/foreign-file-restart.test.ts` depends on that.
+is installed again (measured, ADR 0081); `e2e/foreign-file-restart.test.ts` depends on that.
 
 A test that reloads the extension, as `browser.runtime.reload()` does, calls
 `harness.reloadExtension()`. It evaluates the reload in the settings page, waits until Firefox

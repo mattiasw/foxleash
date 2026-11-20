@@ -23,7 +23,7 @@ export const MAX_REFUSALS = 20;
 export const MAX_REFUSAL_TABS = 100;
 /**
  * How long a page or frame load whose response headers never came is kept, so a download from it
- * can still be matched: a service worker can hold the load at least 10 minutes (ADR 0092).
+ * can still be matched: a service worker can hold the load at least 10 minutes (ADR 0081).
  */
 export const HOP_AGE_MS = 600_000;
 /** The most such loads kept per tab; past it, the tab's flood mark matches by site. */
@@ -40,7 +40,7 @@ export const HOP_GRACE_MS = 2_000;
 export const MAX_GONE_TABS = 200;
 /**
  * How long a tab keeps the site of a document from its last event, so a file the document's page
- * builds itself can be matched with it (ADR 0094).
+ * builds itself can be matched with it (ADR 0081).
  */
 export const DOCUMENT_AGE_MS = 60_000;
 /** The most sites whose documents a tab keeps; past it, the tab's document flood mark. */
@@ -100,7 +100,7 @@ interface Opened {
   tie: Promise<Tie | undefined>;
 }
 
-/** A page or frame load of a tab whose response headers have not come (ADR 0092). */
+/** A page or frame load of a tab whose response headers have not come (ADR 0081). */
 interface Hop {
   requestId: string;
   /** Without its fragment. */
@@ -190,7 +190,7 @@ interface Candidate {
   loads: Loads;
 }
 
-/** A file a page built itself, such as a Blob, which Foxleash did not start (ADR 0094). */
+/** A file a page built itself, such as a Blob, which Foxleash did not start (ADR 0081). */
 interface Built {
   id: number;
   /** The site it came from; unset for a page with no origin of its own, as in a sandbox. */
@@ -235,13 +235,13 @@ const PAGE_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml
  * In the tabs of a session's group, cancels the response to a page or frame load that is anything
  * other than a web page and comes from a site that session may not act on, so Firefox neither
  * saves nor shows it (ADR 0081). A tab or window opened from a tab judged as a session's is judged
- * as that session's too, until it closes (ADR 0089). A tab of a group the extension remembers
- * creating for a session, also before a restart, an update or a reload, is judged as that session's
- * (ADR 0091). An ended session's tabs also pass files of the sites it was allowed for itself when it
- * ended, until the background restarts (ADR 0103). Call it at the top level of the background
+ * as that session's too, until it closes. A tab of a group the extension remembers
+ * creating for a session, also before a restart, an update or a reload, is judged as that session's.
+ * An ended session's tabs also pass files of the sites it was allowed for itself when it
+ * ended, until the background restarts. Call it at the top level of the background
  * script. Its listeners, for the responses and for the tabs that tabs open, are added when the
  * first session starts running, or as soon as a tab of a remembered group is seen, from the
- * background's start on (ADR 0091); never at the top level: Firefox wakes a suspended background
+ * background's start on; never at the top level: Firefox wakes a suspended background
  * for a listener added there, and holds the request meanwhile (ADR 0071). They are never removed:
  * a session's group outlives its session, and a page left open in it can load a file at any time.
  */
@@ -361,7 +361,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       ["blocking", "responseHeaders"],
     );
     browser.webNavigation.onCreatedNavigationTarget.addListener(tie);
-    // The second layer (ADR 0092): a load whose headers never came, as when another site's
+    // The second layer (ADR 0081): a load whose headers never came, as when another site's
     // service worker answers it, is matched with the download it becomes. None of these blocks.
     const loadTypes = { urls: ["<all_urls>"], types: ["main_frame", "sub_frame"] };
     browser.webRequest.onBeforeRequest.addListener(onHop, loadTypes);

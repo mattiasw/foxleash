@@ -50,7 +50,7 @@ export interface SessionGroups {
   sessionOf(groupId: number | undefined): string | undefined;
   /**
    * The session a group was created for: a current one, one this created and forgot, or one an
-   * earlier background stored (ADR 0091); undefined for any other group, and for undefined and -1
+   * earlier background stored (ADR 0081); undefined for any other group, and for undefined and -1
    * without reading storage. The first call that needs the stored list reads it and keeps it; a
    * read that fails warns, answers from memory alone, and is tried again at the next call. Never
    * rejects.

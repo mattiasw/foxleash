@@ -641,7 +641,7 @@ Foxleash stops a page or frame load whose answer comes from a site that session 
 save, or a PDF, an image, plain text or another document that it would show. Nothing of it is
 saved or shown, and the tab keeps the page it had (ADR 0081). A window that a page in the agent's
 tabs opens, or that a page in such a window opens, is covered like those tabs until it closes,
-though the agent cannot reach it (ADR 0089).
+though the agent cannot reach it.
 
 What the agent learns:
 
@@ -669,7 +669,7 @@ When such a site's own service worker answers the load, there is no answer from 
 stop, and Firefox starts saving the file. For that case Foxleash keeps each page and frame load of
 every tab whose answer has not come, and when Firefox starts a download that Foxleash did not
 start, at the address of such a load in a tab it covers, begun before the download, on a site that
-session may not act on, Foxleash cancels the download and removes its file (ADR 0092). This is
+session may not act on, Foxleash cancels the download and removes its file. This is
 after the fact: the request reached that site, and the file exists for a moment, measured at about
 15 to 50 ms for one load and at most about half a second while a page loads the file 33 times a
 second. `upload_file` refuses a file saved or changed in the last 5 seconds, so it does not hand
@@ -679,7 +679,7 @@ loop can read it. The download stays in Firefox's downloads panel, cancelled.
 When a page of such a site, in those tabs or a frame there, builds a file itself, as a Blob, and
 Firefox saves it, there is no load to stop either. Foxleash keeps, for each tab, the sites of the
 pages its frames showed in the last 60 seconds, and cancels such a download and removes its file
-after the fact, as for a worker's answer (ADR 0094), when the file comes from a site that session
+after the fact, as for a worker's answer, when the file comes from a site that session
 may not act on and a tab of the group shows a page of that site in any frame, or showed one in the
 last 60 seconds. A page with no origin of its own, such as one in a sandboxed frame or one opened
 from a file on your computer, gives its file no site: Foxleash then cancels it when a tab of the
@@ -749,14 +749,14 @@ Exceptions and limits:
   also from sites you approved.
 - When a session ended, the tabs left in its group stay covered, judged by the sites you allow
   always and those you had allowed only for that session when it ended, until Firefox restarts or
-  the extension is updated or reloaded (ADR 0103). Foxleash keeps that for the last 200 sessions
+  the extension is updated or reloaded. Foxleash keeps that for the last 200 sessions
   that ended with a site allowed only for them; an older one's tabs are judged by the sites you
   allowed always, also while its tab is still open. Moving a tab out of the group ends its
   coverage, unless another tab of the group opened it.
 - A new tab or window that a page opened for such a file stays open, blank.
 - Foxleash remembers in its storage the tab groups it made for agent sessions, up to 200, so after
   a Firefox restart, or an update or reload of the extension, the tabs left in such a group stay
-  covered, judged by the sites you allowed always (ADR 0091). So a file from a site you allowed
+  covered, judged by the sites you allowed always. So a file from a site you allowed
   only for that session no longer loads in those tabs, and a Blob file of your own from that site
   is cancelled in any tab while such a tab shows it, or showed it in the last 60 seconds. Limits:
   - In the moment after Firefox starts or the extension is updated or reloaded, before Foxleash
@@ -784,4 +784,4 @@ Exceptions and limits:
   wait, and whether the very first loads after Firefox starts wait too, was not measured. If
   Foxleash adds the listener again while starting, it checks the loads that waited in the tabs of
   a remembered group, though not in a window opened from them before then; if not, they go on
-  unchecked and Firefox drops the note (ADR 0091).
+  unchecked and Firefox drops the note.
