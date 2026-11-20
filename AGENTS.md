@@ -174,15 +174,25 @@ permission prompts can be switched off:
   from a site the session may not act on is cancelled, so Firefox saves no such file (ADR 0081).
 - Tool results mark page content as untrusted.
 
-Do not weaken any of these without an ADR. See `docs/adr/` for the threat model.
+Do not weaken any of these without recording the decision in an ADR, as a new record or as a
+dated amendment of the topic's record (see "Architecture decisions"). See `docs/adr/` for the
+threat model.
 
 ## Architecture decisions
 
-Write an ADR in `docs/adr/` (copy `0000-template.md`) for each architecture decision: a
-choice that constrains future code, or one that rejects an alternative the next
-contributor would reasonably reach for. Write it in the same commit as the decision. When
-a decision changes, write a new ADR that supersedes the old one; do not rewrite history.
-Routine feature work and choices that are cheap to reverse need no ADR.
+Write an ADR in `docs/adr/` (copy `0000-template.md`) for a decision that rejects an
+alternative the next contributor would reasonably reach for, or that sets or changes what a
+safeguard promises. Write it in the same commit as the decision. Routine feature work, bug
+fixes and choices that are cheap to reverse need no ADR.
+
+One record per topic. When the topic already has a record (the file guard, the prompts,
+protected fields), change that record in place, in the same commit: correct its text, and
+add a line `Amended YYYY-MM-DD: what changed and why.` under its status. Write a new ADR
+that supersedes the old one only when the decision is replaced as a whole.
+
+Keep a record near 500 words. The measurements a decision rests on (tables, timings,
+differences between Firefox versions) go in `docs/measurements/`, one file per topic, with
+how each was taken, and the record links to them.
 
 ## Borrowed code
 

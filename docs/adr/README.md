@@ -2,7 +2,10 @@
 
 Each record explains one architecture decision: the context that forced it, the decision,
 the alternatives rejected and the consequences. See AGENTS.md for when to write one.
-Records are never rewritten; a changed decision gets a new record that supersedes the old.
+A change inside a recorded decision is made in its record, with a dated `Amended` line under
+its status; a decision replaced as a whole gets a new record that supersedes the old. Records
+from before 2026-11-20 followed another rule, a new record for each change, so several topics
+still span a chain of records.
 
 | Record | Decision |
 |---|---|
