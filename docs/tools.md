@@ -337,12 +337,15 @@ the cache.
   also shows as `other` that does not say whether it is filled, since Firefox gives the same for
   it.
 - Foxleash reads what a request sent only in the tabs of a running agent session's group. A body
-  shows as `other`, with nothing more, when its request was sent before its tab was in such a
-  group, or right after Foxleash spent a quarter of a second or more reading large bodies: it then
-  reads none until as much time has passed as the reading took, 10 seconds at most, or longer when
-  the computer's clock was set back meanwhile. How long the earlier bodies took decides which are
-  left out, not a body's own size. A request sent while no agent session was running shows no
-  `requestBody` at all.
+  shows as `other`, with nothing more, when its request was sent right after Foxleash spent a
+  quarter of a second or more reading large bodies: it then reads none until as much time has
+  passed as the reading took, 10 seconds at most, or longer when the computer's clock was set
+  back meanwhile. How long the earlier bodies took decides which are left out, not a body's own
+  size.
+- A request shows no `requestBody` at all when it was sent before its tab was in such a group, or
+  while no agent session was running, since Foxleash then asks Firefox for no body. So do the
+  requests of a tab that Firefox sends before Foxleash notices the tab joined the group: normally
+  none, at most the tab's next request and any sent with it.
 - With `responseBody`, each fetch or XMLHttpRequest request whose response Foxleash captured
   includes `responseBody`: the response's text as it arrived in the page, so the agent can read
   what a form's POST got back without sending it again. Foxleash captures the responses to

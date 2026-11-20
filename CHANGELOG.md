@@ -97,10 +97,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   development server on your network, a router or an intranet tool. Firefox sent its request to
   `https://` instead, which is another site, so the download failed and nothing was saved.
 - A page that sends very large requests no longer keeps Foxleash busy for minutes, with the
-  agent's tool calls waiting behind them. With no agent session running, Foxleash no longer asks
-  Firefox for what requests send. In a tab outside an agent's tab group it no longer reads it. In
-  an agent's tabs it reads it only while it has time to spare, and `read_network` shows `other`
-  for the rest.
+  agent's tool calls waiting behind them, and a page in a tab outside the agent's tab group can no
+  longer make Firefox's add-on process, which all add-ons share, grow by gigabytes while an agent
+  session runs. Foxleash now asks Firefox for what requests send only in an agent's tabs while its
+  session runs. There it reads it only while it has time to spare, and `read_network` shows
+  `other` for the rest.
 - `resize_window` could report the window's size from before the resize, seen on Wayland when
   making a large window smaller. It now waits up to a second for the window to take its new size
   and reports that.

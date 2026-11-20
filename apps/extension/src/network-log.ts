@@ -180,9 +180,9 @@ type Change = (request: NetworkRequest) => void;
  * credential headers redacted, request bodies reduced to their shape and every string capped as
  * it arrives, and the text of fetch and XHR responses from sites the session may act on. A request
  * body is read only in the tabs of the group of a running session the user has not stopped, within
- * a time allowance, and Firefox is asked for bodies only while such a session runs (ADR 0085). Adds
- * its listeners at once (call it at the top level of the background script); none of them blocks
- * or changes a request.
+ * a time allowance, and Firefox is asked for bodies only for those tabs, one listener per tab
+ * (ADR 0085). Adds its listeners at once (call it at the top level of the background script); none
+ * of them blocks or changes a request.
  */
 export function createNetworkLog({ browser, groups, access, now }: NetworkLogDeps): NetworkLog {
   const logs = new Map<number, Log>();
@@ -192,6 +192,10 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   // Each tab with a live log has a blocking listener that returns at once: Firefox filters a
   // response only for an add-on with a blocking listener that saw its request (ADR 0071).
   const holds = new Map<number, (details: RequestDetails) => void>();
+  // Each tab of a running, not stopped session's group has a non-blocking listener with
+  // ["requestBody"]: Firefox builds a body only for a listener whose filter matches the request's
+  // tab (ADR 0085).
+  const bodyListeners = new Map<number, (details: RequestDetails) => void>();
   // By request id.
   const captures = new Map<string, Capture>();
   // The site view of each session, read ahead, since onBeforeRequest cannot wait for one.
@@ -201,9 +205,6 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   let epoch = 0;
   // Each tab's group, -1 for none, as its latest event showed it: a request names no group.
   const tabGroups = new Map<number, number>();
-  // The sessions that run and that the user has not stopped. Empty at first: the background script
-  // creates the log before it admits any session.
-  const readingSessions = new Set<string>();
   // The milliseconds spent shaping bodies that have not passed again since, as of `owedAt`. One
   // pair for every tab: they share the background's thread.
   let owed = 0;
@@ -218,7 +219,8 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   });
 
   const { webRequest } = browser;
-  listenForRequests(false);
+  // Added first and never removed, so Firefox calls it before a tab's body listener.
+  webRequest.onBeforeRequest.addListener(onBeforeRequest, { urls: ["<all_urls>"] });
   webRequest.onSendHeaders.addListener(onSendHeaders, { urls: ["<all_urls>"] }, ["requestHeaders"]);
   webRequest.onHeadersReceived.addListener(onHeadersReceived, { urls: ["<all_urls>"] }, [
     "responseHeaders",
@@ -227,31 +229,60 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   webRequest.onCompleted.addListener(onCompleted, { urls: ["<all_urls>"] }, ["responseHeaders"]);
   webRequest.onErrorOccurred.addListener(onErrorOccurred, { urls: ["<all_urls>"] });
   browser.tabs.onCreated.addListener((tab) => {
-    if (tab.id !== undefined) tabGroups.set(tab.id, tab.groupId ?? -1);
+    if (tab.id === undefined) return;
+    tabGroups.set(tab.id, tab.groupId ?? -1);
+    syncBodies(tab.id);
   });
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     // Seen from the tab's own group, as Firefox does not always name a change of it.
     tabGroups.set(tabId, changeInfo.groupId ?? tab.groupId ?? -1);
+    syncBodies(tabId);
   });
   // A group stays in its window, so a tab moved to another window has left it.
   browser.tabs.onDetached.addListener((tabId) => {
     tabGroups.set(tabId, -1);
+    syncBodies(tabId);
   });
   browser.tabs.onRemoved.addListener((tabId) => {
     dropLog(tabId);
     pages.delete(tabId);
     committedAt.delete(tabId);
     tabGroups.delete(tabId);
+    syncBodies(tabId);
   });
   void seedTabGroups();
-  access.onRunningChange(onSessionChange);
-  access.onStop(onSessionChange);
+  access.onRunningChange(syncAllBodies);
+  access.onStop(syncAllBodies);
   onSettingsChanged(browser, clearViews);
   access.onGrant(clearViews);
   access.onWithdraw(clearViews);
   access.onStop(clearViews);
 
   return { read, requestsSince };
+
+  /**
+   * Gives the tab a body listener while it is in the group of a running session the user has not
+   * stopped, and takes it away otherwise.
+   */
+  function syncBodies(tabId: number): void {
+    const wanted = inRunningSession(tabId);
+    const listener = bodyListeners.get(tabId);
+    if (wanted && listener === undefined) {
+      // A new function per tab: Firefox ignores a second add of a listener it already has.
+      const added = (details: RequestDetails): void => onRequestBody(details);
+      bodyListeners.set(tabId, added);
+      webRequest.onBeforeRequest.addListener(added, { urls: ["<all_urls>"], tabId }, [
+        "requestBody",
+      ]);
+    } else if (!wanted && listener !== undefined) {
+      bodyListeners.delete(tabId);
+      webRequest.onBeforeRequest.removeListener(listener);
+    }
+  }
+
+  function syncAllBodies(): void {
+    for (const tabId of tabGroups.keys()) syncBodies(tabId);
+  }
 
   /** The group of each tab open before the listeners were added. */
   async function seedTabGroups(): Promise<void> {
@@ -260,33 +291,12 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
         // An event is newer than the query's answer.
         if (tab.id !== undefined && !tabGroups.has(tab.id)) {
           tabGroups.set(tab.id, tab.groupId ?? -1);
+          syncBodies(tab.id);
         }
       }
     } catch (error: unknown) {
       warn({ event: "network_recording_failed", error: String(error) });
     }
-  }
-
-  /**
-   * Asks for request bodies while a session whose bodies are read runs. Called when the session
-   * starts or stops running, and when the user stops it.
-   */
-  function onSessionChange(session: string): void {
-    const asked = readingSessions.size > 0;
-    if (readsBodies(session)) readingSessions.add(session);
-    else readingSessions.delete(session);
-    const asks = readingSessions.size > 0;
-    if (asks === asked) return;
-    // Removed first: Firefox ignores a second add of a listener it already has.
-    webRequest.onBeforeRequest.removeListener(onBeforeRequest);
-    listenForRequests(asks);
-  }
-
-  /** Asks Firefox for request bodies only when `bodies`: it then builds one for every request. */
-  function listenForRequests(bodies: boolean): void {
-    const filter = { urls: ["<all_urls>"] };
-    if (bodies) webRequest.onBeforeRequest.addListener(onBeforeRequest, filter, ["requestBody"]);
-    else webRequest.onBeforeRequest.addListener(onBeforeRequest, filter);
   }
 
   function onCommit(tabId: number, url: string, timeStamp: number): void {
@@ -380,11 +390,13 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   function onBeforeRequest(details: RequestDetails): void {
     const { tabId, requestId } = details;
     if (tabId < 0) return;
+    // Catches up with a group event the log missed.
+    syncBodies(tabId);
     // A hop that did not end, such as one a service worker answered.
     captures.get(requestId)?.capture.release();
     if (details.type === "main_frame") {
       const url = withoutFragment(details.url);
-      const page: Page = { requestId, url, entry: entryOf(details, bodyOf(details)), ended: false };
+      const page: Page = { requestId, url, entry: entryOf(details), ended: false };
       const log = current(tabId);
       // Firefox can report a document's own request after its commit.
       if (log !== undefined && !log.hasPage && loads(page, log)) {
@@ -402,7 +414,7 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
     if (details.timeStamp < log.at) return;
     // A request the previous document makes after this one committed, such as an unload beacon.
     if (siteOf(topDocumentUrl(details) ?? "") !== log.site) return;
-    const entry = entryOf(details, bodyOf(details));
+    const entry = entryOf(details);
     log.entries.push(entry);
     log.open.set(requestId, entry);
     log.chars += entry.chars;
@@ -415,6 +427,17 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
     ) {
       attach(tabId, log, entry, details.url);
     }
+  }
+
+  /**
+   * Fills in the shape of what the request sent, on the entry `onBeforeRequest` made for it; reads
+   * nothing for a request the log does not record.
+   */
+  function onRequestBody(details: RequestDetails): void {
+    update(details.tabId, details.requestId, false, (request) => {
+      const body = bodyOf(details);
+      if (body !== undefined) request.requestBody = body;
+    });
   }
 
   /**
@@ -749,7 +772,7 @@ function loads(page: Page, log: Log): boolean {
   return page.url === log.url && log.since < startTime && startTime <= log.at;
 }
 
-function entryOf(details: RequestDetails, requestBody: NetworkBody | undefined): Entry {
+function entryOf(details: RequestDetails): Entry {
   const request: NetworkRequest = {
     url: capText(details.url, MAX_NETWORK_URL).text,
     method: capText(details.method, MAX_NETWORK_HEADER).text,
@@ -758,7 +781,6 @@ function entryOf(details: RequestDetails, requestBody: NetworkBody | undefined):
     requestHeaders: [],
     responseHeaders: [],
   };
-  if (requestBody !== undefined) request.requestBody = requestBody;
   return {
     requestId: details.requestId,
     request,

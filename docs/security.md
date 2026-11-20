@@ -513,16 +513,24 @@ Exceptions and limits:
   whether it is filled, or, when it is JSON, as `json` with its keys instead of `other`. So the
   shape shows whether a value, a protected one included, holds such a character.
 - Requests of frames from other sites show the shapes of their bodies too.
-- Foxleash asks Firefox for request bodies only while an agent session runs that you have not
-  stopped, and reads one only when its request comes from a tab in the group of such a session.
-  Any other body is recorded as `other` with nothing of it read, and a request sent while no such
-  session ran is recorded with no body.
+- Foxleash asks Firefox for request bodies only for the tabs in the group of an agent session
+  that runs and that you have not stopped, by one listener per such tab, so Firefox builds and
+  delivers no body for any other tab, and a request of another tab is recorded with no body.
+  When Foxleash misses that a tab joined or left the group, it catches up when it handles the
+  tab's next request: what that costs is the bodies of the requests Firefox sends for the tab
+  before then, which show no body in a tab that joined and are never read in a tab that left.
+  Foxleash reads a body only when its request comes from a tab in the group of such a session.
 - In those tabs Foxleash stops reading bodies once reading them has taken 250 ms that have not
   passed again since, so that a page sending very large bodies cannot keep it busy: the bodies
   that arrive until then show as `other`, for 10 seconds at most after a body was read, or longer
   when the computer's clock was set back meanwhile. This is not a size limit of Foxleash's own:
   the time the earlier bodies took decides what is left out, never a body's own size, and the
   time is shared by all sessions (ADR 0085).
+- A page in an agent's tab, including a frame from any site or a page on a site the session may
+  not act on, can still make Firefox deliver bodies faster than Foxleash takes them in, and
+  Firefox's add-on process, which all add-ons share, holds them meanwhile. A page in an agent's
+  tab that kept posting a 1,000,000-byte form of 111,112 fields grew that process by about 60 to
+  90 MiB a second for as long as it sent, in headless Firefox 160.0.1 (ADR 0085).
 - A response body can repeat what a request sent (see [Response bodies](#response-bodies)).
 
 ### Response bodies

@@ -201,6 +201,8 @@ for (const window of Services.wm.getEnumerator("navigator:browser")) {
 }
 return Promise.all(flushes).then(() => null);`;
 const SAVED_LOGINS = "return Services.logins.getAllLogins().then((logins) => logins.length);";
+const EXTENSION_PROCESSES =
+  'return ChromeUtils.requestProcInfo().then((info) => info.children.filter((child) => child.type === "extension").map((child) => child.pid));';
 
 /** The extension's internal UUID, pinned in user.js, so its pages have known URLs. */
 export const EXTENSION_UUID = "6c1f9a52-3d8e-4b7a-9f20-5e4d1c3b2a10";
@@ -278,6 +280,8 @@ export interface Firefox {
   removeLogins(): Promise<void>;
   /** How many logins Firefox has saved. */
   savedLogins(): Promise<number>;
+  /** The id of Firefox's extension process, which runs every add-on's background page. */
+  extensionProcessId(): Promise<number>;
   /**
    * Fills `card` into the card form of the tab's page as Firefox's form autofill does when the
    * user picks a saved card from the card number field's pop-up. It first focuses that field,
@@ -787,6 +791,20 @@ export async function launchFirefox({
     },
     removeLogins() {
       return withDeadline(chrome(REMOVE_LOGINS, []), HELPER_TIMEOUT_MS, "removeLogins");
+    },
+    extensionProcessId() {
+      return withDeadline(
+        chromeResponse(EXTENSION_PROCESSES, []).then((response) => {
+          const pids: unknown = isRecord(response) ? response.value : undefined;
+          const pid: unknown = Array.isArray(pids) && pids.length === 1 ? pids[0] : undefined;
+          if (typeof pid !== "number") {
+            throw new Error(`extensionProcessId returned ${JSON.stringify(response)}`);
+          }
+          return pid;
+        }),
+        HELPER_TIMEOUT_MS,
+        "extensionProcessId",
+      );
     },
     savedLogins() {
       return withDeadline(

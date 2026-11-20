@@ -205,7 +205,9 @@ export interface FakeBrowser {
   activeWebRequestRegistrations(): WebRequestRegistration[];
   /**
    * Fires a `webRequest` event at each listener whose filter's tabId and types match it; returns
-   * what each returned, in order.
+   * what each returned, in order. As in Firefox, only a listener added with `"requestBody"` is
+   * given `requestBody`, and a listener removed during the emit is not called: Firefox's extension
+   * side drops an event for a listener it no longer has. One added during the emit is not called.
    */
   emitWebRequest<E extends WebRequestEventName>(
     event: E,
@@ -957,13 +959,24 @@ export function createFakeBrowser(): FakeBrowser {
     emitWebRequest: (event, details) => {
       latestTimeStamp = Math.max(latestTimeStamp, details.timeStamp);
       const type = "type" in details ? details.type : undefined;
-      return [...(webRequestListeners.get(event) ?? [])]
-        .filter(
-          ([, { filter }]) =>
-            (filter.tabId === undefined || filter.tabId === details.tabId) &&
-            (filter.types === undefined || type === undefined || filter.types.includes(type)),
-        )
-        .map(([listener]) => listener(details as never));
+      const listeners = webRequestListeners.get(event);
+      if (listeners === undefined) return [];
+      const returned: unknown[] = [];
+      for (const [listener, registration] of [...listeners]) {
+        const { filter, extraInfoSpec } = registration;
+        if (filter.tabId !== undefined && filter.tabId !== details.tabId) continue;
+        if (filter.types !== undefined && type !== undefined && !filter.types.includes(type)) {
+          continue;
+        }
+        if (listeners.get(listener) !== registration) continue;
+        if ("requestBody" in details && extraInfoSpec?.includes("requestBody") !== true) {
+          const { requestBody: _, ...withoutBody } = details;
+          returned.push(listener(withoutBody as never));
+        } else {
+          returned.push(listener(details as never));
+        }
+      }
+      return returned;
     },
     streamFilters: [],
     failFilterResponseData: false,

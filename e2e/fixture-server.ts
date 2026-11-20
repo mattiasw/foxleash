@@ -4410,8 +4410,10 @@ window.addEventListener("load", async () => {
 // at once. buildJson keeps one flat JSON object of about `bytes` bytes, which fetchBurst then
 // sends `count` times, one every `everyMs` ms. buildForm makes a text/plain form whose one field's
 // name and value make such an object of its body, which formBurst then submits likewise; the
-// sink's answer keeps the page in place, and a submit replaces one still being sent. burstDone
-// says when every fetch of fetchBurst has settled, or formBurst has submitted its last.
+// sink's answer keeps the page in place, and a submit replaces one still being sent.
+// buildNamesForm makes a urlencoded form of `count` short names instead, which Firefox parses into
+// one field per name, and gives its body's length; formBurst submits it likewise. burstDone says
+// when every fetch of fetchBurst has settled, or formBurst has submitted its last.
 const NETWORK_BURST_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.networkBurst}</title></head>
 <body><h1>${TITLES.networkBurst}</h1>
@@ -4496,6 +4498,26 @@ window.buildForm = (bytes) => {
   form.append(input);
   document.body.append(form);
   return input.name.length + 1 + input.value.length;
+};
+
+window.buildNamesForm = (count) => {
+  form = document.createElement("form");
+  form.method = "post";
+  form.action = SINK;
+  const inputs = document.createDocumentFragment();
+  // The "&" between the pairs.
+  let length = count - 1;
+  for (let index = 0; index < count; index += 1) {
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "k" + index;
+    input.value = "v";
+    inputs.append(input);
+    length += input.name.length + 2;
+  }
+  form.append(inputs);
+  document.body.append(form);
+  return length;
 };
 
 window.formBurst = (count, everyMs) =>

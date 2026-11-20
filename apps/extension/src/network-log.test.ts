@@ -38,6 +38,7 @@ import {
   redactHeaders,
   SHAPING_ALLOWANCE_MS,
 } from "./network-log.ts";
+import { bodyShape } from "./request-body.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, revokeSite, saveBlocklist } from "./settings.ts";
 import { createSiteAccess, PROMPT_PAGE, type SessionMemory } from "./site-access.ts";
@@ -1871,14 +1872,16 @@ describe("network log", { timeout: 10000 }, () => {
     const id = request(tab.id, `${SITE}/api`);
     const details = { requestId: id, tabId: tab.id, timeStamp: 1001 };
     const returned = [
+      // Also the session tab's body listener.
       fake.emitWebRequest("onBeforeRequest", {
         ...details,
         requestId: "other",
         frameId: 0,
         url: `${SITE}/x`,
-        method: "GET",
+        method: "POST",
         type: "image",
         documentUrl: URL_A,
+        requestBody: { formData: { field: ["value"] } },
       }),
       fake.emitWebRequest("onSendHeaders", { ...details, requestHeaders: [] }),
       fake.emitWebRequest("onHeadersReceived", headersEvent({ ...details, statusCode: 200 })),
@@ -1892,7 +1895,7 @@ describe("network log", { timeout: 10000 }, () => {
       fake.emitWebRequest("onErrorOccurred", { ...details, error: "failed" }),
     ];
     assert.deepEqual(returned, [
-      [undefined],
+      [undefined, undefined],
       [undefined],
       [undefined],
       [undefined],
@@ -2400,7 +2403,12 @@ describe("network log response bodies", { timeout: 10000 }, () => {
       type: "xmlhttprequest",
       documentUrl: URL_A,
     };
-    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", details), [undefined, undefined]);
+    // The log's own listener, the tab's body listener and the hold.
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", details), [
+      undefined,
+      undefined,
+      undefined,
+    ]);
     assert.deepEqual(
       fake.emitWebRequest("onBeforeRequest", { ...details, requestId: "out", tabId: outside.id }),
       [undefined],
@@ -2808,7 +2816,10 @@ describe("network log request body reading", { timeout: 10000 }, () => {
     await groups.ensureGroup("s1", tab);
     fake.navigateByUser(tab.id, `${SITE}/next`);
     await flush();
-    assert.deepEqual(read(tab.id).requests[0]?.requestBody, { kind: "other" });
+    // Firefox gave the tab no body: it had no body listener when the request began.
+    assert.deepEqual(read(tab.id, { ...ALL, headers: false }).requests, [
+      { url: `${SITE}/next`, method: "POST", type: "main_frame", startTime: 2000 },
+    ]);
 
     // Only between a commit and its decision has a tab outside every group a log.
     const outside = fake.openTab();
@@ -2849,6 +2860,20 @@ describe("network log request body reading", { timeout: 10000 }, () => {
     const context = setup(parts);
     await flush();
     access.admit("s1");
+    assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
+  });
+
+  it("gives a tab open before the log was created its body listener from the open tabs", async () => {
+    const parts = createParts();
+    const { fake, groups, access } = parts;
+    const tab = fake.openTab();
+    await groups.ensureGroup("s1", tab);
+    const context = setup(parts);
+    // Before the open tabs are known.
+    access.admit("s1");
+    assert.deepEqual(bodyTabs(fake), []);
+    await flush();
+    assert.deepEqual(bodyTabs(fake), [tab.id]);
     assert.ok(send(context, tab.id, 0, { type: "main_frame" }).reads() > 0);
   });
 
@@ -3116,64 +3141,244 @@ describe("network log request body reading", { timeout: 10000 }, () => {
     );
   });
 
-  it("asks Firefox for request bodies only while a session runs", async () => {
+  it("asks Firefox for request bodies only in the tabs of a running session's group", async () => {
     const context = setup();
-    const { fake, access, read, request, tabIn } = context;
-    const without = { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } };
-    const withBodies = { ...without, extraInfoSpec: ["requestBody"] };
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+    const { fake, groups, access, read, request, tabIn } = context;
+    const all = { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } };
+    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [all]);
+    const outside = fake.openTab();
 
     const tab = await tabIn("s1", URL_A);
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
-    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [without, withBodies]);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [
+      all,
+      {
+        event: "onBeforeRequest",
+        filter: { urls: ["<all_urls>"], tabId: tab.id },
+        extraInfoSpec: ["requestBody"],
+      },
+    ]);
+    const second = await tabIn("s1");
+    const other = await tabIn("s2", URL_A);
+    assert.deepEqual(bodyTabs(fake), [tab.id, second.id, other.id]);
+
+    // A tab leaving the group and joining it again.
+    fake.ungroup(second.id);
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+    await groups.ensureGroup("s1", second);
+    assert.deepEqual(bodyTabs(fake), [tab.id, second.id, other.id]);
+    fake.emitDetached(second.id);
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+    fake.emitStatus(second.id, "complete");
+    assert.deepEqual(bodyTabs(fake), [tab.id, second.id, other.id]);
+    fake.removeTab(second.id);
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+
+    // A session ending, and starting again once its group exists.
+    access.endSession("s2");
+    assert.deepEqual(bodyTabs(fake), [tab.id]);
+    request(other.id, `${SITE}/ended`);
+    assert.deepEqual(bodyTabs(fake), [tab.id]);
+    access.admit("s2");
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+    request(outside.id, `${SITE}/outside`);
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+
+    // The log's own listener stays, without bodies, and records throughout.
     request(tab.id, `${SITE}/first`);
     assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/first`]);
-
-    // A second session starting, and one of the two ending, change nothing.
-    await tabIn("s2", URL_A);
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
     access.endSession("s1");
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
-    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [without, withBodies]);
-
     access.endSession("s2");
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
-    assert.deepEqual(requestListeners(fake.webRequestRegistrations), [
-      without,
-      withBodies,
-      without,
-    ]);
-    // Still recorded: the page's own request shows once a session runs and the page commits.
-    request(tab.id, `${SITE}/next`, { type: "main_frame", timeStamp: 2000 });
-    access.admit("s1");
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
-    await flush();
-    fake.navigateByUser(tab.id, `${SITE}/next`);
-    await flush();
-    assert.deepEqual(urlsOf(read(tab.id)), [`${SITE}/next`]);
+    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [all]);
+    assert.deepEqual(
+      requestListeners(fake.webRequestRegistrations).filter(
+        (registration) => registration.filter.tabId === undefined,
+      ),
+      [all],
+    );
   });
 
-  it("asks Firefox for no request bodies once the user stopped every running session", async () => {
+  it("asks Firefox for no request bodies in the tabs of a session the user stopped", async () => {
     const { fake, access, tabIn } = setup();
-    const without = { event: "onBeforeRequest", filter: { urls: ["<all_urls>"] } };
-    const withBodies = { ...without, extraInfoSpec: ["requestBody"] };
     await tabIn("s1", URL_A);
-    await tabIn("s2", URL_A);
-    // One of the two stopped changes nothing.
+    const second = await tabIn("s2", URL_A);
     access.stop("s1");
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    assert.deepEqual(bodyTabs(fake), [second.id]);
     access.stop("s2");
     assert.equal(access.running("s2"), true);
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+    assert.deepEqual(bodyTabs(fake), []);
 
     // A stopped session's next request records it as running again before it is refused.
     access.endSession("s1");
     assert.throws(() => access.admit("s1"), { code: "session_stopped" });
     assert.equal(access.running("s1"), true);
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [without]);
+    assert.deepEqual(bodyTabs(fake), []);
 
-    await tabIn("s3", URL_A);
-    assert.deepEqual(requestListeners(fake.activeWebRequestRegistrations()), [withBodies]);
+    const third = await tabIn("s3", URL_A);
+    assert.deepEqual(bodyTabs(fake), [third.id]);
+  });
+
+  it("gives a tab whose group event came too early its body listener at its next request", async (t) => {
+    const context = setup();
+    const { fake, groups, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    // The tab's group event arrives while its group is not known yet.
+    const sessionOf = groups.sessionOf;
+    const unknown = t.mock.method(groups, "sessionOf", () => undefined);
+    fake.emitStatus(tab.id, "complete");
+    unknown.mock.restore();
+    assert.equal(groups.sessionOf, sessionOf);
+    assert.deepEqual(bodyTabs(fake), []);
+
+    // Firefox had dispatched the request before the listener was added.
+    const first = send(context, tab.id);
+    assert.deepEqual(bodyTabs(fake), [tab.id]);
+    const second = send(context, tab.id);
+    assert.equal(first.reads(), 0);
+    assert.deepEqual(
+      read(tab.id).requests.map((request) => request.requestBody),
+      [undefined, SHAPED],
+    );
+    assert.ok(second.reads() > 0);
+  });
+
+  it("takes the body listener of a tab no longer in a running session at its next request", async (t) => {
+    const context = setup();
+    const { fake, access, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    const other = await tabIn("s1", URL_A);
+    // The session ends with no event reaching the log.
+    t.mock.method(access, "running", () => false);
+    assert.deepEqual(bodyTabs(fake), [tab.id, other.id]);
+    const body = send(context, tab.id);
+    assert.deepEqual(bodyTabs(fake), [other.id]);
+    // Firefox drops a delivery for a listener removed meanwhile.
+    assert.equal(body.reads(), 0);
+    assert.deepEqual(read(tab.id, { ...ALL, headers: false }).requests, [
+      { url: `${SITE}/api`, method: "POST", type: "xmlhttprequest", startTime: 1000 },
+    ]);
+  });
+
+  it("shapes a session tab's body once and counts its time once", async () => {
+    const context = setup();
+    const { clock, read, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    const once = countedBody(clock);
+    bodyShape(once.requestBody);
+    const body = send(context, tab.id, SHAPING_ALLOWANCE_MS - 1);
+    assert.equal(body.reads(), once.reads());
+    send(context, tab.id);
+    assert.deepEqual(
+      read(tab.id).requests.map((request) => request.requestBody),
+      [SHAPED, SHAPED],
+    );
+  });
+
+  it("records what happens to a request after its body was shaped", async () => {
+    const context = setup();
+    const { fake, clock, read, request, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    const id = request(tab.id, `${SITE}/api`, {
+      method: "POST",
+      timeStamp: clock.now,
+      requestBody: countedBody(clock).requestBody,
+    });
+    fake.emitWebRequest("onCompleted", {
+      requestId: id,
+      tabId: tab.id,
+      timeStamp: clock.now + 20,
+      statusCode: 201,
+      fromCache: false,
+    });
+    const [sent] = read(tab.id).requests;
+    assert.deepEqual(sent?.requestBody, SHAPED);
+    assert.equal(sent?.status, 201);
+    assert.equal(sent?.durationMs, 20);
+  });
+
+  it("gives no listener the body of a tab outside every session's group", async () => {
+    const context = setup();
+    const { fake, clock, tabIn } = context;
+    const tab = await tabIn("s1", URL_A);
+    const outside = fake.openTab();
+    const details = (tabId: number, requestBody: RequestBody): RequestDetails => ({
+      requestId: `page${tabId}`,
+      tabId,
+      timeStamp: clock.now,
+      frameId: 0,
+      url: `${SITE}/next`,
+      method: "POST",
+      type: "main_frame",
+      requestBody,
+    });
+    const body = countedBody(clock);
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", details(outside.id, body.requestBody)),
+      [undefined],
+    );
+    assert.equal(body.reads(), 0);
+    // A session tab's body reaches its own listener too.
+    const shaped = countedBody(clock);
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", details(tab.id, shaped.requestBody)), [
+      undefined,
+      undefined,
+    ]);
+    assert.ok(shaped.reads() > 0);
+  });
+
+  it("counts a page's own body shape in its character budget, reported before or after its commit", async () => {
+    const keys = Array.from({ length: MAX_NETWORK_BODY_FIELDS }, (_, index) =>
+      `k${String(index).padStart(3, "0")}`.padEnd(100, "k"),
+    );
+    const body = JSON.stringify(Object.fromEntries(keys.map((key) => [key, 1])));
+    const next = `${SITE}/next`;
+    const shapeChars = "json".length + MAX_NETWORK_BODY_FIELDS * (100 + "number".length);
+    const pageChars = next.length + "POST".length + "main_frame".length;
+    const perHeader = "x-000".length + MAX_NETWORK_HEADER;
+    for (const after of [false, true]) {
+      const context = setup();
+      const { fake, commit, read, request, tabIn } = context;
+      const tab = await tabIn("s1", URL_A);
+      const page = (timeStamp: number) => {
+        request(tab.id, next, {
+          type: "main_frame",
+          method: "POST",
+          timeStamp,
+          requestBody: { raw: [{ bytes: bytesOf(body) }] },
+        });
+      };
+      if (after) {
+        // Firefox reports the document's own request after its commit.
+        commit(tab.id, next, 5000);
+        await flush();
+        page(4990);
+      } else {
+        page(5000);
+        fake.navigateByUser(tab.id, next);
+        await flush();
+      }
+      assert.ok(read(tab.id).requests[0]?.requestBody !== undefined, String(after));
+      // Requests that fit beside the page's own request only without its body's shape.
+      let left = MAX_LOG_CHARS - pageChars - shapeChars + 1;
+      for (let index = 0; left > 0; index += 1) {
+        const url = `${SITE}/${String(index).padStart(3, "0")}`;
+        const plain = url.length + "GET".length + "xmlhttprequest".length;
+        const headers = bigHeaders(
+          Math.min(MAX_NETWORK_HEADERS, Math.max(0, Math.ceil((left - plain) / perHeader))),
+        );
+        left -= plain + headers.length * perHeader;
+        const id = request(tab.id, url, { timeStamp: 6000 });
+        fake.emitWebRequest("onSendHeaders", {
+          requestId: id,
+          tabId: tab.id,
+          timeStamp: 6001,
+          requestHeaders: headers,
+        });
+      }
+      assert.ok(left > -shapeChars, String(after));
+      const result = read(tab.id);
+      assert.equal(result.truncated, true, String(after));
+      assert.notEqual(result.requests[0]?.url, next, String(after));
+    }
   });
 });
 
@@ -3237,6 +3442,14 @@ function requestListeners(
       registration.event === "onBeforeRequest" &&
       registration.extraInfoSpec?.includes("blocking") !== true,
   );
+}
+
+/** The tabs that have a body listener, in the order of their ids. */
+function bodyTabs(fake: Context["fake"]): number[] {
+  return requestListeners(fake.activeWebRequestRegistrations())
+    .filter((registration) => registration.extraInfoSpec?.includes("requestBody") === true)
+    .map((registration) => registration.filter.tabId ?? -1)
+    .sort((a, b) => a - b);
 }
 
 /** Starts a fetch of the tab whose request headers take about 100,500 characters. */

@@ -47,6 +47,32 @@ const MEMORY_SAMPLE_MS = 500;
  */
 const MEMORY_LIMIT_MIB = 6_144;
 const MEMORY_GUARD_FIRED = `the memory guard killed Firefox: its processes passed ${MEMORY_LIMIT_MIB} MiB`;
+/**
+ * The hidden inputs of the many-names form, `k<n>=v`: about 1,000,000 bytes urlencoded, so Firefox
+ * parses the body into one field per name.
+ */
+const NAMES = 111_112;
+/** Firefox parses the fields of a urlencoded body only under this many bytes. */
+const FORM_PARSE_BYTES = 1_048_576;
+/** How many times a tab outside the session submits the many-names form. */
+const NAMES_BURST = 50;
+const NAMES_EVERY_MS = 50;
+/**
+ * How long the page may take to submit the many-names form NAMES_BURST times, which takes longer
+ * than one submit every NAMES_EVERY_MS; with SETTLE_MS it keeps the test inside its 60 s.
+ */
+const NAMES_BURST_WAIT_MS = 35_000;
+/** How long the sampling goes on after the last submit: a backlog can keep a process growing. */
+const SETTLE_MS = 10_000;
+const PROCESS_SAMPLE_MS = 250;
+/** How much the extension process may grow while a tab outside the session sends the burst. */
+const OUTSIDE_GROWTH_LIMIT_MIB = 150;
+
+/** One sample of a process's memory: when, in ms since the sampling began, and how much. */
+interface ProcessSample {
+  at: number;
+  mib: number;
+}
 
 interface MemoryGuard {
   /** The most the processes held at a sample since the last `resetPeak`, in MiB. */
@@ -157,23 +183,23 @@ describe("read_network during a burst of request bodies in real Firefox", () => 
     const guard = guardOf(memory);
     guard.resetPeak();
     try {
+      const pid = await firefox.extensionProcessId();
       const { tab, context } = await openBurstPage("fetch");
       // Firefox slows the timers of a hidden tab down, to a body a second: each would be read.
-      await pollUntil(
-        async () => {
-          const state = await firefox.evaluate(context, "document.visibilityState");
-          return state === "visible" ? true : undefined;
-        },
-        PAGE_TIMEOUT_MS,
-        "the burst page to be the tab its window shows",
-      );
+      await untilShown(context);
       const bytes = await firefox.evaluate(context, `buildJson(${JSON_BYTES})`);
       assert.ok(typeof bytes === "number" && bytes >= JSON_BYTES, String(bytes));
-      assert.equal(
-        await firefox.evaluate(context, `fetchBurst(${BURST}, ${FETCH_EVERY_MS})`),
-        true,
-      );
-      await listTabsDuring(t, context, 0, INSIDE_LIMIT_MS);
+      // The shaping of these bodies holds the background up: the most a backlog can build up.
+      const watch = watchProcess(pid);
+      try {
+        assert.equal(
+          await firefox.evaluate(context, `fetchBurst(${BURST}, ${FETCH_EVERY_MS})`),
+          true,
+        );
+        await listTabsDuring(t, context, 0, INSIDE_LIMIT_MS);
+      } finally {
+        reportGrowth(t, watch.stop());
+      }
       const bodies = (await readSink(tab, BURST)).map(({ requestBody }) => requestBody);
       const shaped = bodies.filter((body) => body?.kind === "json");
       const unread = bodies.filter((body) => body?.kind !== "json");
@@ -190,6 +216,72 @@ describe("read_network during a burst of request bodies in real Firefox", () => 
       assert.equal(guard.fired(), false, MEMORY_GUARD_FIRED);
     }
   });
+
+  test("a burst of many-name form posts from a tab outside the session leaves the extension's process its memory", async (t) => {
+    const guard = guardOf(memory);
+    guard.resetPeak();
+    try {
+      const pid = await firefox.extensionProcessId();
+      // A tab of the session, so that the session runs with a body listener of its own while the
+      // burst is sent, whatever ran before.
+      await openBurstPage("names-inside");
+      // A tab the session does not have, opened as the user would.
+      const context = await firefox.openContext(fixtures.url("/network-burst?names-outside"));
+      await untilShown(context);
+      checkNamesForm(t, await firefox.evaluate(context, `buildNamesForm(${NAMES})`));
+      const growth = await namesBurst(t, pid, context);
+      assert.ok(
+        growth < OUTSIDE_GROWTH_LIMIT_MIB,
+        `the extension's process grew by ${growth} MiB, over ${OUTSIDE_GROWTH_LIMIT_MIB} MiB`,
+      );
+    } finally {
+      t.diagnostic(`peak memory of Firefox's processes: ${guard.peakMib()} MiB`);
+      assert.equal(guard.fired(), false, MEMORY_GUARD_FIRED);
+    }
+  });
+
+  /** Waits until the page's tab is the one its window shows: Firefox slows a hidden tab's timers. */
+  async function untilShown(context: string): Promise<void> {
+    await pollUntil(
+      async () => {
+        const state = await firefox.evaluate(context, "document.visibilityState");
+        return state === "visible" ? true : undefined;
+      },
+      PAGE_TIMEOUT_MS,
+      "the burst page to be the tab its window shows",
+    );
+  }
+
+  /**
+   * Submits the page's many-names form NAMES_BURST times, sampling the process from before the
+   * first submit until SETTLE_MS after the last; gives how much it grew from its first sample to
+   * its peak, in MiB.
+   */
+  async function namesBurst(
+    t: { diagnostic(message: string): void },
+    pid: number,
+    context: string,
+  ): Promise<number> {
+    const watch = watchProcess(pid);
+    let growth = Number.NaN;
+    try {
+      assert.equal(
+        await firefox.evaluate(context, `formBurst(${NAMES_BURST}, ${NAMES_EVERY_MS})`),
+        true,
+      );
+      await pollUntil(
+        async () =>
+          (await firefox.evaluate(context, "window.burstDone")) === true ? true : undefined,
+        NAMES_BURST_WAIT_MS,
+        "the form burst to end",
+      );
+      await sleep(SETTLE_MS);
+    } finally {
+      // Also when the burst failed: the figures say why.
+      growth = reportGrowth(t, watch.stop());
+    }
+    return growth;
+  }
 
   /** Opens the burst page in a new tab of the session; its tab id and its page's context. */
   async function openBurstPage(tag: string): Promise<{ tab: number; context: string }> {
@@ -275,6 +367,65 @@ describe("read_network during a burst of request bodies in real Firefox", () => 
     }
   }
 });
+
+/** Checks the many-names form's body length: at least 1,000,000 bytes, under Firefox's edge. */
+function checkNamesForm(t: { diagnostic(message: string): void }, bytes: unknown): void {
+  assert.ok(
+    typeof bytes === "number" && bytes >= 1_000_000 && bytes < FORM_PARSE_BYTES,
+    String(bytes),
+  );
+  t.diagnostic(`many-names form: ${bytes} bytes urlencoded`);
+}
+
+/**
+ * Reports the samples of a process, its first, its peak, the growth between them and one sample
+ * a second; gives the growth in MiB.
+ */
+function reportGrowth(t: { diagnostic(message: string): void }, samples: ProcessSample[]): number {
+  const first = samples[0];
+  assert.ok(first !== undefined, "the extension's process was gone before its first sample");
+  const peak = Math.max(...samples.map(({ mib }) => mib));
+  const growth = peak - first.mib;
+  const series: string[] = [];
+  let shown = -1;
+  for (const { at, mib } of samples) {
+    const second = Math.floor(at / 1000);
+    if (second <= shown) continue;
+    series.push(`${second}s ${mib}`);
+    shown = second;
+  }
+  t.diagnostic(
+    `extension's process: first ${first.mib} MiB, peak ${peak} MiB, growth ${growth} MiB`,
+  );
+  t.diagnostic(`extension's process by second: ${series.join(" | ")}`);
+  return growth;
+}
+
+/**
+ * Samples one process's memory, resident and swapped out, every PROCESS_SAMPLE_MS from now on,
+ * the first at once; stops by itself once the process is gone. `stop` gives the samples.
+ */
+function watchProcess(pid: number): { stop(): ProcessSample[] } {
+  const started = performance.now();
+  const samples: ProcessSample[] = [];
+  const timer = setInterval(sample, PROCESS_SAMPLE_MS);
+  sample();
+  return {
+    stop: () => {
+      clearInterval(timer);
+      return samples;
+    },
+  };
+
+  function sample(): void {
+    const status = statusOf(String(pid));
+    if (status === undefined) {
+      clearInterval(timer);
+      return;
+    }
+    samples.push({ at: performance.now() - started, mib: Math.round(status.kb / 1024) });
+  }
+}
 
 function guardOf(memory: MemoryGuard | undefined): MemoryGuard {
   assert.ok(memory !== undefined, "the memory guard did not start");
