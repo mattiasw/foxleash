@@ -141,10 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   page or by you, until it closes, Foxleash now stops a page or frame load whose answer comes
   from such a site and is anything other than a web page; the agent's action says that the file
   was stopped, and `tab_open` and `navigate` fail at once saying that the site must be approved
-  first. The tabs left in the group stay covered after Firefox restarts or Foxleash is updated,
-  judged by the sites you allowed always. When such a site's own service worker gives the answer,
-  Foxleash cancels the download and removes its file right after Firefox starts it, and
-  `upload_file` refuses a file saved in the last 5 seconds meanwhile. That also cancels a download
+  first. The tabs left in the group when its session ends stay covered, judged by the sites you
+  allowed always and those you had allowed only for that session, and after Firefox restarts or
+  Foxleash is updated, by the sites you allowed always alone. When such a site's own service
+  worker gives the answer, Foxleash cancels the download and removes its file right after Firefox
+  starts it, and `upload_file` refuses a file saved in the last 5 seconds meanwhile. That also cancels a download
   of your own of exactly the address of such a load begun in the agent's tabs in the 10 minutes
   before, and, while a page there keeps more than 200 loads waiting, every download from a site
   that session may not act on. Still saved are a download Firefox saves under another address than the load's, one

@@ -13,9 +13,9 @@ import type {
   TabChangeInfo,
 } from "./browser-api.ts";
 import { warn } from "./log.ts";
-import type { SessionGroups } from "./session-groups.ts";
+import { MAX_REMEMBERED_GROUPS, type SessionGroups } from "./session-groups.ts";
 import { redactedUrl, siteOf, withoutFragment } from "./site.ts";
-import type { SiteAccess } from "./site-access.ts";
+import type { SiteAccess, SiteView, WithdrawCause } from "./site-access.ts";
 
 /** The most refusals kept per tab, and so the most sites `refusedSince` returns. */
 export const MAX_REFUSALS = 20;
@@ -49,7 +49,7 @@ export const MAX_TAB_SITES = 200;
 export interface FileGuardDeps {
   browser: Pick<BrowserApi, "webRequest" | "tabs" | "webNavigation" | "downloads" | "runtime">;
   groups: Pick<SessionGroups, "sessionOf" | "rememberedSessionOf">;
-  access: Pick<SiteAccess, "view" | "onRunningChange">;
+  access: Pick<SiteAccess, "view" | "onRunningChange" | "onWithdraw" | "running">;
   /** The epoch clock webRequest's timeStamp is on: Date.now in the background. */
   now: () => number;
 }
@@ -237,12 +237,13 @@ const PAGE_TYPES: ReadonlySet<string> = new Set(["text/html", "application/xhtml
  * saves nor shows it (ADR 0081). A tab or window opened from a tab judged as a session's is judged
  * as that session's too, until it closes (ADR 0089). A tab of a group the extension remembers
  * creating for a session, also before a restart, an update or a reload, is judged as that session's
- * (ADR 0091). Call it at the top level of the background script. Its listeners, for the responses
- * and for the tabs that tabs open, are added when the first session starts running, or as soon as
- * a tab of a remembered group is seen, from the background's start on (ADR 0091); never at the top
- * level: Firefox wakes a suspended background for a listener added there, and holds the request
- * meanwhile (ADR 0071). They are never removed: a session's group outlives its session, and a page
- * left open in it can load a file at any time.
+ * (ADR 0091). An ended session's tabs also pass files of the sites it was allowed for itself when it
+ * ended, until the background restarts (ADR 0103). Call it at the top level of the background
+ * script. Its listeners, for the responses and for the tabs that tabs open, are added when the
+ * first session starts running, or as soon as a tab of a remembered group is seen, from the
+ * background's start on (ADR 0091); never at the top level: Firefox wakes a suspended background
+ * for a listener added there, and holds the request meanwhile (ADR 0071). They are never removed:
+ * a session's group outlives its session, and a page left open in it can load a file at any time.
  */
 export function createFileGuard({ browser, groups, access, now }: FileGuardDeps): FileGuard {
   const refusals = new Map<number, Refusal[]>();
@@ -273,9 +274,16 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
    */
   const refusedDownloads = new Map<number, Download>();
   const judging = new Set<Promise<void>>();
+  /**
+   * By ended session, oldest end first, the sites it was allowed for itself only when it ended:
+   * for judging files only, never stored.
+   */
+  const endedSites = new Map<string, Set<string>>();
   let listening = false;
 
   access.onRunningChange(listen);
+  access.onWithdraw(keepEnded);
+  access.onRunningChange(dropEnded);
   browser.tabs.onRemoved.addListener((tabId) => {
     if (listening) closeLoads(tabId);
     keepGone(tabId);
@@ -300,6 +308,27 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   void listenForOpenTabs();
 
   return { refusedSince, onRefused, settled };
+
+  function keepEnded(session: string, site: string, cause: WithdrawCause): void {
+    if (cause === "end") {
+      // Always a new entry: the session's admit dropped any older one.
+      const sites = endedSites.get(session) ?? new Set<string>();
+      sites.add(site);
+      endedSites.set(session, sites);
+      if (endedSites.size <= MAX_REMEMBERED_GROUPS) return;
+      const oldest = endedSites.keys().next();
+      if (oldest.done !== true) endedSites.delete(oldest.value);
+    } else {
+      const sites = endedSites.get(session);
+      sites?.delete(site);
+      if (sites?.size === 0) endedSites.delete(session);
+    }
+  }
+
+  /** A session that runs again asks again for the sites it had. */
+  function dropEnded(session: string): void {
+    if (access.running(session)) endedSites.delete(session);
+  }
 
   /** Never rejects. */
   async function listenFor(tab: Tab): Promise<void> {
@@ -369,13 +398,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       return { cancel: true };
     }
     if (judged === undefined) return undefined;
-    try {
-      // Read anew each time: an approval the user withdrew a moment ago no longer counts.
-      const view = await access.view(judged.session);
-      if (view.allowed(details.url)) return undefined;
-    } catch {
-      // A session the user stopped, or settings that cannot be read: refused.
-    }
+    if (await allows(judged.session, details.url)) return undefined;
     refused(
       details.tabId,
       redactedUrl(details.url),
@@ -1008,13 +1031,7 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     // A tab that cannot be looked up lets no file through, as for the header layer.
     if ("failed" in outcome) return { refuse: true };
     const { judged } = outcome;
-    try {
-      // Read anew each time: an approval the user withdrew a moment ago no longer counts.
-      const view = await access.view(judged.session);
-      if (view.allowed(url)) return { refuse: false, allowed: true };
-    } catch {
-      // A session the user stopped, or settings that cannot be read: refused.
-    }
+    if (await allows(judged.session, url)) return { refuse: false, allowed: true };
     return { refuse: true, judged };
   }
 
@@ -1045,12 +1062,23 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     }
   }
 
+  /**
+   * Whether the session's tabs may load a file of the site of `url`: a site it may act on, or one
+   * it was allowed for itself when it ended.
+   */
   async function allows(session: string, url: string): Promise<boolean> {
+    let view: SiteView;
     try {
-      return (await access.view(session)).allowed(url);
+      // Read anew each time: an approval the user withdrew a moment ago no longer counts.
+      view = await access.view(session);
     } catch {
+      // A session the user stopped, or settings that cannot be read: refused.
       return false;
     }
+    if (view.allowed(url)) return true;
+    // Read after the view: a session that ran again or a site withdrawn meanwhile no longer counts.
+    const site = siteOf(url);
+    return site !== undefined && endedSites.get(session)?.has(site) === true && !view.blocked(url);
   }
 
   /** Its judgements end with the refusal: `track` waits for it. */

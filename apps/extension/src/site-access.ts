@@ -41,6 +41,12 @@ export interface FrontCheck<Handle> {
 /** What a session may do with a site: load it, never, never in this session, or ask the user. */
 export type SiteState = "allowed" | "blocked" | "refused" | "askable";
 
+/**
+ * Why a session's approval of a site ended: the user withdrew it, the session ended, or the user
+ * stopped the session.
+ */
+export type WithdrawCause = "forget" | "end" | "stop";
+
 export type Decision =
   | { decision: "allowed" }
   | { decision: "ask" }
@@ -156,11 +162,11 @@ export interface SiteAccess {
    */
   forget(session: string, site: string): void;
   /**
-   * Calls `listener` each time the session's approval of a site ends: the user withdrew it, or
-   * the session ended or was stopped. Synchronously, at the end of `forget`, `endSession` or
-   * `stop`, in the order added.
+   * Calls `listener` each time the session's approval of a site ends, with the cause: `"forget"`
+   * when the user withdrew it, `"end"` when the session ended, `"stop"` when the user stopped it.
+   * Synchronously, at the end of `forget`, `endSession` or `stop`, in the order added.
    */
-  onWithdraw(listener: (session: string, site: string) => void): void;
+  onWithdraw(listener: (session: string, site: string, cause: WithdrawCause) => void): void;
   /**
    * Calls `listener` once per session the user stops, synchronously at the end of `stop`, in the
    * order added. Covers sites allowed always, which `onWithdraw` never reports.
@@ -250,7 +256,7 @@ export function createSiteAccess<Handle>({
   const answered = new Map<number, Answered>();
   // By session: how often it ended, so a request that was running when it ended shows no prompt.
   const generations = new Map<string, number>();
-  const withdrawals = new Set<(session: string, site: string) => void>();
+  const withdrawals = new Set<(session: string, site: string, cause: WithdrawCause) => void>();
   const grants = new Set<(session: string, site: string) => void>();
   const stops = new Set<(session: string) => void>();
   const runningChanges = new Set<(session: string) => void>();
@@ -410,7 +416,7 @@ export function createSiteAccess<Handle>({
     if (prompt !== undefined) drop(prompt, false);
     // A session that reconnects with the same id asks again for these sites. Its documents on
     // every site stop being live through the running-change listeners.
-    for (const site of state?.allowed ?? []) withdrawn(session, site);
+    for (const site of state?.allowed ?? []) withdrawn(session, site, "end");
     if (wasRunning) runningChanged(session);
   }
 
@@ -430,7 +436,7 @@ export function createSiteAccess<Handle>({
     sessions.delete(session);
     const prompt = prompts.get(session);
     if (prompt !== undefined) drop(prompt, false, sessionStopped());
-    for (const site of state?.allowed ?? []) withdrawn(session, site);
+    for (const site of state?.allowed ?? []) withdrawn(session, site, "stop");
     for (const listener of stops) listener(session);
   }
 
@@ -526,15 +532,17 @@ export function createSiteAccess<Handle>({
     if (state.allowed.size === 0 && state.refused.size === 0 && state.closed === 0) {
       sessions.delete(session);
     }
-    if (ended) withdrawn(session, site);
+    if (ended) withdrawn(session, site, "forget");
   }
 
-  function onWithdraw(listener: (session: string, site: string) => void): void {
+  function onWithdraw(
+    listener: (session: string, site: string, cause: WithdrawCause) => void,
+  ): void {
     withdrawals.add(listener);
   }
 
-  function withdrawn(session: string, site: string): void {
-    for (const listener of withdrawals) listener(session, site);
+  function withdrawn(session: string, site: string, cause: WithdrawCause): void {
+    for (const listener of withdrawals) listener(session, site, cause);
   }
 
   function onStop(listener: (session: string) => void): void {

@@ -26,7 +26,7 @@ import {
   MAX_TAB_HOPS,
   MAX_TAB_SITES,
 } from "./file-guard.ts";
-import { createSessionGroups } from "./session-groups.ts";
+import { createSessionGroups, MAX_REMEMBERED_GROUPS } from "./session-groups.ts";
 import { grantSite, revokeSite, SESSION_GROUPS_KEY, saveBlocklist } from "./settings.ts";
 import { createSiteAccess, type SessionMemory, type SiteAccess } from "./site-access.ts";
 
@@ -279,17 +279,18 @@ describe("a file from a site the session may not act on", { timeout: 10000 }, ()
     assert.deepEqual(guard.refusedSince(tab.id, 0), [A]);
   });
 
-  it("is cancelled in an ended session's tab when the site was approved for that session only", async () => {
+  it("passes in an ended session's tab a file of a site approved for that session only, until the guard restarts", async () => {
     const { access, groups, sessions, guard, tabIn, respond } = setup();
     const tab = await tabIn("s1");
     sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
     assert.equal(await verdict(respond({ tabId: tab.id })), "passed");
     access.endSession("s1");
     await groups.endSession("s1");
-    assert.equal(await verdict(respond({ tabId: tab.id })), "cancelled");
-    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
-    // A site allowed always still loads its files there.
+    assert.equal(await verdict(respond({ tabId: tab.id })), "passed");
+    // A site allowed always still loads its files there, and one never approved does not.
     assert.equal(await verdict(respond({ tabId: tab.id, url: `${A}/export` })), "passed");
+    assert.equal(await verdict(respond({ tabId: tab.id, url: `${C}/export` })), "cancelled");
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [C]);
   });
 
   it("is cancelled in a tab whose id is 0: only a negative id means no tab", async (t) => {
@@ -350,6 +351,180 @@ describe("a file from a site the session may not act on", { timeout: 10000 }, ()
       [tab.id, "http:", 7],
     ]);
     assert.deepEqual(guard.refusedSince(tab.id, 0), [`${B}:8443`, "http:"]);
+  });
+});
+
+describe("an ended session's tabs", { timeout: 10000 }, () => {
+  it("are judged by the sites allowed always by a guard that starts after the end, though one that saw it passes", async () => {
+    const { fake, tab } = await endedWithB();
+    const { guard } = restart(fake);
+    await flush();
+    const answers = fake.emitWebRequest("onHeadersReceived", response({ tabId: tab.id }));
+    assert.equal(answers.length, 2);
+    assert.equal(await verdict(answers[0]), "passed");
+    assert.equal(await verdict(answers[1]), "cancelled");
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("keep a Blob file of a site the session was allowed, built in a tab of the user's own or in the ended session's tab", async () => {
+    for (const own of [true, false]) {
+      const { fake, clock, guard, tab } = await endedWithB();
+      clock.now = 1000;
+      fake.emitCommitted({ tabId: tab.id, frameId: 0, url: `${B}/page`, timeStamp: 1000 });
+      fake.setFrames(tab.id, [{ frameId: 0, url: `${B}/page` }]);
+      if (own) {
+        const mine = fake.openTab({ url: `${B}/page` });
+        fake.emitCommitted({ tabId: mine.id, frameId: 0, url: `${B}/page`, timeStamp: 1010 });
+      }
+      clock.now = 1040;
+      download(fake, { id: 1, url: BLOB, started: 1030 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, [], String(own));
+      assert.deepEqual(guard.refusedSince(tab.id, 0), [], String(own));
+    }
+  });
+
+  it("cancel a Blob file of a site the session was never allowed", async () => {
+    const { fake, clock, guard, tab } = await endedWithB();
+    clock.now = 1000;
+    fake.emitCommitted({ tabId: tab.id, frameId: 0, url: `${C}/page`, timeStamp: 1000 });
+    fake.setFrames(tab.id, [{ frameId: 0, url: `${C}/page` }]);
+    clock.now = 1040;
+    download(fake, { id: 1, url: `blob:${C}/0b2c5d1e`, started: 1030 });
+    await idle(guard);
+    assert.deepEqual(fake.cancelledDownloads, [1]);
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [C]);
+  });
+
+  it("let a download from a load whose headers never came through for a site the session was allowed only", async () => {
+    for (const [site, cancelled] of [
+      [B, false],
+      [C, true],
+    ] as const) {
+      const { fake, clock, guard, tab } = await endedWithB();
+      hop(fake, { tabId: tab.id, url: `${site}/export`, timeStamp: 1000 });
+      clock.now = 1010;
+      download(fake, { id: 1, url: `${site}/export`, started: 1004 });
+      await idle(guard);
+      assert.deepEqual(fake.cancelledDownloads, cancelled ? [1] : [], site);
+    }
+  });
+
+  it("do not keep a site the user withdrew before the end", async () => {
+    const { fake, access, groups, sessions, guard, tabIn } = setup();
+    const tab = await tabIn("s1");
+    sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    access.forget("s1", B);
+    access.endSession("s1");
+    await groups.endSession("s1");
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "cancelled");
+    assert.deepEqual(guard.refusedSince(tab.id, 0), [B]);
+  });
+
+  it("do not keep a site the session held again and the user withdrew after the end, and keep the others", async () => {
+    const { fake, access, groups, sessions, tabIn } = setup();
+    const tab = await tabIn("s1");
+    const other = "https://d.example";
+    sessions.set("s1", { allowed: new Set([B, other]), refused: new Set(), closed: 0 });
+    access.endSession("s1");
+    await groups.endSession("s1");
+    sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    access.forget("s1", B);
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "cancelled");
+    assert.equal(
+      await verdict(respondOnce(fake, { tabId: tab.id, url: `${other}/export` })),
+      "passed",
+    );
+  });
+
+  it("are judged by the session's current answers alone once it runs again", async () => {
+    const { fake, access, sessions, tab } = await endedWithB();
+    access.admit("s1");
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "cancelled");
+    sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "passed");
+    // Its next end keeps what it then had.
+    access.endSession("s1");
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "passed");
+  });
+
+  it("refuse every file once the user stopped the session, before or after its end", async () => {
+    for (const stopped of ["before", "after"] as const) {
+      const { fake, access, groups, sessions, tabIn } = setup();
+      const tab = await tabIn("s1");
+      sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+      if (stopped === "before") access.stop("s1");
+      access.endSession("s1");
+      await groups.endSession("s1");
+      if (stopped === "after") {
+        assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "passed");
+        access.stop("s1");
+      }
+      for (const url of [`${B}/export`, `${A}/export`]) {
+        assert.equal(
+          await verdict(respondOnce(fake, { tabId: tab.id, url })),
+          "cancelled",
+          `${stopped} ${url}`,
+        );
+      }
+    }
+  });
+
+  it("refuse a file of a site the session was allowed once it is on the blocklist", async () => {
+    const { fake, tab } = await endedWithB();
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "passed");
+    await saveBlocklist(fake.browser, ["b.example"]);
+    assert.equal(await verdict(respondOnce(fake, { tabId: tab.id })), "cancelled");
+  });
+
+  it("lose the sites of their session once MAX_REMEMBERED_GROUPS later sessions ended with a site", async () => {
+    for (const [later, kept] of [
+      [MAX_REMEMBERED_GROUPS - 1, true],
+      [MAX_REMEMBERED_GROUPS, false],
+    ] as const) {
+      const { fake, access, groups, sessions, tab, tabIn } = await endedWithB();
+      // The oldest of the later sessions, whose sites must outlive s1's.
+      const next = await tabIn("f0");
+      for (let index = 0; index < later; index += 1) {
+        sessions.set(`f${index}`, {
+          allowed: new Set([C, `https://s${index}.example`]),
+          refused: new Set(),
+          closed: 0,
+        });
+        access.endSession(`f${index}`);
+      }
+      await groups.endSession("f0");
+      // Sessions that end with no site allowed for themselves count for nothing.
+      sessions.set("refusing", { allowed: new Set(), refused: new Set([C]), closed: 0 });
+      access.endSession("refusing");
+      access.endSession("idle");
+      assert.equal(
+        await verdict(respondOnce(fake, { tabId: tab.id })),
+        kept ? "passed" : "cancelled",
+        String(later),
+      );
+      assert.equal(
+        await verdict(respondOnce(fake, { tabId: next.id, url: `${C}/export` })),
+        "passed",
+        String(later),
+      );
+    }
+  });
+
+  it("do not keep a site for a judgement under way when the session runs again or the user withdraws it", async (t) => {
+    for (const change of ["admit", "forget"] as const) {
+      const { fake, access, guard, sessions, tab } = await endedWithB();
+      const views = holdViews(t, access);
+      const answer = respondOnce(fake, { tabId: tab.id });
+      await idle(guard, false);
+      if (change === "admit") access.admit("s1");
+      else {
+        sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+        access.forget("s1", B);
+      }
+      views.release();
+      assert.equal(await verdict(answer), "cancelled", change);
+    }
   });
 });
 
@@ -1825,12 +2000,12 @@ describe("the loads the guard keeps", { timeout: 10000 }, () => {
     download(fake, { id: 1, started: 1600 });
     download(fake, { id: 2, url: `${C}/a`, started: 1600 });
     await idle(guard);
-    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(fake.cancelledDownloads.toSorted(), [1, 2]);
     clock.now = 2000 + HOP_GRACE_MS;
     download(fake, { id: 3, url: `${C}/b`, started: 1600 });
     download(fake, { id: 4, url: `${B}/second`, started: 1600 });
     await idle(guard);
-    assert.deepEqual(fake.cancelledDownloads, [1, 2]);
+    assert.deepEqual(fake.cancelledDownloads.toSorted(), [1, 2]);
   });
 
   it("of a tab of no session set a flood mark that refuses nothing", async () => {
@@ -3310,6 +3485,16 @@ async function leftBehind(): Promise<{ fake: FakeBrowser; left: FakeTab }> {
   const left = fake.openTab({ url: `${A}/page` });
   await earlier.ensureGroup("old", left);
   return { fake, left };
+}
+
+/** A setup where s1's tab stays in its group after s1 ended, with B allowed for s1 only. */
+async function endedWithB() {
+  const context = setup();
+  const tab = await context.tabIn("s1");
+  context.sessions.set("s1", { allowed: new Set([B]), refused: new Set(), closed: 0 });
+  context.access.endSession("s1");
+  await context.groups.endSession("s1");
+  return { ...context, tab };
 }
 
 /** The background as it starts again, over the same browser. */

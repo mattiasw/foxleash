@@ -9,6 +9,9 @@ is still saved. Extends the second layer of
 come from no load. Amended by
 [0102](0102-file-guard-ties-a-window-by-the-group-its-opener-was-seen-in.md), 2026-11-20: a page
 of a site the session may not act on that saves its own address as a file is named as still saved.
+Amended by [0103](0103-file-guard-keeps-an-ended-sessions-sites-until-restart.md), 2026-11-20:
+for an ended session's tab, the Blob judgement also counts the sites that session was allowed for
+itself when it ended, until a restart, an update or a reload.
 
 ## Context
 

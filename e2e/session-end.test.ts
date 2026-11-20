@@ -1,18 +1,29 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { readdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
+import { DEFAULT_BLOCKLIST } from "../apps/extension/src/default-blocklist.ts";
 import { Bridge } from "../apps/server/src/bridge.ts";
 import { resolveSocketDir } from "../apps/server/src/socket-dir.ts";
 import { SERVER_VERSION } from "../apps/server/src/version.ts";
 import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
-import { type FixtureServer, RECORDING_TOKEN, startFixtureServer } from "./fixture-server.ts";
+import {
+  type FixtureServer,
+  FOREIGN_SECRET,
+  RECORDING_TOKEN,
+  startFixtureServer,
+} from "./fixture-server.ts";
 import { createHarness, EXTENSION_DIST, type Harness, type Session } from "./harness.ts";
 
 const GONE_TIMEOUT_MS = 15_000;
 const GONE_POLL_MS = 100;
 // Long enough for a recorder to be injected in a page that would still be recorded.
 const RECORDER_WAIT_MS = 3_000;
+const ONCE = 'button[data-answer="once"]';
+/** How long a saved file must stay in the download folder to count as kept. */
+const SAVE_WAIT_MS = 1500;
 
 // One Firefox for the file; a live session probes the tabs of the sessions that end.
 describe("session end in real Firefox", () => {
@@ -150,6 +161,119 @@ describe("session end in real Firefox", () => {
     again.close();
   });
 
+  test("keeps your Blob files from a site allowed for an ended session only, and loads that site's files in its left-over tab", {
+    timeout: 120_000,
+  }, async () => {
+    // The same server under another site, not allowed always.
+    const other = `http://localhost:${fixtures.port}`;
+    const shownUrl = `${other}/foreign/login?session-only`;
+    const session = await harness.connect();
+    const existing = await promptContexts();
+    // Its cookie lets the export below answer with the file.
+    const opening = settled(harness.ok(session, "tab_open", { url: shownUrl }));
+    const prompt = await harness.promptContext(existing);
+    await harness.waitForArmed(prompt);
+    await firefox.click(prompt, ONCE);
+    await opening;
+    await session.close();
+    await waitUntilDecided();
+    const shown = (await firefox.contexts()).find((context) => context.url === shownUrl);
+    assert.ok(shown !== undefined, `no tab shows ${shownUrl}`);
+    const leftOver = shown.context;
+    const saved: string[] = [];
+
+    // Each outcome is recorded, so a failure shows every step's.
+    const outcomes: Record<string, string> = {};
+    let own: string | undefined;
+    outcomes.own = await keptFile(async () => {
+      own = await firefox.openContext(`${other}/foreign/built?own`);
+      await builtAndSaved(own);
+    });
+    if (own !== undefined) await firefox.closeContext(own);
+    outcomes.leftOver = await keptFile(async () => {
+      await firefox.navigate(leftOver, `${other}/foreign/built?left-over`);
+      await builtAndSaved(leftOver);
+    });
+    outcomes.loaded = await keptFile(loadExport);
+    // The tab is still guarded: once on the blocklist, that site's file is stopped there.
+    await harness.seedSettings({ blocklist: ["localhost"] });
+    try {
+      outcomes.blocked = await keptFile(loadExport);
+    } finally {
+      await harness.seedSettings({ blocklist: [...DEFAULT_BLOCKLIST] });
+    }
+    for (const name of saved) rmSync(join(harness.downloads, name), { force: true });
+    assert.deepEqual(outcomes, {
+      own: "kept",
+      leftOver: "kept",
+      loaded: "kept",
+      blocked: "not saved",
+    });
+
+    /** Loads the other site's export in the left-over tab, as a link there would. */
+    async function loadExport(): Promise<void> {
+      const hits = fixtures.hits("/foreign/export.csv");
+      const url = JSON.stringify(`${other}/foreign/export.csv`);
+      await firefox.evaluate(leftOver, `location.href = ${url}; true`);
+      await pollUntil(
+        async () => (fixtures.hits("/foreign/export.csv") > hits ? true : undefined),
+        PAGE_TIMEOUT_MS,
+        "a request for the export",
+      );
+    }
+
+    /**
+     * Runs `step` and waits for the new file it saves: "kept" when it is still in the download
+     * folder SAVE_WAIT_MS later, else what happened.
+     */
+    async function keptFile(step: () => Promise<void>): Promise<string> {
+      const before = listed();
+      try {
+        await step();
+      } catch (error) {
+        return `failed: ${String(error)}`;
+      }
+      const name = await pollUntil(
+        async () => {
+          const names = listed();
+          // Firefox reserves the name with an empty file before it writes the .part one.
+          if (names.some((entry) => entry.endsWith(".part"))) return undefined;
+          return names.find(
+            (entry) =>
+              !before.includes(entry) &&
+              readFileSync(join(harness.downloads, entry), "utf8") === FOREIGN_SECRET,
+          );
+        },
+        PAGE_TIMEOUT_MS,
+        "the file in the download folder",
+      ).catch(() => undefined);
+      if (name === undefined) return "not saved";
+      saved.push(name);
+      await sleep(SAVE_WAIT_MS);
+      return listed().includes(name) ? "kept" : "removed";
+    }
+  });
+
+  /** Waits until the page built its file and asked Firefox to save it. */
+  async function builtAndSaved(context: string): Promise<void> {
+    await pollUntil(
+      async () => ((await firefox.evaluate(context, "window.saved === true")) ? true : undefined),
+      PAGE_TIMEOUT_MS,
+      "the page to save the file it built",
+    );
+  }
+
+  function listed(): string[] {
+    return readdirSync(harness.downloads).sort();
+  }
+
+  async function promptContexts(): Promise<string[]> {
+    const prefix = firefox.extensionUrl("approve.html");
+    return (await firefox.contexts())
+      .filter((tab) => tab.url.startsWith(prefix))
+      .map(({ context }) => context);
+  }
+
   /** A connection whose requests name `session`, as an MCP server that kept its id would. */
   function connectAs(session: string): Bridge {
     const uid = process.getuid?.() ?? 0;
@@ -232,6 +356,12 @@ async function readNetwork(bridge: Bridge, tabId: number): Promise<NetworkRead> 
     urls: requests.map((entry) => String(isRecord(entry) ? entry.url : entry)),
     bodies: requests.filter((entry) => isRecord(entry) && entry.responseBody !== undefined).length,
   };
+}
+
+/** The call, with its rejection handled, so it can be awaited later. */
+function settled<T>(call: Promise<T>): Promise<T> {
+  call.catch(() => undefined);
+  return call;
 }
 
 function tabIdOf(value: unknown): number {

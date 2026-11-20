@@ -23,6 +23,7 @@ import {
   type SessionMemory,
   type SessionState,
   type SiteAccess,
+  type WithdrawCause,
 } from "./site-access.ts";
 
 describe("view", () => {
@@ -1950,9 +1951,11 @@ describe("endSession", () => {
     assert.equal(sessions.has("s1"), false);
   });
 
-  it("tells onWithdraw of each site the session allowed", () => {
-    const withdrawn: [string, string][] = [];
-    const { access, sessions } = setup((session, site) => withdrawn.push([session, site]));
+  it("tells onWithdraw of each site the session allowed, as ended", () => {
+    const withdrawn: [string, string, WithdrawCause][] = [];
+    const { access, sessions } = setup((session, site, cause) =>
+      withdrawn.push([session, site, cause]),
+    );
     sessions.set("s1", {
       allowed: new Set(["https://a.example", "https://b.example"]),
       refused: new Set(["https://c.example"]),
@@ -1962,8 +1965,8 @@ describe("endSession", () => {
     access.endSession("s1");
     access.endSession("s3");
     assert.deepEqual(withdrawn, [
-      ["s1", "https://a.example"],
-      ["s1", "https://b.example"],
+      ["s1", "https://a.example", "end"],
+      ["s1", "https://b.example", "end"],
     ]);
   });
 
@@ -2186,9 +2189,11 @@ describe("sessionAnswers", () => {
 });
 
 describe("forget", () => {
-  it("tells onWithdraw once when it forgets an allowed site, and only then", () => {
-    const withdrawn: [string, string][] = [];
-    const { access, sessions } = setup((session, site) => withdrawn.push([session, site]));
+  it("tells onWithdraw once when it forgets an allowed site, and only then, as forgotten", () => {
+    const withdrawn: [string, string, WithdrawCause][] = [];
+    const { access, sessions } = setup((session, site, cause) =>
+      withdrawn.push([session, site, cause]),
+    );
     sessions.set("s1", {
       allowed: new Set(["https://a.example"]),
       refused: new Set(["https://b.example"]),
@@ -2201,7 +2206,7 @@ describe("forget", () => {
     assert.deepEqual(withdrawn, []);
     access.forget("s1", "https://a.example");
     access.forget("s1", "https://a.example");
-    assert.deepEqual(withdrawn, [["s1", "https://a.example"]]);
+    assert.deepEqual(withdrawn, [["s1", "https://a.example", "forget"]]);
   });
 
   it("tells every listener, in the order added, of each allowed site that ends", () => {
@@ -2594,7 +2599,7 @@ async function rejectsWith(promise: Promise<unknown>, code: string): Promise<voi
   );
 }
 
-function setup(onWithdraw?: (session: string, site: string) => void) {
+function setup(onWithdraw?: (session: string, site: string, cause: WithdrawCause) => void) {
   const fake = createFakeBrowser();
   const sessions: SessionMemory = new Map();
   const timers = createFakeTimers();
@@ -2879,9 +2884,11 @@ describe("stop", () => {
 
   it("forgets the session's answers, tells onWithdraw of each site it allowed, then onStop", async () => {
     const heard: string[] = [];
-    const { access, sessions, ask } = setup((session, site) => {
+    const { access, sessions, ask } = setup((session, site, cause) => {
       const open = access.openPrompt(session) !== undefined;
-      heard.push(`withdraw ${session} ${site} prompt:${open} answers:${sessions.has(session)}`);
+      heard.push(
+        `withdraw ${session} ${site} ${cause} prompt:${open} answers:${sessions.has(session)}`,
+      );
     });
     access.onStop((session) => heard.push(`stop ${session}`));
     await ask("s1", "https://d.example/");
@@ -2893,8 +2900,8 @@ describe("stop", () => {
     sessions.set("s2", state(["https://e.example"]));
     access.stop("s1");
     assert.deepEqual(heard, [
-      "withdraw s1 https://a.example prompt:false answers:false",
-      "withdraw s1 https://b.example prompt:false answers:false",
+      "withdraw s1 https://a.example stop prompt:false answers:false",
+      "withdraw s1 https://b.example stop prompt:false answers:false",
       "stop s1",
     ]);
     assert.equal(sessions.has("s1"), false);

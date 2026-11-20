@@ -726,13 +726,18 @@ Exceptions and limits:
   affected, and neither is a PDF or another document in an `<object>` or `<embed>` element.
 - In the tabs of a session you stopped, every load whose answer is not a web page is stopped,
   also from sites you approved.
-- When a session ended, the tabs left in its group stay covered, judged by the sites you allowed
-  always: a file from a site you allowed only for that session no longer loads there. Moving the
-  tab out of the group ends that, unless another tab of the group opened it.
+- When a session ended, the tabs left in its group stay covered, judged by the sites you allow
+  always and those you had allowed only for that session when it ended, until Firefox restarts or
+  the extension is updated or reloaded (ADR 0103). Foxleash keeps that for the last 200 sessions
+  that ended with a site allowed only for them; an older one's tabs are judged by the sites you
+  allowed always, also while its tab is still open. Moving a tab out of the group ends its
+  coverage, unless another tab of the group opened it.
 - A new tab or window that a page opened for such a file stays open, blank.
 - Foxleash remembers in its storage the tab groups it made for agent sessions, up to 200, so after
   a Firefox restart, or an update or reload of the extension, the tabs left in such a group stay
-  covered, judged by the sites you allowed always (ADR 0091). Limits:
+  covered, judged by the sites you allowed always (ADR 0091). So a file from a site you allowed
+  only for that session no longer loads in those tabs, and a Blob file of your own from that site
+  is cancelled in any tab while such a tab shows it, or showed it in the last 60 seconds. Limits:
   - In the moment after Firefox starts or the extension is updated or reloaded, before Foxleash
     has read that list, nothing is covered.
   - Windows opened from those tabs before the restart, update or reload are no longer covered, and

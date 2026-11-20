@@ -165,7 +165,7 @@
         },
         {
           "file": "apps/extension/src/file-guard.ts",
-          "contains": "if (view.allowed(details.url)) return undefined;"
+          "contains": "if (await allows(judged.session, details.url)) return undefined;"
         },
         { "file": "apps/extension/src/file-guard.ts", "contains": "return { cancel: true };" },
         {

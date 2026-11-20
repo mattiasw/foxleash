@@ -2,7 +2,11 @@
 
 **Status:** Accepted, 2026-11-18. Amends
 [0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md): its last
-consequence.
+consequence. Amended by
+[0103](0103-file-guard-keeps-an-ended-sessions-sites-until-restart.md), 2026-11-20: until a
+restart, an update or a reload, the tabs left in an ended session's group are judged by the sites
+allowed always and those that session was allowed for itself when it ended; only after one are
+they judged by the sites allowed always alone.
 
 ## Context
 

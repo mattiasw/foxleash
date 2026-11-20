@@ -19,7 +19,11 @@ fact; a `data:` file is not. Amended by
 [0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: the
 consequence "The request still reaches the other site, with the cookies Firefox sends for it" no
 longer holds for a redirect hop to a blocklisted site in a load the agent started, which is
-cancelled before it is sent.
+cancelled before it is sent. Amended by
+[0103](0103-file-guard-keeps-an-ended-sessions-sites-until-restart.md), 2026-11-20: the tabs left
+in an ended session's group are judged by the sites allowed always and those that session was
+allowed for itself when it ended, and by the sites allowed always alone only after a Firefox
+restart or an update or reload of the add-on.
 
 ## Context
 
