@@ -69,6 +69,60 @@ describe("runCli usage", () => {
   });
 });
 
+describe("runCli on an old Node.js", () => {
+  const invocations: [string, string[]][] = [
+    ["setup", ["setup"]],
+    ["install", ["install"]],
+    ["uninstall", ["uninstall"]],
+    ["doctor", ["doctor"]],
+    ["mcp", ["mcp"]],
+    ["host", ["host", "/path/to/foxleash.json", "foxleash@mattiasw.com"]],
+    ["probe", ["probe", "https://a.example/"]],
+    ["--help", ["--help"]],
+    ["-h", ["-h"]],
+    ["no command", []],
+    ["an unknown command", ["nope"]],
+    ["a usage error", ["setup", "--nope"]],
+  ];
+  for (const nodeVersion of ["18.20.8", "20.20.2", "22.23.3", "23.11.1"]) {
+    for (const [label, args] of invocations) {
+      it(`refuses ${label} on Node.js ${nodeVersion} on stderr and returns 1`, async () => {
+        const { deps, stdout, stderr, writes, calls } = setup({}, nodeVersion);
+        assert.equal(await runCli(args, deps), 1);
+        assert.deepEqual(calls, []);
+        assert.equal(stdout(), "");
+        assert.equal(
+          stderr(),
+          `Foxleash needs Node.js 24 or later, and this is Node.js ${nodeVersion}.\n`,
+        );
+        assert.equal(writes.length, 1);
+      });
+    }
+  }
+
+  for (const nodeVersion of ["24.0.0", "25.2.1"]) {
+    it(`runs the command on Node.js ${nodeVersion}`, async () => {
+      const { deps, stderr, calls } = setup({}, nodeVersion);
+      assert.equal(await runCli(["doctor"], deps), 7);
+      assert.deepEqual(calls, [{ name: "doctor", options: { noClaude: false }, deps }]);
+      assert.equal(stderr(), "");
+    });
+  }
+
+  for (const nodeVersion of ["", "x", "v24.0.0", "24"]) {
+    it(`refuses the unreadable version ${JSON.stringify(nodeVersion)}`, async () => {
+      const { deps, stdout, stderr, calls } = setup({}, nodeVersion);
+      assert.equal(await runCli(["doctor"], deps), 1);
+      assert.deepEqual(calls, []);
+      assert.equal(stdout(), "");
+      assert.equal(
+        stderr(),
+        `Foxleash needs Node.js 24 or later, and this is Node.js ${nodeVersion}.\n`,
+      );
+    });
+  }
+});
+
 describe("runCli subcommands", () => {
   for (const name of ["setup", "install", "uninstall"]) {
     it(`passes noClaude true to ${name} with --no-claude and returns its exit code`, async () => {
@@ -261,6 +315,7 @@ describe("realDeps", () => {
     assert.equal(deps.stdout, process.stdout);
     assert.equal(deps.stderr, process.stderr);
     assert.equal(deps.commands, COMMANDS);
+    assert.equal(deps.nodeVersion, process.versions.node);
   });
 });
 
@@ -309,7 +364,7 @@ interface Call {
   deps: CliDeps;
 }
 
-function setup(overrides: Record<string, Command> = {}) {
+function setup(overrides: Record<string, Command> = {}, nodeVersion = "24.0.0") {
   const out: string[] = [];
   const err: string[] = [];
   const writes: string[] = [];
@@ -328,6 +383,7 @@ function setup(overrides: Record<string, Command> = {}) {
     stdout: collector(out, writes),
     stderr: collector(err, writes),
     commands,
+    nodeVersion,
   };
   return {
     deps,

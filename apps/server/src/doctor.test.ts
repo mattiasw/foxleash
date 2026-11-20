@@ -276,6 +276,17 @@ describe("doctor, running the launcher", () => {
     assert.equal(existsSync(xdg), false);
   });
 
+  it("names the cause when the launcher's program is not there", LIMIT, async () => {
+    const f = await fixture();
+    const node = path.join(f.home, "removed-node");
+    await install({ home: f.home, node, program: { kind: "source", main: f.main }, ...quiet() });
+    const result = await runDoctor(f, { node, run: fakeRun(claudeOk(node, f.main)).run });
+    assert.deepEqual(section(result, ["launcher"]), [
+      `FAIL launcher: ${f.launcher} exited with code 127 before answering, so the shell did not find what it runs: '${node}' '${f.main}' host; ${SETUP}`,
+    ]);
+    assert.equal(result.code, 1);
+  });
+
   it("survives a launcher that exits without reading its input", LIMIT, async () => {
     const f = await fixture("exit 3\n");
     // Larger than a pipe buffer, so the write is still pending when the launcher exits.

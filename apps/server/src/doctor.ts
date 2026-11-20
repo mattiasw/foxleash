@@ -216,7 +216,13 @@ async function checkLauncher(
       fail(`${launcher} did not answer within ${seconds(welcomeMsOf(options))} s`);
       break;
     case "exited-early":
-      fail(`${launcher} exited with ${outcome.how} before answering`);
+      // /bin/sh exits with 127 when the program it execs is not there, for example a Node.js
+      // that a version manager removed.
+      fail(
+        outcome.how === "code 127"
+          ? `${launcher} exited with code 127 before answering, so the shell did not find what it runs: ${launcherCommand(read.text)}`
+          : `${launcher} exited with ${outcome.how} before answering`,
+      );
       break;
     case "not-welcome":
       fail(`${launcher} did not answer with a welcome`);

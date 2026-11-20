@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SETUP_COMMAND } from "@foxleash/protocol";
+import { MINIMUM_NODE_MAJOR, NODE_REQUIREMENT, SETUP_COMMAND } from "@foxleash/protocol";
 import { doctor } from "./doctor.ts";
 import { hostCommand } from "./host.ts";
 import { type ExtensionSource, install, type Program, programPath, uninstall } from "./install.ts";
@@ -29,6 +29,8 @@ export interface CliDeps {
   stdout: NodeJS.WritableStream;
   stderr: NodeJS.WritableStream;
   commands: ReadonlyMap<string, Command>;
+  /** The running Node.js version as `process.versions.node` gives it, without a leading `v`. */
+  nodeVersion: string;
 }
 
 const PROGRAM = programOf(fileURLToPath(import.meta.url));
@@ -103,6 +105,12 @@ probe writes <path>.json and .md, by default ./foxleash-probe-<date>-<time>.
 `;
 
 export async function runCli(args: string[], deps: CliDeps): Promise<number> {
+  if (!nodeIsSupported(deps.nodeVersion)) {
+    deps.stderr.write(
+      `Foxleash needs ${NODE_REQUIREMENT}, and this is Node.js ${deps.nodeVersion}.\n`,
+    );
+    return 1;
+  }
   const name = args[0];
   if (name === "--help" || name === "-h") {
     deps.stdout.write(USAGE);
@@ -122,6 +130,12 @@ export async function runCli(args: string[], deps: CliDeps): Promise<number> {
   return await command(options, deps);
 }
 
+// An unparseable version reads as unsupported.
+function nodeIsSupported(version: string): boolean {
+  const major = Number(/^(\d+)\./.exec(version)?.[1]);
+  return major >= MINIMUM_NODE_MAJOR;
+}
+
 /** The checkout's main.ts when this runs from the TypeScript source, else the running bundle. */
 export function programOf(self: string): Program {
   return self.endsWith(".ts")
@@ -130,7 +144,12 @@ export function programOf(self: string): Program {
 }
 
 export function realDeps(): CliDeps {
-  return { stdout: process.stdout, stderr: process.stderr, commands: COMMANDS };
+  return {
+    stdout: process.stdout,
+    stderr: process.stderr,
+    commands: COMMANDS,
+    nodeVersion: process.versions.node,
+  };
 }
 
 function usageError(deps: CliDeps): number {

@@ -13,8 +13,11 @@ export const NATIVE_HOST_NAME = "foxleash";
 /** The command that installs the Foxleash program on this computer. */
 export const SETUP_COMMAND = "npx foxleash setup";
 
+/** The oldest Node.js major version the foxleash program runs on. */
+export const MINIMUM_NODE_MAJOR = 24;
+
 /** What the setup command needs on this computer. */
-export const NODE_REQUIREMENT = "Node.js 24 or later";
+export const NODE_REQUIREMENT = `Node.js ${MINIMUM_NODE_MAJOR} or later`;
 
 /** The extension's add-on ID; the native host manifest allows only this one. */
 export const EXTENSION_ID = "foxleash@mattiasw.com";

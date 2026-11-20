@@ -710,7 +710,12 @@ describe("the setup and uninstall commands", () => {
       const uninstallCommand = COMMANDS.get("uninstall");
       assert.ok(installCommand !== undefined && uninstallCommand !== undefined);
       const out: string[] = [];
-      const deps: CliDeps = { stdout: collector(out), stderr: collector(out), commands: COMMANDS };
+      const deps: CliDeps = {
+        stdout: collector(out),
+        stderr: collector(out),
+        commands: COMMANDS,
+        nodeVersion: process.versions.node,
+      };
       const launcher = join(home, ".local", "share", "foxleash", "foxleash-host");
       const manifest = join(home, ".mozilla", "native-messaging-hosts", "foxleash.json");
       assert.equal(await installCommand({ noClaude: true, noExtension: true }, deps), 0);
@@ -854,7 +859,12 @@ async function runInstallCommand(
   const installCommand = COMMANDS.get("install");
   assert.ok(installCommand !== undefined);
   const out: string[] = [];
-  const deps: CliDeps = { stdout: collector(out), stderr: collector(out), commands: COMMANDS };
+  const deps: CliDeps = {
+    stdout: collector(out),
+    stderr: collector(out),
+    commands: COMMANDS,
+    nodeVersion: process.versions.node,
+  };
   const code = await installCommand(options, deps);
   return { code, output: out.join("") };
 }
