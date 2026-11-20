@@ -1,7 +1,7 @@
-<!-- Copy to docs/adr/NNNN-short-slug.md (next free number) and fill in. Delete this
-comment. First check that the topic has no record yet: a change inside a recorded decision
-goes into that record. Aim for a two-minute read, near 500 words: prose, not a form to pad
-out. -->
+<!-- Copy to docs/adr/NNNN-short-slug.md (the number above the highest in README.md's table
+and its list of merged records) and fill in. Delete this comment. First check that the topic
+has no record yet: a change inside a recorded decision goes into that record. Aim for a
+two-minute read, near 500 words: prose, not a form to pad out. -->
 
 # NNNN: <the decision, as a statement, not a topic>
 

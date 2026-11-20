@@ -51,6 +51,11 @@ runs or the history, and when HEAD's history holds neither a recognised run amon
 nor that commit. A merge of two lines that each passed CI since they forked is compared with only
 one of them: the one topological order lists first.
 
+`npm test` also checks the architecture decision records: that every `ADR NNNN` reference
+names a record that exists, that links and written-out paths into `docs/adr/` and
+`docs/measurements/` name files that exist, that every record has a row in
+`docs/adr/README.md`, and that the numbers of merged records are not used again.
+
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
 printed in full with the output the tests wrote, and a missed coverage floor prints the
