@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { basename, join } from "node:path";
 import { after, before, describe, type TestContext, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isDeepStrictEqual } from "node:util";
@@ -638,9 +638,10 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     ] as const) {
       test(`a frame on the other site's page that builds a file itself still saves it${how}`, async () => {
         const before = listed();
+        const since = Date.now();
         const url = fixtures.url(`/foreign/built-frame${query}`);
         const tab = tabOf(await harness.ok(session, "tab_open", { url }));
-        const saved = await newFile(before, FOREIGN_SECRET);
+        const saved = await fileFrom(url, before, since);
         rmSync(join(harness.downloads, saved));
         await harness.ok(session, "tab_close", { tabId: tab.id });
       });
@@ -822,6 +823,27 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
     return readdirSync(harness.downloads).sort();
   }
 
+  /**
+   * Waits for a new file holding the other site's secret; its name. When none arrives, the error
+   * says what the download folder holds, what the tab showing `url` and its frames show, and what
+   * Firefox downloaded since `since`, to tell a file the guard cancelled from one Firefox never
+   * started.
+   */
+  async function fileFrom(url: string, before: string[], since: number): Promise<string> {
+    try {
+      return await newFile(before, FOREIGN_SECRET);
+    } catch (error: unknown) {
+      const folder = listed();
+      // In parallel, so the failure stays well inside the runner's 60 s test timeout.
+      const [page, downloads] = await Promise.all([pageStatesAt(url), downloadsSince(since)]);
+      const held = folder.length === 0 ? "nothing" : folder.join(", ");
+      throw new Error(
+        `${messageOf(error)}; the download folder holds ${held}; ${page}; ${downloads}`,
+        { cause: error },
+      );
+    }
+  }
+
   /** Waits for a file not in `before` to be in the download folder, holding `content`; its name. */
   async function newFile(before: string[], content: string): Promise<string> {
     return pollUntil(
@@ -853,6 +875,20 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       );
     } catch (error: unknown) {
       throw new Error(`${messageOf(error)}; ${await pageStates(found.context)}`, { cause: error });
+    }
+  }
+
+  /** What the tab showing `url` and its frames show, or why no such tab was found. */
+  async function pageStatesAt(url: string): Promise<string> {
+    try {
+      const found = await pollUntil(
+        async () => (await firefox.contexts()).find((context) => context.url === url),
+        DIAGNOSTIC_READ_MS,
+        `a tab to show ${url}`,
+      );
+      return await pageStates(found.context);
+    } catch (error: unknown) {
+      return `no tab found: ${messageOf(error)}`;
     }
   }
 
@@ -892,6 +928,49 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       return `frames: ${states.join(", ")}`;
     } catch (error: unknown) {
       return `frames not listed: ${messageOf(error)}`;
+    }
+  }
+
+  /** The downloads Firefox started since `since`, with their state and whether the file is there. */
+  async function downloadsSince(since: number): Promise<string> {
+    const timer = new AbortController();
+    try {
+      const entries = await Promise.race([
+        readDownloads(since),
+        sleep(DIAGNOSTIC_READ_MS, undefined, { signal: timer.signal }).then(() => {
+          throw new Error(`no answer within ${DIAGNOSTIC_READ_MS} ms`);
+        }),
+      ]);
+      return entries.length === 0
+        ? "no download since the spec began"
+        : `downloads since the spec began: ${entries.join(", ")}`;
+    } catch (error: unknown) {
+      return `downloads not listed: ${messageOf(error)}`;
+    } finally {
+      timer.abort();
+    }
+  }
+
+  async function readDownloads(since: number): Promise<string[]> {
+    const page = await firefox.openContext(firefox.extensionUrl("options.html"));
+    try {
+      const json = await firefox.evaluate(
+        page,
+        `browser.downloads.search({ startedAfter: ${JSON.stringify(new Date(since).toISOString())} })` +
+          ".then((items) => JSON.stringify(items.map((item) =>" +
+          ' [item.url, item.state, item.error ?? "", item.filename])))',
+      );
+      const items: unknown = JSON.parse(String(json));
+      assert.ok(Array.isArray(items), `downloads.search returned ${String(json)}`);
+      return items.map((item: unknown) => {
+        assert.ok(Array.isArray(item), `a download is ${JSON.stringify(item)}`);
+        const [url, state, error, filename] = item.map(String) as [string, string, string, string];
+        // Firefox's own `exists` stays true after the guard removes the file.
+        const disk = existsSync(filename) ? "on disk" : "not on disk";
+        return `${url} ${state}${error === "" ? "" : ` (${error})`}, ${disk} (${basename(filename)})`;
+      });
+    } finally {
+      await firefox.closeContext(page).catch(() => undefined);
     }
   }
 
