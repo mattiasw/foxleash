@@ -9,7 +9,8 @@ Firefox extension works together with the Foxleash program, which you install se
 and which needs Node.js 24 or later, and with an AI agent, all on the same computer. It
 works with any MCP client.
 
-**Status:** in development, not released yet. Linux only.
+**Status:** early releases (0.x): the tool names agents use may still change between versions.
+Linux only.
 
 ## How it works
 
@@ -54,6 +55,10 @@ npx foxleash setup
 | `npx foxleash setup --xpi <path>` | Opens a signed `.xpi` you already have in Firefox instead of step 4. |
 | `npx foxleash setup --no-extension` | Skips step 4. |
 
+If the add-on's page on Firefox Add-ons shows an error instead of the add-on, download the signed
+`.xpi` from the [latest Foxleash release on GitHub](https://github.com/mattiasw/foxleash/releases/latest)
+and run `npx foxleash setup --xpi <path>`.
+
 When `claude` is not on your PATH, setup prints the command to run yourself; when `firefox` is
 not, it prints the file to open in Firefox. For another MCP client, setup prints the stdio server
 to register: the absolute path of `node` and of `~/.local/share/foxleash/foxleash.mjs`, then
@@ -79,7 +84,7 @@ all websites.
 ### From a checkout
 
 ```sh
-git clone <repository URL>
+git clone https://github.com/mattiasw/foxleash.git
 cd foxleash
 npm ci
 npm run setup
