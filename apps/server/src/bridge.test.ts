@@ -42,7 +42,10 @@ const SESSION = "session-1";
 const HANDSHAKE_MS = 2_000;
 // For the tests about the handshake timer.
 const SHORT_HANDSHAKE_MS = 200;
-const REQUEST_MS = 100;
+// A stall in the test process must not fail a call the host answers.
+const REQUEST_MS = 2_000;
+// For the tests about the request timer.
+const SHORT_REQUEST_MS = 100;
 const LIMIT = { timeout: 3000 };
 const NO_HOST =
   "No Foxleash native host is running: start Firefox with the Foxleash extension installed, and run `npx foxleash doctor` (in a Foxleash checkout, `npm run doctor`) if it still fails.";
@@ -452,8 +455,10 @@ describe("Bridge, requests", () => {
       pid: 103,
       respond: () => ({ type: "response", id: "nope", ok: true, result: null }),
     });
-    const h = start(dir);
+    const h = start(dir, { requestTimeoutMs: SHORT_REQUEST_MS });
     await rejectsWith(h.bridge.call("tabs_list", {}), TIMEOUT);
+    // The timer can fire before the host's answer arrives.
+    await until(() => h.logs.length === 2);
     host.send({ type: "response", id: "r1", ok: true, result: null });
     await until(() => h.logs.length === 3);
     assert.deepEqual(h.logs.slice(1), [
@@ -526,12 +531,15 @@ describe("Bridge, requests", () => {
   it("accepts a frame at its limit", LIMIT, async () => {
     const dir = privateDir();
     await rawPeer(dir, 107, (socket, _value, index) => {
-      socket.write(
-        index === 0 ? encodeFrame(JSON.stringify(welcome())) : header(FRAME_LIMIT + 1024),
-      );
+      if (index === 0) {
+        socket.write(encodeFrame(JSON.stringify(welcome())));
+      } else {
+        // The header arrives before the end: a refused one fails the call as unreadable.
+        socket.end(header(FRAME_LIMIT + 1024));
+      }
     });
     const h = start(dir);
-    await rejectsWith(h.bridge.call("tabs_list", {}), TIMEOUT);
+    await rejectsWith(h.bridge.call("tabs_list", {}), HOST_CLOSED);
   });
 
   it("refuses a call on a connection destroyed before its close event", LIMIT, async () => {
@@ -567,7 +575,7 @@ describe("Bridge, requests", () => {
     servers.push(server);
     await new Promise<void>((resolve) => server.listen(path.join(dir, "111.sock"), resolve));
     const accepted = once(server, "connection");
-    const h = start(dir, { requestTimeoutMs: 2000 });
+    const h = start(dir);
     const call = h.bridge.call("tabs_list", {});
     const [socket] = await accepted;
     assert.ok(socket instanceof net.Socket);
@@ -611,7 +619,7 @@ describe("Bridge, losing and closing the connection", () => {
       pid: 121,
       respond: (request) => (answering ? ok("again")(request) : undefined),
     });
-    const h = start(dir, { requestTimeoutMs: 2000 });
+    const h = start(dir);
     const requested = once(host.events, "request");
     const call = h.bridge.call("tabs_list", {});
     await requested;
@@ -640,7 +648,7 @@ describe("Bridge, losing and closing the connection", () => {
   it("rejects a pending call on close() and closes the socket quietly", LIMIT, async () => {
     const dir = privateDir();
     const host = await fakeHost({ dir, pid: 122, respond: silence });
-    const h = start(dir, { requestTimeoutMs: 2000 });
+    const h = start(dir);
     const requested = once(host.events, "request");
     const call = h.bridge.call("tabs_list", {});
     await requested;
