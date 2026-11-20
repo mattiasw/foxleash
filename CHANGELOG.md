@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   settings pages and `npm run doctor` say how. Firefox from Snap works there too: your desktop
   asks once whether Firefox may start the program.
 - Foxleash is free software under the GNU General Public License, version 3 or later.
-  `SECURITY.md` says how to report a vulnerability privately and `CONTRIBUTING.md` how to
-  contribute.
+  `SECURITY.md` says how to report a vulnerability privately, `CONTRIBUTING.md` how to
+  contribute and `CODE_OF_CONDUCT.md` what is expected of everyone taking part.
 - Install the Foxleash program with `npx foxleash setup`, without cloning the repository. On a
   Node.js older than 24, setup and every other foxleash command stop and say which version they
   need, instead of installing a program that cannot start.

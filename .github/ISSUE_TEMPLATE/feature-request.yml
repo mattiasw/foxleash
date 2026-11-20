@@ -1,0 +1,16 @@
+name: Feature request
+description: Suggest something Foxleash could do or do better.
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: what-you-want
+    attributes:
+      label: What do you want to do?
+      description: Describe the task you want the agent to do in your Firefox, or what you want Foxleash to do differently.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: What happens today?
+      description: Describe what Foxleash does now when you try this, and what is missing or hard.

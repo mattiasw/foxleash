@@ -1,0 +1,75 @@
+name: Bug report
+description: Report something in Foxleash that does not work as it should.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report a security problem here. Report it privately, as [the security policy (SECURITY.md)](https://github.com/mattiasw/foxleash/blob/main/SECURITY.md) describes.
+
+        Leave page content, passwords and tokens out of everything you write in this issue, including the output you paste.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe what Foxleash did, and any error message it showed.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List what you did, step by step, so that someone else can make it happen again.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      description: Describe what you thought Foxleash would do instead.
+  - type: input
+    id: addon-version
+    attributes:
+      label: Add-on version
+      description: Open about:addons in Firefox and select Foxleash. The page shows the version.
+    validations:
+      required: true
+  - type: input
+    id: program-version
+    attributes:
+      label: Foxleash program version
+      description: Run `npx foxleash doctor`. Its line that starts with "ok launcher:" says "runs host version" and then the version.
+  - type: input
+    id: firefox-version
+    attributes:
+      label: Firefox version
+      description: In Firefox, open the menu and choose Help, then About Firefox. The window shows the version.
+  - type: dropdown
+    id: firefox-install
+    attributes:
+      label: How Firefox was installed
+      description: Choose the way you installed Firefox. Snap and Flatpak start the Foxleash program differently from the other kinds.
+      options:
+        - A package, such as .deb or .rpm
+        - Snap
+        - Flatpak
+        - An archive from mozilla.org
+        - Not sure
+  - type: input
+    id: os
+    attributes:
+      label: Operating system and version
+      description: Foxleash runs on Linux only, so give the distribution and its version.
+      placeholder: Ubuntu 26.04
+  - type: input
+    id: mcp-client
+    attributes:
+      label: MCP client and version
+      description: Name the program that uses Foxleash's tools, and its version. An example is Claude Code.
+  - type: textarea
+    id: doctor
+    attributes:
+      label: Output of npx foxleash doctor
+      description: |
+        The output names folders on your computer, among them your home folder, which contains your user name. Read it before you paste it, and shorten or replace what you do not want to make public.
+      render: text

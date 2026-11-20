@@ -10,4 +10,6 @@ follows the "Borrowed code" section of [AGENTS.md](AGENTS.md).
 - [docs/development.md](docs/development.md) describes how to build, check and test Foxleash.
 - [AGENTS.md](AGENTS.md) describes the project's conventions.
 
+Everyone taking part follows the [code of conduct](CODE_OF_CONDUCT.md).
+
 Report a security problem as [SECURITY.md](SECURITY.md) describes, not in an issue.

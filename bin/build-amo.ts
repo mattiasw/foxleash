@@ -36,6 +36,7 @@ const TOP_LEVEL_EXCLUDE = new Set([
   "AGENTS.md",
   "CHANGELOG.md",
   "CLAUDE.md",
+  "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "README.md",
   "SECURITY.md",

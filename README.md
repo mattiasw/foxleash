@@ -312,6 +312,7 @@ noun for foxes: a leash of foxes.
 - [AGENTS.md](AGENTS.md): the project's conventions
 - [docs/adr/](docs/adr/): architecture decisions
 - [CONTRIBUTING.md](CONTRIBUTING.md): how to contribute
+- [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md): what is expected of everyone taking part
 - [SECURITY.md](SECURITY.md): how to report a vulnerability privately
 
 ## License

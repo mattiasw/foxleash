@@ -52,6 +52,7 @@ const SHIPPED = [
 
 const EXCLUDED = [
   "AGENTS.md",
+  "CODE_OF_CONDUCT.md",
   "CONTRIBUTING.md",
   "README.md",
   "SECURITY.md",
