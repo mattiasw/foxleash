@@ -271,6 +271,41 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
       }
     });
 
+    test("a page that opens a window on the other site's file and closes its own tab saves nothing", async () => {
+      await firefox.allowPopups(fixtures.site);
+      try {
+        const before = new Set((await firefox.contexts()).map(({ context }) => context));
+        try {
+          const files = listed();
+          const hits = fixtures.hits(EXPORT);
+          const url = fixtures.url("/foreign/window-script?close=1");
+          // The tab closes itself as it loads, so the call may end either way.
+          await harness.call(session, "tab_open", { url });
+          await answered(EXPORT, hits);
+          await assertNothingSaved(files, false);
+          // A page the other site sent, such as its answer to a request without the cookie, would
+          // have taken the window to that site.
+          const shown = (await firefox.contexts()).filter(
+            (context) => !before.has(context.context) && context.url.startsWith(`${other}/`),
+          );
+          assert.deepEqual(shown, []);
+          // With its opener open, the window would be tied through it.
+          await pollUntil(
+            async () =>
+              (await firefox.contexts()).some((context) => context.url === url) ? undefined : true,
+            PAGE_TIMEOUT_MS,
+            `the tab on ${url} to close`,
+          );
+        } finally {
+          for (const { context } of await firefox.contexts()) {
+            if (!before.has(context)) await firefox.closeContext(context).catch(() => undefined);
+          }
+        }
+      } finally {
+        await firefox.resetPopups(fixtures.site);
+      }
+    });
+
     test("a window on a file of the approved site itself still saves it", async () => {
       await firefox.allowPopups(fixtures.site);
       try {

@@ -679,10 +679,12 @@ Exceptions and limits:
 - The request still reaches that site, with the cookies Firefox sends for it. Only its answer is
   stopped.
 - Still saved is a `data:` file that a page of such a site builds itself, since Firefox tells
-  Foxleash nothing about where it came from, and a file such a page builds more than 60 seconds
-  after its last change of address, in a frame or window that is removed, closed or sent to
-  another page right then. An answer that such a site's service worker gives and that Firefox
-  shows rather than saves, such as a PDF, an image or text, is still shown: it starts no download.
+  Foxleash nothing about where it came from; a page of such a site that saves its own address as a
+  file, for example with a download link to itself, since its answer is a web page; and a file
+  such a page builds more than 60 seconds after its last change of address, in a frame or window
+  that is removed, closed or sent to another page right then. An answer that such a site's service
+  worker gives and that Firefox shows rather than saves, such as a PDF, an image or text, is still
+  shown: it starts no download.
 - A download whose address is not that of a load of the tab is not cancelled, such as one that a
   service worker answers with a redirect it builds. Neither is one whose load the worker held for
   more than 10 minutes before answering. A file Foxleash could not remove, which is logged, or took
@@ -708,10 +710,12 @@ Exceptions and limits:
   Foxleash cancel and remove every Blob file from every site that session may not act on, in any
   tab, until 60 seconds after the last one over those 200, or 2 seconds after its tab closed. Such
   a file is in no result.
-- A window that a page in those tabs opens is not covered when the tab that opened it closes
-  before Foxleash has looked that tab up, a matter of milliseconds, unless another tab of the
-  group opened that tab. A page may be able to close its own tab that fast while the tab has
-  shown only that page.
+- A window that a page in those tabs opens is covered also when the tab that opened it closes at
+  once, as a page may do with its own tab while the tab has shown only that page: Foxleash keeps
+  the group of the last 200 tabs that closed, and of every tab that closed in the last 2 seconds.
+  Not covered are a window opened from a tab whose group Foxleash never saw, which can happen only
+  in the moment as it starts, or when it could not read the open tabs then, and a window that no
+  tab's page opens, such as one a service worker opens when you click its notification.
 - A window or tab you open from one of those tabs yourself, such as with Open Link in New Window,
   is covered too until it closes, so a file from a site the session may not act on is stopped
   there as well. Possibly not the first address it loads: Foxleash may hear of such a window only

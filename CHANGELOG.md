@@ -153,9 +153,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   itself as a Blob, Foxleash cancels that download and removes its file after the fact too, which
   can also cancel a Blob file of your own from a site that the agent's tabs show, or showed in the
   last minute. An answer of such a worker that Firefox shows rather than saves, such as a PDF, is
-  still shown, and still saved are a `data:` file that a page of such a site builds itself, and
-  one that loads in the moment after Firefox starts or Foxleash is updated, in a window opened
-  from such a tab before that, or in a group made by an earlier version of Foxleash.
+  still shown, and still saved are a `data:` file that a page of such a site builds itself, such a
+  page itself when it saves its own address as a file, and a file that loads in the moment after
+  Firefox starts or Foxleash is updated, in a window opened from such a tab before that, or in a
+  group made by an earlier version of Foxleash.
 - The buttons of a question Foxleash asks you (whether to allow a site, to save or run a recipe,
   or to allow the sites a task needs) now wait a full second again after its window changes size,
   so a click aimed at where a button was cannot answer another button that moved there, and an

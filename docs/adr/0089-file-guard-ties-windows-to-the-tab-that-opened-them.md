@@ -2,7 +2,10 @@
 
 **Status:** Accepted, 2026-11-18. Amends
 [0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md): its consequence
-that a file loaded in a window a page opens is still saved.
+that a file loaded in a window a page opens is still saved. Amended by
+[0102](0102-file-guard-ties-a-window-by-the-group-its-opener-was-seen-in.md), 2026-11-20: a window
+whose opening tab closes within the moment of its lookup is judged as the session of the group
+that tab was in.
 
 ## Context
 

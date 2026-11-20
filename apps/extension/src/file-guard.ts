@@ -34,6 +34,11 @@ export const MAX_TAB_HOPS = 200;
  */
 export const HOP_GRACE_MS = 2_000;
 /**
+ * The most closed tabs, past those closed in the last HOP_GRACE_MS, whose group still ties a window
+ * opened from them: how long after a tab's close Firefox can report such a window is not measured.
+ */
+export const MAX_GONE_TABS = 200;
+/**
  * How long a tab keeps the site of a document from its last event, so a file the document's page
  * builds itself can be matched with it (ADR 0094).
  */
@@ -244,8 +249,19 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   const listeners = new Set<RefusalListener>();
   const opened = new Map<number, Opened>();
   const loads = new Map<number, Loads>();
+  /** Each tab's group, -1 for none, as its latest event showed it, kept while the tab is open. */
+  const tabGroups = new Map<number, number>();
   /** Tabs closed in the last HOP_GRACE_MS, with their `opened` entry: for a load's lookup only. */
   const closedTabs = new Map<number, { at: number; entry: Opened | undefined }>();
+  /**
+   * Every tab closed in the last HOP_GRACE_MS and the MAX_GONE_TABS closed last, with their
+   * `opened` entry and group: for the tie of a window the tab opened as it closed. Firefox never
+   * reuses a tab id, so only such a window names one.
+   */
+  const goneTabs = new Map<
+    number,
+    { at: number; entry: Opened | undefined; group: number | undefined }
+  >();
   /** Commits in the last HOP_GRACE_MS that came before their load. */
   let commits: { tabId: number; frameId: number; url: string; timeStamp: number; at: number }[] =
     [];
@@ -262,13 +278,24 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   access.onRunningChange(listen);
   browser.tabs.onRemoved.addListener((tabId) => {
     if (listening) closeLoads(tabId);
+    keepGone(tabId);
     refusals.delete(tabId);
     opened.delete(tabId);
+    tabGroups.delete(tabId);
   });
-  browser.tabs.onCreated.addListener((tab) => listenFor(tab));
+  browser.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) tabGroups.set(tab.id, tab.groupId ?? -1);
+    void listenFor(tab);
+  });
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    // Seen from the tab's own group, as Firefox does not always name a change of it.
+    tabGroups.set(tabId, changeInfo.groupId ?? tab.groupId ?? -1);
     void listenFor(tab);
     regroup(tabId, changeInfo, tab);
+  });
+  // A group stays in its window, so a tab moved to another window has left it.
+  browser.tabs.onDetached.addListener((tabId) => {
+    tabGroups.set(tabId, -1);
   });
   void listenForOpenTabs();
 
@@ -289,7 +316,11 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       warn({ event: "file_guard_tabs_unread", error: String(error) });
       return;
     }
-    for (const tab of tabs) void listenFor(tab);
+    for (const tab of tabs) {
+      // An event is newer than the query's answer.
+      if (tab.id !== undefined && !tabGroups.has(tab.id)) tabGroups.set(tab.id, tab.groupId ?? -1);
+      void listenFor(tab);
+    }
   }
 
   function listen(): void {
@@ -402,12 +433,17 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
   }
 
   function tie(details: CreatedNavigationTargetDetails): void {
-    // The source's own tie, taken now: a page can close a window or tab it opened at once, and
-    // its entry goes with it.
-    const fallback = opened.get(details.sourceTabId)?.tie;
+    const source = details.sourceTabId;
+    const closed = goneTabs.get(source);
+    // Taken now: a page can close its own tab at once, and Firefox forgets the tab, its group and
+    // its entry with it; the group's last tab may be the source.
+    const group = closed === undefined ? tabGroups.get(source) : closed.group;
+    const session = groups.sessionOf(group);
+    const fallback = opened.get(source)?.tie ?? closed?.entry?.tie;
+    const gone = () => tieOfGone(source, group, session, fallback);
     opened.set(details.tabId, {
-      source: details.sourceTabId,
-      tie: tieOf(details.sourceTabId).catch(() => fallback),
+      source,
+      tie: tieOf(source).then((tied) => tied ?? gone(), gone),
     });
     const entry = loads.get(details.tabId);
     if (entry !== undefined) rerun(details.tabId, entry);
@@ -419,6 +455,23 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
     if (judged === undefined) return undefined;
     // A chain of tabs points at the tab in a session's group it began in.
     return { session: judged.session, opener: judged.opener ?? source };
+  }
+
+  /**
+   * The tie of a tab whose source is gone, or now in no session's group, by what was seen of the
+   * source as it opened the tab; never rejects.
+   */
+  async function tieOfGone(
+    source: number,
+    group: number | undefined,
+    session: string | undefined,
+    fallback: Promise<Tie | undefined> | undefined,
+  ): Promise<Tie | undefined> {
+    if (session !== undefined) return { session, opener: source };
+    const tied = await fallback;
+    if (tied !== undefined) return tied;
+    const remembered = await groups.rememberedSessionOf(group);
+    return remembered === undefined ? undefined : { session: remembered, opener: source };
   }
 
   function record(tabId: number, refusal: Refusal): void {
@@ -460,6 +513,16 @@ export function createFileGuard({ browser, groups, access, now }: FileGuardDeps)
       entry.flood.until = Math.min(entry.flood.until, at + HOP_GRACE_MS);
     if (entry.documentFlood !== undefined)
       entry.documentFlood.until = Math.min(entry.documentFlood.until, at + HOP_GRACE_MS);
+  }
+
+  /** Keeps a closed tab's group and entry, oldest out first, for a window Firefox reports late. */
+  function keepGone(tabId: number): void {
+    const at = now();
+    goneTabs.set(tabId, { at, entry: opened.get(tabId), group: tabGroups.get(tabId) });
+    for (const [id, gone] of goneTabs) {
+      if (goneTabs.size <= MAX_GONE_TABS || at - gone.at < HOP_GRACE_MS) return;
+      goneTabs.delete(id);
+    }
   }
 
   function regroup(tabId: number, changeInfo: TabChangeInfo, tab: Tab): void {

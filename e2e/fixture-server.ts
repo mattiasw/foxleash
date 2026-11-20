@@ -1208,7 +1208,8 @@ function sendForeign(
   } else if (path === "/foreign/windows") {
     sendHtml(response, FOREIGN_WINDOWS_PAGE);
   } else if (path === "/foreign/window-script") {
-    sendHtml(response, foreignWindowScriptPage(other));
+    const query = new URL(request.url ?? "/", other).searchParams;
+    sendHtml(response, foreignWindowScriptPage(other, query.get("close") === "1"));
   } else if (path === "/foreign/worker-setup") {
     sendHtml(response, FOREIGN_WORKER_SETUP_PAGE);
   } else if (path === "/foreign/worker.js") {
@@ -3213,9 +3214,9 @@ const timer = setInterval(() => {
 
 /**
  * On the approved site: opens a pop-up window on the other site's export by itself, on its load.
- * The page keeps the window in window.popup.
+ * The page keeps the window in window.popup; with `close`, it then closes its own tab at once.
  */
-function foreignWindowScriptPage(other: string): string {
+function foreignWindowScriptPage(other: string, close: boolean): string {
   return `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.foreignWindowScript}</title></head>
 <body>
@@ -3226,7 +3227,7 @@ addEventListener("load", () => {
     ${JSON.stringify(`${other}/foreign/export.csv`)},
     "_blank",
     "popup,width=400,height=300",
-  );
+  );${close ? "\n  window.close();" : ""}
 });
 </script>
 </body></html>

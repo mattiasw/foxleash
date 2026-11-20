@@ -6,7 +6,9 @@ that a file a page of the other site builds itself is still saved, a Blob file s
 in a session's tab or frame is now cancelled and its file removed after the fact; a `data:` file
 is still saved. Extends the second layer of
 [0092](0092-file-guard-cancels-downloads-from-loads-whose-headers-never-came.md) to downloads that
-come from no load.
+come from no load. Amended by
+[0102](0102-file-guard-ties-a-window-by-the-group-its-opener-was-seen-in.md), 2026-11-20: a page
+of a site the session may not act on that saves its own address as a file is named as still saved.
 
 ## Context
 
