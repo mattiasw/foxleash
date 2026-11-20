@@ -544,8 +544,12 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
 - Foxleash writes each chunk of the response on to the page, in the order it arrives, before it
   copies anything, and never changes one. At the copy limit, for a type it does not keep, and on
   any fault, redirect, error or end of recording, it stops copying and keeps passing the rest of
-  the response on until it ends, also when that happens before the response starts. When
-  Foxleash's background stops in the middle of a response, the page still gets all of it.
+  the response on until it ends, also when that happens before the response starts. A response
+  that fails while it arrives, such as one the connection cuts short, reaches the page as a
+  complete response with the bytes that arrived and without the error Firefox would otherwise
+  report, because Firefox gives an add-on's stream filter no way to pass that failure on;
+  `read_network` gives that request its error and no body (ADR 0097). When Foxleash's background
+  stops in the middle of a response, the page still gets all of it.
 - Nothing from before recording began, and nothing from a gap: a response still arriving when
   recording stops is never kept.
 - Firefox lets an add-on read a response only for a request one of its blocking listeners saw. So

@@ -11,6 +11,7 @@ import { type Firefox, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
   NETWORK_BODIES,
+  NETWORK_CUT_BYTES,
   NETWORK_SECRETS,
   startFixtureServer,
   TITLES,
@@ -485,6 +486,55 @@ describe("read_network in real Firefox", () => {
     }
   });
 
+  test("a response the connection cuts short reaches a recorded page as complete, and read_network shows the error", async () => {
+    const page = await openBodiesPage(harness, session, firefox, fixtures);
+    const other = `http://localhost:${fixtures.port}`;
+    const outcome = async (script: string): Promise<unknown> =>
+      JSON.parse(String(await firefox.evaluate(page.context, script)));
+    assert.deepEqual(await outcome(outcomeScript("/api/body/cut-text")), {
+      status: 200,
+      length: NETWORK_CUT_BYTES.text,
+      digest: sha256(NETWORK_BODIES.large.slice(0, NETWORK_CUT_BYTES.text)),
+    });
+    assert.deepEqual(await outcome(outcomeScript("/api/body/cut-binary")), {
+      status: 200,
+      length: NETWORK_CUT_BYTES.binary,
+      digest: sha256(NETWORK_BODIES.ordered.slice(0, NETWORK_CUT_BYTES.binary)),
+    });
+    assert.deepEqual(await outcome(xhrOutcomeScript("/api/body/cut-binary")), {
+      status: 200,
+      length: NETWORK_CUT_BYTES.binary,
+    });
+    // Without a filter the same cut fails in the page, so the rows above show the filter's effect.
+    assert.deepEqual(await outcome(outcomeScript(`${other}/api/body/cut-binary`)), {
+      error: "TypeError",
+    });
+    const own = (requests: readonly NetworkRequestRead[]) =>
+      requests.filter((request) => request.url.startsWith(fixtures.url("/api/body/cut-")));
+    const read = await readUntil(
+      page.tab,
+      (requests) =>
+        own(requests).length === 3 &&
+        own(requests).every(
+          (request) => request.error !== undefined || request.durationMs !== undefined,
+        ),
+      { responseBody: true, pattern: "/api/body/cut-" },
+    );
+    assert.deepEqual(
+      own(read.requests).map((request) => ({
+        path: new URL(request.url).pathname,
+        error: request.error,
+        body: Object.hasOwn(request, "responseBody"),
+      })),
+      [
+        { path: "/api/body/cut-text", error: "NS_ERROR_NET_PARTIAL_TRANSFER", body: false },
+        { path: "/api/body/cut-binary", error: "NS_ERROR_NET_PARTIAL_TRANSFER", body: false },
+        { path: "/api/body/cut-binary", error: "NS_ERROR_NET_PARTIAL_TRANSFER", body: false },
+      ],
+      read.text,
+    );
+  });
+
   // Last: it blocks the fixture site for a moment, which ends every recording of it.
   test("a capture abandoned while the response arrives leaves the page's response whole", async () => {
     const page = await openBodiesPage(harness, session, firefox, fixtures);
@@ -674,6 +724,35 @@ function digestScript(path: string): string {
     .then((response) => response.arrayBuffer())
     .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
     .then((digest) => Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""))`;
+}
+
+/**
+ * A page script that fetches `url` and gives, as JSON, the status, the length and the SHA-256 of
+ * what it received, or the name of the error when the fetch or the body fails.
+ */
+function outcomeScript(url: string): string {
+  return `fetch(${JSON.stringify(url)})
+    .then((response) => response.arrayBuffer().then(async (bytes) => {
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      return JSON.stringify({
+        status: response.status,
+        length: bytes.byteLength,
+        digest: Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join(""),
+      });
+    }))
+    .catch((error) => JSON.stringify({ error: error.name }))`;
+}
+
+/** A page script that gets `url` with XMLHttpRequest and gives, as JSON, how it ended. */
+function xhrOutcomeScript(url: string): string {
+  return `new Promise((resolve) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("GET", ${JSON.stringify(url)});
+    xhr.responseType = "arraybuffer";
+    xhr.onload = () => resolve(JSON.stringify({ status: xhr.status, length: xhr.response.byteLength }));
+    xhr.onerror = xhr.onabort = xhr.ontimeout = (event) => resolve(JSON.stringify({ error: event.type }));
+    xhr.send();
+  })`;
 }
 
 function textScript(url: string): string {

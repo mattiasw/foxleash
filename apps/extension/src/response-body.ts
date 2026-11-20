@@ -1,7 +1,8 @@
 // Copies the text of a response as it passes to the page (ADR 0071, 0073, 0097). Every chunk
 // is written on, in order, before anything else happens to it; the copy stops at the cap and
-// on any fault, and Foxleash never disconnects the filter, so the page always gets the whole
-// response, unchanged and in order.
+// on any fault, and Foxleash never disconnects the filter, so the page gets every byte that
+// arrives, unchanged and in order; a response the connection cuts short still ends cleanly for
+// the page (ADR 0097).
 import {
   MAX_NETWORK_RESPONSE_BYTES,
   MAX_NETWORK_RESPONSE_TEXT,

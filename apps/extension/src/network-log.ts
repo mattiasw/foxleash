@@ -594,6 +594,10 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
 
   function onErrorOccurred(details: ErrorDetails): void {
     captures.get(details.requestId)?.capture.release();
+    const log = current(details.tabId);
+    const entry = log?.open.get(details.requestId);
+    // A body can be stored before the error: at the copy limit, or at a stop that came first.
+    if (log !== undefined && entry?.request.responseBody !== undefined) dropBody(log, entry);
     update(details.tabId, details.requestId, true, (request) => {
       request.error = capText(details.error, MAX_NETWORK_HEADER).text;
       request.durationMs = details.timeStamp - request.startTime;
@@ -814,7 +818,8 @@ function copyOf(
     copy.requestBody = { ...shape };
     if (fields !== undefined) copy.requestBody.fields = fields.map((field) => ({ ...field }));
   }
-  if (responseBody && request.responseBody !== undefined) {
+  // Until the request ends, a failure can still take its body away.
+  if (responseBody && request.responseBody !== undefined && request.durationMs !== undefined) {
     copy.responseBody = { ...request.responseBody };
   }
   if (request.durationMs !== undefined) copy.durationMs = request.durationMs;

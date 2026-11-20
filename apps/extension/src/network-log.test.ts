@@ -5,6 +5,8 @@ import {
   MAX_NETWORK_HEADER,
   MAX_NETWORK_HEADERS,
   MAX_NETWORK_REQUESTS,
+  MAX_NETWORK_RESPONSE_BYTES,
+  MAX_NETWORK_RESPONSE_TEXT,
   MAX_NETWORK_URL,
   type NetworkBody,
   type NetworkRequestRead,
@@ -2146,6 +2148,13 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     for (const id of [granted, stored, own]) {
       filterFor(fake, id)?.data("}");
       filterFor(fake, id)?.stop();
+      fake.emitWebRequest("onCompleted", {
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1200,
+        statusCode: 200,
+        fromCache: false,
+      });
     }
     assert.deepEqual(
       read(tab.id).requests.map((entry) => entry.responseBody),
@@ -2222,6 +2231,13 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     const release = holdViews(t, access)();
     await grantSite(fake.browser, "https://c.example");
     filterFor(fake, id)?.stop();
+    fake.emitWebRequest("onCompleted", {
+      requestId: id,
+      tabId: tab.id,
+      timeStamp: 1200,
+      statusCode: 200,
+      fromCache: false,
+    });
     assert.equal(read(tab.id).requests[0]?.responseBody, undefined);
     release();
     await flush();
@@ -2573,6 +2589,115 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     assert.equal(filterFor(fake, closed)?.disconnects, 0);
     assert.ok(released(filterFor(fake, closed)));
     assert.deepEqual(read(tab.id), NONE);
+  });
+
+  it("keeps no body of a response that fails after its filter stopped", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const cut = request(tab.id, `${SITE}/cut`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, cut, 200, "text/plain"));
+    filterFor(fake, cut)?.data("part of it");
+    // Firefox stops the filter before it reports the failure.
+    filterFor(fake, cut)?.stop();
+    const before = read(tab.id).requests[0];
+    assert.equal(before?.url, `${SITE}/cut`);
+    assert.equal(Object.hasOwn(before ?? {}, "responseBody"), false);
+    assert.equal(before?.error, undefined);
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: cut,
+      tabId: tab.id,
+      timeStamp: 1100,
+      error: "NS_ERROR_NET_PARTIAL_TRANSFER",
+    });
+    const after = read(tab.id).requests[0];
+    assert.equal(after?.error, "NS_ERROR_NET_PARTIAL_TRANSFER");
+    assert.equal(Object.hasOwn(after ?? {}, "responseBody"), false);
+    assert.equal(filterFor(fake, cut)?.disconnects, 0);
+    assert.equal(filterFor(fake, cut)?.writtenText(), "part of it");
+    const whole = request(tab.id, `${SITE}/whole`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, whole, 200, "text/plain"));
+    filterFor(fake, whole)?.data("all of it");
+    filterFor(fake, whole)?.stop();
+    fake.emitWebRequest("onCompleted", {
+      requestId: whole,
+      tabId: tab.id,
+      timeStamp: 1200,
+      statusCode: 200,
+      fromCache: false,
+    });
+    assert.deepEqual(read(tab.id).requests[1]?.responseBody, { text: "all of it" });
+  });
+
+  it("keeps no body of a response that fails after the copy limit stored it", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const cut = request(tab.id, `${SITE}/cut`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, cut, 200, "text/plain"));
+    // Past the copy limit the body is stored with no stop.
+    filterFor(fake, cut)?.data("x".repeat(MAX_NETWORK_RESPONSE_BYTES + 1));
+    fake.emitWebRequest("onErrorOccurred", {
+      requestId: cut,
+      tabId: tab.id,
+      timeStamp: 1100,
+      error: "NS_ERROR_NET_PARTIAL_TRANSFER",
+    });
+    const after = read(tab.id).requests[0];
+    assert.equal(after?.error, "NS_ERROR_NET_PARTIAL_TRANSFER");
+    assert.equal(Object.hasOwn(after ?? {}, "responseBody"), false);
+  });
+
+  it("gives the body of a failed response back to the page's bound", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const body = "c".repeat(MAX_NETWORK_RESPONSE_TEXT);
+    // 38 fetches of about 100,500 characters each bring the page to about 3,819,000 characters.
+    for (let index = 0; index < 38; index += 1) headersRequest(fake, request, tab.id, "/headers");
+    // 62 bodies of 32,768 characters, 2,031,616 in all: over half the bound unless given back.
+    for (let index = 0; index < 62; index += 1) {
+      const id = request(tab.id, `${SITE}/cut?n=${index}`);
+      assert.ok(filterFor(fake, id) !== undefined, `cut ${index} has a filter`);
+      fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id, 200, "text/plain"));
+      filterFor(fake, id)?.data(body);
+      filterFor(fake, id)?.stop();
+      fake.emitWebRequest("onErrorOccurred", {
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1100,
+        error: "NS_ERROR_NET_PARTIAL_TRANSFER",
+      });
+    }
+    respond(fake, tab.id, request(tab.id, `${SITE}/kept`), "k".repeat(MAX_NETWORK_RESPONSE_TEXT));
+    assert.equal(read(tab.id).truncated, false);
+    // Two more push the page over the bound: the oldest request goes, not the kept body.
+    for (let index = 0; index < 2; index += 1) headersRequest(fake, request, tab.id, "/more");
+    const result = read(tab.id);
+    assert.equal(result.truncated, true);
+    const kept = result.requests.find((entry) => entry.url === `${SITE}/kept`);
+    assert.equal(kept?.responseBody?.text.length, MAX_NETWORK_RESPONSE_TEXT);
+    assert.ok(charsIn(result) <= MAX_LOG_CHARS);
+  });
+
+  it("gives no body while the response is still arriving", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await liveTab(tabIn);
+    const id = request(tab.id, `${SITE}/long`);
+    fake.emitWebRequest("onHeadersReceived", headersOf(tab.id, id));
+    // Past the copy limit the body is stored while the rest still arrives.
+    filterFor(fake, id)?.data("l".repeat(MAX_NETWORK_RESPONSE_BYTES + 1));
+    assert.equal(Object.hasOwn(read(tab.id).requests[0] ?? {}, "responseBody"), false);
+    filterFor(fake, id)?.data("l");
+    filterFor(fake, id)?.stop();
+    fake.emitWebRequest("onCompleted", {
+      requestId: id,
+      tabId: tab.id,
+      timeStamp: 1200,
+      statusCode: 200,
+      fromCache: false,
+    });
+    assert.deepEqual(read(tab.id).requests[0]?.responseBody, {
+      text: "l".repeat(MAX_NETWORK_RESPONSE_TEXT),
+      truncated: true,
+    });
   });
 
   it(`copies at most ${MAX_OPEN_CAPTURES} responses of a page at once`, async () => {

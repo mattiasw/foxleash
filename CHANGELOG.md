@@ -49,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed or upgraded.
 - When the add-on needs an update, the settings and first-run pages say to check for updates in
   `about:addons` and link to the add-on's page, instead of naming a command.
+- In a tab being recorded, a fetch or XMLHttpRequest response from an approved site that fails
+  while it arrives, such as one the connection cuts short, reaches the page as complete, without
+  the error Firefox would otherwise report; in 0.5.0 that held only for small text responses.
+  `read_network` shows the request's error.
 
 ### Removed
 
@@ -62,7 +66,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The browser now says that a Foxleash program of version 0.4.0 or 0.4.1 is too old for the
   add-on, instead of showing it as connected while it refuses every tool call.
 - In a tab being recorded, a page's fetch and XMLHttpRequest requests could get a large response
-  with parts out of order or missing. Every response now reaches the page whole and in order.
+  with parts out of order or missing. Every response now reaches the page in order, with every
+  byte that arrives.
 - The Foxleash button no longer shows ON on the tabs of an agent session that has ended. An agent
   session whose Foxleash program stopped or crashed without ending it no longer shows ON on its
   tabs or stays listed as running in the settings.
@@ -112,6 +117,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   once, when the address was answered with a file by the service worker of a site the agent may
   not act on and another tab had loaded the same address a moment before. Nothing was saved
   either way.
+- `read_network` no longer gives a response's body before the response has ended, nor the part
+  of a response that failed while it arrived, such as one the connection cut short; such a
+  request has its error and no body.
 
 ### Security
 

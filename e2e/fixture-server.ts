@@ -221,6 +221,8 @@ export const NETWORK_BODIES = {
   held: ["first\n", "h".repeat(100_000)],
   other: '{"other":true}',
 } as const;
+/** How many bytes /api/body/cut-text and /api/body/cut-binary send before they close the connection. */
+export const NETWORK_CUT_BYTES = { text: 1_000, binary: 600_000 } as const;
 /** How long /api/body/stream waits between its chunks. */
 export const NETWORK_STREAM_GAP_MS = 150;
 
@@ -1158,6 +1160,20 @@ export async function startFixtureServer(): Promise<FixtureServer> {
         timers.add(timer);
       };
       next();
+    } else if (path === "/api/body/cut-text") {
+      response.writeHead(200, {
+        ...headers,
+        "Content-Type": "text/plain; charset=utf-8",
+        "Content-Length": "2000",
+      });
+      cutShort(response, NETWORK_BODIES.large.slice(0, NETWORK_CUT_BYTES.text));
+    } else if (path === "/api/body/cut-binary") {
+      response.writeHead(200, {
+        ...headers,
+        "Content-Type": "application/octet-stream",
+        "Content-Length": String(NETWORK_BODIES.ordered.length),
+      });
+      cutShort(response, NETWORK_BODIES.ordered.slice(0, NETWORK_CUT_BYTES.binary));
     } else if (path === "/api/body/held") {
       response.writeHead(200, { ...headers, "Content-Type": "text/plain; charset=utf-8" });
       response.write(NETWORK_BODIES.held[0]);
@@ -1175,6 +1191,20 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       response.writeHead(404, headers);
       response.end();
     }
+  }
+
+  /**
+   * Sends the part of a body shorter than its Content-Length, then closes the connection once
+   * the part was handed to the socket, so the page gets all of it before the close.
+   */
+  function cutShort(response: ServerResponse, part: string): void {
+    response.write(part, () => {
+      const timer = setTimeout(() => {
+        timers.delete(timer);
+        response.socket?.destroy();
+      }, 100);
+      timers.add(timer);
+    });
   }
 
   function releaseBody(): void {

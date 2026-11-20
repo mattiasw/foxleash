@@ -353,8 +353,11 @@ the cache.
   `Content-Type` names, or as UTF-8 when it names none or one Firefox does not know; bytes that do
   not decode show as U+FFFD. The text is cut to 32,768 characters, and `truncated` in
   `responseBody` says either cut took something.
-- The page gets every response whole and in order: a response Foxleash copies from passes
-  through it to its end, also past the 65,536 bytes it keeps.
+- The page gets every byte of a response that arrives, in order: a response Foxleash copies from
+  passes through it to its end, also past the 65,536 bytes it keeps. A response that fails while
+  it arrives, such as one the connection cuts short, reaches the page as complete, without the
+  error Firefox would otherwise report; `read_network` shows the request's `error`, such as
+  `NS_ERROR_NET_PARTIAL_TRANSFER`, and no `responseBody`.
 - As a best effort, the values of `access_token`, `refresh_token` and `id_token` fields (also with
   a prefix such as `oauth_access_token`, in camelCase such as `accessToken`, or with a hyphen) in
   JSON, JavaScript, XML elements and form or query text, and every JWT-shaped string, are replaced
@@ -367,8 +370,9 @@ the cache.
   response has no `Content-Type`, more than one, a type that is not text, a charset in which ASCII
   bytes can decode to other characters (UTF-16, ISO-2022-JP, Shift_JIS, GBK, gb18030, Big5,
   EUC-KR), or text Foxleash cannot redact reliably; when a service worker answered it; while its
-  response is still arriving; when it ended in an error such as a refused connection (a response
-  with an error status, such as 500, keeps its body); when it was redirected; when it started
+  response is still arriving; when it ended in an error, such as a refused connection or a
+  response the connection cut short (a response with an error status, such as 500, keeps its
+  body); when it was redirected; when it started
   before recording began, or recording stopped and started again while it arrived; when it
   started in the moment after recording began, before Foxleash could capture; when part of it
   arrived, or the agent reads, just as your approvals or blocklist changed; when 64 responses of
