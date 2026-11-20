@@ -77,7 +77,10 @@ export interface Session {
   close(): Promise<void>;
 }
 
-type StartOptions = Pick<LaunchOptions, "holdBeforeUnloadPrompts" | "restoreSession"> & {
+type StartOptions = Pick<
+  LaunchOptions,
+  "holdBeforeUnloadPrompts" | "restoreSession" | "headless"
+> & {
   /** Leaves open the welcome page the extension opens when it is installed. */
   keepWelcome?: boolean;
 };

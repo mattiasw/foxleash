@@ -1,5 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { connect as connectTcp } from "node:net";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -56,6 +56,11 @@ const POLL_MS = 100;
 const ELEMENT_KEY = "element-6066-11e4-a52e-4f735466cecf";
 // press and release share one pointer source, so Marionette keeps the button held between them.
 const MOUSE = { type: "pointer", id: "mouse", parameters: { pointerType: "mouse" } };
+// Firefox stripes the address bar and shows a robot icon on a window WebDriver controls (its
+// urlbar.css, :root[remotecontrol]); users never see either.
+const HIDE_REMOTE_CONTROL = `:root[remotecontrol] #remote-control-box { visibility: collapse !important; }
+:root[remotecontrol] #urlbar > .urlbar-background { background-image: none !important; }
+`;
 
 // An empty form action origin matches any form on the origin.
 const SAVE_LOGIN = `const [origin, username, password] = arguments;
@@ -364,14 +369,21 @@ export interface LaunchOptions {
    * and tabs" setting does.
    */
   restoreSession?: boolean;
+  /**
+   * Firefox runs headless unless this is false. False draws its window on the X display named by
+   * `DISPLAY` and hides the marks Firefox puts on a window WebDriver controls, for screenshots of
+   * the whole window.
+   */
+  headless?: boolean;
 }
 
 /**
- * Starts Firefox headless in its own process group under a hard lifetime, opens the WebDriver
- * session over Marionette as soon as it listens, so this run holds Firefox's single session from
- * the start, and connects BiDi to that session. BiDi does everything it can; Marionette only
- * sends input (clicks, mouse presses, keys) and brings a tab to the front, because BiDi has no
- * input in extension pages and does not activate them (ADR 0008). Any failure kills the group before it rejects.
+ * Starts Firefox, headless unless `headless` is false, in its own process group under a hard
+ * lifetime, opens the WebDriver session over Marionette as soon as it listens, so this run holds
+ * Firefox's single session from the start, and connects BiDi to that session. BiDi does
+ * everything it can; Marionette only sends input (clicks, mouse presses, keys) and brings a tab to
+ * the front, because BiDi has no input in extension pages and does not activate them (ADR 0008).
+ * Any failure kills the group before it rejects.
  */
 export async function launchFirefox({
   binary,
@@ -381,11 +393,16 @@ export async function launchFirefox({
   lifetimeSeconds = FIREFOX_LIFETIME_SECONDS,
   holdBeforeUnloadPrompts = false,
   restoreSession = false,
+  headless = true,
 }: LaunchOptions): Promise<Firefox> {
   writeFileSync(
     join(profileDir, "user.js"),
-    buildUserJs(downloadDir, holdBeforeUnloadPrompts, restoreSession),
+    buildUserJs(downloadDir, holdBeforeUnloadPrompts, restoreSession, headless),
   );
+  if (!headless) {
+    mkdirSync(join(profileDir, "chrome"), { recursive: true });
+    writeFileSync(join(profileDir, "chrome", "userChrome.css"), HIDE_REMOTE_CONTROL);
+  }
   const child = spawn(
     "sh",
     [
@@ -394,7 +411,7 @@ export async function launchFirefox({
       "foxleash-e2e",
       String(lifetimeSeconds),
       binary,
-      "--headless",
+      ...(headless ? ["--headless"] : []),
       "--no-remote",
       "--profile",
       profileDir,
@@ -410,7 +427,13 @@ export async function launchFirefox({
       // No crash reporter: its helper process puts itself in a session and process group of its
       // own, out of reach of the group kill and the watchdog, and a crash would write a minidump
       // outside the throwaway profile and try to upload it.
-      env: { ...env, MOZ_CRASHREPORTER_DISABLE: "1", MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1" },
+      env: {
+        ...env,
+        MOZ_CRASHREPORTER_DISABLE: "1",
+        MOZ_REMOTE_ALLOW_SYSTEM_ACCESS: "1",
+        // Firefox then draws on the X display in DISPLAY, also when started from a Wayland session.
+        ...(headless ? {} : { MOZ_ENABLE_WAYLAND: "0" }),
+      },
     },
   );
   track(child);
@@ -925,6 +948,7 @@ function buildUserJs(
   downloadDir: string,
   holdBeforeUnloadPrompts: boolean,
   restoreSession: boolean,
+  headless: boolean,
 ): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
     restoreSession
@@ -1009,6 +1033,13 @@ function buildUserJs(
       "dom.require_user_interaction_for_beforeunload",
       false,
       "Show a page's beforeunload prompt without a click on the page first, so a test can make one appear.",
+    ]);
+  }
+  if (!headless) {
+    prefs.push([
+      "toolkit.legacyUserProfileCustomizations.stylesheets",
+      true,
+      "Load the profile's chrome/userChrome.css, which hides the striped address bar and robot icon Firefox shows while WebDriver controls it, so a screenshot shows Firefox as users see it.",
     ]);
   }
   return prefs

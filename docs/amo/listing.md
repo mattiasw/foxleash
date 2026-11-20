@@ -23,6 +23,8 @@
 >   its own, not through the submission metadata. AMO takes at most 150,000 characters.
 > - **Compatibility**: not text for AMO. It says which applications each version is
 >   submitted for, and why.
+> - **Screenshots**: AMO's screenshots of the add-on, uploaded from `docs/amo/screenshots/`
+>   with the captions given there, in that order; not pasted text.
 >
 > The release check fails when the Summary, the Description or the Permissions section is
 > longer than AMO takes.
@@ -231,3 +233,12 @@ AMO's server code (addons-server, `Version.from_upload` and the version `compati
 field of its API), not in the public API documentation. A version whose manifest has the key
 is marked compatible with Firefox for Android from its `strict_min_version`, even when the
 submission requests Firefox only, and AMO's API refuses to remove that mark afterwards.
+
+## Screenshots
+
+The files are 1280x800, AMO's recommended size; `npm run screenshots:amo` retakes them (see
+`docs/development.md`). Each item gives the file and, after the colon, its caption.
+
+- `docs/amo/screenshots/1-approval-prompt.png`: Before the agent opens a site you have not allowed, Foxleash asks you in Firefox.
+- `docs/amo/screenshots/2-tab-group.png`: The pages the agent opens stay together in an orange Foxleash tab group.
+- `docs/amo/screenshots/3-settings.png`: In the settings you can see and stop running agent sessions, revoke the sites you allowed and edit the list of blocked sites.

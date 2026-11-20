@@ -400,6 +400,23 @@ tagged commit (ADR 0075).
 8. Create a draft GitHub release for the tag `vx.y.z` with `foxleash-x.y.z.xpi` attached,
    review it and publish it.
 
+### AMO screenshots
+
+A listed release takes its screenshots from `docs/amo/screenshots/`, with the captions in
+`docs/amo/listing.md`: the approval prompt with its buttons armed, the orange Foxleash tab
+group with an OpenStreetMap page the agent opened, and the settings page. Retake them, and
+look at them, when the UI a shot shows changes before a listed release.
+
+`npm run screenshots:amo` builds the extension and takes them through the end-to-end harness,
+in a headed Firefox (the end-to-end pin) with a throwaway profile. It sizes the window to the
+screen, hides the marks Firefox puts on a window WebDriver controls, and overwrites the three
+files in `docs/amo/screenshots/`. It needs `xvfb-run`, `ffmpeg` and access to
+openstreetmap.org:
+
+```sh
+xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24' npm run screenshots:amo
+```
+
 ## Server
 
 Each subcommand runs as `node apps/server/src/main.ts <subcommand>`; `--help` lists them.
