@@ -80,7 +80,7 @@ export interface KeyWatch {
 /**
  * Tells which key and pointer events start the arming second again, and holds it after input that
  * can open a Firefox menu, which takes the keys after it without a blur and lets the page see only
- * some keyups once it lets go (ADR 0063, 0064). A hold starts at a lone Alt, at an Alt keyup it
+ * some keyups once it lets go (ADR 0057). A hold starts at a lone Alt, at an Alt keyup it
  * did not see go down while fresh (no keydown or pointer press since creation or the last blur), at
  * an F10, Menu-key or Alt-chord keydown, at a secondary press and at a `contextmenu`; it forgets
  * the keys seen going down. It ends at the next primary press, click, keydown that neither starts

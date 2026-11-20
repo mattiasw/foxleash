@@ -373,7 +373,7 @@ describe("leave prompts beside an open question in real Firefox", () => {
     assert.ok(match !== null, text);
     const tabId = Number(match[1]);
     assert.ok(elapsed < SIGN_IN_ANSWER_MS, `tab_open answered after ${elapsed} ms`);
-    // Firefox's own select, to show its dialog (ADR 0082): a Firefox that stops making it fails
+    // Firefox's own select, to show its dialog (ADR 0057): a Firefox that stops making it fails
     // here when the pinned version moves.
     await pollUntil(
       async () => {

@@ -84,7 +84,7 @@ export function fieldsOf(value: unknown): Record<string, unknown> | undefined {
  * armed, with only Tab, Shift+Tab and modifier keydowns since, focus moved from an element before
  * the buttons onto the first button and on from button to neighbouring button. A button's focus
  * counts only when it arrives that way while armed; a focus from no element, from after the
- * buttons, or from a button whose focus did not count never counts (ADR 0061). Every other
+ * buttons, or from a button whose focus did not count never counts (ADR 0057). Every other
  * Enter or Space keydown on an answer button while asking is refused: no click, the arming second
  * starts again, focus goes back to `rest()` and `onUnarmed("refocus")` is called. A refused click
  * calls `onUnarmed("arming")`. An answer starts the arming second again. Any keydown in the page while unarmed, and while armed any key but
@@ -93,9 +93,10 @@ export function fieldsOf(value: unknown): Record<string, unknown> | undefined {
  * modifier other than Alt whose keydown the page saw since the window last lost focus or a hold
  * started. Input that can open a Firefox menu (a lone Alt, F10, the Menu key, a key pressed with
  * Alt, a right-button press or a `contextmenu` event) disarms the page with no second running until
- * the page next sees a key, a pointer press or a click, from which the second starts (ADR 0063,
- * 0064). A resize of the page's viewport after `watch()` starts the second again, and a pointer
- * press under way at the resize does not answer (ADR 0083).
+ * the page next sees a key the hold does not keep, a primary pointer press or a click, from which
+ * the second starts.
+ * A resize of the page's viewport after `watch()` starts the second again, and a pointer
+ * press under way at the resize does not answer.
  * `aria-disabled`, not `disabled`, keeps the buttons focusable.
  */
 export function armButtons<Handle>(options: {
@@ -153,7 +154,7 @@ export function armButtons<Handle>(options: {
   // page unarmed until it stops for a second, also once armed.
   window.addEventListener("keydown", onKeydown, { capture: true });
   // A Firefox menu takes the keys after it without a blur; the page sees only some keyups once it
-  // lets go (ADR 0063, 0064). Capture, so these run before the buttons' own listeners.
+  // lets go (ADR 0057). Capture, so these run before the buttons' own listeners.
   window.addEventListener("keyup", onKeyup, { capture: true });
   window.addEventListener("pointerdown", (event) => track(keys.press(event.button === 2)), {
     capture: true,
@@ -218,7 +219,7 @@ export function armButtons<Handle>(options: {
       arming.visible(document.visibilityState === "visible");
     });
     window.addEventListener("focus", () => arming.focused(!keys.held()));
-    // A resize moves the buttons (ADR 0083).
+    // A resize moves the buttons (ADR 0057).
     window.addEventListener("resize", rearm);
   }
 

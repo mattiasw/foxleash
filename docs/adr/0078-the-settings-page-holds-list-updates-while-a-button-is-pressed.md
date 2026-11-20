@@ -32,7 +32,7 @@ list update through `hold.run(slot, update)`, with the slots `"sites"`, `"answer
 
 - A `pointerdown` with `button` 0 starts the hold for its pointer. Only the primary button: after a
   secondary press on Linux, Firefox opens its context menu and the page gets no `pointerup`
-  ([0064](0064-the-keys-firefox-menus-take-from-a-prompt.md) records a right-click as
+  ([0057](0057-an-open-question-stays-in-view-and-is-answered-only-by-input-made-for-it.md) records a right-click as
   `pointerdown`, `mousedown`, `contextmenu` and nothing after), which would leave the hold stuck; and
   only a primary press makes a click on a button.
 - `pointerup` and `pointercancel` end the hold for their pointer; the window's own `blur` ends it

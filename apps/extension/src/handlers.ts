@@ -418,7 +418,7 @@ export function createHandlers<Handle>({
    * without asking the server unless the response was `no-store`. Not selected while the session
    * is asking the user something. A load that waits on Firefox's sign-in dialog fails with
    * `sign_in_needed`, and the tab stays open, not selected by Foxleash: Firefox shows the dialog in
-   * it (ADR 0082).
+   * it (ADR 0057).
    */
   async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
     refuseIfEnded(access, session, generation);
