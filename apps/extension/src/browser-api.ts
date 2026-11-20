@@ -136,10 +136,11 @@ export interface BrowserApi {
    * frame load, in a tab of a session's group or in a tab or window opened from one, that is not a
    * web page and comes from a site the session may not act on (ADR 0081). While a download runs,
    * its listener on requests that belong to no tab cancels a redirect hop of the download's own
-   * fetch to a site the session may not act on (ADR 0099). While a load the agent started in a tab
-   * of a session's group runs, a listener on that tab's top-level requests cancels a redirect hop
-   * to a blocklisted site, and keeps doing so for that load until Firefox reports it ended (ADR
-   * 0101).
+   * fetch to a site the session may not act on or that it cannot check, and for 5 minutes after a
+   * timeout every hop of that fetch (ADR 0099). While the agent waits for a load in a tab of a session's group, and
+   * for every top-level load the tab starts in the 5 minutes after, a listener on that tab's
+   * top-level requests cancels a redirect hop to a blocklisted site or one it cannot check, until
+   * Firefox reports that load ended (ADR 0101).
    */
   webRequest: {
     onBeforeRequest: WebRequestEvent<
@@ -218,7 +219,7 @@ export interface Cancel {
  * Firefox's webRequest StreamFilter: once attached, the page gets only what `write` passes on,
  * until `close` or `disconnect`. Foxleash never calls `disconnect`, which hands the rest of the
  * response back to Firefox: chunks still on their way can then reach the page out of order or
- * not at all, measured after the start (ADR 0073) and at it (ADR 0097). It throws before the
+ * not at all, measured after the start (ADR 0071) and at it. It throws before the
  * filter started.
  */
 export interface StreamFilter {

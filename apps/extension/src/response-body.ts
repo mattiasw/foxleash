@@ -1,8 +1,8 @@
-// Copies the text of a response as it passes to the page (ADR 0071, 0073, 0097). Every chunk
+// Copies the text of a response as it passes to the page (ADR 0071). Every chunk
 // is written on, in order, before anything else happens to it; the copy stops at the cap and
 // on any fault, and Foxleash never disconnects the filter, so the page gets every byte that
 // arrives, unchanged and in order; a response the connection cuts short still ends cleanly for
-// the page (ADR 0097).
+// the page.
 import {
   MAX_NETWORK_RESPONSE_BYTES,
   MAX_NETWORK_RESPONSE_TEXT,
@@ -200,7 +200,7 @@ export function captureResponse(filter: StreamFilter, hooks: CaptureHooks): Resp
  * Takes over the filter's events once the capture ended, holding nothing but the filter, so
  * the capture and its hooks can be freed while a long response still streams. Every chunk is
  * written on and the stop closes the filter, also when the response has not started: a
- * disconnect can reorder or drop the chunks still on their way (ADR 0073, 0097).
+ * disconnect can reorder or drop the chunks still on their way (ADR 0071).
  */
 function passOn(filter: StreamFilter): void {
   filter.ondata = (event) => {

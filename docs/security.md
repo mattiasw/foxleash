@@ -553,7 +553,7 @@ XMLHttpRequest requests, as they arrived (ADR 0071):
   that fails while it arrives, such as one the connection cuts short, reaches the page as a
   complete response with the bytes that arrived and without the error Firefox would otherwise
   report, because Firefox gives an add-on's stream filter no way to pass that failure on;
-  `read_network` gives that request its error and no body (ADR 0097). When Foxleash's background
+  `read_network` gives that request its error and no body. When Foxleash's background
   stops in the middle of a response, the page still gets all of it.
 - Nothing from before recording began, and nothing from a gap: a response still arriving when
   recording stops is never kept.

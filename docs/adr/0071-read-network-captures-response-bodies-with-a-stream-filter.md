@@ -1,126 +1,124 @@
-# 0071: read_network captures response bodies with a stream filter
+# 0071: read_network captures response bodies with a stream filter it never disconnects
 
 **Status:** Accepted, 2026-11-17. Supersedes the rule "Non-blocking listeners only" and the
 rejected alternative "Response bodies" of
-[0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md). Its capture rule
-("disconnects the filter" at the cap and on release) and measurement M4 are superseded by
-[0073](0073-response-capture-never-disconnects-after-the-start.md), 2026-11-17. Amended by
-[0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19:
-"it never blocks or changes a request" gains the exception of a download's redirect hop to a site
-the session may not act on, which is cancelled. Amended by
-[0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: it
+[0016](0016-read-network-records-live-documents-with-non-blocking-web-request.md).
+
+Amended 2026-11-17: the capture no longer disconnects its filter once data flows (at the cap, on
+a release or on a fault), since a disconnect after the start reordered or dropped the chunks
+still on their way; it disconnected the filter only inside `onstart`, before any data.
+
+Amended by [0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md),
+2026-11-18: "it never blocks or changes a request" gains the exception of a page or frame load in
+a tab of a session's group whose answer is not a web page and comes from a site the session may
+not act on, which is cancelled.
+
+Amended 2026-11-19: no filter is disconnected at all, since the `onstart` disconnect too
+reordered or dropped chunks on Firefox 156.0.1 under CPU contention.
+
+Amended by [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md),
+2026-11-19: "it never blocks or changes a request" gains the exception of a download's redirect
+hop to a site the session may not act on, which is cancelled.
+
+Amended by [0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: it
 also gains the exception of a redirect hop to a blocklisted site in a load the agent started in a
 session tab, which is cancelled.
+
+Amended 2026-11-20: a filter cannot pass a response's failure on, so a response the connection
+cuts short reaches a recorded page as complete; the limit is now stated, and `read_network` gives
+such a request no body.
 
 ## Context
 
 A form's POST answered 500 with a 36-byte JSON body, and `read_network` gave the agent only the
 status and headers. A response body cannot be fetched afterwards, and sending the request again
-can be impossible (a single-use reCAPTCHA token) or harmful (a second form submission). The
-maintainer decided that Foxleash reads response bodies with a stream filter
-(`browser.webRequest.filterResponseData`), with the manifest permissions `webRequestBlocking` and
-`webRequestFilterResponse`, before the first public listing. The listing's sentence "Foxleash
-does not block or change any request" becomes "Foxleash reads these responses and passes every
-byte on unchanged; it never blocks or changes a request."
+can be impossible (a single-use reCAPTCHA token) or harmful (a second form submission). Before
+the first public listing, the maintainer decided that Foxleash reads response bodies with a
+stream filter (`browser.webRequest.filterResponseData`), with the manifest permissions
+`webRequestBlocking` and `webRequestFilterResponse`. The add-on listing states that Foxleash
+passes every byte of each response on to the page unchanged and never changes a request, and
+names the few things it stops.
 
-Measured in Firefox 156.0.1, headless, with a probe add-on (MV3 event page, the three
-`webRequest` permissions and `<all_urls>`) and a local server on 127.0.0.1 and localhost; the
-page computed a SHA-256 of what it received and the server of what it sent:
-
-- M1. `filterResponseData` called from a listener not registered `"blocking"`, when no blocking
-  listener of the add-on saw the request, fails: the filter's `onerror` fires with "Invalid
-  request ID", and the page gets its response unchanged.
-- M2. With a blocking `onBeforeRequest` listener that returns `undefined` at once seeing the
-  request, a filter made in a separate non-blocking `onBeforeRequest` listener works, whichever
-  of the two was added first (88 of 88).
-- M3. A response sent with `Content-Encoding: gzip` reaches `ondata` uncompressed.
-- M4. With a filter that writes every chunk, the page got exactly the server's bytes for bodies of
-  14 B, 31 B (a POST answered 500), 8,191 B gzip, 200,000 B, 11 chunks streamed 200 ms apart, and
-  200,000 B with a disconnect after the first `ondata`. One `ondata` carried 131,072 bytes.
-- M5. `disconnect()` throws `NS_ERROR_FAILURE` while the filter has not started (in
-  `onHeadersReceived` and `onBeforeRedirect`); from `onstart` on it works, the rest reaches the
-  page unchanged, and the filter fires no more events.
-- M6. `onHeadersReceived` and `onCompleted` arrive in no fixed order relative to the filter's
-  `start`, `data` and `stop`.
-- M7. A filter does not follow a redirect: it errors with "Channel redirected". The next hop's
-  `onBeforeRequest`, with the same `requestId`, can attach a new one.
-- M8. A fresh response from the HTTP cache reaches a filter like a network one.
-- M9. A response a service worker gives shows as `onBeforeRedirect` with status 0 to the same URL
-  and no `onHeadersReceived` or `onCompleted`. In a page a worker controls but does not answer
-  for, the first hop's filter errors with "ServiceWorker fallback redirection" and a second
-  `onBeforeRequest` with the same `requestId` follows. The worker's own fetch has `tabId` -1.
-- M10. Requests of a frame from another site filter like the top document's.
-- M11. `runtime.reload()` after the first of 11 streamed chunks: the page still got every byte.
-- M12. With filters open and a chunk every 4 s for 40 s, the event page was not suspended
-  (Firefox's ext-backgroundPage.js resets its idle timer while a stream filter is active).
-- M13. 40 sequential 14 B fetches took 88 and 89 ms seen only by a non-blocking listener, 89 and
-  110 ms with a blocking no-op seeing them too. After 45 s idle, with the event page suspended,
-  the first fetch a blocking listener saw took 34 and 280 ms (it waited for the background to
-  start), against 5 ms for one seen only by a non-blocking listener.
-- M14. A blocking no-op added at runtime with the filter `{ urls: ["<all_urls>"], types:
-  ["xmlhttprequest"], tabId }` makes that tab's fetches filterable; before it is added, after it
-  is removed, and for another tab, the filter errors with "Invalid request ID".
-- M15. Firefox has no permission prompt text for `webRequest`, `webRequestBlocking` or
-  `webRequestFilterResponse` (no `webext-perms-description-*` string for them, read in its
-  source). Whether an update that adds them prompts was not run.
-- M16. `filter.write(event.data)` leaves the buffer readable: its bytes after the write are the
-  response's.
+What bound the design was measured
+([response stream filter measurements](../measurements/response-stream-filter.md); M1 to M16 are
+in [how a stream filter behaves](../measurements/response-stream-filter.md#how-a-stream-filter-behaves-2026-11-17)).
+A filter works only for a request a blocking listener of the add-on saw (M1); one that returns at
+once is enough, also when added at runtime for one tab (M2, M14), but every blocking listener
+costs a round trip to the background, tens to hundreds of milliseconds while the event page is
+suspended (M13). Bodies arrive decoded (M3). The headers and the filter's events come in no fixed
+order (M6). A filter does not follow a redirect or reach a service worker's answer (M7, M9).
+`disconnect()` throws before the filter starts (M5); once data flows, a disconnect reorders or
+drops the chunks still on their way
+([disconnecting after the start](../measurements/response-stream-filter.md#disconnecting-after-the-start-2026-11-17)),
+and on Firefox 156.0.1 so did one inside `onstart`, on CI
+([the order test on CI](../measurements/response-stream-filter.md#the-order-test-on-ci-with-the-onstart-disconnect-2026-11-19))
+and under CPU contention
+([disconnecting at the start](../measurements/response-stream-filter.md#disconnecting-at-the-start-under-cpu-contention-2026-11-19)).
+A filter cannot pass a response's failure on
+([a response the connection cuts short](../measurements/response-stream-filter.md#a-response-the-connection-cuts-short-2026-11-20)).
 
 ## Decision
 
+- **Blocking.** Apart from the hold below, which returns at once, and three listeners that cancel,
+  Foxleash "never blocks or changes a request". The three are the file guard
+  ([0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md)), a download's
+  redirect hop ([0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md))
+  and a redirect hop to a blocklisted site in a tab's top-level load while the agent waits for a
+  load there and for 5 minutes after
+  ([0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md)); each record gives its
+  exception's full scope. The doc comment on `webRequest` in `apps/extension/src/browser-api.ts`
+  lists the four blocking places.
 - **A per-tab hold.** While a tab has a live log (ADR 0016, 0066), `network-log.ts` keeps one
-  extra `onBeforeRequest` listener for it, with the filter `{ urls: ["<all_urls>"], types:
-  ["xmlhttprequest"], tabId }` and extra info `["blocking"]`, which returns `undefined` at once and
-  does nothing else (M2, M14). It is added when a log goes live and removed whenever the tab is
-  left without its live log: a commit, a refusal, a log dropped because its document stopped
-  being live, the tab closing. A tab has at most one. No listener returns a Promise or a
-  BlockingResponse.
+  blocking `onBeforeRequest` listener for it, `{ urls: ["<all_urls>"], types: ["xmlhttprequest"],
+  tabId }`, which returns `undefined` at once (M2, M14). `goneLive` adds it; `dropLog` removes it
+  whenever the tab is left without its live log (a commit, a refusal, a log dropped because its
+  document stopped being live, the tab closing). A tab has at most one. No listener of the network
+  log returns a Promise or a BlockingResponse.
 - **When a filter is attached.** In the non-blocking `onBeforeRequest`, right after the request's
   entry is pushed to the tab's log (so nothing from before recording started is captured), only
   for `type` `xmlhttprequest`, a live log, and a request whose own URL is approved for the session
   and not on the blocklist (`SiteView.allowed`), whether the page or a frame made it, and while
   the log has fewer than `MAX_OPEN_CAPTURES` (64) captures open.
-- **A synchronous site check.** `onBeforeRequest` cannot wait for `access.view()`, so
-  `network-log.ts` caches each session's `SiteView`. It is read when a log goes live and on a
-  miss, never awaited: a request that misses goes uncaptured. Every settings change, grant,
-  withdrawal and stop clears the cache synchronously and starts reading it again for the live
-  logs; a read that started before a clear is thrown away. After each read, every open capture of
-  the session asks again, so one whose own site was withdrawn or blocklisted while the page's
-  site stayed live stores nothing; a failed read releases them all. A chunk that arrives while
-  the session has no current view releases its capture, so no copied byte comes from a moment
-  whose access Foxleash had not checked. Each read also forgets the stored bodies of the session's
-  logs whose request's site it refuses, and `read` gives no body while the session has no current
-  view, so a body never outlives its site's approval.
-- **The capture** (`captureResponse` in `response-body.ts`). `ondata` first writes the chunk on,
-  then copies it up to `MAX_NETWORK_RESPONSE_BYTES` (65,536); a chunk past that cap marks the body
-  truncated and disconnects the filter, so the rest flows past the extension. `onstop` closes the
-  filter. A body is stored only once the response ended, its headers said it is text and the
-  site check still allows it, in whichever order those come (M6). The capture is released (copy
-  dropped, filter disconnected, or at `onstart` when a disconnect threw, M5) on a redirect (the
-  next hop decides again on its own URL, M7, M9), an error, the end of the log, a dropped entry
-  and the tab closing; any exception does the same. The handlers are never removed, so until
-  Firefox stops sending events every chunk is written and the stop closes the filter.
-- **Text only.** Exactly one `Content-Type` header whose type is `text/*` (not
-  `text/event-stream`, which has no end at which a body is complete), `application/json`,
-  `application/*+json`, `application/xml`, `application/*+xml`, `application/javascript` or
-  `application/x-www-form-urlencoded`. Its charset picks the decoder, UTF-8 when it names none or
-  an unknown one. A charset whose decoder can turn ASCII bytes into other characters (UTF-16;
-  ISO-2022-JP through its escapes; Shift_JIS, GBK, gb18030, Big5 and EUC-KR, whose lead bytes take
-  an ASCII byte as their second; not EUC-JP, whose never do), a body that starts with a UTF-16 byte
-  order mark, and a body whose text holds a NUL are refused: the redaction reads ASCII, and those
-  would hide a token from it.
+- **A synchronous site check.** `onBeforeRequest` cannot wait for `access.view()`, so `viewOf`
+  caches each session's `SiteView`, read when a log goes live and on a miss, never awaited: a
+  request that misses goes uncaptured. Every settings change, grant, withdrawal and stop clears the
+  cache synchronously (`clearViews`), and a read started before a clear is thrown away. After each
+  read every open capture of the session asks again; a failed read, or a chunk that arrives with no
+  current view, releases it. `dropRefusedBodies` forgets the stored bodies from sites a read
+  refuses, and `read` gives no body without a current view.
+- **The capture** (`captureResponse` in `response-body.ts`). `ondata` writes each chunk on, then
+  copies it up to `MAX_NETWORK_RESPONSE_BYTES` (65,536); a chunk past that marks the body truncated
+  and the copying stops. A body is stored once the response ended or the copy limit cut it, its
+  headers said text and the site check allows it, in any order (M6). The capture is released, its
+  copy dropped, for a type that is not text, a site check that refuses, a redirect or a new hop
+  (the next hop decides on its own URL, M7, M9), an error, the end of the log or its tab, a dropped
+  entry and any exception. Once a capture ends, `passOn` takes the filter's events, holding
+  nothing but the filter: it sets no `onstart`, writes every chunk on in the order it arrives and
+  closes the filter at the stop. No response's stream filter is ever disconnected, before, at or
+  after its start.
+- **Text only.** `textEncoding` keeps a response with exactly one `Content-Type` header of
+  `text/*` other than `text/event-stream` (it has no end at which a body is complete),
+  `application/json`, `application/xml`, `application/javascript`,
+  `application/x-www-form-urlencoded`, `application/*+json` or `application/*+xml`, decoded by its
+  charset, UTF-8 when it names none or an unknown one. A charset that can decode ASCII bytes
+  to other characters ([response bodies](../security.md#response-bodies) lists them), a UTF-16
+  byte order mark and a NUL in the text are refused: they would hide a token from the redaction.
 - **Redaction, as a best effort.** Before the text is cut to `MAX_NETWORK_RESPONSE_TEXT` (32,768
-  UTF-16 units), the values of keys named `access_token`, `refresh_token` (with any prefix) or
-  `id_token`, in any case and in camelCase or with a hyphen, are replaced with `[redacted]`: in
-  JSON or JavaScript (quoted after `:` or `=`), XML elements and form or query fields, also when
-  the text ends inside one; so is every JWT-shaped string (`eyJ` at the start of a base64url run
-  or right after a %-escape such as `%20`, then one to four dot-separated segments) and a trailing
-  `eyJ` run. Every pattern starts only where a name or token can start, so none rescans a long run
-  of text from every position.
-- **Shape.** `NetworkRequest.responseBody?: { text, truncated? }` in `packages/protocol`, returned
-  only with the read option `responseBody: true`, off by default (ADR 0065). It counts toward the
-  page's 4,000,000 characters; while bodies take more than half of them, the oldest bodies go
-  before any request. `PROTOCOL_VERSION` is 6.
+  UTF-16 units), `redactTokens` replaces with `[redacted]` the values of keys named
+  `access_token` or `refresh_token` with any prefix, or `id_token` with none (in any case,
+  camelCase or with a hyphen), in JSON, JavaScript, XML elements and form or query fields, and JWT-shaped strings, also when the text ends inside one. Every pattern starts
+  only where a name or token can start, so none rescans a long run of text from every position.
+- **Shape and reading.** The field `NetworkRequest.responseBody?: { text, truncated? }` in
+  `packages/protocol` came with protocol 6. It is returned only with the read option
+  `responseBody: true`, off by default (ADR 0065), and only once its request ended (`copyOf`). A
+  body stored before an error, at the copy limit or at a stop that came first, is dropped at the
+  error (`onErrorOccurred`). Bodies count toward the page's `MAX_LOG_CHARS` (4,000,000); while
+  they take more than half of it, `trim` drops the oldest bodies before any request.
+- **A cut response is stated and pinned.** The add-on listing and
+  [response bodies](../security.md#response-bodies) state that a response that fails while it
+  arrives reaches a recorded page without its error. The end-to-end test `a response the connection
+  cuts short reaches a recorded page as complete, and read_network shows the error` in
+  `e2e/network.test.ts` pins it, so a Firefox change that passes the error on shows.
 
 ## Alternatives rejected
 
@@ -140,29 +138,62 @@ page computed a SHA-256 of what it received and the server of what it sent:
   from a blocklisted or unapproved site would hand its bodies to the agent.
 - **Waiting for `view()` in `onBeforeRequest`.** A listener that returns a Promise blocks the
   request.
+- **Attaching the filter only once the headers show a text type.** That needs a blocking
+  `onHeadersReceived`, which makes every recorded request wait for the background (M13, M14), and
+  kept text responses would still lose their error.
+- **Disconnecting the filter once a capture ends**, mid-stream as 0.5.0 did, only inside
+  `onstart`, or only on versions measured safe. A disconnect after the start reordered or dropped
+  chunks; 0.5.0's passed a cut response's error on but changed 20 and 28 of 40 complete responses
+  per case on 156.0.1; the `onstart` disconnect damaged responses on 156.0.1 under contention, 153
+  is the minimum version, and the affected range is unknown.
+- **Disconnecting after `onstart` while no chunk has arrived yet.** Not measured, and the headers
+  and the filter's events come in no fixed order (M6), so a capture can end at any point of the
+  response, and both disconnect points measured before the stop, inside `onstart` and once data
+  flowed, damaged responses on 156.0.1.
+- **Closing the filter early.** It would cut the response short for the page.
+- **`disconnect()` at the stop.** The page still gets no error.
+- **Keeping the partial body with `truncated`.** The error already says the body is incomplete,
+  and the tool promises no body on error.
 
 ## Consequences
 
 - A recorded tab's fetches wait for the background's answer to the hold (M13). Other tabs, and
   tabs outside a session, are never held.
+- Every filtered response, kept or not, passes through the extension chunk by chunk to its end,
+  also past the cap: a round trip per chunk. A round whose capture ended before the start took a
+  median 2 to 4 ms longer on loopback
+  ([disconnecting at the start](../measurements/response-stream-filter.md#disconnecting-at-the-start-under-cpu-contention-2026-11-19)).
+- A response the connection cuts short reaches a recorded page as complete: with the status the
+  server sent (200 in every measured case), the bytes that arrived and no error. This holds for
+  every filtered response; 0.5.0 lost the error only for text under the copy limit. A page that
+  saves or acts on what it fetched (an export, an editor saving a document back) can take a short
+  body as the whole. `read_network` gives such a request its error and no body
+  ([response bodies](../security.md#response-bodies)).
 - No body for: a request whose response is still arriving; a request that ended in an error (a
   response with an error status keeps its body) or was redirected; a service worker's answer
-  (M9); a non-text, event-stream or header-less response, or one in a charset refused above; a
-  body whose site stopped being approved or was blocklisted; a request started in the moment
-  after recording began, before the hold or the site check is in place (its filter errors or none
-  is attached); a request beyond 64 open captures; one whose recording was interrupted while it
+  (M9); a non-text, event-stream or header-less response, or one in a refused charset; a body
+  whose site stopped being approved or was blocklisted; a request started in the moment after
+  recording began, before the hold or the site check is in place (its filter errors or none is
+  attached); a request beyond 64 open captures; one whose recording was interrupted while it
   arrived; a body dropped to make room.
-- A frame from another site that fetches from an approved site has that response captured: the
-  rule is the request's own URL. So is a response the page itself cannot read (a `no-cors` fetch,
-  a failed CORS check) from an approved site.
-- Redaction is a best effort, as ADR 0016 says of URLs and headers. It misses other names
-  (`token`, `session`, `apiKey`), keys spelled with escapes or inside a JSON string that holds
-  JSON (caught only when the value is a JWT), a token value that is not a string, an XML element
-  with attributes, a body encoded another way (base64 of the whole body), and a response that
-  repeats what a request sent: a form echoed back, protected values included.
+- The rule is the request's own URL, so a frame from another site that fetches from an approved
+  site, and a response the page cannot read (`no-cors`, a failed CORS check), are captured.
+  Redaction is a best effort, as ADR 0016 says of URLs and headers; what it misses, a response
+  that echoes a form included, is listed in [response bodies](../security.md#response-bodies).
 - A body that finishes between a storage write and its `onChanged` event is stored under the
   access Foxleash had seen, as every gate check acts on the state it has seen.
-- When the background stops in the middle of a response, the page still gets every byte (M11).
-- In-flight copies are bounded per page by 64 captures of 64 KiB (4 MiB).
-- Whether Firefox shows a prompt when an installed version updates to one with the two new
-  permissions was read in its source (M15), not run; check it on the first signed update.
+- A background that stopped in the middle of a response left the page every byte in M11, measured
+  only with chunks 200 ms apart. Whether Firefox's own hand-back then reorders the chunks of a
+  fast response was not measured, and every filtered response now stays filtered to its end, so
+  every one is exposed to it.
+- A capture that ended leaves the 64 open captures while its filter still passes data, so a page
+  can have more than 64 filters open; the bound of 4 MiB on copies (64 captures of 64 KiB per
+  page) holds. A long response, such as an event stream, whose capture ended keeps its filter open
+  and the event page awake (M12) while it lasts. Its handlers hold only the filter, so the
+  capture, its hooks and the page's network log are freed.
+- A write that throws loses that chunk for the page; the later chunks are still written.
+- The end-to-end suite runs on 160.0.1 and 153.7.0esr, where the `onstart` disconnect did not
+  reorder; the unit tests' assertions that no filter is disconnected are the guard.
+- Firefox shows no permission line for `webRequestBlocking` or `webRequestFilterResponse`: read
+  in its source (M15) and seen on the update to 0.5.0
+  ([an update that adds the two permissions](../measurements/response-stream-filter.md#an-update-that-adds-the-two-permissions-2026-11-17)).
