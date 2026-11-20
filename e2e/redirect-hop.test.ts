@@ -3,6 +3,7 @@ import { after, before, describe, type TestContext, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { TabInfo } from "@foxleash/protocol";
 import { DEFAULT_BLOCKLIST } from "../apps/extension/src/default-blocklist.ts";
+import { pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -114,6 +115,55 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       );
       await close(tab);
     });
+
+    test("a reload on a page that keeps navigating itself sends nothing to that site", async (t) => {
+      const tab = await open("/load-hop/busy-reload");
+      await stepOnBusyPage(t, tab, "reload", "/load-hop/busy-reload");
+    });
+
+    test("a step back from a page that keeps navigating itself sends nothing to that site", async (t) => {
+      const tab = await open("/load-hop/busy-back");
+      await harness.ok(session, "navigate", {
+        tabId: tab.id,
+        url: fixtures.url("/load-hop/busy-next"),
+      });
+      await stepOnBusyPage(t, tab, "back", "/load-hop/busy-back");
+    });
+
+    /**
+     * The page's own navigations end the wait before the step's load starts; that load's redirect
+     * is cancelled all the same.
+     */
+    async function stepOnBusyPage(
+      t: TestContext,
+      tab: TabInfo,
+      action: string,
+      entry: string,
+    ): Promise<void> {
+      // The step must come while the page is busy with a navigation of its own, so that the wait ends
+      // on that navigation before the step's load starts; a step right after the load comes first
+      // and is refused during the wait.
+      await sleep(1500);
+      const started = Date.now();
+      const result = await harness.call(session, "navigate", { tabId: tab.id, action });
+      const answeredMs = Date.now() - started;
+      if (result.isError) {
+        assert.equal(untrustedContent(result.text) ?? result.text, blockedHop(tab.id));
+      }
+      // Fails rather than passes when Firefox shows the page again without requesting it.
+      await pollUntil(
+        async () => (fixtures.hits(entry) >= 2 ? true : undefined),
+        15_000,
+        `the ${action} step to request ${entry}`,
+      );
+      const requestedMs = Date.now() - started;
+      await sleep(2000);
+      assert.equal(fixtures.hits(`${entry}-target`), 0);
+      t.diagnostic(
+        `navigate ${action} answered in ${answeredMs} ms, ${result.isError ? "refused" : "with the tab"}; its request seen by ${requestedMs} ms`,
+      );
+      await close(tab);
+    }
   });
 
   describe("to a site that is only not approved", () => {

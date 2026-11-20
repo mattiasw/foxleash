@@ -1022,13 +1022,23 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       // To the same server under another site; each redirect leads to a path of its own, so a
       // test counts the requests that reached it.
       redirectTo(response, `http://localhost:${request.socket.localPort}${path}-target`);
-    } else if (path === "/load-hop/reload" || path === "/load-hop/held") {
+    } else if (
+      path === "/load-hop/reload" ||
+      path === "/load-hop/held" ||
+      path === "/load-hop/busy-reload" ||
+      path === "/load-hop/busy-back"
+    ) {
       // The page on the first request, then a redirect to another site, as a reload finds it.
       if (hits.get(path) === 1) {
-        sendHtml(response, path === "/load-hop/held" ? LOAD_HOP_HELD_PAGE : LOAD_HOP_PAGE);
+        sendHtml(response, LOAD_HOP_PAGES[path] ?? LOAD_HOP_PAGE);
       } else {
         redirectTo(response, `http://localhost:${request.socket.localPort}${path}-target`);
       }
+    } else if (path === "/load-hop/busy-next") {
+      sendHtml(response, LOAD_HOP_BUSY_PAGE);
+    } else if (path === "/load-hop/busy-204") {
+      response.writeHead(204, { "Cache-Control": "no-store" });
+      response.end();
     } else if (path.startsWith("/load-hop/") && path.endsWith("-target")) {
       sendPage(response, TITLES.loadHopTarget);
     } else if (path === "/before-unload") {
@@ -1486,6 +1496,39 @@ window.addEventListener("beforeunload", () => {
 </script>
 </body></html>
 `;
+
+// Keeps navigating itself to an address that answers 204, busy for 400 ms as each one leaves,
+// until a navigation it did not start leaves the page, which it then holds back for 1.5 s.
+const LOAD_HOP_BUSY_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.loadHop}</title></head>
+<body><h1>${TITLES.loadHop}</h1>
+<script>
+let n = 0, own = false, stopped = false;
+window.addEventListener("beforeunload", () => {
+  if (own) {
+    own = false;
+    const end = Date.now() + 400;
+    while (Date.now() < end) {}
+  } else {
+    stopped = true;
+    const end = Date.now() + 1500;
+    while (Date.now() < end) {}
+  }
+});
+setInterval(() => {
+  if (stopped) return;
+  own = true;
+  location.href = "/load-hop/busy-204?" + n++;
+}, 100);
+</script>
+</body></html>
+`;
+
+const LOAD_HOP_PAGES: Record<string, string> = {
+  "/load-hop/held": LOAD_HOP_HELD_PAGE,
+  "/load-hop/busy-reload": LOAD_HOP_BUSY_PAGE,
+  "/load-hop/busy-back": LOAD_HOP_BUSY_PAGE,
+};
 
 const SIGN_IN_PAGE = "<!doctype html><title>Sign in</title><p>This page needs a sign-in.</p>";
 

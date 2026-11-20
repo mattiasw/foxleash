@@ -11,23 +11,41 @@ import { siteOf } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 
 /**
- * Cancels a redirect hop to a blocklisted site in a top-level load of a tab while the agent's
- * wait for a load in that tab runs, and for the loads it saw until Firefox reports them ended
- * (ADR 0101).
+ * Cancels a redirect hop to a blocklisted site in a top-level load of a tab: while the agent's
+ * wait for a load in that tab runs, for every load the tab starts in the `LATE_START_MS` after
+ * the last such wait, and for each such load until Firefox reports it ended (ADR 0101).
  */
 export interface LoadHops {
   /**
    * Starts judging the tab's top-level loads; `refuse` hears each cancel until the returned
-   * function is called.
+   * function is called. A newer watch of the tab takes over adopting new loads from this one.
    */
   watch(session: string, tabId: number, refuse: (error: ToolError) => void): () => void;
 }
 
 /**
- * How long after a wait that saw no load ended the tab's next top-level load is still judged as
- * its load: a page can hold back the start of a load past the wait (ADR 0101).
+ * How long after the last wait in a tab every new top-level load of the tab is still adopted and
+ * its hops judged against the blocklist: a page can hold back the agent's load past the wait, also
+ * by keeping navigations of its own going (ADR 0101).
  */
 export const LATE_START_MS = 300_000;
+
+/** A watch as the other watches of its tab and the tab's window reach it. */
+interface TabWatch {
+  /** A newer watch of the tab heard a request. */
+  endAdoption(): void;
+  /** The tab's window ended: adoption ends unless the wait still runs. */
+  windowEnded(): void;
+}
+
+/**
+ * A tab's watches, oldest first, and the window that the end of each of their waits restarts, so
+ * that it runs until `LATE_START_MS` after the last one, whichever watch adopts.
+ */
+interface WatchedTab<Handle> {
+  watches: Set<TabWatch>;
+  windowTimer: Handle | undefined;
+}
 
 export function createLoadHops<Handle>({
   browser,
@@ -35,9 +53,10 @@ export function createLoadHops<Handle>({
   timers,
 }: {
   browser: Pick<BrowserApi, "webRequest">;
-  access: Pick<SiteAccess, "view">;
+  access: Pick<SiteAccess, "view" | "blocklisted">;
   timers: Timers<Handle>;
 }): LoadHops {
+  const tabs = new Map<number, WatchedTab<Handle>>();
   return { watch };
 
   function watch(session: string, tabId: number, refuse: (error: ToolError) => void): () => void {
@@ -45,9 +64,12 @@ export function createLoadHops<Handle>({
     const seen = new Set<string>();
     // Those Firefox has not reported ended.
     const open = new Set<string>();
-    let watching = true;
-    // Set while a wait that saw no load waits for the tab's next new request to adopt as its load.
-    let startTimer: Handle | undefined;
+    let waiting = true;
+    // False once the tab's window ended after the wait or a newer watch of the tab took over.
+    let adopting = true;
+    const tab = tabOf(tabId);
+    const self: TabWatch = { endAdoption, windowEnded };
+    tab.watches.add(self);
     const filter = { urls: ["<all_urls>"], types: ["main_frame"], tabId };
     browser.webRequest.onBeforeRequest.addListener(onRequest, filter, ["blocking"]);
     browser.webRequest.onCompleted.addListener(onEnded, filter);
@@ -56,14 +78,20 @@ export function createLoadHops<Handle>({
 
     // A new request's first address was gated, or the page started the load: it goes on at once.
     function onRequest(details: RequestDetails): Promise<Cancel | undefined> | undefined {
+      // Firefox adds a listener asynchronously: the tab's older watches adopt until this one hears.
+      endOlder();
       if (seen.has(details.requestId)) return judgeHop(details.url);
-      if (startTimer !== undefined) {
-        timers.clearTimeout(startTimer);
-        startTimer = undefined;
-      } else if (!watching) return undefined;
+      if (!adopting) return undefined;
       seen.add(details.requestId);
       open.add(details.requestId);
       return undefined;
+    }
+
+    function endOlder(): void {
+      for (const other of tab.watches) {
+        if (other === self) return;
+        other.endAdoption();
+      }
     }
 
     /** Never rejects. Cancels after `stop` too: Firefox applies a pending answer after removal. */
@@ -74,7 +102,7 @@ export function createLoadHops<Handle>({
       if (refusal === undefined) return undefined;
       // Before the cancel is answered: a wait without a URL would otherwise end at the complete
       // Firefox reports for the page the tab keeps.
-      if (watching) {
+      if (waiting) {
         try {
           refuse(refusal);
         } catch {
@@ -84,11 +112,18 @@ export function createLoadHops<Handle>({
       return { cancel: true };
     }
 
-    /** Why the hop to `url` may not be requested, from the session's view read anew. */
+    /**
+     * Why the hop to `url` may not be requested: while the wait runs, from the session's view
+     * read anew; after it, from the blocklist alone, also for a session the user stopped.
+     */
     async function hopRefusal(url: string): Promise<ToolError | undefined> {
       const site = siteOf(url);
       if (site === undefined) return hopUnchecked(tabId, undefined);
       try {
+        // Read as the hop arrives, before any await.
+        if (!waiting) {
+          return (await access.blocklisted(url)) ? hopBlocked(tabId, site) : undefined;
+        }
         const view = await access.view(session);
         return view.blocked(url) ? hopBlocked(tabId, site) : undefined;
       } catch (error: unknown) {
@@ -97,25 +132,49 @@ export function createLoadHops<Handle>({
     }
 
     function onEnded(details: CompletedDetails | ErrorDetails): void {
-      if (open.delete(details.requestId) && !watching && open.size === 0) remove();
+      open.delete(details.requestId);
+      removeWhenDone();
     }
 
     function stop(): void {
-      if (!watching) return;
-      watching = false;
-      if (open.size > 0) return;
-      if (seen.size > 0) {
-        remove();
-        return;
-      }
-      startTimer = timers.setTimeout(remove, LATE_START_MS);
+      if (!waiting) return;
+      waiting = false;
+      restartWindow(tab);
+      removeWhenDone();
     }
 
-    function remove(): void {
+    function windowEnded(): void {
+      if (!waiting) endAdoption();
+    }
+
+    function endAdoption(): void {
+      if (!adopting) return;
+      adopting = false;
+      removeWhenDone();
+    }
+
+    function removeWhenDone(): void {
+      if (waiting || adopting || open.size > 0) return;
       browser.webRequest.onBeforeRequest.removeListener(onRequest);
       browser.webRequest.onCompleted.removeListener(onEnded);
       browser.webRequest.onErrorOccurred.removeListener(onEnded);
+      if (tab.watches.delete(self) && tab.watches.size === 0) tabs.delete(tabId);
     }
+  }
+
+  function tabOf(tabId: number): WatchedTab<Handle> {
+    const known = tabs.get(tabId);
+    if (known !== undefined) return known;
+    const tab: WatchedTab<Handle> = { watches: new Set(), windowTimer: undefined };
+    tabs.set(tabId, tab);
+    return tab;
+  }
+
+  function restartWindow(tab: WatchedTab<Handle>): void {
+    if (tab.windowTimer !== undefined) timers.clearTimeout(tab.windowTimer);
+    tab.windowTimer = timers.setTimeout(() => {
+      for (const watch of tab.watches) watch.windowEnded();
+    }, LATE_START_MS);
   }
 }
 

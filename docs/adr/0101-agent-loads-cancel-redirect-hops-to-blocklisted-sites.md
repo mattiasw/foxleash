@@ -7,6 +7,12 @@
 [0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md) and
 [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md).
 
+Amended 2026-11-20: after the wait, every new top-level load of the tab is adopted and its hops
+judged for 5 minutes whatever the watch saw, by the blocklist alone, with one adopting watch per
+tab. A page that kept starting navigations of its own ended the wait and the watch before the
+agent's reload or back step began, and a stopped session's next load was cancelled at any
+redirect.
+
 ## Context
 
 `navigate` and `tab_open` check only the first address of a load (`gate` and `access.check` in
@@ -64,6 +70,14 @@ resolving to `{ cancel: true }` after a `storage.local.get`:
 Firefox runs no add-on's `webRequest` listener for a request to one of its restricted or
 quarantined domains (0099; read in the source, not measured).
 
+Two defects of the first rule after the wait, which adopted a new load only when the wait had
+seen none ([measurements](../measurements/agent-load-redirect-hops.md)): a page that keeps
+navigating itself to an address that answers 204 ends the wait with its own navigation, so the
+agent's reload or back step, starting after, was not judged and its hop sent the blocklisted site
+the user's Strict and Lax cookies while `navigate` returned success. And after the user stopped a
+session, the session's view threw `session_stopped`, so the next load in one of its tabs was
+cancelled at its first redirect to any site.
+
 ## Decision
 
 `createLoadHops` in `apps/extension/src/load-hops.ts`. `watch(session, tabId, refuse)` adds, at
@@ -81,17 +95,21 @@ reload left blank.
 
 The `onBeforeRequest` listener answers:
 
-1. A `requestId` it has not seen: `undefined` at once. While the wait runs it is remembered as a
-   top-level load of the tab; its first address was checked, or the page started it.
+1. A `requestId` it has not seen: `undefined` at once. While the wait runs, and in the window
+   after it (below), it is remembered as a top-level load of the tab; its first address was
+   checked, or the page started it.
 2. A `requestId` it has seen is a redirect hop of that load, also of a load a page started
    during the wait. A Promise that never rejects judges it:
    - an address that is not http(s): `undefined` (the blocklist matches only web sites);
    - an http(s) address with no site, which Firefox would not normally give: `{ cancel: true }`
      with `redirect_unchecked`;
-   - otherwise the session's view is read anew. A blocklisted site, approved or not:
-     `{ cancel: true }` with `site_blocked`. A view that fails with a stopped session's error:
-     `{ cancel: true }` with that error; any other failure: `{ cancel: true }` with
-     `redirect_unchecked`;
+   - otherwise, for a hop that arrives while the wait runs, the session's view is read anew. A
+     blocklisted site, approved or not: `{ cancel: true }` with `site_blocked`. A view that fails
+     with a stopped session's error: `{ cancel: true }` with that error; any other failure:
+     `{ cancel: true }` with `redirect_unchecked`. For a hop that arrives after `stop`,
+     `access.blocklisted(url)`, which takes no session, decides: a blocklisted site gets
+     `{ cancel: true }`, also for a session the user stopped; a failure to read cancels as
+     `redirect_unchecked`. Which of the two applies is decided when the hop arrives;
    - otherwise `undefined`; a site that is only not approved loads and reaches the agent redacted.
 3. `refuse` is called only while the wait runs, and before the cancel is answered: M4 shows the
    complete that follows a cancel would otherwise end a wait without a URL with success. A
@@ -105,15 +123,23 @@ its page.
 
 `stop` ends refusals and then:
 
-- **Late phase.** While a load the watch saw has not ended, the listeners stay and keep judging
-  its hops, until Firefox reports every such load ended (`onCompleted` or `onErrorOccurred`); new
-  `requestId`s are not taken on. A server can delay its redirect past the wait's 30 s, and the
-  load runs on in Firefox.
-- **Start phase.** When the watch saw no top-level request at all, the listeners stay for
-  `LATE_START_MS` (5 minutes): the first new `requestId` is taken on as the wait's load and judged
-  as in the late phase, and the timer is cleared. If none comes in that time, the listeners are
-  removed. M9 is why: a page can hold back the start of a reload, back or forward past the wait.
-- Otherwise the listeners are removed at once.
+- **Window.** For `LATE_START_MS` (5 minutes) every new `requestId` of the tab is taken on and its
+  hops judged, whatever the watch saw during the wait; taking one on does not end the window. M9
+  is why: a page can hold back the start of a reload, back or forward past the wait, also by
+  keeping navigations of its own going, which end the wait first. The window is the tab's: the
+  `stop` of each of its watches restarts it, so it ends 5 minutes after the last wait in the tab,
+  also when two calls' waits in one tab overlap.
+- **Late phase.** While a load the watch took on has not ended, the listeners stay and keep
+  judging its hops, until Firefox reports every such load ended (`onCompleted` or
+  `onErrorOccurred`). A server can delay its redirect past the wait's 30 s, and the load runs on
+  in Firefox. A request that starts after the window is not taken on.
+- The listeners are removed once the wait stopped, the window ended and every load taken on
+  ended, whichever comes last.
+- **One adopting watch per tab.** A map in `createLoadHops` holds each tab's watches, oldest first,
+  and its window. Firefox adds a listener asynchronously, so the older watches of the tab keep
+  taking on new requests until the newer watch's listener hears its first request; then every
+  older one stops taking them on, also one whose wait still runs. An older watch keeps judging the
+  loads it took on until they end.
 
 ## Alternatives rejected
 
@@ -135,6 +161,16 @@ its page.
   and the checks of history steps stay as they are.
 - **Falling back to a per-tab registry in the file guard.** M1 and M2 show the per-load listener
   sees every hop in time.
+- **Adopting only the first request after the wait** (this record's rule until 2026-11-20). A page
+  that keeps navigating itself fills the wait with its own loads, and the agent's step that starts
+  after the wait is not judged.
+- **Dropping the watch when its session is stopped.** An agent load the page held back past the
+  stop would then reach the blocklisted site.
+- **Ending an older watch's adoption when a newer watch of the tab starts.** A request that starts
+  before the newer listener takes effect would be judged by neither, as would a held-back load of
+  the older call, which carries Strict cookies.
+- **A window per watch.** When two calls' waits in one tab overlap, the call that returns last
+  would get only the window of the watch that adopts, which can end up to a wait's length earlier.
 
 ## Consequences
 
@@ -144,10 +180,23 @@ its page.
   redaction; 0099's hop cancelling now also covers these loads, for blocklisted sites only.
 - During the wait, a page's own navigation through a blocklisted site is cancelled too, and the
   call fails with `site_blocked`.
-- When the wait saw no load, the tab's next load within 5 minutes is judged as the agent's, also
-  when it is a load the page or the user starts because the step itself loaded nothing; only a
-  request to a blocklisted site from a tab of the agent's group is ever stopped by it. A load held
-  back longer, and any other later load of the tab, is not judged.
+- Every top-level load of the tab in the 5 minutes after an agent's load, whoever starts it (the
+  page, the user, also once the tab left the agent's group), has its blocklisted hops cancelled,
+  and nothing else is stopped, also for a stopped session. A load still running at the end keeps
+  being judged; a load started later is not.
+- A `navigate` reload or back on a page that keeps navigating itself can still return success
+  with the page the tab kept, since the wait ended before the step's load began; its hop is
+  cancelled all the same.
+- `navigate` to a URL behind a `beforeunload` kept busy past the 30 s timeout is covered by the
+  window, not measured.
+- A step held back past the window, as behind a leave-page dialog the user answers later, is not
+  judged (not measured).
+- The user's own loads in that tab in the window, also once the tab left the group, stop at such
+  a step with no message, the tab keeping its page; an `http://` address Firefox upgrades to
+  `https://` comes as a hop (M5). A load a click or another act starts there is cancelled with no
+  note in the act's result.
+- An older watch adopts until a newer one of the tab hears its first request, so a request in
+  that overlap is judged by both; a cancel from either stops it.
 - A load still running when the call returned keeps its listeners until Firefox reports it ended.
 - Without access to all websites Foxleash sees no hop to a site outside its grants (M7), so it
   cancels none.

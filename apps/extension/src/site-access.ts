@@ -88,6 +88,12 @@ export interface SiteAccess {
   /** What one session may see, as stored and granted at the time of the call. */
   view(session: string): Promise<SiteView>;
   /**
+   * Whether the URL's site is on the effective blocklist, as stored at the time of the call. It
+   * takes no session, so a session the user stopped does not change it. Rejects when the
+   * settings cannot be read.
+   */
+  blocklisted(url: string): Promise<boolean>;
+  /**
    * The gate before a load: throws `invalid_url`, `site_blocked`, `site_refused` or
    * `approval_pending` (also while the session's recipe page is open), else says whether the
    * site is allowed, must be asked for, or can join the session's open prompt. Changes nothing.
@@ -291,6 +297,7 @@ export function createSiteAccess<Handle>({
 
   return {
     view,
+    blocklisted,
     check,
     ask,
     generation: generationOf,
@@ -320,12 +327,7 @@ export function createSiteAccess<Handle>({
     const stored = new Set(settings.sites);
     const blocklist = effectiveBlocklist(settings);
     const granted = sessions.get(session);
-    const blocked = (url: string): boolean => {
-      const site = siteOf(url);
-      if (site === undefined) return false;
-      const host = hostOf(site);
-      return blocklist.some((pattern) => matchesDomain(host, pattern));
-    };
+    const blocked = (url: string): boolean => onBlocklist(blocklist, url);
     const allowed = (url: string): boolean => {
       const site = siteOf(url);
       return (
@@ -350,6 +352,10 @@ export function createSiteAccess<Handle>({
       return { id: tab.id, url: shownUrl, title: "", active: tab.active };
     };
     return { blocked, allowed, tabInfo };
+  }
+
+  async function blocklisted(url: string): Promise<boolean> {
+    return onBlocklist(effectiveBlocklist(await readSettings(browser)), url);
   }
 
   async function check(session: string, url: string): Promise<Decision> {
@@ -949,6 +955,13 @@ export function createSiteAccess<Handle>({
     }
     return state;
   }
+}
+
+function onBlocklist(blocklist: readonly string[], url: string): boolean {
+  const site = siteOf(url);
+  if (site === undefined) return false;
+  const host = hostOf(site);
+  return blocklist.some((pattern) => matchesDomain(host, pattern));
 }
 
 /** Whether the port is this extension's page `name` at exactly `pageUrl`, in tab `tabId`. */

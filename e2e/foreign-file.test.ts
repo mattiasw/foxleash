@@ -695,17 +695,34 @@ describe("a file from a site the session may not act on, in real Firefox", () =>
    * `blocklisted`, navigate's redirect step to the other site is cancelled before it is sent.
    */
   function threeWays({ blocklisted = false } = {}): void {
-    test("a click on a link that redirects to the other site's file saves nothing, and its result says so", async () => {
-      const page = await openLinks();
-      const files = listed();
-      const hits = fixtures.hits(EXPORT);
-      const result = await click(page, 'link "Export"');
-      await answered(EXPORT, hits);
-      await assertNothingSaved(files, stoppedIn(result));
-      assert.deepEqual(result.refusedFiles, [other]);
-      await assertNothingToUpload(page);
-      await close(page);
-    });
+    if (blocklisted) {
+      // Within 5 minutes of the agent's load in the tab, its redirect step is cancelled first.
+      test("a click on a link that redirects to the blocked site's file sends nothing there and saves nothing", async () => {
+        const page = await openLinks();
+        const files = listed();
+        const hits = fixtures.hits(EXPORT);
+        const goHits = fixtures.hits(TO_EXPORT);
+        const result = await click(page, 'link "Export"');
+        await answered(TO_EXPORT, goHits);
+        await assertNothingSaved(files, false);
+        assert.equal(fixtures.hits(EXPORT), hits, "the other site was asked for its file");
+        assert.equal(result.refusedFiles, undefined);
+        await assertNothingToUpload(page);
+        await close(page);
+      });
+    } else {
+      test("a click on a link that redirects to the other site's file saves nothing, and its result says so", async () => {
+        const page = await openLinks();
+        const files = listed();
+        const hits = fixtures.hits(EXPORT);
+        const result = await click(page, 'link "Export"');
+        await answered(EXPORT, hits);
+        await assertNothingSaved(files, stoppedIn(result));
+        assert.deepEqual(result.refusedFiles, [other]);
+        await assertNothingToUpload(page);
+        await close(page);
+      });
+    }
 
     test("navigate to an address that redirects to the other site's file fails at once and saves nothing", async () => {
       const page = await openLinks();

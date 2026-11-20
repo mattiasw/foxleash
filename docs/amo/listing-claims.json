@@ -73,6 +73,10 @@
           "contains": "return view.blocked(url) ? hopBlocked(tabId, site) : undefined;"
         },
         {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "return (await access.blocklisted(url)) ? hopBlocked(tabId, site) : undefined;"
+        },
+        {
           "file": "apps/extension/src/wait-for-load.ts",
           "contains": "const stopWatchingHops = hops?.watch(tabId, fail);"
         },

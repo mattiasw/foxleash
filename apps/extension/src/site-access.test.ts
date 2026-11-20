@@ -286,6 +286,52 @@ describe("blocked", () => {
   });
 });
 
+describe("blocklisted", () => {
+  it("matches a built-in pattern and its subdomains, and nothing else", async () => {
+    const { access } = setup();
+    assert.equal(await access.blocklisted("https://www.paypal.com/"), true);
+    assert.equal(await access.blocklisted("http://paypal.com:8080/x"), true);
+    for (const url of [
+      "https://a.example/",
+      "https://notpaypal.com/",
+      "about:blank",
+      "file:///home/user/paypal.com",
+      "",
+    ]) {
+      assert.equal(await access.blocklisted(url), false, url);
+    }
+  });
+
+  it("uses a stored blocklist instead of the built-in one", async () => {
+    const { fake, access } = setup();
+    await fake.browser.storage.local.set({ blocklist: ["chase.com"] });
+    assert.equal(await access.blocklisted("https://www.chase.com/"), true);
+    assert.equal(await access.blocklisted("https://www.paypal.com/"), false);
+  });
+
+  it("wins over a stored grant", async () => {
+    const { fake, access } = setup();
+    await grantSite(fake.browser, "https://www.paypal.com");
+    assert.equal(await access.blocklisted("https://www.paypal.com/inbox"), true);
+  });
+
+  it("still answers for a session the user stopped", async () => {
+    const { access } = setup();
+    access.stop("s1");
+    await assert.rejects(access.view("s1"), { code: "session_stopped" });
+    assert.equal(await access.blocklisted("https://www.paypal.com/"), true);
+    assert.equal(await access.blocklisted("https://a.example/"), false);
+  });
+
+  it("rejects when storage cannot be read", async () => {
+    const { fake, access } = setup();
+    fake.browser.storage.local.get = async () => {
+      throw new Error("storage is unavailable");
+    };
+    await assert.rejects(access.blocklisted("https://a.example/"), /storage is unavailable/);
+  });
+});
+
 // Hosts the site prompt refuses to show; request_sites refuses them too.
 const PARENTHESES_SITE = "https://accounts.google.com(verified-by-foxleash).evil.example";
 const COMMA_SITE = "https://accounts.google.com,evil.example";

@@ -173,7 +173,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When the agent opens, reloads, or goes back or forward to an address that answers with a
   redirect to a site on the blocklist, Foxleash now stops that redirect before Firefox sends it, so
   the blocked site gets no request and none of your cookies, and the agent's call fails saying the
-  site is on the blocklist. A redirect to a site you have only not approved still loads, as before.
+  site is on the blocklist. Such a redirect in any load of that tab in the 5 minutes after the
+  call is stopped too, whoever starts the load. A redirect to a site you have only not approved
+  still loads, as before.
 
 ## [0.5.0] - 2026-11-17
 
