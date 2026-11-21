@@ -394,6 +394,9 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
 
 1. Run `npm run check:release -- pre-roll --bump=<patch|minor|major>`. It prints the next
    version, `x.y.z` below. The first release, 0.1.0, runs `pre-roll` without `--bump`.
+   Then check that the address the program prints for the add-on (`ADDON_PAGE_URL`) is this
+   add-on's page on Firefox Add-ons, by its slug there or by its add-on id, and stop when it
+   is not.
 2. Create the release branch with `git switch --no-track -c release/x.y.z`, then roll the
    changelog: move the entries under `## [Unreleased]` unchanged into a new
    `## [x.y.z] - YYYY-MM-DD` section, dated today, and leave an empty `## [Unreleased]`

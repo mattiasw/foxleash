@@ -4,6 +4,7 @@ import path from "node:path";
 import { describe, test } from "node:test";
 import {
   ADDON_PAGE_URL,
+  EXTENSION_ID,
   NODE_REQUIREMENT,
   SETUP_COMMAND,
   UPDATE_COMMAND,
@@ -28,6 +29,20 @@ describe("the setup command and the Node.js requirement", () => {
       }
     });
   }
+});
+
+describe("the add-on page address", () => {
+  test("is an add-on page on AMO whose last segment is a slug or the add-on id", () => {
+    const match = /^https:\/\/addons\.mozilla\.org\/firefox\/addon\/([^/]+)\/$/.exec(
+      ADDON_PAGE_URL,
+    );
+    const segment = match?.[1];
+    assert.ok(segment !== undefined, `${ADDON_PAGE_URL} is not an add-on page on AMO`);
+    assert.ok(
+      segment === EXTENSION_ID || /^(?!\d+$)[a-z0-9-]+$/.test(segment),
+      `${ADDON_PAGE_URL} ends in neither the add-on id nor a lower-case slug`,
+    );
+  });
 });
 
 function read(file: string): string {
