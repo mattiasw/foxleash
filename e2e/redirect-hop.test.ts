@@ -3,7 +3,7 @@ import { after, before, describe, type TestContext, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { TabInfo } from "@foxleash/protocol";
 import { DEFAULT_BLOCKLIST } from "../apps/extension/src/default-blocklist.ts";
-import { PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
+import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -18,8 +18,13 @@ import {
 /** Well under the 30 s a load may take to commit: the refusal comes when the hop is cancelled. */
 const ANSWER_WITHIN_MS = 10_000;
 
+/** Counts the page's `beforeunload` events, so a test tells a cancelled load from none. */
+const COUNT_UNLOADS =
+  'window.unloads = 0; addEventListener("beforeunload", () => { window.unloads++; }); true';
+
 describe("a redirect hop of the agent's load, in real Firefox", () => {
   let harness: Harness;
+  let firefox: Firefox;
   let fixtures: FixtureServer;
   let session: Session;
   // The same server under another site, which the tests never approve.
@@ -31,7 +36,7 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       harness.install();
       fixtures = await startFixtureServer();
       other = `http://localhost:${fixtures.port}`;
-      await harness.startFirefox(EXTENSION_DIST);
+      firefox = await harness.startFirefox(EXTENSION_DIST);
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
@@ -124,19 +129,79 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
 
     test("a reload the page holds back past the wait sends nothing to that site", async (t) => {
       const tab = await open("/load-hop/held");
-      const started = Date.now();
-      const result = await harness.call(session, "navigate", { tabId: tab.id, action: "reload" });
-      const answeredMs = Date.now() - started;
-      // The wait ends at its grace before the load starts, or hears the cancel if it started first.
-      if (result.isError) {
-        assert.equal(untrustedContent(result.text) ?? result.text, blockedHop(tab.id));
-      }
+      const first = await heldReload(tab);
       await sleep(3000);
       assert.equal(fixtures.hits("/load-hop/held"), 2);
       assert.equal(fixtures.hits("/load-hop/held-target"), 0);
-      t.diagnostic(
-        `navigate reload answered in ${answeredMs} ms, ${result.isError ? "refused" : "with the tab"}`,
+      // Firefox sends this reload straight to the address of the cancelled redirect.
+      const context = await countUnloads("/load-hop/held");
+      const second = await heldReload(tab);
+      await sleep(3000);
+      assert.equal(fixtures.hits("/load-hop/held"), 2);
+      assert.equal(fixtures.hits("/load-hop/held-target"), 0);
+      assert.equal(await firefox.evaluate(context, "window.unloads"), 1);
+      t.diagnostic(`navigate reload answered ${first}, then ${second}`);
+      await close(tab);
+    });
+
+    test("a step back onto the page after its refused reload sends nothing to that site", async (t) => {
+      const tab = await open("/load-hop/back");
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "reload" }),
+        blockedHop(tab.id),
       );
+      await settled(tab.id);
+      await harness.ok(session, "navigate", { tabId: tab.id, url: fixtures.url("/a") });
+      // Firefox sends the step's load straight to the address of the cancelled redirect.
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "back" }),
+        blockedHop(tab.id),
+      );
+      assert.equal(fixtures.hits("/load-hop/back-target"), 0);
+      await close(tab);
+    });
+
+    test("a step forward onto the page after its refused reload sends nothing to that site", async (t) => {
+      const tab = await open("/a");
+      await harness.ok(session, "navigate", {
+        tabId: tab.id,
+        url: fixtures.url("/load-hop/forward"),
+      });
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "reload" }),
+        blockedHop(tab.id),
+      );
+      await settled(tab.id);
+      await harness.ok(session, "navigate", { tabId: tab.id, action: "back" });
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "forward" }),
+        blockedHop(tab.id),
+      );
+      assert.equal(fixtures.hits("/load-hop/forward-target"), 0);
+      await close(tab);
+    });
+
+    test("the page's own reloads after a redirect to that site was cancelled send nothing to it", async () => {
+      const path = "/load-hop/own-reload";
+      const tab = await open(path);
+      const context = await contextShowing(path);
+      assert.equal(await firefox.evaluate(context, "location.reload(); true"), true);
+      await pollUntil(
+        async () => (fixtures.hits(path) >= 2 ? true : undefined),
+        15_000,
+        `the page's reload to request ${path}`,
+      );
+      await settled(tab.id);
+      // Firefox sends this reload straight to the address of the cancelled redirect.
+      await countUnloads(path);
+      assert.equal(await firefox.evaluate(context, "location.reload(); true"), true);
+      await sleep(2000);
+      assert.equal(fixtures.hits(path), 2);
+      assert.equal(fixtures.hits(`${path}-target`), 0);
+      assert.equal(await firefox.evaluate(context, "window.unloads"), 1);
+      const shown = await settled(tab.id);
+      assert.equal(shown.url, fixtures.url(path));
+      assert.equal(shown.title, TITLES.loadHop);
       await close(tab);
     });
 
@@ -153,6 +218,18 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       });
       await stepOnBusyPage(t, tab, "back", "/load-hop/busy-back");
     });
+
+    /** The answer time of the agent's reload of a page that holds it back past the wait. */
+    async function heldReload(tab: TabInfo): Promise<string> {
+      const started = Date.now();
+      const result = await harness.call(session, "navigate", { tabId: tab.id, action: "reload" });
+      const answeredMs = Date.now() - started;
+      // The wait ends at its grace before the load starts, or hears the cancel if it started first.
+      if (result.isError) {
+        assert.equal(untrustedContent(result.text) ?? result.text, blockedHop(tab.id));
+      }
+      return `in ${answeredMs} ms, ${result.isError ? "refused" : "with the tab"}`;
+    }
 
     /**
      * The page's own navigations end the wait before the step's load starts; that load's redirect
@@ -257,6 +334,19 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       PAGE_TIMEOUT_MS,
       `tab ${tabId} to finish its refused reload`,
     );
+  }
+
+  /** The browsing context of the tab showing `path`, its page counting its `beforeunload` events. */
+  async function countUnloads(path: string): Promise<string> {
+    const context = await contextShowing(path);
+    assert.equal(await firefox.evaluate(context, COUNT_UNLOADS), true);
+    return context;
+  }
+
+  async function contextShowing(path: string): Promise<string> {
+    const found = (await firefox.contexts()).find(({ url }) => url === fixtures.url(path));
+    assert.ok(found !== undefined, `no tab shows ${path}`);
+    return found.context;
   }
 
   async function listed(tabId: number): Promise<TabInfo | undefined> {

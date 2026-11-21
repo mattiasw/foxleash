@@ -1029,7 +1029,10 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       path === "/load-hop/reload-again" ||
       path === "/load-hop/held" ||
       path === "/load-hop/busy-reload" ||
-      path === "/load-hop/busy-back"
+      path === "/load-hop/busy-back" ||
+      path === "/load-hop/back" ||
+      path === "/load-hop/forward" ||
+      path === "/load-hop/own-reload"
     ) {
       // The page on the first request, then a redirect to another site, as a reload finds it.
       if (hits.get(path) === 1) {

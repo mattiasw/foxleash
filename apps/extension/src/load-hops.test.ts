@@ -3,7 +3,12 @@ import { describe, it } from "node:test";
 import type { RequestDetails } from "./browser-api.ts";
 import { createFakeBrowser, createFakeTimers } from "./fake-browser.ts";
 import type { ToolError } from "./handlers.ts";
-import { createLoadHops, LATE_START_MS } from "./load-hops.ts";
+import {
+  createLoadHops,
+  LATE_START_MS,
+  MAX_CANCELLED_ADDRESS_CHARS,
+  MAX_CANCELLED_ADDRESSES,
+} from "./load-hops.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, saveBlocklist } from "./settings.ts";
 import {
@@ -19,6 +24,8 @@ const UNAPPROVED = "https://c.example";
 const BLOCKED = "https://www.paypal.com";
 // The address a reload was checked on.
 const GATED = `${SITE}/page?x=1`;
+// The address of a cancelled hop.
+const REFUSED = `${BLOCKED}/pay?card=1`;
 
 describe("load hops", { timeout: 10000 }, () => {
   it("lets a new request go on at once, unjudged", async () => {
@@ -232,7 +239,7 @@ describe("load hops", { timeout: 10000 }, () => {
     const [later] = fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/`));
     assert.equal(later, undefined);
     const before = reads();
-    assert.equal(await hop(fake, "r2", `${BLOCKED}/x`), undefined);
+    assert.equal(await hop(fake, "r2", `${BLOCKED}/z`), undefined);
     assert.equal(reads(), before);
     fake.emitWebRequest("onCompleted", ended("r2"));
     assert.equal(fake.activeWebRequestRegistrations().length, 3);
@@ -377,7 +384,7 @@ describe("load hops", { timeout: 10000 }, () => {
     assert.deepEqual(await Promise.all(both), [{ cancel: true }, { cancel: true }]);
     assert.equal(newerRefusals.length, 1);
     fake.emitWebRequest("onBeforeRequest", request("r3", `${SITE}/`));
-    const answers = fake.emitWebRequest("onBeforeRequest", request("r3", `${BLOCKED}/x`));
+    const answers = fake.emitWebRequest("onBeforeRequest", request("r3", `${BLOCKED}/z`));
     assert.equal(answers[0], undefined);
     assert.deepEqual(await answers[1], { cancel: true });
     // One window for the tab, which the older watch's stop started.
@@ -583,6 +590,325 @@ describe("load hops", { timeout: 10000 }, () => {
     assert.equal(refusals.length, 1);
     assert.equal(refusals[0]?.code, "site_blocked");
   });
+
+  it("judges a newer watch's new request to an address a watch of the tab cancelled, refusing first", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops } = context;
+    const order: string[] = [];
+    const refused: ToolError[] = [];
+    hops.watch("s1", TAB, (error) => {
+      refused.push(error);
+      order.push("refused");
+    });
+    for (const [requestId, url] of [
+      ["r2", `${REFUSED}#other`],
+      ["r3", REFUSED],
+    ] as const) {
+      const [answer] = fake.emitWebRequest("onBeforeRequest", request(requestId, url));
+      assert.ok(answer instanceof Promise);
+      await answer.then((cancel) => {
+        assert.deepEqual(cancel, { cancel: true });
+        order.push("answered");
+      });
+    }
+    assert.deepEqual(order, ["refused", "answered", "refused", "answered"]);
+    assert.deepEqual(
+      refused.map((error) => error.code),
+      ["site_blocked", "site_blocked"],
+    );
+  });
+
+  it("cancels a new request to a cancelled address heard after the wait by the blocklist alone, without refusing", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops, viewReads, blocklistReads } = context;
+    const refused: ToolError[] = [];
+    const stopLater = hops.watch("s1", TAB, (error) => refused.push(error));
+    stopLater();
+    const views = viewReads();
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED));
+    assert.ok(answer instanceof Promise);
+    assert.deepEqual(await answer, { cancel: true });
+    assert.deepEqual(refused, []);
+    assert.equal(viewReads(), views);
+    assert.equal(blocklistReads(), 1);
+  });
+
+  it("judges a new request to a cancelled address in a watch that a newer watch took adoption from", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops } = context;
+    const stopOlder = hops.watch("s1", TAB, () => {});
+    stopOlder();
+    hops.watch("s1", TAB, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/`));
+    // The older watch adopts no new load now.
+    fake.emitWebRequest("onBeforeRequest", request("r3", `${SITE}/`));
+    const [notAdopted] = fake.emitWebRequest("onBeforeRequest", request("r3", `${BLOCKED}/x`));
+    assert.equal(notAdopted, undefined);
+    const [older, newer] = fake.emitWebRequest("onBeforeRequest", request("r4", REFUSED));
+    assert.ok(older instanceof Promise);
+    assert.deepEqual(await older, { cancel: true });
+    assert.deepEqual(await newer, { cancel: true });
+  });
+
+  it("judges a new request to a cancelled address in a watch whose window ended while a load stays open", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops, timers } = context;
+    const stopLater = hops.watch("s1", TAB, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/`));
+    stopLater();
+    timers.advance(LATE_START_MS);
+    assert.equal(fake.activeWebRequestRegistrations().length, 3);
+    const [notAdopted] = fake.emitWebRequest("onBeforeRequest", request("r3", `${BLOCKED}/x`));
+    assert.equal(notAdopted, undefined);
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r4", REFUSED));
+    assert.ok(answer instanceof Promise);
+    assert.deepEqual(await answer, { cancel: true });
+    // So is a hop there of a load it did not adopt.
+    const [redirected] = fake.emitWebRequest("onBeforeRequest", request("r3", `${REFUSED}#x`));
+    assert.ok(redirected instanceof Promise);
+    assert.deepEqual(await redirected, { cancel: true });
+  });
+
+  it("remembers an address cancelled as a reload's first request", async () => {
+    const context = await setup({ gated: GATED });
+    const { fake, stop, timers, hops } = context;
+    const [first] = fake.emitWebRequest("onBeforeRequest", request("r1", `${REFUSED}#a`));
+    assert.deepEqual(await first, { cancel: true });
+    fake.emitWebRequest("onErrorOccurred", ended("r1"));
+    stop();
+    timers.advance(LATE_START_MS);
+    assert.deepEqual(fake.activeWebRequestRegistrations(), []);
+    hops.watch("s1", TAB, () => {});
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED));
+    assert.ok(answer instanceof Promise);
+    assert.deepEqual(await answer, { cancel: true });
+  });
+
+  it("lets a new request to another address of a cancelled address's site go on at once, unjudged", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops, reads } = context;
+    hops.watch("s1", TAB, () => {});
+    const before = reads();
+    for (const [requestId, url] of [
+      ["r2", `${BLOCKED}/other`],
+      ["r3", `${REFUSED}&more`],
+      ["r4", `${BLOCKED}/pay?card=2`],
+    ] as const) {
+      assert.deepEqual(fake.emitWebRequest("onBeforeRequest", request(requestId, url)), [
+        undefined,
+      ]);
+    }
+    assert.equal(reads(), before);
+  });
+
+  it("lets a new request to a cancelled address go on when its site is no longer blocklisted", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops, reads } = context;
+    await saveBlocklist(fake.browser, []);
+    const refused: ToolError[] = [];
+    hops.watch("s1", TAB, (error) => refused.push(error));
+    const before = reads();
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED));
+    assert.ok(answer instanceof Promise);
+    assert.equal(await answer, undefined);
+    assert.equal(reads(), before + 1);
+    assert.deepEqual(refused, []);
+    // It stays remembered.
+    await saveBlocklist(fake.browser, ["www.paypal.com"]);
+    const [again] = fake.emitWebRequest("onBeforeRequest", request("r3", REFUSED));
+    assert.deepEqual(await again, { cancel: true });
+  });
+
+  it("judges no other tab's new request to a cancelled address", async () => {
+    const context = await setup();
+    await cancelThenEnd(context);
+    const { fake, hops, reads } = context;
+    hops.watch("s1", TAB + 1, () => {});
+    const before = reads();
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED, TAB + 1)), [
+      undefined,
+    ]);
+    assert.equal(reads(), before);
+  });
+
+  it("forgets a tab's cancelled addresses when the tab is removed", async () => {
+    const context = await setup();
+    const { fake, hops, reads } = context;
+    const { id } = fake.openTab();
+    const stopFirst = hops.watch("s1", id, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/`, id));
+    assert.deepEqual(await hop(fake, "r1", REFUSED, id), { cancel: true });
+    fake.emitWebRequest("onErrorOccurred", ended("r1", id));
+    stopFirst();
+    context.timers.advance(LATE_START_MS);
+    const stopKept = hops.watch("s1", id, () => {});
+    const [kept] = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED, id));
+    assert.deepEqual(await kept, { cancel: true });
+    fake.emitWebRequest("onErrorOccurred", ended("r2", id));
+    stopKept();
+    context.timers.advance(LATE_START_MS);
+    fake.removeTab(id);
+    hops.watch("s1", id, () => {});
+    const before = reads();
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", request("r3", REFUSED, id)), [
+      undefined,
+    ]);
+    assert.equal(reads(), before);
+  });
+
+  it("remembers every cancelled address up to the cap, then judges every new request of the tab until it is removed", async () => {
+    const context = await setup();
+    const { fake, hops } = context;
+    const { id } = fake.openTab();
+    hops.watch("s1", id, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/`, id));
+    const addresses = Array.from(
+      { length: MAX_CANCELLED_ADDRESSES },
+      (_, index) => `${BLOCKED}/n${index}`,
+    );
+    for (const url of addresses) {
+      assert.deepEqual(await hop(fake, "r1", url, id), { cancel: true });
+    }
+    for (const [index, url] of addresses.entries()) {
+      const [answer] = fake.emitWebRequest("onBeforeRequest", request(`a${index}`, url, id));
+      assert.deepEqual(await answer, { cancel: true });
+    }
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", request("n1", `${BLOCKED}/never`, id)),
+      [undefined],
+    );
+    // One cancelled address more floods the tab.
+    assert.deepEqual(await hop(fake, "r1", `${BLOCKED}/n${MAX_CANCELLED_ADDRESSES}`, id), {
+      cancel: true,
+    });
+    const [blocked] = fake.emitWebRequest("onBeforeRequest", request("n2", `${BLOCKED}/never`, id));
+    assert.ok(blocked instanceof Promise);
+    assert.deepEqual(await blocked, { cancel: true });
+    const [fine] = fake.emitWebRequest("onBeforeRequest", request("n3", `${SITE}/fine`, id));
+    assert.ok(fine instanceof Promise);
+    assert.equal(await fine, undefined);
+    const [first] = fake.emitWebRequest("onBeforeRequest", request("n4", addresses[0] ?? "", id));
+    assert.deepEqual(await first, { cancel: true });
+    // Another tab is not flooded.
+    hops.watch("s1", TAB + 1, () => {});
+    assert.deepEqual(
+      fake.emitWebRequest("onBeforeRequest", request("o1", `${BLOCKED}/never`, TAB + 1)),
+      [undefined],
+    );
+    fake.removeTab(id);
+    hops.watch("s1", id, () => {});
+    const answers = fake.emitWebRequest("onBeforeRequest", request("n5", `${BLOCKED}/never`, id));
+    assert.ok(answers.length > 0);
+    assert.ok(answers.every((answer) => answer === undefined));
+  });
+
+  it("remembers a long cancelled address by its first characters", async () => {
+    const long = `${BLOCKED}/${"a".repeat(MAX_CANCELLED_ADDRESS_CHARS)}`;
+    const context = await setup();
+    await cancelThenEnd(context, long);
+    const { fake, hops, reads } = context;
+    hops.watch("s1", TAB, () => {});
+    const [same] = fake.emitWebRequest("onBeforeRequest", request("r2", long));
+    assert.deepEqual(await same, { cancel: true });
+    const [longer] = fake.emitWebRequest(
+      "onBeforeRequest",
+      request("r3", `${long.slice(0, MAX_CANCELLED_ADDRESS_CHARS)}b`),
+    );
+    assert.deepEqual(await longer, { cancel: true });
+    const before = reads();
+    const within = `${long.slice(0, MAX_CANCELLED_ADDRESS_CHARS - 1)}b`;
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", request("r4", within)), [undefined]);
+    assert.equal(reads(), before);
+  });
+
+  it("judges a new request to an address whose hop is still being judged", async () => {
+    const { fake, holdView } = await setup();
+    request1(fake);
+    const release = holdView();
+    const pending = hop(fake, "r1", `${REFUSED}#a`);
+    const [during] = fake.emitWebRequest("onBeforeRequest", request("r2", `${REFUSED}#b`));
+    assert.ok(during instanceof Promise);
+    release();
+    assert.deepEqual(await pending, { cancel: true });
+    assert.deepEqual(await during, { cancel: true });
+  });
+
+  it("judges a new request to an address while another judgement of it still runs", async () => {
+    const { fake, hops, holdView } = await setup();
+    hops.watch("s1", TAB, () => {});
+    // The hop of r1 is let through, as the blocklist then reads, while that of r2 is still held.
+    request1(fake);
+    const releaseFirst = holdView();
+    const [adopted] = fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/`));
+    assert.equal(adopted, undefined);
+    const firstJudged = hop(fake, "r1", REFUSED);
+    const releaseSecond = holdView();
+    const secondJudged = hop(fake, "r2", REFUSED);
+    await saveBlocklist(fake.browser, []);
+    releaseFirst();
+    assert.equal(await firstJudged, undefined);
+    const [during] = fake.emitWebRequest("onBeforeRequest", request("r3", REFUSED));
+    assert.ok(during instanceof Promise);
+    await saveBlocklist(fake.browser, ["www.paypal.com"]);
+    releaseSecond();
+    assert.deepEqual(await secondJudged, { cancel: true });
+    assert.deepEqual(await during, { cancel: true });
+  });
+
+  it("leaves a newer record of the tab id alone when a judgement of a removed tab settles", async () => {
+    const { fake, hops, holdView } = await setup();
+    const { id } = fake.openTab();
+    hops.watch("s1", id, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/`, id));
+    const releaseFirst = holdView();
+    const letThrough = hop(fake, "r1", `${SITE}/b`, id);
+    fake.removeTab(id);
+    hops.watch("s1", id, () => {});
+    const releaseSecond = holdView();
+    fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/`, id));
+    const blocked = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED, id));
+    releaseFirst();
+    assert.equal(await letThrough, undefined);
+    releaseSecond();
+    assert.deepEqual(await Promise.all(blocked), [{ cancel: true }, { cancel: true }]);
+    hops.watch("s1", id, () => {});
+    const answers = fake.emitWebRequest("onBeforeRequest", request("r3", REFUSED, id));
+    assert.ok(answers.length > 0);
+    assert.ok(answers.every((answer) => answer instanceof Promise));
+  });
+
+  it("remembers nothing of a hop whose judgement lets it go on", async () => {
+    const { fake, reads } = await setup();
+    request1(fake);
+    assert.equal(await hop(fake, "r1", `${SITE}/b`), undefined);
+    const before = reads();
+    assert.deepEqual(fake.emitWebRequest("onBeforeRequest", request("r2", `${SITE}/b`)), [
+      undefined,
+    ]);
+    assert.equal(reads(), before);
+  });
+
+  it("brings back no record of a tab removed while its hop was judged", async () => {
+    const { fake, hops, holdView } = await setup();
+    const { id } = fake.openTab();
+    hops.watch("s1", id, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/`, id));
+    const release = holdView();
+    const pending = hop(fake, "r1", REFUSED, id);
+    fake.removeTab(id);
+    release();
+    assert.deepEqual(await pending, { cancel: true });
+    hops.watch("s1", id, () => {});
+    const answers = fake.emitWebRequest("onBeforeRequest", request("r2", REFUSED, id));
+    assert.equal(answers.length, 2);
+    assert.ok(answers.every((answer) => answer === undefined));
+  });
 });
 
 async function setup({ gated }: { gated?: string } = {}) {
@@ -658,16 +984,21 @@ function request1(fake: ReturnType<typeof createFakeBrowser>): void {
 }
 
 /** A redirect hop of `requestId`: Firefox reports it with the first request's id. */
-function hop(fake: ReturnType<typeof createFakeBrowser>, requestId: string, url: string): unknown {
-  const [answer] = fake.emitWebRequest("onBeforeRequest", request(requestId, url));
+function hop(
+  fake: ReturnType<typeof createFakeBrowser>,
+  requestId: string,
+  url: string,
+  tabId = TAB,
+): unknown {
+  const [answer] = fake.emitWebRequest("onBeforeRequest", request(requestId, url, tabId));
   return answer;
 }
 
-function request(requestId: string, url: string): RequestDetails {
+function request(requestId: string, url: string, tabId = TAB): RequestDetails {
   return {
     requestId,
     url,
-    tabId: TAB,
+    tabId,
     type: "main_frame",
     frameId: 0,
     method: "GET",
@@ -675,6 +1006,23 @@ function request(requestId: string, url: string): RequestDetails {
   };
 }
 
-function ended(requestId: string) {
-  return { requestId, tabId: TAB, timeStamp: 2, statusCode: 200, fromCache: false, error: "" };
+function ended(requestId: string, tabId = TAB) {
+  return { requestId, tabId, timeStamp: 2, statusCode: 200, fromCache: false, error: "" };
+}
+
+/**
+ * The setup's watch cancels a hop of `tabId`'s load to `url`, then its wait, its window and its
+ * load end, so that nothing listens on the tab.
+ */
+async function cancelThenEnd(
+  { fake, stop, timers }: Awaited<ReturnType<typeof setup>>,
+  url = `${REFUSED}#top`,
+  tabId = TAB,
+): Promise<void> {
+  fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/`, tabId));
+  assert.deepEqual(await hop(fake, "r1", url, tabId), { cancel: true });
+  fake.emitWebRequest("onErrorOccurred", ended("r1", tabId));
+  stop();
+  timers.advance(LATE_START_MS);
+  assert.deepEqual(fake.activeWebRequestRegistrations(), []);
 }

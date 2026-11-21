@@ -87,3 +87,44 @@ the page with its title, 6 to 72 ms after the refusal.
 
 The end-to-end test "every later reload of that tab fails at once too and sends nothing to that
 site" in `e2e/redirect-hop.test.ts` reproduces the reload rows.
+
+## A later load of a page whose redirect hop was cancelled (2026-11-21)
+
+Taken in Firefox 160.0.1 and 153.7.0esr headless, with the same outcomes on both, with Foxleash as
+it was before the second 2026-11-21 amendment of ADR 0101. The end-to-end harness ran a server of
+its own on 127.0.0.1, approved, also reached as `localhost`, with the blocklist `localhost`. A path
+`P` answers its first request with the page and every later one with a 302 to a target path on
+`localhost`; the server counts requests by path. The page's own reloads and navigations ran over
+WebDriver BiDi in the tab's browsing context. 3 runs per scenario on each build:
+
+| Scenario | What happened | Target hits |
+|---|---|---|
+| `tab_open` P, `navigate` reload (refused in 16 to 30 ms), tab settled, `navigate` to another page, `navigate` back | back returned success in 41 to 61 ms (55 to 62 ms on the ESR), the tab listed as `http://localhost:<port>` with no title | 0 to 1 |
+| `tab_open` another page, `navigate` to P, reload (refused in 13 to 17 ms), back (success, target still 0), `navigate` forward | forward returned success in 38 to 52 ms (54 to 69 ms on the ESR), the tab listed on `localhost` | 0 to 1 |
+| P's `beforeunload` busy for 1.5 s: reload, 3 s, reload, 3 s | the first reload returned success in 1,530 to 1,538 ms (page 2, target 0); the second returned success with the page in 1,552 to 1,565 ms, then its request went to the target; the tab ended on `localhost` | 0 to 1 |
+| `tab_open` P, reload refused (13 to 15 ms), tab settled, the page's `location.reload()`, 2 s | the tab ended on `localhost` | 0 to 1 |
+| Page only: `tab_open` P, the page's `location.reload()` (page 2, target 0: its hop cancelled with no refusal), tab settled, `location.reload()` again, 2 s | the tab ended on `localhost` | 0 to 1 |
+| `tab_open` P, reload refused, tab settled, the page's `location.href` to another path that 302s to its own target on `localhost` (cancelled: that path 1 hit, its target 0), then `location.reload()` | the reload still went to P's target | P's target 0 to 1 |
+
+Forward behaves as back: the fixture pages send `Cache-Control: no-store`, so Firefox restores no
+page from its back-forward cache. The last row shows that the page's own cancelled navigation does
+not change the address the tab's current entry loads next.
+
+The end-to-end tests "a step back onto the page after its refused reload sends nothing to that
+site", "a step forward onto the page after its refused reload sends nothing to that site", "a
+reload the page holds back past the wait sends nothing to that site" (its second reload) and "the
+page's own reloads after a redirect to that site was cancelled send nothing to it" in
+`e2e/redirect-hop.test.ts` reproduce the first, second, third and fifth rows.
+
+With the change, on Firefox 160.0.1 and 153.7.0esr headless, with the end-to-end tests, 2 runs
+on each build:
+
+| Test | Without the change (1 run per build) | With it (4 of 4 runs) |
+|---|---|---|
+| a step back onto the page after its refused reload | fails: `navigate` back returned success, the tab listed as `http://localhost:<port>` with no title | back refused with `site_blocked` in 10 to 16 ms; target 0 |
+| a step forward onto the page after its refused reload | fails: `navigate` forward returned success, the tab on `localhost` | forward refused with `site_blocked` in 8 to 13 ms; target 0 |
+| a reload the page holds back past the wait (two reloads) | fails: target 1 hit, expected 0 | both reloads returned the tab, in 1,534 to 1,539 ms and 1,540 to 1,547 ms; target 0; one `beforeunload` for the second reload |
+| the page's own reloads after a redirect to that site was cancelled | fails: target 1 hit, expected 0 | target 0; one `beforeunload` for the second reload; the tab shows the page with its title |
+
+Without the change each of the four failed as the measurement above predicts, on both builds; the
+other seven tests of the file passed in every run, with and without it.

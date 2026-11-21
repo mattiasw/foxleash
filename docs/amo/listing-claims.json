@@ -118,9 +118,36 @@
         { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session)" },
         {
           "file": "apps/extension/src/load-hops.ts",
-          "contains": "return first ? judgeHop(details.url) : undefined;"
+          "contains": "return first ? judgeHop(details) : undefined;"
         },
-        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session, url)" }
+        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session, url)" },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "rememberCancelled(judged, key);"
+        },
+        { "file": "apps/extension/src/load-hops.ts", "contains": "wasCancelled(tabId, details);" }
+      ]
+    },
+    {
+      "listing": "After such a cancel, Firefox can send a later load of that page straight to the blocked site: Foxleash cancels that too when the agent reloads the tab or goes back or forward onto the page",
+      "evidence": [
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "rememberCancelled(judged, key);"
+        },
+        { "file": "apps/extension/src/load-hops.ts", "contains": "wasCancelled(tabId, details);" },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "browser.tabs.onRemoved.addListener((tabId) => addresses.delete(tabId));"
+        },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "else tab.cancelled = \"flooded\";"
+        },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "return first ? judgeHop(details) : undefined;"
+        }
       ]
     },
     {

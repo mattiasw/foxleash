@@ -17,6 +17,11 @@ Amended 2026-11-21: while the wait of the agent's reload of a checked address ru
 `requestId` whose site differs from that address's is judged as a hop is. After a cancelled hop,
 Firefox sent the tab's next reload straight to the hop's address (M10).
 
+Amended 2026-11-21: every watch of a tab that still listens judges a new `requestId` to an address
+a watch of that tab cancelled, remembered per tab until the tab closes. Firefox sent a back or
+forward step onto the page, a reload the page held back past its wait and the page's own reload
+straight to the hop's address, and they reached the blocklisted site (M10).
+
 ## Context
 
 `navigate` and `tab_open` check only the first address of a load (`gate` and `access.check` in
@@ -72,9 +77,12 @@ resolving to `{ cancel: true }` after a `storage.local.get`:
   after the call, after the 1 s a wait without a URL gives a load to start.
 - M10 ([measurements](../measurements/agent-load-redirect-hops.md)). After a reload's hop was
   cancelled, `tabs.Tab.url` kept the page, and the tab's next reload, a reload the page held back,
-  the page's own reload and a step back onto that entry each sent their first request, with a new
-  `requestId`, to the hop's address. A reload after a refused `navigate` to a URL requested the
-  page; one of an about:blank tab after a refused `navigate` from it requested nothing.
+  the page's own reload and a step back or forward onto that entry each sent their first request,
+  with a new `requestId`, to the hop's address. So did the page's second own reload when only its
+  first one's hop had been cancelled, with no agent reload, and a reload after the page's own
+  navigation elsewhere was cancelled at its hop: that navigation does not change the address the
+  entry loads next. A reload after a refused `navigate` to a URL requested the page; one of an
+  about:blank tab after a refused `navigate` from it requested nothing.
 
 Firefox runs no add-on's `webRequest` listener for a request to one of its restricted or
 quarantined domains (0099; read in the source, not measured).
@@ -107,9 +115,11 @@ The `onBeforeRequest` listener answers:
 
 1. A `requestId` it has not seen: `undefined` at once. While the wait runs, and in the window
    after it (below), it is remembered as a top-level load of the tab; its first address was
-   checked, or the page started it. The exception: while the wait of a watch given `gated` runs,
-   one whose site differs from `gated`'s is remembered and judged as rule 2 judges a hop, also
-   once a newer watch of the tab took over adopting.
+   checked, or the page started it. The exceptions, remembered and judged as rule 2 judges a hop,
+   also once a newer watch of the tab took over adopting: while the wait of a watch given `gated`
+   runs, one whose site differs from `gated`'s; and, by every watch of the tab that still listens,
+   waiting, adopting or only judging the loads it took on, one whose address a watch of the tab
+   cancelled or is judging for another request.
 2. A `requestId` it has seen is a redirect hop of that load, also of a load a page started
    during the wait. A Promise that never rejects judges it:
    - an address that is not http(s): `undefined` (the blocklist matches only web sites);
@@ -127,6 +137,16 @@ The `onBeforeRequest` listener answers:
    complete that follows a cancel would otherwise end a wait without a URL with success. A
    judgement that settles after `stop` still cancels (0099 M7: Firefox applies a pending answer
    after removal).
+
+The cancelled addresses are kept in `createLoadHops`, per tab and apart from the tab's window
+record, until `tabs.onRemoved`: each address any watch of the tab answered with `{ cancel: true }`,
+a hop or a judged first request, for any reason, without its fragment and cut to its first 2,048
+characters, so a longer address that starts with them matches too. While an address is being
+judged, a new request to it other than the judged one matches too, since a load of the entry may
+come before the answer (unverified). A tab keeps at most 100; one more distinct cancel marks the
+tab flooded, drops its addresses, and from then on every new `requestId` a watch of the tab hears
+is judged, until the tab closes. Nothing else is evicted, and an address stays when a later
+judgement lets it go on.
 
 The refusal names only the hop's site: "Tab `<id>`'s load was redirected to `<site>`, which is on
 Foxleash's blocklist; Foxleash stopped it before anything was requested there." `tab_open` then
@@ -168,10 +188,18 @@ its page.
 - **A fixed late window, as 0099's `LATE_HOP_MS`.** Firefox's response timeout is an idle
   timeout, so a server that trickles header bytes can outlast any window; a listener whose load
   never reports an end is filtered to its tab and answers new requests at once.
-- **Judging the first request of a back or forward step too.** M8: a history step keeps the
+- **Judging the first request of every back or forward step.** M8: a history step keeps the
   cookies of the navigation that made the entry, so it is not the Strict-cookie path this closes,
-  and the checks of history steps stay as they are. A step onto an entry whose hop was cancelled
-  sends its first request to the hop's address (M10); that is a limit under Consequences.
+  and the checks of history steps stay as they are. The one exception is the exact address a watch
+  of the tab cancelled, which a step onto that entry requests (M10).
+- **Keeping the refused addresses in the tab's window record.** The record goes when the window
+  and the loads end, so the agent's step onto the entry after the window would reach the site.
+- **Dropping the oldest refused address past the cap.** A page that redirects itself through 100
+  other blocked addresses would push the entry's address out; its own cancelled navigations leave
+  the entry loading that address (M10), so the agent's later step would reach the site.
+- **A listener kept on a tab while it remembers an address.** It would close only the page's own
+  reload past the window that goes straight there, while one whose server answers it with a
+  redirect there is not judged either; closing both needs a permanent blocking listener.
 - **Falling back to a per-tab registry in the file guard.** M1 and M2 show the per-load listener
   sees every hop in time.
 - **Adopting only the first request after the wait** (this record's rule until 2026-11-20). A page
@@ -187,7 +215,8 @@ its page.
 - **Gating the reload on the address Firefox will request.** `tabs.Tab.url` reports the page the
   tab kept, and no API gives the address a reload will request.
 - **Judging every first request in the window.** It would cancel the user's own direct loads of a
-  blocklisted site in that tab.
+  blocklisted site in that tab. The exceptions are the exact addresses a watch of the tab cancelled
+  and a flooded tab.
 
 ## Consequences
 
@@ -216,10 +245,17 @@ its page.
   that overlap is judged by both; a cancel from either stops it.
 - A load still running when the call returned keeps its listeners until Firefox reports it ended.
 - After a cancelled hop, a later load of that page whose first request goes to the hop's address
-  is judged only while the wait of the agent's reload runs: a reload held back past its wait (M9),
-  the page's own reload and a back or forward step onto that page reach the blocklisted site
-  (M10, forward not measured). A first request that comes before the watch's listener takes
-  effect is judged by no watch (none seen: M1, M10).
+  is judged while a watch of the tab listens: the agent's reload, back or forward at any later
+  time, and any load of the tab in the window or while a load a watch took on runs. Not judged: a
+  load while no watch listens, such as the page's or the user's reload more than 5 minutes after
+  the last agent wait, also one an agent click starts; any load after a restart of the background
+  (Firefox, an update or reload of Foxleash), where the agent's reload is still covered by
+  `gated`; a tab Firefox copies or reopens, which has a new id. A first request that comes before
+  the watch's listener takes effect is judged by no watch (none seen: M1, M10).
+- While a watch of the tab listens, the user's own load of an exact refused address in that tab
+  stops with no message, the tab keeping its page; it opens in a new tab. In a flooded tab every
+  top-level load's first request waits for a storage read while a watch listens, and the user's
+  own load of any blocklisted address there stops the same way.
 - During such a reload's wait, a top-level load of the tab whose first request goes to a
   blocklisted site off the reloaded page's site is cancelled too, whoever started it.
 - Without access to all websites Foxleash sees no hop to a site outside its grants (M7), so it
