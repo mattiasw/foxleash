@@ -56,6 +56,12 @@ names a record that exists, that links and written-out paths into `docs/adr/` an
 `docs/measurements/` name files that exist, that every record has a row in
 `docs/adr/README.md`, and that the numbers of merged records are not used again.
 
+It checks the workflows in `.github/workflows/` too: each sets its token's permissions at the
+top level, as `permissions: {}` or a block of scopes, and names its actions by commit (see
+[Dependency updates](#dependency-updates)). In `ci.yml` that block is exactly `contents: read`;
+a job that needs more lists every scope it needs in a block of its own, which replaces the
+top-level one.
+
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
 printed in full with the output the tests wrote, and a missed coverage floor prints the
@@ -595,6 +601,13 @@ moment, or the workflow then cannot read the pull request's state, the merge is 
 15 seconds apart. After merging, the workflow starts CI on `main`
 itself, because a merge made with its own token starts no push run, and retries starting it the
 same way. The CI run it starts tests the updates merged together.
+
+The workflows name each action by the commit its release tag points to, with that tag in a
+comment (`actions/checkout@<commit> # v7.0.1`), and Dependabot's updates change both; a unit
+test fails on an action named any other way, a tag or a local action (`./...`) included. The
+test checks the form only, not that the commit is the one the tag names. The pin keeps a moved
+tag from changing what CI runs, but it does not vet a new release: Dependabot still proposes it
+after the 3-day wait, and it is merged on the checks like any other update.
 
 Updates are merged without a person reading them because the checks are the gate: CI,
 including the end-to-end suite, runs on every Dependabot pull request, and an update that
