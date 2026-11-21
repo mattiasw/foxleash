@@ -101,12 +101,25 @@ and ADR 0076), and also updates the exact version and sha256 in that pin's test 
 validates".
 
 `FOXLEASH_E2E_SHARD=<index>/<total> npm run e2e`, for example `FOXLEASH_E2E_SHARD=2/3`, runs
-only that shard of the test files, through Node's `--test-shard`, which sorts the test files
-and deals them out round-robin. CI runs the suite on both pins, as three shards each, in six
-parallel jobs. Each job's end-to-end step stops itself after 15 minutes, inside the job's
-20-minute limit, so a hung run ends with the report above of what was running. The shard must
-go through the variable: `npm run e2e -- --test-shard=2/3` puts the flag after the test file
-pattern, where Node reads it as one more pattern and runs every file.
+only that shard of the test files. `bin/e2e-shard.ts` deals them out by measured duration:
+the longest file first, each to the shard with the least measured time so far. The durations
+are the seconds in `bin/e2e-durations.json`; a file without an entry there counts as the mean
+of the entries. CI runs the suite on both pins, as three shards each, in six parallel jobs.
+Each job's end-to-end step stops itself after 15 minutes, inside the job's 20-minute limit, so
+a hung run ends with the report above of what was running. The shard must go through the
+variable: `npm run e2e -- --test-shard=2/3` puts the flag after the test files, where Node
+reads it as one more pattern and runs every file.
+
+To refresh the durations, run the suite with the durations reporter:
+`FOXLEASH_TEST_REPORTER=./bin/e2e-durations-reporter.ts npm run e2e`.
+It writes `bin/e2e-durations.json`, and drops the entries of test files that no longer exist.
+With `FOXLEASH_E2E_SHARD` set it measures that shard's files only and keeps the other entries.
+A run with a failed test writes nothing; run the suite again with the normal reporter to see
+which test failed. Refresh after adding a long test file, or when the slowest shard's CI step
+on a pin takes more than about 15% longer than the mean of that pin's three steps. A refresh
+cannot bring a shard below the mean: when the mean nears 60% of the 15-minute limit (540
+seconds), the remedy is more shards, which amends
+[ADR 0076](adr/0076-e2e-tests-run-on-the-current-firefox-release-and-the-esr.md).
 
 The tests also act in the extension's own pages, which WebDriver reaches only with system
 access, so the test Firefox starts with `--marionette` and `--remote-allow-system-access`

@@ -29,7 +29,7 @@
     "check:test-integrity": "sh bin/check-test-integrity.sh",
     "test:bin": "node --test --test-reporter=\"${FOXLEASH_TEST_REPORTER:-./bin/test-reporter.ts}\" 'bin/**/*.test.ts'",
     "typecheck:bin": "tsc --noEmit -p bin",
-    "e2e": "npm run build && node bin/install-firefox.ts && node --test --test-concurrency=1 --test-timeout=60000 ${FOXLEASH_E2E_SHARD:+--test-shard=$FOXLEASH_E2E_SHARD} --test-reporter=\"${FOXLEASH_TEST_REPORTER:-./bin/test-reporter.ts}\" 'e2e/**/*.test.ts'",
+    "e2e": "npm run build && node bin/install-firefox.ts && FILES=$(node bin/e2e-shard.ts) && node --test --test-concurrency=1 --test-timeout=60000 --test-reporter=\"${FOXLEASH_TEST_REPORTER:-./bin/test-reporter.ts}\" $FILES",
     "screenshots:amo": "npm run build && node bin/install-firefox.ts && node e2e/amo-screenshots.ts",
     "typecheck:e2e": "tsc --noEmit -p e2e"
   },
