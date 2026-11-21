@@ -34,6 +34,10 @@
 > In those sections each paragraph and each list item is one line, and they hold plain
 > sentences and `- ` list items only, because AMO's fields accept only a small subset of
 > formatting.
+>
+> Why the manifest declares the three data categories that the Data collection and handling
+> section names, and no more, is recorded in
+> [ADR 0104](../adr/0104-the-manifest-declares-three-data-categories.md).
 
 ## Name
 
