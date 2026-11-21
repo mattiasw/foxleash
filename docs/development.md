@@ -275,9 +275,12 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   ones; each safeguard's evidence holds (a tracked file contains, or lacks, a string), and a
   safeguard with no evidence fails, because it is not built yet; every permission and data
   collection category in the manifest is explained in the listing, and every permission the
-  listing explains is in the manifest; the Summary, the Description and the Permissions
-  section, which go to AMO as the add-on's summary and description and as each version's
-  notes to reviewers, hold at most the 250, 15,000 and 3,000 characters AMO takes for them.
+  listing explains is in the manifest; the categories are matched in the list after "The
+  extension declares these kinds of data to Firefox:" in the Data collection and handling
+  section, which must name, as `(name)`, each category the manifest declares and no other of
+  Mozilla's categories; the Summary, the Description and the Permissions section, which go
+  to AMO as the add-on's summary and description and as each version's notes to reviewers,
+  hold at most the 250, 15,000 and 3,000 characters AMO takes for them.
   With a previous tag, it prints the diffs of the manifest, the listing and
   `bin/amo-source-files.txt` between that tag and the working tree, and fails when the
   manifest's permissions, content script matches, data declarations, `web_accessible_resources`,

@@ -2,6 +2,10 @@
 
 **Status:** Accepted, 2026-11-21.
 
+Amended 2026-11-21: the release check reads categories only from the listing's list of declared
+data, and also fails when that list names a category the manifest does not declare: that drift
+between the listing and the manifest used to pass.
+
 ## Context
 
 Mozilla's Extension Workshop page "Firefox built-in consent for data collection and
@@ -80,7 +84,8 @@ records the decision that recipes add no category.
 The release check guards the declaration in `bin/check-release.ts`. `checkListingDrift` fails when
 the manifest's `data_collection_permissions` changed since the last release tag but the listing's
 Summary, Description, Permissions and Data collection and handling sections did not.
-`checkPermissionsExplained` fails when a declared category is not named as `(name)` in the Data
-collection and handling section; neither check fails when the listing names a category the
-manifest does not declare. If Mozilla changes a definition above so that `websiteContent`
-no longer covers what a page shows or loads, this decision is revisited.
+`checkPermissionsExplained` fails when a declared category is not named as `(name)` in the list
+after "The extension declares these kinds of data to Firefox:", and when that list names, as
+`(key)`, one of Mozilla's categories that the manifest does not declare. If Mozilla changes a
+definition above so that `websiteContent` no longer covers what a page shows or loads, this
+decision is revisited.

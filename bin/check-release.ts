@@ -141,6 +141,7 @@ const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
 const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
 const PROTECTIONS_INTRO = "What protects you:";
+const DATA_INTRO = "The extension declares these kinds of data to Firefox:";
 const PERMISSIONS_HEADING = "## Permissions";
 const SECTION_CAPS = [
   { heading: "## Summary", max: 250, field: "the add-on's summary" },
@@ -156,6 +157,22 @@ const PERMISSION_KEYS = [
   "optional_host_permissions",
 ];
 const DATA_KEYS = ["required", "optional"];
+// The keys of Extension Workshop's "Firefox built-in consent for data collection and transmission".
+const DATA_CATEGORIES = [
+  "none",
+  "authenticationInfo",
+  "bookmarksInfo",
+  "browsingActivity",
+  "financialAndPaymentInfo",
+  "healthInfo",
+  "locationInfo",
+  "personalCommunications",
+  "personallyIdentifyingInfo",
+  "searchTerms",
+  "technicalAndInteraction",
+  "websiteActivity",
+  "websiteContent",
+];
 // `- https://*.example.com/*: ...` names the whole URL pattern, not `https`.
 const PERMISSION_BULLET = /^- (\S+):(?: |$)/;
 // A CommonMark list item marker, at any indentation.
@@ -706,17 +723,48 @@ function checkPermissionsExplained(listing: string, manifest: unknown, findings:
       }
     }
   }
-  const dataSection = sectionLines(all, DATA_HEADING, findings);
-  if (dataSection !== undefined) {
-    const text = dataSection.map((line) => line.text).join("\n");
-    for (const name of declared) {
-      if (!text.includes(`(${name})`)) {
-        findings.push(
-          fail(
-            `the manifest declares the data collection category ${quote(name)}, but the Data collection and handling section of ${LISTING} does not name it as ${quote(`(${name})`)}`,
-          ),
-        );
-      }
+  checkCategoriesListed(all, declared, findings);
+}
+
+function checkCategoriesListed(
+  all: readonly string[],
+  declared: readonly string[],
+  findings: Finding[],
+): void {
+  const section = sectionLines(all, DATA_HEADING, findings);
+  if (section === undefined) return;
+  const bullets = listingBullets(section.map((line) => line.text).join("\n"), DATA_INTRO);
+  if (typeof bullets === "string") {
+    findings.push(
+      fail(bullets.replace(LISTING, `the Data collection and handling section of ${LISTING}`)),
+    );
+    return;
+  }
+  for (const name of declared) {
+    if (!bullets.some((bullet) => bullet.text.includes(`(${name})`))) {
+      findings.push(
+        fail(
+          `the manifest declares the data collection category ${quote(name)}, but the list after ${quote(DATA_INTRO)} in the Data collection and handling section of ${LISTING} does not name it as ${quote(`(${name})`)}`,
+        ),
+      );
+    }
+  }
+  const named = new Map<string, number>();
+  for (const bullet of bullets) {
+    // The bullet's line counts within the section; the listing's own line number is the entry's.
+    const line = section[bullet.line - 1]?.line ?? bullet.line;
+    for (const [found] of bullet.text.matchAll(/\([A-Za-z]+\)/g)) {
+      const key = found.slice(1, -1);
+      if (DATA_CATEGORIES.includes(key) && !named.has(key)) named.set(key, line);
+    }
+  }
+  for (const [key, line] of named) {
+    if (!declared.includes(key)) {
+      findings.push(
+        fail(
+          `${LISTING} line ${line} names the data collection category ${quote(key)}, which the manifest does not declare`,
+        ),
+      );
     }
   }
 }

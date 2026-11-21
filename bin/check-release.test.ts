@@ -223,8 +223,11 @@ const FIXTURE_LISTING = [
   "",
   "## Data collection and handling",
   "",
-  "- Website content (websiteContent): page text.",
-  "- Browsing activity (browsingActivity): tab URLs.",
+  "The extension declares these kinds of data to Firefox:",
+  "",
+  "- Website content (websiteContent): page text (text).",
+  "",
+  "Tab URLs are browsing activity (browsingActivity), which this list does not declare.",
   "",
   "## Compatibility",
   "",
@@ -1632,6 +1635,12 @@ describe("listing", () => {
   const notJson = /^listing claims: docs\/amo\/listing-claims\.json is not JSON: /;
   const missingCookies =
     'the manifest requests "cookies", but the Permissions section of docs/amo/listing.md has no "- cookies:" bullet';
+  const dataIntro = "The extension declares these kinds of data to Firefox:";
+  const missingCategory = (name: string) =>
+    `the manifest declares the data collection category "${name}", but the list after "${dataIntro}" in the Data collection and handling section of docs/amo/listing.md does not name it as "(${name})"`;
+  const undeclaredCategory = (name: string, line: number) =>
+    `docs/amo/listing.md line ${line} names the data collection category "${name}", which the manifest does not declare`;
+  const websiteBullet = "- Website content (websiteContent): page text (text).\n";
 
   test("passes when the listing, the claims, the manifest and the tools agree", () => {
     const findings = listing(firstReleaseTree());
@@ -2134,8 +2143,117 @@ describe("listing", () => {
       'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
       'the manifest requests "downloads", but the Permissions section of docs/amo/listing.md has no "- downloads:" bullet',
       'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
-      'the manifest declares the data collection category "locationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(locationInfo)"',
-      'the manifest declares the data collection category "authenticationInfo", but the Data collection and handling section of docs/amo/listing.md does not name it as "(authenticationInfo)"',
+      missingCategory("locationInfo"),
+      missingCategory("browsingActivity"),
+      missingCategory("authenticationInfo"),
+    ]);
+  });
+
+  test("a category that the list names and the manifest does not declare fails, at its line", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        websiteBullet,
+        `${websiteBullet}- Personal communications (personalCommunications): emails.\n`,
+      ),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      undeclaredCategory("personalCommunications", 38),
+    ]);
+  });
+
+  test("a category in a wrapped bullet is reported at the bullet's first line, in text order", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        websiteBullet,
+        `${websiteBullet}- Messages and searches\n  (searchTerms) and (personalCommunications): both.\n`,
+      ),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      undeclaredCategory("searchTerms", 38),
+      undeclaredCategory("personalCommunications", 38),
+    ]);
+  });
+
+  test("a category named twice in the list is reported once, at its first line", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(
+        websiteBullet,
+        `${websiteBullet}- Searches (searchTerms): a.\n  - Messages (personalCommunications): b.\n- More searches (searchTerms): c.\n- Messages again (personalCommunications): d.\n`,
+      ),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      undeclaredCategory("searchTerms", 38),
+      undeclaredCategory("personalCommunications", 39),
+    ]);
+  });
+
+  test("a category the manifest declares only as optional is a declared category", () => {
+    const tree = withListing(
+      withManifest(firstReleaseTree(), {
+        browser_specific_settings: {
+          gecko: {
+            data_collection_permissions: {
+              required: ["websiteContent"],
+              optional: ["searchTerms"],
+            },
+          },
+        },
+      }),
+      (text) => text.replace(websiteBullet, `${websiteBullet}- Searches (searchTerms): a.\n`),
+    );
+    assertClean(listing(tree));
+  });
+
+  test("a parenthesised word that is not a data category is no category", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(websiteBullet, `${websiteBullet}- Page links (URLs) and (page text, forms).\n`),
+    );
+    assertClean(listing(tree));
+  });
+
+  test("a declared category that the Data section names only outside the list fails", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      browser_specific_settings: {
+        gecko: {
+          data_collection_permissions: { required: ["websiteContent", "browsingActivity"] },
+        },
+      },
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [missingCategory("browsingActivity")]);
+  });
+
+  test("a declared category that is not a Mozilla key still needs its bullet", () => {
+    const tree = withManifest(firstReleaseTree(), {
+      browser_specific_settings: {
+        gecko: { data_collection_permissions: { required: ["websiteContent", "websiteContnt"] } },
+      },
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [missingCategory("websiteContnt")]);
+  });
+
+  test("a Data section without the intro line or without a list is one FAIL, not one per category", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace(dataIntro, "The extension declares data to Firefox:"),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      `the Data collection and handling section of docs/amo/listing.md has no line ending with "${dataIntro}"`,
+    ]);
+    withListing(tree, (text) =>
+      text.replace("The extension declares data to Firefox:", dataIntro).replace(websiteBullet, ""),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      `the Data collection and handling section of docs/amo/listing.md: no bullet list follows "${dataIntro}"`,
+    ]);
+  });
+
+  test("the intro line and its list count only inside the Data section", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text
+        .replace(dataIntro, "The extension declares data to Firefox:")
+        .replace("Linux only;", `${dataIntro}\n\n${websiteBullet}\nLinux only;`),
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      `the Data collection and handling section of docs/amo/listing.md has no line ending with "${dataIntro}"`,
     ]);
   });
 
@@ -2228,6 +2346,7 @@ describe("listing", () => {
       'docs/amo/listing.md line 29 explains the permission "tabs", which the manifest does not request',
       'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
       'docs/amo/listing.md line 31 explains the permission "<all_urls>", which the manifest does not request',
+      undeclaredCategory("websiteContent", 37),
     ]);
   });
 
@@ -5105,7 +5224,7 @@ describe("real git", () => {
       {
         browser_specific_settings: {
           gecko: {
-            data_collection_permissions: { required: ["websiteContent", "browsingActivity"] },
+            data_collection_permissions: { required: [], optional: ["websiteContent"] },
           },
         },
       },
