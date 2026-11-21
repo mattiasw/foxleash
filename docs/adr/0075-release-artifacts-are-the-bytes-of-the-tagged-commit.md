@@ -2,6 +2,9 @@
 
 **Status:** Accepted, 2026-11-17.
 
+Amended 2026-11-21: `built` compares a digest of the XPI's files with the one CI's `validate` job
+printed for the tag's commit.
+
 ## Context
 
 Mozilla signs the XPI we upload and keeps the source archive we attach; both must be what the
@@ -34,6 +37,11 @@ copies it signs: the archive holds exactly the files that commit ships by the ru
 `x.y.z` Node and npm versions filled in (`readmePattern`). Each extra, missing or differing file
 is a FAIL naming the file and the commit.
 
+`build:amo` also prints a digest of the extension's files, the sha256 of one `<sha256>  <path>`
+line per file in byte order of the path, and `built` computes it over the XPI's file entries: it
+must equal the digest the `validate` job printed in each successful `ci.yml` run on `main` for the
+tag's commit, and at least one must have printed it.
+
 ## Alternatives rejected
 
 - Rebuilding the XPI from the archive inside the check. It needs `npm ci` and the network on
@@ -41,6 +49,10 @@ is a FAIL naming the file and the commit.
 - Reading the shipped files from the index. Another session's staged edit would still ship.
 - Leaving the archive's `README.md` uncompared because it holds the build machine's versions. Any
   text would pass, including instructions telling reviewers to build differently.
+- Uploading CI's XPI as a workflow artifact and comparing with it: another action to pin, for no
+  gain, since artifacts and logs expire under the same retention setting.
+- Comparing builds on one machine only, as `build:amo`'s `diff -r` does: it cannot show that a
+  second machine builds the same files.
 
 ## Consequences
 
@@ -55,10 +67,14 @@ A crafted archive, such as a symlink entry whose stored target text equals the c
 would pass, but making one needs write access to the release checkout's `artifacts/`, outside
 what this closes.
 
-The checks do not compare the XPI's bytes, only its manifest version: the XPI is bound to the
-archive by the `build:amo` run that wrote both. An XPI separated from its archive afterwards,
-such as a stale copy left in a `--dir` folder, is caught only by its version. The checks judge the
-tag's tree by the ship rules of the checkout they run in, and fail where those rules disagree
-with the tag's `bin/amo-source-files.txt`, which `build:amo` made the tag's archive match: a
-checkout whose rules changed since the tag fails a correct archive rather than passing a wrong
-one.
+`pre-push` checks only the XPI's manifest version: the `build:amo` run that wrote both binds the
+XPI to the archive. `built`'s digest covers the files' names and bytes, not the zip's, whose
+timestamps differ between machines, so a stale or foreign XPI in a `--dir` folder fails. It
+trusts every process of the `validate` job: one that runs before `build:amo`, such as a
+dependency's install script, could print another digest line and hide the real one with
+`::add-mask::`. It also needs that job's log: GitHub deletes it after the repository's retention
+period and reruns a run only within 30 days of it, so a release whose log is gone after that
+needs a new version. The checks judge the tag's tree by the ship rules of the checkout they run
+in, and fail where those rules disagree with the tag's `bin/amo-source-files.txt`, which
+`build:amo` made the tag's archive match: a checkout whose rules changed since the tag fails a
+correct archive rather than passing a wrong one.

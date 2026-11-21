@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync } from "node:fs";
 import {
   copyFile,
@@ -9,6 +10,7 @@ import {
   realpath,
   rename,
   rm,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import os from "node:os";
@@ -107,6 +109,10 @@ export async function main(root: string): Promise<void> {
     console.log("Comparing the two builds");
     const cleanDist = path.join(clean, "apps", "extension", "dist");
     run("diff", ["-r", path.join(root, "apps", "extension", "dist"), cleanDist], root);
+    const hashes = await folderHashes(cleanDist);
+    console.log(
+      `Extension files digest at ${sha}: sha256:${extensionDigest(hashes)} (${hashes.size} files)`,
+    );
     const xpi = path.join(tmp, "extension.xpi");
     run("zip", ["-rqX", xpi, "."], cleanDist);
 
@@ -293,6 +299,46 @@ export async function listFiles(dir: string): Promise<string[]> {
     .map((entry) => path.relative(dir, path.join(entry.parentPath, entry.name)));
 }
 
+/**
+ * The sha256 of one `<sha256 hex>  <path>` line per file, in byte order of the path, as
+ * `sha256sum` prints them under `LC_ALL=C sort`: it covers the files' names and bytes, not how a
+ * zip stores them, so two machines that build the same files print the same value.
+ */
+export function extensionDigest(hashes: ReadonlyMap<string, string>): string {
+  const digest = createHash("sha256");
+  for (const [file, hash] of [...hashes].sort(([a], [b]) => compareBytes(a, b))) {
+    // With fixed-length hashes, newline-free paths make the lines name exactly one set of files.
+    if (file.includes("\n")) {
+      throw new Error(
+        `${TOOL}: the path ${JSON.stringify(file)} holds a line break, which would make the extension files digest ambiguous`,
+      );
+    }
+    digest.update(`${hash}  ${file}\n`);
+  }
+  return digest.digest("hex");
+}
+
+/** The sha256 hex of each file below `dir`, read through links as `zip -r` without `-y` does. */
+export async function folderHashes(dir: string): Promise<Map<string, string>> {
+  const entries = new Map<string, Buffer>();
+  for (const file of await listFiles(dir)) {
+    const full = path.join(dir, file);
+    if (!(await stat(full)).isFile()) {
+      throw new Error(`${TOOL}: ${file} in ${dir} is not a regular file`);
+    }
+    entries.set(file, await readFile(full));
+  }
+  return hashAll(entries);
+}
+
+export function hashAll(entries: Map<string, Buffer>): Map<string, string> {
+  const hashes = new Map<string, string>();
+  for (const [name, bytes] of entries) {
+    hashes.set(name, createHash("sha256").update(bytes).digest("hex"));
+  }
+  return hashes;
+}
+
 /** Compares the archive's files with the list text; every difference goes into one error. */
 export function assertMatchesList(files: readonly string[], listText: string): void {
   const lines = listText.split("\n");
@@ -325,7 +371,7 @@ function section(heading: string, files: readonly string[]): string[] {
 }
 
 /** Byte order, the order `LC_ALL=C sort` uses. */
-function compareBytes(a: string, b: string): number {
+export function compareBytes(a: string, b: string): number {
   return Buffer.compare(Buffer.from(a), Buffer.from(b));
 }
 

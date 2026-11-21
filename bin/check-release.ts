@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import {
   childEnv,
   DOT_OR_EMPTY_SEGMENT,
+  extensionDigest,
+  hashAll,
   README_TEMPLATE,
   readmePattern,
   SHIPPED_NAME,
@@ -104,6 +105,9 @@ const SLUG_URL =
   /^(?:git@github\.com:|https:\/\/github\.com\/|ssh:\/\/git@github\.com\/)([^/]+)\/([^/]+?)(?:\.git)?$/;
 const SLUG_PART = /^[\w.-]+$/;
 const GH_WORD = /^[a-z_]+$/;
+// The line build:amo prints, with the timestamp a GitHub Actions job log puts before each line.
+const DIGEST_LINE =
+  /^(?:\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z )?Extension files digest at ([0-9a-f]{40}|[0-9a-f]{64}): sha256:([0-9a-f]{64}) \((\d+) files\)\r?$/;
 const ENTRY_NAME = /^[A-Za-z0-9_][A-Za-z0-9._/-]*$/;
 const ARCHIVE_WILDCARD = /[*?[\\]/;
 const BREAKING = /breaking[\s-]+changes?/gi;
@@ -177,7 +181,7 @@ const USAGE = [
   "  post-roll <version>                      the Unreleased entries moved to <version>",
   "  post-bump <version>                      every version field is <version>",
   "  pre-push                                 the release commits, the tag and the artifacts",
-  "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI has <version>",
+  "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI is CI's build of it",
   "  artifacts <version> [--unsigned <path>]  the signed XPI holds the unsigned XPI's files",
   "exit status: 0 ok, 1 a check failed, 2 usage error, 3 a warning needs confirmation",
 ];
@@ -1086,11 +1090,29 @@ export function checkPrePush(env: Env): Finding[] {
   return findings;
 }
 
-/** The artifact checks of `pre-push` alone, for the files in `dir` (default `artifacts`). */
+/**
+ * The artifact checks of `pre-push` for the files in `dir` (default `artifacts`), and the XPI's
+ * files against CI's build of the tag's commit.
+ */
 export function checkBuilt(env: Env, version: string, dir: string | undefined): Finding[] {
   const findings: Finding[] = [];
   const folder = dir === undefined ? "artifacts" : path.resolve(env.root, dir);
-  attempt(findings, "artifacts", () => checkBuiltArtifacts(env, version, folder, findings));
+  const xpi = attempt(findings, "artifacts", () =>
+    checkBuiltArtifacts(env, version, folder, findings),
+  );
+  if (xpi === undefined) return findings;
+  const built = attempt(findings, `${xpi} files digest`, () => xpiDigest(env, xpi, findings));
+  if (built === undefined) return findings;
+  findings.push(info(`${xpi} files digest: sha256:${built.digest} (${built.count} files)`));
+  const slug = attempt(findings, "origin URL", () => remoteSlug(env, findings));
+  const tag = `v${version}`;
+  const commit = attempt(findings, `commit of ${tag}`, () =>
+    commitSha(env, `refs/tags/${tag}^{commit}`),
+  );
+  if (slug === undefined || commit === undefined) return findings;
+  attempt(findings, "CI digest", () =>
+    compareWithCi(env, slug, commit, xpi, built.digest, findings),
+  );
   return findings;
 }
 
@@ -1829,13 +1851,11 @@ function checkNextTagFree(env: Env, tag: string, findings: Finding[]): void {
 
 /** The newest CI run of ci.yml on main for HEAD must have succeeded. */
 function checkCi(env: Env, slug: string, head: string, findings: Finding[]): void {
-  const output = env.sh("gh", [
-    "api",
-    "--hostname",
-    "github.com",
-    `repos/${slug}/actions/runs?head_sha=${head}&per_page=100`,
-  ]);
-  const runs = mainCiRuns(JSON.parse(output), slug, head);
+  const runs = mainCiRuns(
+    ghJson(env, `repos/${slug}/actions/runs?head_sha=${head}&per_page=100`),
+    slug,
+    head,
+  );
   const short = head.slice(0, 12);
   if (typeof runs === "string") {
     findings.push(fail(runs));
@@ -2157,7 +2177,13 @@ function checkReleaseTag(env: Env, tag: string, findings: Finding[]): void {
   }
 }
 
-function checkBuiltArtifacts(env: Env, version: string, dir: string, findings: Finding[]): void {
+/** Returns the XPI's path when it is there and usable, so a later check can read it. */
+function checkBuiltArtifacts(
+  env: Env,
+  version: string,
+  dir: string,
+  findings: Finding[],
+): string | undefined {
   const source = path.join(dir, `foxleash-source-${version}.zip`);
   const xpi = path.join(dir, `foxleash-${version}.xpi`);
   const [sourcePresent, xpiPresent] = [source, xpi].map((file) => {
@@ -2165,7 +2191,8 @@ function checkBuiltArtifacts(env: Env, version: string, dir: string, findings: F
     if (!present) findings.push(fail(`${file} is missing; run npm run build:amo`));
     return present;
   });
-  if (xpiPresent && archiveUsable(env, xpi, findings)) {
+  const xpiUsable = xpiPresent && archiveUsable(env, xpi, findings);
+  if (xpiUsable) {
     attempt(findings, `${xpi} manifest.json`, () => {
       const manifest = env.shBytes("unzip", ["-UU", "-p", xpi, "manifest.json"]);
       checkManifestVersion(manifest, `${xpi} manifest.json`, version, findings);
@@ -2174,6 +2201,140 @@ function checkBuiltArtifacts(env: Env, version: string, dir: string, findings: F
   if (sourcePresent && archiveUsable(env, source, findings)) {
     attempt(findings, source, () => compareSourceWithTag(env, source, version, findings));
   }
+  return xpiUsable ? xpi : undefined;
+}
+
+/** The extension files digest of the XPI's file entries; undefined when one could not be read. */
+export function xpiDigest(
+  env: Env,
+  file: string,
+  findings: Finding[],
+): { digest: string; count: number } | undefined {
+  const archive = listArchive(env, file, findings);
+  const bytes = readEntries(env, file, archive.files, findings);
+  if (archive.skipped.size > 0 || bytes.size !== archive.files.length) return undefined;
+  const hashes = hashAll(bytes);
+  return { digest: extensionDigest(hashes), count: hashes.size };
+}
+
+/**
+ * Every digest the successful `validate` jobs of the commit's successful CI runs on main printed
+ * must equal the XPI's, and at least one must have been printed.
+ */
+function compareWithCi(
+  env: Env,
+  slug: string,
+  commit: string,
+  xpi: string,
+  digest: string,
+  findings: Finding[],
+): void {
+  const short = commit.slice(0, 12);
+  const runs = mainCiRuns(
+    ghJson(env, `repos/${slug}/actions/runs?head_sha=${commit}&per_page=100`),
+    slug,
+    commit,
+  );
+  if (typeof runs === "string") {
+    findings.push(fail(runs));
+    return;
+  }
+  const green = runs.filter((run) => run.status === "completed" && run.conclusion === "success");
+  const compared: number[] = [];
+  for (const run of green) {
+    const jobs = attempt(findings, `jobs of CI run ${run.id}`, () =>
+      validateJobs(ghJson(env, `repos/${slug}/actions/runs/${run.id}/jobs?per_page=100`)),
+    );
+    if (jobs === undefined) continue;
+    if (typeof jobs === "string") {
+      findings.push(fail(`jobs of CI run ${run.id}: ${jobs}`));
+      continue;
+    }
+    const printed = new Set<string>();
+    for (const job of jobs) {
+      const log = attempt(
+        findings,
+        `log of job ${job} in CI run ${run.id} (for a log GitHub no longer keeps: gh run rerun ${run.id} within 30 days of the run, a new release after that)`,
+        () =>
+          env.sh("gh", [
+            "api",
+            "--hostname",
+            "github.com",
+            `repos/${slug}/actions/jobs/${job}/logs`,
+          ]),
+      );
+      if (log === undefined) continue;
+      for (const each of ciDigests(log, commit)) printed.add(each);
+    }
+    if (printed.size === 0) continue;
+    compared.push(run.id);
+    const name = `CI run ${run.id} (${run.event})`;
+    const differing = [...printed].filter((each) => each !== digest);
+    for (const ci of differing) {
+      findings.push(
+        fail(
+          `${name} printed the extension files digest sha256:${ci} for ${short}, but ${xpi} has sha256:${digest}; do not sign it: it is not the extension CI built`,
+        ),
+      );
+    }
+    if (differing.length === 0) {
+      findings.push(info(`${name} built the same extension files for ${short}`));
+    }
+  }
+  if (compared.length > 0) return;
+  const seen =
+    runs.length === 0
+      ? ""
+      : `; CI runs on main for it: ${runs.map((run) => `${run.id} (${run.status}, ${run.conclusion ?? "no conclusion"})`).join(", ")}`;
+  findings.push(
+    fail(
+      `no successful validate job of a CI run on main for ${short} printed an extension files digest; wait for CI (gh run watch) or rerun it (gh run rerun <run id>)${seen}`,
+    ),
+  );
+}
+
+/** `gh api <endpoint>` parsed as JSON, or undefined when the output is not JSON. */
+function ghJson(env: Env, endpoint: string): unknown {
+  const output = env.sh("gh", ["api", "--hostname", "github.com", endpoint]);
+  try {
+    return JSON.parse(output);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * The ids of a run's successful `validate` jobs, in the response's order. A string is the reason
+ * the response is unusable.
+ */
+export function validateJobs(response: unknown): number[] | string {
+  const jobs = field(response, "jobs");
+  if (!Array.isArray(jobs) || !jobs.every(isRecord)) {
+    return "unexpected gh api response: jobs is not a list of jobs";
+  }
+  const ids: number[] = [];
+  for (const { id, name, conclusion } of jobs) {
+    if (
+      typeof id !== "number" ||
+      !Number.isSafeInteger(id) ||
+      typeof name !== "string" ||
+      !(conclusion === null || (typeof conclusion === "string" && GH_WORD.test(conclusion)))
+    ) {
+      return "unexpected gh api response: a job has unexpected fields";
+    }
+    if (name === "validate" && conclusion === "success") ids.push(id);
+  }
+  return ids;
+}
+
+/** The digests of the log's digest lines for `commit`, in log order. */
+export function ciDigests(log: string, commit: string): string[] {
+  const digests: string[] = [];
+  for (const line of log.split("\n")) {
+    const match = DIGEST_LINE.exec(line);
+    if (match !== null && match[1] === commit && match[2] !== undefined) digests.push(match[2]);
+  }
+  return digests;
 }
 
 /**
@@ -2338,14 +2499,6 @@ function readEntries(
     if (bytes !== undefined) entries.set(name, bytes);
   }
   return entries;
-}
-
-function hashAll(entries: Map<string, Buffer>): Map<string, string> {
-  const hashes = new Map<string, string>();
-  for (const [name, bytes] of entries) {
-    hashes.set(name, createHash("sha256").update(bytes).digest("hex"));
-  }
-  return hashes;
 }
 
 /**

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -20,6 +21,8 @@ import {
   assertNoNodeModulesAbove,
   assertNoTrackedLinks,
   childEnv,
+  extensionDigest,
+  folderHashes,
   listFiles,
   main,
   partitionTrackedFiles,
@@ -29,6 +32,7 @@ import {
   runBytes,
   selectShippedFiles,
 } from "./build-amo.ts";
+import { ciDigests } from "./check-release.ts";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 const LINK_ERROR = /tracked symlinks or submodules/;
@@ -504,6 +508,87 @@ describe("files in the checkout", () => {
   });
 });
 
+function sha256(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+describe("extensionDigest", () => {
+  const hashOf = (file: string): string => sha256(`content of ${file}`);
+  const mapOf = (files: readonly string[]): Map<string, string> =>
+    new Map(files.map((file) => [file, hashOf(file)]));
+  // Byte order of the UTF-8 paths; a locale sort and JavaScript's default sort differ from it.
+  const ordered = ["B.js", "a-b.js", "a.js", "a/b.js", "\uFF61.js", "\u{1F600}.js"];
+  const shuffled = ["a/b.js", "\u{1F600}.js", "a.js", "\uFF61.js", "B.js", "a-b.js"];
+
+  test("is the sha256 of one sha256sum line per file, in byte order of the path", () => {
+    const lines = ordered.map((file) => `${hashOf(file)}  ${file}\n`).join("");
+    assert.equal(extensionDigest(mapOf(shuffled)), sha256(lines));
+    assert.notDeepEqual([...shuffled].sort(), ordered);
+  });
+
+  test("matches sha256sum's output for one file", () => {
+    assert.equal(
+      extensionDigest(new Map([["a", "0".repeat(64)]])),
+      "53d743f33b897204dd8c5442651c6bb773fd59ebb101222fe2fcf900b26e4bef",
+    );
+  });
+
+  test("does not depend on the order the entries were added in", () => {
+    assert.equal(extensionDigest(mapOf(shuffled)), extensionDigest(mapOf([...shuffled].reverse())));
+  });
+
+  test("changes when a path or one byte of a file changes", () => {
+    const digest = extensionDigest(mapOf(ordered));
+    const renamed = mapOf(ordered.map((file) => (file === "a.js" ? "a.mjs" : file)));
+    renamed.set("a.mjs", hashOf("a.js"));
+    assert.notEqual(extensionDigest(renamed), digest);
+    const edited = mapOf(ordered);
+    edited.set("a.js", sha256("content of a.jt"));
+    assert.notEqual(extensionDigest(edited), digest);
+  });
+
+  test("refuses a path that holds a line break", () => {
+    const file = `a.js\n${"0".repeat(64)}  b.js`;
+    assert.throws(
+      () => extensionDigest(new Map([[file, "0".repeat(64)]])),
+      new Error(
+        `bin/build-amo.ts: the path ${JSON.stringify(file)} holds a line break, which would make the extension files digest ambiguous`,
+      ),
+    );
+  });
+});
+
+describe("folderHashes", () => {
+  const root = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-build-amo-test-")));
+  after(() => rmSync(root, { recursive: true, force: true }));
+  const files = path.join(root, "files");
+  mkdirSync(path.join(files, "icons", "deep"), { recursive: true });
+  writeFileSync(path.join(files, "manifest.json"), "{}\n");
+  writeFileSync(path.join(files, "icons", "deep", "icon.svg"), "<svg/>");
+  symlinkSync("manifest.json", path.join(files, "copy.json"));
+  const linked = path.join(root, "linked");
+  mkdirSync(path.join(linked, "icons"), { recursive: true });
+  symlinkSync("icons", path.join(linked, "pictures"));
+
+  test("hashes each file below the folder, a link as its target's bytes", async () => {
+    assert.deepEqual(
+      await folderHashes(files),
+      new Map([
+        ["copy.json", sha256("{}\n")],
+        ["icons/deep/icon.svg", sha256("<svg/>")],
+        ["manifest.json", sha256("{}\n")],
+      ]),
+    );
+  });
+
+  test("refuses a link to a folder", async () => {
+    await assert.rejects(
+      folderHashes(linked),
+      new Error(`bin/build-amo.ts: pictures in ${linked} is not a regular file`),
+    );
+  });
+});
+
 describe("childEnv", () => {
   test("drops the option variables of zip and unzip and keeps the rest", () => {
     const env = { ZIP: "-x a", ZIPOPT: "-x b", UNZIP: "-x c", UNZIPOPT: "-x d", HOME: "/home/u" };
@@ -709,6 +794,17 @@ describe("main", () => {
     assert.deepEqual(entry(sourceZip(root), "apps/extension/src/unused.ts"), unused);
     const xpi = path.join(artifacts, "foxleash-1.2.3.xpi");
     assert.deepEqual(zipEntries(xpi), ["icons/icon.svg", "manifest.json"]);
+    const expected = extensionDigest(
+      new Map(zipEntries(xpi).map((name) => [name, sha256(entry(xpi, name))])),
+    );
+    const commit = git(root, "rev-parse", "HEAD");
+    const logged = log.mock.calls.map((call) => String(call.arguments[0]));
+    const digests = logged.filter((line) => line.startsWith("Extension files digest at "));
+    assert.deepEqual(digests, [
+      `Extension files digest at ${commit}: sha256:${expected} (2 files)`,
+    ]);
+    assert.ok(logged.indexOf(digests[0] ?? "") < logged.length - 2);
+    assert.deepEqual(ciDigests(digests[0] ?? "", commit), [expected]);
     assert.equal(existsSync(path.join(root, "amo-dist")), false);
     assert.deepEqual(leftovers(), []);
   });

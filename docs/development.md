@@ -235,6 +235,15 @@ builds `artifacts/foxleash-<version>.xpi`. It fails unless:
 - the clean rebuild is identical to the normal build in `apps/extension/dist/`, which builds
   the working tree: a working tree that builds differently from HEAD fails here.
 
+After the comparison it prints `Extension files digest at <commit>: sha256:<64 hex> (<n> files)`,
+with HEAD's full commit. The digest is the sha256 of one line per regular file of the clean
+copy's `apps/extension/dist/`, the files the XPI holds: the sha256 hex of the file's bytes, two
+spaces, the path relative to that folder with `/` between its parts, and a newline, as
+`sha256sum` prints it, with the lines in byte order of the path (`LC_ALL=C sort`). It covers the
+files' names and bytes, not zip metadata, so another machine that builds the same files prints
+the same value. CI's `validate` job runs `build:amo`, so its log carries the digest, and
+`check:release -- built` compares it with the XPI (see [Release checks](#release-checks)).
+
 The two files appear in `artifacts/` only when every check passes, and they are moved there
 together, so a second run at the same time cannot leave one run's archive beside the other's
 XPI.
@@ -304,14 +313,19 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   files the tagged commit ships (by the rules of `bin/build-amo.ts`, which must agree with
   the tag's `bin/amo-source-files.txt`), byte for byte, and a `README.md` that is the tag's
   `bin/amo-source-readme.md` with some Node and npm versions filled in.
-- `built <version> [--dir <path>]`: the artifact checks of `pre-push` alone, for
-  `foxleash-<version>.xpi` and `foxleash-source-<version>.zip` in `<path>` (default
-  `artifacts`, relative to the repository root), against the commit of the tag
-  `v<version>`, which must exist. The XPI's bytes are not compared, only its manifest
-  version: the `build:amo` run that wrote both files binds the XPI to the archive, so keep
-  the two files together. It judges the tag's tree by the ship rules of the checkout it runs
-  in and fails where they disagree with the tag's `bin/amo-source-files.txt`, so a checkout
-  whose rules changed since the tag fails rather than passes.
+- `built <version> [--dir <path>]`: the artifact checks of `pre-push`, and a comparison of
+  the XPI with CI's build, for `foxleash-<version>.xpi` and `foxleash-source-<version>.zip` in
+  `<path>` (default `artifacts`, relative to the repository root), against the commit of the
+  tag `v<version>`, which must exist. It computes the digest `build:amo` prints (see
+  [AMO source archive](#amo-source-archive)) over the XPI's file entries, prints it, and
+  compares it with the digest the `validate` job printed for the tag's commit in each
+  successful run of `ci.yml` on `main` for that commit. It fails when one differs, when no
+  successful `validate` job printed one, and when a `gh` call fails, so it needs an
+  authenticated `gh` and network access. A log GitHub no longer keeps comes back with
+  `gh run rerun <run id>`, which GitHub allows only within 30 days of the run; after that the
+  version needs a new release. It judges the tag's tree by the ship rules of the checkout it
+  runs in and fails where they disagree with the tag's `bin/amo-source-files.txt`, so a
+  checkout whose rules changed since the tag fails rather than passes.
 - `artifacts <version> [--unsigned <path>]`: the signed XPI in `web-ext-artifacts/` holds the
   signature files and exactly the files of the unsigned XPI (default
   `artifacts/foxleash-<version>.xpi`), byte for byte except `manifest.json`, which may differ
@@ -372,7 +386,7 @@ the extension's manifest taking its version from `apps/extension/package.json`.
 The signed add-on and the source archive are the bytes of the tagged commit. `build:amo`
 copies the shipped files from HEAD's commit and builds the XPI from that archive, failing
 when the checkout's build differs, and `pre-push` and `built` compare the archive with the
-tagged commit (ADR 0075).
+tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build of that commit.
 
 1. Run `npm run check:release -- pre-roll --bump=<patch|minor|major>`. It prints the next
    version, `x.y.z` below. The first release, 0.1.0, runs `pre-roll` without `--bump`.
@@ -403,6 +417,9 @@ tagged commit (ADR 0075).
    `artifacts/foxleash-x.y.z.xpi`, as an unlisted version on addons.mozilla.org. First run
    `npm run check:release -- built x.y.z` (with `--dir <path>` when you sign copies kept
    elsewhere, and then take both files below from that folder) and stop on a failure.
+   `built` also compares the XPI's files with CI's build of the tagged commit. When the
+   digests differ, do not sign: this machine built another extension than CI did, and the fix
+   is a build change, not a looser check.
    `web-ext sign` takes a directory, so extract the XPI and pass that directory as
    `--source-dir`. Before extracting, check the entry names again as in step 5. Then extract
    it, stop on any unzip warning, and check that the folder holds exactly the XPI's files, as

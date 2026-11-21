@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   copyFileSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import os from "node:os";
 import path from "node:path";
 import { after, describe, test } from "node:test";
 import { crc32 } from "node:zlib";
+import { extensionDigest, folderHashes } from "./build-amo.ts";
 import {
   auditAdvisories,
   type Bump,
@@ -29,6 +31,7 @@ import {
   checkPrePush,
   checkPreRoll,
   checkProtocol,
+  ciDigests,
   compareVersions,
   type Env,
   escapeControls,
@@ -44,7 +47,9 @@ import {
   realEnv,
   requiredBump,
   runCli,
+  validateJobs,
   worktreeChanges,
+  xpiDigest,
 } from "./check-release.ts";
 
 const ROOT = "/repo";
@@ -346,6 +351,43 @@ function ciRun(overrides: Record<string, unknown> = {}): Record<string, unknown>
 
 function runs(...list: Record<string, unknown>[]): string {
   return JSON.stringify({ total_count: list.length, workflow_runs: list });
+}
+
+function ciJob(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return { id: 201, name: "validate", status: "completed", conclusion: "success", ...overrides };
+}
+
+function ciJobs(...list: Record<string, unknown>[]): string {
+  return JSON.stringify({ total_count: list.length, jobs: list });
+}
+
+/** The line build:amo prints, as a GitHub Actions job log holds it. */
+function digestLine(commit: string, digest: string, count = 1): string {
+  return `2026-11-21T03:51:14.3587454Z Extension files digest at ${commit}: sha256:${digest} (${count} files)`;
+}
+
+/** A job log around `lines`, starting with a byte order mark as GitHub's do. */
+function jobLog(...lines: string[]): string {
+  return [
+    "\uFEFF2026-11-21T03:51:10.1014333Z Comparing the two builds",
+    ...lines,
+    "2026-11-21T03:51:20.1014333Z Source archive: /home/runner/work/artifacts/source.zip",
+    "",
+  ].join("\n");
+}
+
+function sha256(data: string | Buffer): string {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+/** The extension files digest of an XPI's file entries, read with unzip itself. */
+function zipDigest(file: string): string {
+  const names = execFileSync("unzip", ["-Z1", file], { encoding: "utf8" })
+    .split("\n")
+    .filter((name) => name !== "" && !name.endsWith("/"));
+  return extensionDigest(
+    new Map(names.map((name) => [name, sha256(execFileSync("unzip", ["-p", file, name]))])),
+  );
 }
 
 /** The listing, its claims, their evidence and the tools, all in agreement. */
@@ -1094,6 +1136,11 @@ describe("pre-roll", () => {
     [
       "a non-array workflow_runs",
       (t) => (t.commands[GH] = JSON.stringify({ workflow_runs: {} })),
+      /^unexpected gh api response: workflow_runs is not a list of runs$/,
+    ],
+    [
+      "a CI runs reply that is not JSON",
+      (t) => (t.commands[GH] = "<html>token=abc</html>"),
       /^unexpected gh api response: workflow_runs is not a list of runs$/,
     ],
     [
@@ -2874,6 +2921,17 @@ describe("pre-push", () => {
     });
   }
 
+  test("fails on a CI runs reply that is not JSON, quoting none of it", () => {
+    const tree = prePushTree("second");
+    tree.commands[ghRuns(OTHER)] = "<html>token=abc</html>";
+    const findings = checkPrePush(fakeEnv(tree));
+    assertOnlyFail(findings, /^unexpected gh api response: workflow_runs is not a list of runs$/);
+    assert.deepEqual(
+      findings.filter((finding) => finding.text.includes("token=abc")),
+      [],
+    );
+  });
+
   const deviations: [string, (tree: Tree) => void, RegExp][] = [
     [
       "a missing commit",
@@ -3992,6 +4050,59 @@ describe("artifacts", () => {
   });
 });
 
+describe("xpiDigest", () => {
+  const XPI = "artifacts/foxleash-0.2.0.xpi";
+  const LIST = key("unzip", "-Z1", "-UU", XPI);
+
+  test("digests every file entry and counts them, leaving out directories", () => {
+    const findings: Finding[] = [];
+    const env = fakeEnv({
+      files: {},
+      commands: {
+        [LIST]: "icons/\nicons/a.svg\nmanifest.json",
+        [unzipEntry(XPI, "icons/a.svg")]: "<svg/>",
+        [unzipEntry(XPI, "manifest.json")]: "{}\n",
+      },
+    });
+    assert.deepEqual(xpiDigest(env, XPI, findings), {
+      digest: extensionDigest(
+        new Map([
+          ["icons/a.svg", sha256("<svg/>")],
+          ["manifest.json", sha256("{}\n")],
+        ]),
+      ),
+      count: 2,
+    });
+    assert.deepEqual(findings, []);
+  });
+
+  test("gives no digest when an entry name is unsafe", () => {
+    const findings: Finding[] = [];
+    const env = fakeEnv({
+      files: {},
+      commands: { [LIST]: "manifest.json\n-x", [unzipEntry(XPI, "manifest.json")]: "{}\n" },
+    });
+    assert.equal(xpiDigest(env, XPI, findings), undefined);
+    assert.deepEqual(texts(findings, "FAIL"), [`${XPI}: unsafe entry name "-x"`]);
+  });
+
+  test("gives no digest when an entry cannot be read", () => {
+    const findings: Finding[] = [];
+    const env = fakeEnv({
+      files: {},
+      commands: {
+        [LIST]: "icon.svg\nmanifest.json",
+        [unzipEntry(XPI, "icon.svg")]: new CommandError("unzip -UU -p", 11, "not matched"),
+        [unzipEntry(XPI, "manifest.json")]: "{}\n",
+      },
+    });
+    assert.equal(xpiDigest(env, XPI, findings), undefined);
+    assert.deepEqual(texts(findings, "FAIL"), [
+      `${XPI} icon.svg: \`unzip -UU -p\` failed (status 11): not matched`,
+    ]);
+  });
+});
+
 describe("real git", () => {
   const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-check-release-git-")));
   // A git hook in a linked worktree exports GIT_DIR, which would point the fixture's git
@@ -4053,21 +4164,71 @@ describe("real git", () => {
     return bare;
   }
 
-  /** The real git, with origin's URLs as GitHub's, a green CI run for any sha, a clean audit. */
-  function github(dir: string): Env {
+  type Ci = {
+    origin?: string;
+    runs?: string | CommandError;
+    jobs?: Record<number, string | CommandError>;
+    logs?: Record<number, string | CommandError>;
+  };
+  type GitHub = Env & { calls: string[][] };
+
+  /**
+   * The real git with origin's URLs as GitHub's (or `ci.origin`), a clean audit, and GitHub's API
+   * answered from `ci`: by default a green CI run for any sha, and no jobs or logs. The gh and
+   * `git remote` calls are recorded; no call reaches the real gh.
+   */
+  function github(dir: string, ci: Ci = {}): GitHub {
     const env = realEnv(dir);
+    const calls: string[][] = [];
     return {
       ...env,
+      calls,
       sh(command, args) {
-        if (command === "git" && args[0] === "remote" && args[1] === "get-url") return ORIGIN_URL;
-        if (command === "gh") {
-          return runs(ciRun({ head_sha: /head_sha=(\w+)/.exec(args.at(-1) ?? "")?.[1] }));
+        if (command === "gh" || (command === "git" && args[0] === "remote")) {
+          calls.push([command, ...args]);
         }
+        if (command === "git" && args[0] === "remote" && args[1] === "get-url") {
+          return ci.origin ?? ORIGIN_URL;
+        }
+        if (command === "gh") return ghReply(ci, args);
         if (command === "npm") return json(auditReport());
         return env.sh(command, args);
       },
       listTools: () => [...FIXTURE_TOOLS],
     };
+  }
+
+  function ghReply(ci: Ci, args: readonly string[]): string {
+    const [api, flag, host, endpoint = "", ...rest] = args;
+    let reply: string | CommandError | undefined;
+    if (api === "api" && flag === "--hostname" && host === "github.com" && rest.length === 0) {
+      const runsOf = /^repos\/owner\/repo\/actions\/runs\?head_sha=(\w+)&per_page=100$/.exec(
+        endpoint,
+      );
+      const jobsOf = /^repos\/owner\/repo\/actions\/runs\/(\d+)\/jobs\?per_page=100$/.exec(
+        endpoint,
+      );
+      const logOf = /^repos\/owner\/repo\/actions\/jobs\/(\d+)\/logs$/.exec(endpoint);
+      if (runsOf !== null) reply = ci.runs ?? runs(ciRun({ head_sha: runsOf[1] }));
+      else if (jobsOf !== null) reply = ci.jobs?.[Number(jobsOf[1])];
+      else if (logOf !== null) reply = ci.logs?.[Number(logOf[1])];
+    }
+    if (reply === undefined) {
+      throw new CommandError(["gh", ...args].join(" "), 1, "not scripted in the test");
+    }
+    if (reply instanceof CommandError) throw reply;
+    return reply;
+  }
+
+  /** The tag's commit, its XPI's digest, and CI run 101 whose validate job 201 printed that digest. */
+  function releaseCi(dir: string): { commit: string; digest: string; ci: Ci } {
+    const commit = git(dir, "rev-parse", "refs/tags/v0.2.0^{commit}");
+    const digest = zipDigest(path.join(dir, "artifacts/foxleash-0.2.0.xpi"));
+    const ci = {
+      jobs: { 101: ciJobs(ciJob()) },
+      logs: { 201: jobLog(digestLine(commit, digest)) },
+    };
+    return { commit, digest, ci };
   }
 
   test("latestTag: none, one, the highest of several, and an unreachable tag ignored", () => {
@@ -4329,16 +4490,19 @@ describe("real git", () => {
 
   test("built checks the artifacts in artifacts/ or in --dir against the tag", () => {
     const dir = secondRelease();
-    assertClean(checkBuilt(realEnv(dir), "0.2.0", undefined));
+    const { ci } = releaseCi(dir);
+    assertClean(checkBuilt(github(dir, ci), "0.2.0", undefined));
     const elsewhere = path.join(base, `elsewhere-${counter++}`);
     renameSync(path.join(dir, "artifacts"), elsewhere);
-    const env = realEnv(dir);
+    const env = github(dir, ci);
     assertClean(checkBuilt(env, "0.2.0", elsewhere));
     assertClean(checkBuilt(env, "0.2.0", path.relative(dir, elsewhere)));
-    assert.deepEqual(texts(checkBuilt(env, "0.2.0", undefined), "FAIL"), [
+    const missing = github(dir, ci);
+    assert.deepEqual(texts(checkBuilt(missing, "0.2.0", undefined), "FAIL"), [
       "artifacts/foxleash-source-0.2.0.zip is missing; run npm run build:amo",
       "artifacts/foxleash-0.2.0.xpi is missing; run npm run build:amo",
     ]);
+    assert.deepEqual(missing.calls, []);
   });
 
   test("built fails when the tag does not exist", () => {
@@ -4348,14 +4512,21 @@ describe("real git", () => {
       out: (line: string) => out.push(line),
       err: () => assert.fail("printed to stderr"),
     };
-    assert.equal(runCli(["built", "0.2.0"], realEnv(dir), io), 0);
+    const { ci } = releaseCi(dir);
+    assert.equal(runCli(["built", "0.2.0"], github(dir, ci), io), 0);
     assert.equal(out.at(-1), "check-release: built ok");
     git(dir, "tag", "-d", "v0.2.0");
-    assertOnlyFail(
-      checkBuilt(realEnv(dir), "0.2.0", undefined),
+    const fails = texts(checkBuilt(github(dir, ci), "0.2.0", undefined), "FAIL");
+    assert.equal(fails.length, 2, JSON.stringify(fails));
+    assert.match(
+      fails[0] ?? "",
       /^artifacts\/foxleash-source-0\.2\.0\.zip: `git rev-parse refs\/tags\/v0\.2\.0\^\{commit\}` failed/,
     );
-    assert.equal(runCli(["built", "0.2.0"], realEnv(dir), io), 1);
+    assert.match(
+      fails[1] ?? "",
+      /^commit of v0\.2\.0: `git rev-parse refs\/tags\/v0\.2\.0\^\{commit\}` failed/,
+    );
+    assert.equal(runCli(["built", "0.2.0"], github(dir, ci), io), 1);
     assert.equal(out.at(-1), "check-release: built failed");
   });
 
@@ -4368,9 +4539,310 @@ describe("real git", () => {
     });
     git(dir, "tag", "-f", "-a", "v0.2.0", "-m", "v0.2.0");
     assertOnlyFail(
-      checkBuilt(realEnv(dir), "0.2.0", undefined),
+      checkBuilt(github(dir, releaseCi(dir).ci), "0.2.0", undefined),
       /^bin\/amo-source-files\.txt at v0\.2\.0 \([0-9a-f]{12}\) lists apps\/extension\/src\/a\.test\.ts, which the ship rules of this checkout do not ship$/,
     );
+  });
+
+  test("pre-push asks GitHub only for the CI runs of origin/main's commit", () => {
+    const dir = secondRelease();
+    const env = github(dir);
+    assertClean(checkPrePush(env));
+    const originMain = git(dir, "rev-parse", "refs/remotes/origin/main");
+    assert.deepEqual(
+      env.calls.filter(([command]) => command === "gh"),
+      [
+        [
+          "gh",
+          "api",
+          "--hostname",
+          "github.com",
+          `repos/owner/repo/actions/runs?head_sha=${originMain}&per_page=100`,
+        ],
+      ],
+    );
+  });
+
+  test("xpiDigest reads the digest folderHashes gives the folder from a zip of it", async () => {
+    const folder = path.join(base, `folder-${counter++}`);
+    write(folder, {
+      "manifest.json": "{}\n",
+      "icons/deep/icon.svg": "<svg/>",
+      "a-b.js": "x();\n",
+      "B.js": "y();\n",
+    });
+    mkdirSync(path.join(folder, "empty"));
+    const xpi = path.join(base, `folder-${counter++}.xpi`);
+    execFileSync("zip", ["-rqX", xpi, "."], { cwd: folder });
+    const findings: Finding[] = [];
+    assert.deepEqual(xpiDigest(realEnv(base), xpi, findings), {
+      digest: extensionDigest(await folderHashes(folder)),
+      count: 4,
+    });
+    assert.deepEqual(findings, []);
+  });
+
+  describe("built against CI's build", () => {
+    const XPI = "artifacts/foxleash-0.2.0.xpi";
+    const OTHER_DIGEST = "e".repeat(64);
+    let shared: { dir: string; commit: string; digest: string; ci: Ci } | undefined;
+
+    /** One fixture for these tests, which only read it. */
+    function release(): { dir: string; commit: string; digest: string; ci: Ci } {
+      if (shared === undefined) {
+        const dir = secondRelease();
+        shared = { dir, ...releaseCi(dir) };
+      }
+      return shared;
+    }
+
+    function built(ci: Ci, dir?: string): { findings: Finding[]; calls: string[][] } {
+      const env = github(release().dir, ci);
+      return { findings: checkBuilt(env, "0.2.0", dir), calls: env.calls };
+    }
+
+    function endpoints(calls: readonly string[][]): string[] {
+      return calls.filter(([command]) => command === "gh").map((call) => call.at(-1) ?? "");
+    }
+
+    function ciRunOf(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+      return ciRun({ head_sha: release().commit, ...overrides });
+    }
+
+    function noneFound(seen = "; CI runs on main for it: 101 (completed, success)"): string {
+      return `no successful validate job of a CI run on main for ${release().commit.slice(0, 12)} printed an extension files digest; wait for CI (gh run watch) or rerun it (gh run rerun <run id>)${seen}`;
+    }
+
+    function differs(name: string, ci: string): string {
+      const { commit, digest } = release();
+      return `${name} printed the extension files digest sha256:${ci} for ${commit.slice(0, 12)}, but ${XPI} has sha256:${digest}; do not sign it: it is not the extension CI built`;
+    }
+
+    function same(name: string): string {
+      return `${name} built the same extension files for ${release().commit.slice(0, 12)}`;
+    }
+
+    function xpiInfo(): string {
+      return `${XPI} files digest: sha256:${release().digest} (1 files)`;
+    }
+
+    test("passes when CI's validate job printed the XPI's digest, naming the run", () => {
+      const { commit, ci } = release();
+      const { findings, calls } = built(ci);
+      assertClean(findings);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo(), same("CI run 101 (push)")]);
+      assert.deepEqual(endpoints(calls), [
+        `repos/owner/repo/actions/runs?head_sha=${commit}&per_page=100`,
+        "repos/owner/repo/actions/runs/101/jobs?per_page=100",
+        "repos/owner/repo/actions/jobs/201/logs",
+      ]);
+    });
+
+    test("fails when CI printed another digest, telling not to sign", () => {
+      const { commit, ci } = release();
+      const { findings } = built({
+        ...ci,
+        logs: { 201: jobLog(digestLine(commit, OTHER_DIGEST)) },
+      });
+      assert.deepEqual(texts(findings, "FAIL"), [differs("CI run 101 (push)", OTHER_DIGEST)]);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo()]);
+    });
+
+    test("fails when one of a job's digest lines differs, even when another agrees", () => {
+      const { commit, digest, ci } = release();
+      const log = jobLog(digestLine(commit, digest), digestLine(commit, OTHER_DIGEST));
+      const { findings } = built({ ...ci, logs: { 201: log } });
+      assert.deepEqual(texts(findings, "FAIL"), [differs("CI run 101 (push)", OTHER_DIGEST)]);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo()]);
+    });
+
+    test("fails for the run that disagrees and names the one that agrees", () => {
+      const { commit, digest } = release();
+      const { findings } = built({
+        runs: runs(ciRunOf(), ciRunOf({ id: 102, event: "workflow_dispatch" })),
+        jobs: { 101: ciJobs(ciJob()), 102: ciJobs(ciJob({ id: 202 })) },
+        logs: {
+          201: jobLog(digestLine(commit, digest)),
+          202: jobLog(digestLine(commit, OTHER_DIGEST)),
+        },
+      });
+      assert.deepEqual(texts(findings, "FAIL"), [
+        differs("CI run 102 (workflow_dispatch)", OTHER_DIGEST),
+      ]);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo(), same("CI run 101 (push)")]);
+    });
+
+    test("fails when there is no CI run on main for the tag's commit", () => {
+      const { commit, ci } = release();
+      const { findings, calls } = built({ ...ci, runs: runs() });
+      assert.deepEqual(texts(findings, "FAIL"), [noneFound("")]);
+      assert.deepEqual(endpoints(calls), [
+        `repos/owner/repo/actions/runs?head_sha=${commit}&per_page=100`,
+      ]);
+    });
+
+    test("looks only at completed, successful runs, naming the others", () => {
+      const { commit, digest } = release();
+      const { findings, calls } = built({
+        runs: runs(
+          ciRunOf({ status: "in_progress", conclusion: null }),
+          ciRunOf({ id: 102, status: "in_progress", conclusion: "success" }),
+          ciRunOf({ id: 103, conclusion: "failure" }),
+          ciRunOf({ id: 104, conclusion: "cancelled" }),
+        ),
+        jobs: Object.fromEntries([101, 102, 103, 104].map((id) => [id, ciJobs(ciJob())])),
+        logs: { 201: jobLog(digestLine(commit, digest)) },
+      });
+      assert.deepEqual(texts(findings, "FAIL"), [
+        noneFound(
+          "; CI runs on main for it: 101 (in_progress, no conclusion), 102 (in_progress, success), 103 (completed, failure), 104 (completed, cancelled)",
+        ),
+      ]);
+      assert.equal(endpoints(calls).length, 1, JSON.stringify(calls));
+    });
+
+    test("reads no log of a job that is not a successful validate job", () => {
+      const { commit, digest } = release();
+      const { findings, calls } = built({
+        jobs: {
+          101: ciJobs(
+            ciJob({ name: "lint" }),
+            ciJob({ id: 202, name: "Validate" }),
+            ciJob({ id: 203, conclusion: "failure" }),
+            ciJob({ id: 204, conclusion: "skipped" }),
+            ciJob({ id: 205, conclusion: null }),
+          ),
+        },
+        logs: Object.fromEntries(
+          [201, 202, 203, 204, 205].map((id) => [id, jobLog(digestLine(commit, digest))]),
+        ),
+      });
+      assert.deepEqual(texts(findings, "FAIL"), [noneFound()]);
+      assert.equal(endpoints(calls).length, 2, JSON.stringify(calls));
+    });
+
+    test("fails when the validate job's log has no digest line for the tag's commit", () => {
+      const { digest, ci } = release();
+      for (const log of [jobLog(), jobLog(digestLine(OTHER, digest))]) {
+        const { findings, calls } = built({ ...ci, logs: { 201: log } });
+        assert.deepEqual(texts(findings, "FAIL"), [noneFound()]);
+        assert.equal(endpoints(calls).length, 3, JSON.stringify(calls));
+      }
+    });
+
+    test("passes a log with CRLF line endings", () => {
+      const { commit, digest, ci } = release();
+      const log = jobLog(digestLine(commit, digest)).replaceAll("\n", "\r\n");
+      const { findings } = built({ ...ci, logs: { 201: log } });
+      assertClean(findings);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo(), same("CI run 101 (push)")]);
+    });
+
+    test("ignores digest lines with control characters, and prints none", () => {
+      const { commit, digest, ci } = release();
+      const line = digestLine(commit, digest);
+      const log = jobLog(
+        `\u001b[2K${line}`,
+        `${line}\u001b[2K`,
+        `${line}\u0085`,
+        `\u2028${line}`,
+        line.replace(" (", "\r ("),
+      );
+      const { findings } = built({ ...ci, logs: { 201: log } });
+      assert.deepEqual(texts(findings, "FAIL"), [noneFound()]);
+      assert.deepEqual(
+        findings.filter((finding) => escapeControls(finding.text) !== finding.text),
+        [],
+      );
+    });
+
+    test("fails on a failed gh call for the runs, without asking for jobs", () => {
+      const { ci } = release();
+      const { findings, calls } = built({
+        ...ci,
+        runs: new CommandError("gh api", 1, "HTTP 502: Bad Gateway"),
+      });
+      assert.deepEqual(texts(findings, "FAIL"), [
+        "CI digest: `gh api` failed (status 1): HTTP 502: Bad Gateway",
+      ]);
+      assert.equal(endpoints(calls).length, 1, JSON.stringify(calls));
+    });
+
+    test("fails on a failed gh call for the jobs or the log, saying to rerun for the log", () => {
+      const { ci } = release();
+      const jobs = built({ ...ci, jobs: { 101: new CommandError("gh api", 1, "HTTP 502") } });
+      assert.deepEqual(texts(jobs.findings, "FAIL"), [
+        "jobs of CI run 101: `gh api` failed (status 1): HTTP 502",
+        noneFound(),
+      ]);
+      const log = built({ ...ci, logs: { 201: new CommandError("gh api", 1, "HTTP 410: Gone") } });
+      assert.deepEqual(texts(log.findings, "FAIL"), [
+        "log of job 201 in CI run 101 (for a log GitHub no longer keeps: gh run rerun 101 within 30 days of the run, a new release after that): `gh api` failed (status 1): HTTP 410: Gone",
+        noneFound(),
+      ]);
+    });
+
+    test("fails on a malformed or non-JSON reply with a fixed reason, quoting none of it", () => {
+      const { ci } = release();
+      const notJobs = "jobs of CI run 101: unexpected gh api response: jobs is not a list of jobs";
+      for (const [reply, expected] of [
+        [JSON.stringify({ jobs: {} }), [notJobs, noneFound()]],
+        ["<html>token=abc</html>", [notJobs, noneFound()]],
+        [
+          ciJobs(ciJob({ id: "201" })),
+          [
+            "jobs of CI run 101: unexpected gh api response: a job has unexpected fields",
+            noneFound(),
+          ],
+        ],
+      ] as const) {
+        const { findings } = built({ ...ci, jobs: { 101: reply } });
+        assert.deepEqual(texts(findings, "FAIL"), expected, reply);
+        assert.deepEqual(
+          findings.filter((finding) => finding.text.includes("token=abc")),
+          [],
+        );
+      }
+      const { findings } = built({ ...ci, runs: "<html>token=abc</html>" });
+      assert.deepEqual(texts(findings, "FAIL"), [
+        "unexpected gh api response: workflow_runs is not a list of runs",
+      ]);
+      assert.deepEqual(
+        findings.filter((finding) => finding.text.includes("token=abc")),
+        [],
+      );
+    });
+
+    test("compares nothing with CI for an XPI it cannot digest", () => {
+      const { dir, ci } = release();
+      const folder = path.join(base, `undigestable-${counter++}`);
+      mkdirSync(folder);
+      for (const name of ["foxleash-0.2.0.xpi", "foxleash-source-0.2.0.zip"]) {
+        copyFileSync(path.join(dir, "artifacts", name), path.join(folder, name));
+      }
+      const staging = path.join(base, `entry-${counter++}`);
+      write(staging, { "a b": "x\n" });
+      execFileSync("zip", ["-qX", path.join(folder, "foxleash-0.2.0.xpi"), "a b"], {
+        cwd: staging,
+      });
+      const { findings, calls } = built(ci, folder);
+      assert.deepEqual(texts(findings, "FAIL"), [
+        `${path.join(folder, "foxleash-0.2.0.xpi")}: unsafe entry name "a b"`,
+      ]);
+      assert.deepEqual(texts(findings, "INFO"), []);
+      assert.deepEqual(calls, []);
+    });
+
+    test("asks GitHub nothing for an origin that is not on GitHub", () => {
+      const { ci } = release();
+      const { findings, calls } = built({ ...ci, origin: "/srv/repo.git" });
+      assert.deepEqual(texts(findings, "FAIL"), [
+        'the origin URL "/srv/repo.git" is not a github.com repository URL',
+        'the origin push URL "/srv/repo.git" is not a github.com repository URL',
+      ]);
+      assert.deepEqual(texts(findings, "INFO"), [xpiInfo()]);
+      assert.deepEqual(endpoints(calls), []);
+    });
   });
 
   test("pre-push fails when the release commits are on main", () => {
@@ -4860,7 +5332,7 @@ describe("runCli", () => {
       );
       assert.ok(
         err.includes(
-          "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI has <version>",
+          "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI is CI's build of it",
         ),
       );
     }
@@ -5006,6 +5478,87 @@ describe("helpers", () => {
       assert.equal(
         typeof mainCiRuns({ workflow_runs: [ciRun(bad)] }, "owner/repo", HEAD),
         "string",
+        JSON.stringify(bad),
+      );
+    }
+  });
+
+  test("ciDigests takes the digest lines build:amo printed for the commit, in log order", () => {
+    const commit = "1".repeat(40);
+    const one = "d".repeat(64);
+    const two = "e".repeat(64);
+    const line = (digest: string, at = commit, count = "12"): string =>
+      `Extension files digest at ${at}: sha256:${digest} (${count} files)`;
+    assert.deepEqual(ciDigests(line(one), commit), [one]);
+    assert.deepEqual(ciDigests(`2026-11-21T03:51:14.3587454Z ${line(one)}`, commit), [one]);
+    assert.deepEqual(ciDigests(`2026-11-21T03:51:14Z ${line(one)}`, commit), [one]);
+    assert.deepEqual(ciDigests(`${line(one)}\r`, commit), [one]);
+    assert.deepEqual(ciDigests(line(one, commit, "3"), commit), [one]);
+    const long = "2".repeat(64);
+    assert.deepEqual(ciDigests(line(one, long), long), [one]);
+    assert.deepEqual(
+      ciDigests([line(one), "other", line(two, OTHER), line(two), line(one)].join("\n"), commit),
+      [one, two, one],
+    );
+    const odd = "3".repeat(41);
+    assert.deepEqual(ciDigests(line(one, odd), odd), []);
+    for (const ignored of [
+      line(one, OTHER),
+      line("d".repeat(63)),
+      line("d".repeat(65)),
+      line("D".repeat(64)),
+      `x ${line(one)}`,
+      `${line(one)} x`,
+      `${line(one)}\u001b[2K`,
+      `${line(one)}\r\r`,
+      line(one).replace(" (", "\r ("),
+      line(one, commit, ""),
+      line(one).replace("sha256:", "sha256: "),
+      `2026-11-21 ${line(one)}`,
+      `2026-11-21T03:51:14.Z ${line(one)}`,
+      `2026-11-21T03:51:14.3587454 ${line(one)}`,
+    ]) {
+      assert.deepEqual(ciDigests(ignored, commit), [], JSON.stringify(ignored));
+    }
+  });
+
+  test("validateJobs gives the ids of the successful validate jobs, in order", () => {
+    assert.deepEqual(
+      validateJobs({
+        total_count: 8,
+        jobs: [
+          ciJob({ id: 8 }),
+          ciJob({ id: 2, name: "Validate" }),
+          ciJob({ id: 3, name: "validate (x)" }),
+          ciJob({ id: 4, conclusion: "failure" }),
+          ciJob({ id: 5, conclusion: "skipped" }),
+          ciJob({ id: 6, conclusion: null }),
+          ciJob({ id: 7, name: "e2e (release, 1/3)" }),
+          ciJob({ id: 1 }),
+        ],
+      }),
+      [8, 1],
+    );
+    assert.deepEqual(validateJobs({ jobs: [] }), []);
+    for (const bad of [undefined, {}, { jobs: 1 }, { jobs: [1] }, { jobs: [[]] }]) {
+      assert.equal(
+        validateJobs(bad),
+        "unexpected gh api response: jobs is not a list of jobs",
+        JSON.stringify(bad),
+      );
+    }
+    for (const bad of [
+      { id: "1" },
+      { id: 1.5 },
+      { id: 2 ** 53 },
+      { name: 7 },
+      { conclusion: 1 },
+      { conclusion: "success!" },
+      { conclusion: "Success" },
+    ]) {
+      assert.equal(
+        validateJobs({ jobs: [ciJob(), ciJob({ name: "lint", ...bad })] }),
+        "unexpected gh api response: a job has unexpected fields",
         JSON.stringify(bad),
       );
     }
