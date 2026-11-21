@@ -3,7 +3,7 @@ import { after, before, describe, type TestContext, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { TabInfo } from "@foxleash/protocol";
 import { DEFAULT_BLOCKLIST } from "../apps/extension/src/default-blocklist.ts";
-import { pollUntil } from "./firefox.ts";
+import { PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -92,9 +92,18 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       assert.equal(text, blockedHop(tab.id));
       assert.equal(fixtures.hits("/load-hop/reload"), 2);
       assert.equal(fixtures.hits("/load-hop/reload-target"), 0);
-      const shown = await listed(tab.id);
-      assert.equal(shown?.url, fixtures.url("/load-hop/reload"));
-      assert.equal(shown?.title, TITLES.loadHop);
+      // The refusal comes before Firefox stops the reload, and a loading tab lists no title.
+      const shown = await pollUntil(
+        async () => {
+          const listedTab = await listed(tab.id);
+          if (listedTab !== undefined && listedTab.title !== "") return listedTab;
+          throw new Error(`tab ${tab.id} is listed as ${JSON.stringify(listedTab)}`);
+        },
+        PAGE_TIMEOUT_MS,
+        `tab ${tab.id} to finish its refused reload`,
+      );
+      assert.equal(shown.url, fixtures.url("/load-hop/reload"));
+      assert.equal(shown.title, TITLES.loadHop);
       await close(tab);
     });
 
