@@ -280,8 +280,12 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   notes to reviewers, hold at most the 250, 15,000 and 3,000 characters AMO takes for them.
   With a previous tag, it prints the diffs of the manifest, the listing and
   `bin/amo-source-files.txt` between that tag and the working tree, and fails when the
-  manifest's permissions, content script matches or data declarations changed but the listing
-  did not.
+  manifest's permissions, content script matches, data declarations, `web_accessible_resources`,
+  `externally_connectable` or `content_security_policy` changed but none of the listing's
+  Summary, Description, Permissions and Data collection and handling sections (the text that
+  goes to AMO as fields, notes to reviewers and privacy policy) did. A change elsewhere in the
+  listing (its preface, Name, Compatibility or Screenshots) does not count. It also fails when
+  the tag's listing cannot be read or lacks one of those sections.
 - `protocol`: the extension still serves the server of the latest release (see
   [Protocol versions](#protocol-versions)). It reads `PROTOCOL_VERSION` and
   `OLDEST_SERVED_PROTOCOL` from `packages/protocol/src/index.ts` in the working tree and

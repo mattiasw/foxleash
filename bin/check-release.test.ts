@@ -408,7 +408,13 @@ function driftCommands(tag: string): Tree["commands"] {
     [diffSince(tag, LISTING)]: "",
     [diffSince(tag, AMO_SOURCES)]: "",
     [show(`refs/tags/${tag}`, MANIFEST)]: json(FIXTURE_MANIFEST),
+    [show(`refs/tags/${tag}`, LISTING)]: FIXTURE_LISTING,
   };
+}
+
+/** The drift FAIL for the manifest keys `keys`, with no change in the four AMO sections. */
+function driftFail(keys: string, tag = "v0.1.0"): string {
+  return `the manifest's ${keys} changed since ${tag}, but the Summary, Description, Permissions and Data collection and handling sections of docs/amo/listing.md did not: update the listing to match`;
 }
 
 /** The reply of the protocol check at `tag`, a release from before the window. */
@@ -2320,26 +2326,34 @@ describe("listing", () => {
       ...driftCommands("v0.1.0"),
       [show("refs/tags/v0.1.0", MANIFEST)]: json({ manifest_version: 3 }),
     });
-    assert.deepEqual(texts(listing(tree), "FAIL"), [
-      "the manifest's permissions, host_permissions, optional_permissions, optional_host_permissions, content_scripts matches, data_collection_permissions changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match",
-    ]);
+    const keys =
+      "permissions, host_permissions, optional_permissions, optional_host_permissions, content_scripts matches, data_collection_permissions";
+    assert.deepEqual(texts(listing(tree), "FAIL"), [driftFail(keys)]);
     tree.commands[diffSince("v0.1.0", LISTING)] = "+a line";
+    assert.deepEqual(texts(listing(tree), "FAIL"), [driftFail(keys)]);
+    tree.commands[show("refs/tags/v0.1.0", LISTING)] = FIXTURE_LISTING.replace(
+      "Lets an agent use Firefox.",
+      "Lets an agent use a browser.",
+    );
     assertClean(listing(tree));
   });
 
   test("a type change of a declaration counts as a change", () => {
-    const tree = firstReleaseTree();
+    const tree = withManifest(firstReleaseTree(), {
+      content_security_policy: { extension_pages: "script-src 'self'" },
+    });
     Object.assign(tree.commands, {
       [TAGS]: "v0.1.0",
       ...driftCommands("v0.1.0"),
       [show("refs/tags/v0.1.0", MANIFEST)]: json({
         ...FIXTURE_MANIFEST,
         content_scripts: "none",
+        content_security_policy: "script-src 'self'",
         browser_specific_settings: { gecko: { data_collection_permissions: [] } },
       }),
     });
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      "the manifest's content_scripts matches, data_collection_permissions changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match",
+      driftFail("content_scripts matches, data_collection_permissions, content_security_policy"),
     ]);
   });
 
@@ -2362,17 +2376,80 @@ describe("listing", () => {
     ]);
   });
 
-  test("a failing git diff is its own FAIL and skips only the comparison that needs it", () => {
+  test("a failing git diff is its own FAIL, and the drift comparison still runs", () => {
     const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
     Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
     tree.commands[diffSince("v0.1.0", LISTING)] = new CommandError("git diff", 128, "fatal: no");
     const findings = listing(tree);
     assert.deepEqual(texts(findings, "FAIL"), [
       "docs/amo/listing.md since v0.1.0: `git diff` failed (status 128): fatal: no",
+      driftFail("optional_permissions"),
     ]);
     assert.deepEqual(texts(findings, "INFO"), [
       "manifest since v0.1.0: no change",
       "AMO source files since v0.1.0: no change",
+    ]);
+  });
+
+  test("an unreadable tagged listing is its own FAIL and skips the comparison", () => {
+    const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", LISTING)] = new CommandError(
+      "git show",
+      128,
+      "fatal: no",
+    );
+    const findings = listing(tree);
+    assert.deepEqual(texts(findings, "FAIL"), [
+      "docs/amo/listing.md at v0.1.0: `git show` failed (status 128): fatal: no",
+    ]);
+    assert.deepEqual(texts(findings, "INFO"), [
+      "manifest since v0.1.0: no change",
+      "listing since v0.1.0: no change",
+      "AMO source files since v0.1.0: no change",
+    ]);
+  });
+
+  for (const heading of ["## Data collection and handling", "## Summary"]) {
+    test(`a tagged listing without ${heading} is its own FAIL and skips the comparison`, () => {
+      const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+      Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+      tree.commands[show("refs/tags/v0.1.0", LISTING)] = FIXTURE_LISTING.replace(
+        `${heading}\n`,
+        `#${heading}\n`,
+      );
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        `docs/amo/listing.md at v0.1.0 has no "${heading}" section`,
+      ]);
+    });
+  }
+
+  test("a tagged listing missing a section, and a failing manifest read, give both FAILs", () => {
+    const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", MANIFEST)] = new CommandError("git show", 128, "x");
+    tree.commands[show("refs/tags/v0.1.0", LISTING)] = FIXTURE_LISTING.replace(
+      "## Permissions\n",
+      "### Permissions\n",
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "apps/extension/manifest.json at v0.1.0: `git show` failed (status 128): x",
+      'docs/amo/listing.md at v0.1.0 has no "## Permissions" section',
+    ]);
+  });
+
+  test("a section missing at the tag and in the working tree still skips the comparison", () => {
+    const withoutData = FIXTURE_LISTING.replace(
+      "## Data collection and handling\n",
+      "### Data collection and handling\n",
+    );
+    const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+    tree.files[LISTING] = withoutData;
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", LISTING)] = withoutData;
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing.md has no "## Data collection and handling" section',
+      'docs/amo/listing.md at v0.1.0 has no "## Data collection and handling" section',
     ]);
   });
 
@@ -4950,10 +5027,6 @@ describe("real git", () => {
     return checkListing({ ...realEnv(dir), listTools: () => [...FIXTURE_TOOLS] });
   }
 
-  function driftFail(keys: string): string {
-    return `the manifest's ${keys} changed since v0.1.0, but docs/amo/listing.md did not: update the listing to match`;
-  }
-
   const withoutStorage = {
     [MANIFEST]: json({ ...FIXTURE_MANIFEST, permissions: ["tabs"] }),
   };
@@ -5037,6 +5110,15 @@ describe("real git", () => {
         },
       },
     ],
+    [
+      "web_accessible_resources",
+      { web_accessible_resources: [{ resources: ["page.html"], matches: ["<all_urls>"] }] },
+    ],
+    ["externally_connectable", { externally_connectable: { ids: ["*"] } }],
+    [
+      "content_security_policy",
+      { content_security_policy: { extension_pages: "script-src 'self'" } },
+    ],
   ];
   for (const [name, change] of driftCases) {
     test(`drift: a change of ${name} counts`, () => {
@@ -5047,7 +5129,12 @@ describe("real git", () => {
       assert.ok(texts(findings, "INFO").some((line) => /^\+ /.test(line)));
       assert.ok(texts(findings, "INFO").includes("listing since v0.1.0: no change"));
       assert.ok(texts(findings, "INFO").includes("AMO source files since v0.1.0: no change"));
-      commit(dir, "Explain", { [LISTING]: `${FIXTURE_LISTING}\nThe change is explained.\n` });
+      commit(dir, "Explain", {
+        [LISTING]: FIXTURE_LISTING.replace(
+          "## Permissions\n",
+          "The change is explained.\n\n## Permissions\n",
+        ),
+      });
       const explained = listingAt(dir);
       assertClean(explained);
       assert.ok(texts(explained, "INFO").includes("+The change is explained."));
@@ -5062,6 +5149,9 @@ describe("real git", () => {
         optional_permissions: [],
         optional_host_permissions: [],
         content_scripts: [],
+        web_accessible_resources: [],
+        externally_connectable: {},
+        content_security_policy: {},
         browser_specific_settings: {
           gecko: {
             data_collection_permissions: { required: ["websiteContent"], optional: [] },
@@ -5078,6 +5168,44 @@ describe("real git", () => {
     });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [driftFail("content_scripts matches")]);
   });
+
+  const hostChange = {
+    [MANIFEST]: json({ ...FIXTURE_MANIFEST, host_permissions: ["<all_urls>", "tabs"] }),
+  };
+  const outsideTheFour: [string, string][] = [
+    [
+      "the preface",
+      FIXTURE_LISTING.replace("# AMO listing\n", "# AMO listing\n\n> A note for editors.\n"),
+    ],
+    ["Compatibility", `${FIXTURE_LISTING}\nAnother line.\n`],
+    [
+      "another section",
+      FIXTURE_LISTING.replace("## Summary\n", "## Name\n\nFoxleash\n\n## Summary\n"),
+    ],
+  ];
+  for (const [where, text] of outsideTheFour) {
+    test(`drift: a listing change only in ${where} does not count`, () => {
+      const dir = listingRepo();
+      commit(dir, "Change", { ...hostChange, [LISTING]: text });
+      assert.notEqual(text, FIXTURE_LISTING);
+      const findings = listingAt(dir);
+      assert.deepEqual(texts(findings, "FAIL"), [driftFail("host_permissions")]);
+      assert.ok(texts(findings, "INFO").includes("listing since v0.1.0:"));
+    });
+  }
+
+  for (const heading of ["Summary", "Description", "Permissions", "Data collection and handling"]) {
+    test(`drift: a change in the ${heading} section counts as a listing change`, () => {
+      const dir = listingRepo();
+      const text = FIXTURE_LISTING.replace(
+        `## ${heading}\n\n`,
+        `## ${heading}\n\nA sentence about it.\n\n`,
+      );
+      assert.notEqual(text, FIXTURE_LISTING);
+      commit(dir, "Change", { ...hostChange, [LISTING]: text });
+      assertClean(listingAt(dir));
+    });
+  }
 
   test("a committed symlink is not evidence", () => {
     const dir = listingRepo();

@@ -130,17 +130,19 @@ misleading". So any change to:
 
 - permissions or host permissions,
 - `data_collection_permissions`,
+- `web_accessible_resources`, `externally_connectable` or `content_security_policy`,
 - what data leaves the browser, or where it goes,
 - what the extension can do on the user's behalf,
 
 updates `apps/extension/manifest.json` and `docs/amo/listing.md` in the same commit. The
-release check refuses a release where the manifest's permissions or data declarations
-changed but the listing did not. A new, renamed or removed tool, or a new safeguard, also
-updates `docs/amo/listing-claims.json`, which the release check compares with the listing
-and with the tools the server registers. CI runs these checks as
-`npm run check:release -- listing`. When a change moves or rewrites code that a safeguard's
-evidence names, point the evidence at the new code in the same commit; a safeguard that no
-longer holds is a listing change.
+release check refuses a release where the manifest's permissions, data declarations,
+web-accessible resources, external connections or content security policy changed but the
+listing's Summary, Description, Permissions and Data collection and handling sections did
+not. A new, renamed or removed tool, or a new safeguard, also updates
+`docs/amo/listing-claims.json`, which the release check compares with the listing and with the
+tools the server registers. CI runs these checks as `npm run check:release -- listing`. When a
+change moves or rewrites code that a safeguard's evidence names, point the evidence at the new
+code in the same commit; a safeguard that no longer holds is a listing change.
 
 Firefox does not show users host permissions that an update adds, so adding one is a
 listing change and a decision, not a routine edit.

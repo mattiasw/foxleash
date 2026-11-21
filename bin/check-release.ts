@@ -148,6 +148,7 @@ const SECTION_CAPS = [
   { heading: PERMISSIONS_HEADING, max: 3000, field: "a version's notes to reviewers" },
 ];
 const DATA_HEADING = "## Data collection and handling";
+const AMO_HEADINGS = [...SECTION_CAPS.map((cap) => cap.heading), DATA_HEADING];
 const PERMISSION_KEYS = [
   "permissions",
   "host_permissions",
@@ -406,7 +407,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
     checkPermissionsExplained(listing, manifest, findings);
   }
   if (listing !== undefined) checkSectionLengths(listing, findings);
-  checkListingDrift(env, tag, manifest, findings);
+  checkListingDrift(env, tag, manifest, listing, findings);
 }
 
 function readClaims(env: Env, findings: Finding[]): Claims | undefined {
@@ -760,12 +761,7 @@ function checkSectionLengths(listing: string, findings: Finding[]): void {
     const missing = cap.heading === PERMISSIONS_HEADING ? [] : findings;
     const section = sectionLines(all, cap.heading, missing);
     if (section === undefined) continue;
-    const length = [
-      ...section
-        .map((line) => line.text)
-        .join("\n")
-        .trim(),
-    ].length;
+    const length = [...sectionText(section)].length;
     if (length > cap.max) {
       findings.push(
         fail(
@@ -776,10 +772,18 @@ function checkSectionLengths(listing: string, findings: Finding[]): void {
   }
 }
 
+function sectionText(section: Entry[]): string {
+  return section
+    .map((line) => line.text)
+    .join("\n")
+    .trim();
+}
+
 function checkListingDrift(
   env: Env,
   tag: string | null | undefined,
   manifest: unknown,
+  listing: string | undefined,
   findings: Finding[],
 ): void {
   if (tag === undefined) return;
@@ -788,32 +792,47 @@ function checkListingDrift(
     return;
   }
   printDiff(env, tag, MANIFEST, `manifest since ${tag}:`, findings);
-  const listingDiff = printDiff(env, tag, LISTING, `listing since ${tag}:`, findings);
+  printDiff(env, tag, LISTING, `listing since ${tag}:`, findings);
   printDiff(env, tag, AMO_SOURCE_FILES, `AMO source files since ${tag}:`, findings);
   const tagged = attempt(findings, `${MANIFEST} at ${tag}`, () =>
     parseJson(env.sh("git", ["show", `refs/tags/${tag}:${MANIFEST}`])),
   );
-  if (tagged === undefined || manifest === undefined || listingDiff !== "") return;
+  const taggedListing = attempt(findings, `${LISTING} at ${tag}`, () =>
+    env.sh("git", ["show", `refs/tags/${tag}:${LISTING}`]),
+  );
+  if (taggedListing === undefined) return;
+  const taggedSections = amoSections(taggedListing);
+  for (const [index, heading] of AMO_HEADINGS.entries()) {
+    if (taggedSections[index] === undefined) {
+      findings.push(fail(`${LISTING} at ${tag} has no ${quote(heading)} section`));
+    }
+  }
+  if (taggedSections.includes(undefined)) return;
+  if (tagged === undefined || manifest === undefined || listing === undefined) return;
+  if (!isDeepStrictEqual(taggedSections, amoSections(listing))) return;
   const before = declarations(tagged);
   const now = declarations(manifest);
   const changed = Object.keys(before).filter((name) => !isDeepStrictEqual(before[name], now[name]));
   if (changed.length > 0) {
     findings.push(
       fail(
-        `the manifest's ${changed.join(", ")} changed since ${tag}, but ${LISTING} did not: update the listing to match`,
+        `the manifest's ${changed.join(", ")} changed since ${tag}, but the Summary, Description, Permissions and Data collection and handling sections of ${LISTING} did not: update the listing to match`,
       ),
     );
   }
 }
 
-/** Prints the diff of `file` from `tag` to the working tree, and returns it. */
-function printDiff(
-  env: Env,
-  tag: string,
-  file: string,
-  header: string,
-  findings: Finding[],
-): string | undefined {
+/** The text of each AMO section, in AMO_HEADINGS order; undefined for a missing one. */
+function amoSections(listing: string): (string | undefined)[] {
+  const all = listing.split(/\r?\n/);
+  return AMO_HEADINGS.map((heading) => {
+    const section = sectionLines(all, heading, []);
+    return section === undefined ? undefined : sectionText(section);
+  });
+}
+
+/** Prints the diff of `file` from `tag` to the working tree. */
+function printDiff(env: Env, tag: string, file: string, header: string, findings: Finding[]): void {
   const diff = attempt(findings, `${file} since ${tag}`, () =>
     env.sh("git", [
       "diff",
@@ -831,7 +850,6 @@ function printDiff(
     findings.push(info(header));
     for (const line of lines(diff)) findings.push(info(line));
   }
-  return diff;
 }
 
 /** The manifest values the listing explains, in FAIL order, with an absent value as empty. */
@@ -846,6 +864,9 @@ function declarations(manifest: unknown): Record<string, unknown> {
   values.data_collection_permissions = isRecord(data)
     ? { ...data, required: field(data, "required") ?? [], optional: field(data, "optional") ?? [] }
     : data;
+  values.web_accessible_resources = field(manifest, "web_accessible_resources") ?? [];
+  values.externally_connectable = field(manifest, "externally_connectable") ?? {};
+  values.content_security_policy = field(manifest, "content_security_policy") ?? {};
   return values;
 }
 

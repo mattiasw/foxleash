@@ -3,8 +3,9 @@
 > This file holds the text Foxleash gives Mozilla's add-on site (AMO) and what Mozilla's
 > reviewers compare the extension with. Mozilla disables add-ons whose listing, manifest and
 > behaviour disagree, so update this file in the same commit as any change to
-> `permissions`, `host_permissions`, `data_collection_permissions`, the data that leaves
-> the browser or where it goes, or what the extension can do on the user's behalf.
+> `permissions`, `host_permissions`, `data_collection_permissions`, `web_accessible_resources`,
+> `externally_connectable`, `content_security_policy`, the data that leaves the browser or
+> where it goes, or what the extension can do on the user's behalf.
 >
 > It describes the feature set the first signed version declares. Permissions are fixed from
 > the first release, because Firefox does not show users host permissions that an update
