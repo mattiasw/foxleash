@@ -115,7 +115,12 @@
           "file": "apps/extension/src/wait-for-load.ts",
           "contains": "const stopWatchingHops = hops?.watch(tabId, fail);"
         },
-        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session)" }
+        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session)" },
+        {
+          "file": "apps/extension/src/load-hops.ts",
+          "contains": "return first ? judgeHop(details.url) : undefined;"
+        },
+        { "file": "apps/extension/src/handlers.ts", "contains": "hops: hopsOf(session, url)" }
       ]
     },
     {

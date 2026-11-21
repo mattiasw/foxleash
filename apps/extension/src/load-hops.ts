@@ -19,8 +19,15 @@ export interface LoadHops {
   /**
    * Starts judging the tab's top-level loads; `refuse` hears each cancel until the returned
    * function is called. A newer watch of the tab takes over adopting new loads from this one.
+   * With `gated`, the address the agent's reload was checked on, a new request that leaves its
+   * site while the wait runs is judged as a hop is.
    */
-  watch(session: string, tabId: number, refuse: (error: ToolError) => void): () => void;
+  watch(
+    session: string,
+    tabId: number,
+    refuse: (error: ToolError) => void,
+    gated?: string,
+  ): () => void;
 }
 
 /**
@@ -59,7 +66,12 @@ export function createLoadHops<Handle>({
   const tabs = new Map<number, WatchedTab<Handle>>();
   return { watch };
 
-  function watch(session: string, tabId: number, refuse: (error: ToolError) => void): () => void {
+  function watch(
+    session: string,
+    tabId: number,
+    refuse: (error: ToolError) => void,
+    gated?: string,
+  ): () => void {
     // The top-level requests of the tab this watch judges the hops of.
     const seen = new Set<string>();
     // Those Firefox has not reported ended.
@@ -67,6 +79,7 @@ export function createLoadHops<Handle>({
     let waiting = true;
     // False once the tab's window ended after the wait or a newer watch of the tab took over.
     let adopting = true;
+    const gatedSite = gated === undefined ? undefined : siteOf(gated);
     const tab = tabOf(tabId);
     const self: TabWatch = { endAdoption, windowEnded };
     tab.watches.add(self);
@@ -76,15 +89,19 @@ export function createLoadHops<Handle>({
     browser.webRequest.onErrorOccurred.addListener(onEnded, filter);
     return stop;
 
-    // A new request's first address was gated, or the page started the load: it goes on at once.
+    // A new request's first address was gated, or the page started the load: it goes on at once,
+    // unless it leaves the site a reload was gated on while the wait runs.
     function onRequest(details: RequestDetails): Promise<Cancel | undefined> | undefined {
       // Firefox adds a listener asynchronously: the tab's older watches adopt until this one hears.
       endOlder();
       if (seen.has(details.requestId)) return judgeHop(details.url);
-      if (!adopting) return undefined;
+      // After a reload's redirect hop was cancelled, Firefox sends the tab's next reload straight to
+      // the hop's address (ADR 0101).
+      const first = waiting && gated !== undefined && siteOf(details.url) !== gatedSite;
+      if (!adopting && !first) return undefined;
       seen.add(details.requestId);
       open.add(details.requestId);
-      return undefined;
+      return first ? judgeHop(details.url) : undefined;
     }
 
     function endOlder(): void {

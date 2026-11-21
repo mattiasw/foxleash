@@ -92,17 +92,32 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
       assert.equal(text, blockedHop(tab.id));
       assert.equal(fixtures.hits("/load-hop/reload"), 2);
       assert.equal(fixtures.hits("/load-hop/reload-target"), 0);
-      // The refusal comes before Firefox stops the reload, and a loading tab lists no title.
-      const shown = await pollUntil(
-        async () => {
-          const listedTab = await listed(tab.id);
-          if (listedTab !== undefined && listedTab.title !== "") return listedTab;
-          throw new Error(`tab ${tab.id} is listed as ${JSON.stringify(listedTab)}`);
-        },
-        PAGE_TIMEOUT_MS,
-        `tab ${tab.id} to finish its refused reload`,
-      );
+      const shown = await settled(tab.id);
       assert.equal(shown.url, fixtures.url("/load-hop/reload"));
+      assert.equal(shown.title, TITLES.loadHop);
+      await close(tab);
+    });
+
+    test("every later reload of that tab fails at once too and sends nothing to that site", async (t) => {
+      const tab = await open("/load-hop/reload-again");
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "reload" }),
+        blockedHop(tab.id),
+      );
+      await settled(tab.id);
+      // Firefox sends the next reload straight to the address of the cancelled redirect.
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "reload" }),
+        blockedHop(tab.id),
+      );
+      assert.equal(
+        await refusedInTime(t, "navigate", { tabId: tab.id, action: "reload" }),
+        blockedHop(tab.id),
+      );
+      assert.equal(fixtures.hits("/load-hop/reload-again"), 2);
+      assert.equal(fixtures.hits("/load-hop/reload-again-target"), 0);
+      const shown = await settled(tab.id);
+      assert.equal(shown.url, fixtures.url("/load-hop/reload-again"));
       assert.equal(shown.title, TITLES.loadHop);
       await close(tab);
     });
@@ -229,6 +244,19 @@ describe("a redirect hop of the agent's load, in real Firefox", () => {
 
   async function tabs(): Promise<TabInfo[]> {
     return tabsOf(await harness.ok(session, "tabs_list"));
+  }
+
+  /** The refusal comes before Firefox stops the reload, and a loading tab lists no title. */
+  async function settled(tabId: number): Promise<TabInfo> {
+    return pollUntil(
+      async () => {
+        const listedTab = await listed(tabId);
+        if (listedTab !== undefined && listedTab.title !== "") return listedTab;
+        throw new Error(`tab ${tabId} is listed as ${JSON.stringify(listedTab)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `tab ${tabId} to finish its refused reload`,
+    );
   }
 
   async function listed(tabId: number): Promise<TabInfo | undefined> {

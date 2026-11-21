@@ -1026,6 +1026,7 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       redirectTo(response, `http://localhost:${request.socket.localPort}${path}-target`);
     } else if (
       path === "/load-hop/reload" ||
+      path === "/load-hop/reload-again" ||
       path === "/load-hop/held" ||
       path === "/load-hop/busy-reload" ||
       path === "/load-hop/busy-back"

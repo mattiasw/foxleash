@@ -141,27 +141,36 @@ A load the agent started is one of `navigate` to an address, a reload, back or f
 `tab_open`, also after you approved its site. When a redirect step of such a load leads to a
 blocked site, even one you approved, Foxleash cancels it before Firefox sends it, so that site
 gets no request and none of your cookies, and the call fails with `site_blocked`, naming only the
-site. A redirect step to an `http://` or `https://` address that Foxleash cannot check is
-cancelled the same way, and the call fails with `redirect_unchecked`: a step whose host Foxleash
-cannot read as a site, and every such step while Foxleash cannot read its settings. This also
-covers a redirect that a site's service worker builds and Firefox's own upgrade of an address to
-`https://`. While the call waits, the redirect steps of a navigation the page starts by itself in
-that tab are checked the same way. Its limits:
+site. A reload whose first request Firefox sends to a blocked site, as it can after Foxleash
+refused a redirect step of an earlier reload in that tab, is cancelled the same way, and the call
+fails with `site_blocked`. A redirect step to an `http://` or `https://` address that Foxleash
+cannot check is cancelled the same way, and the call fails with `redirect_unchecked`: a step whose
+host Foxleash cannot read as a site, and every such step while Foxleash cannot read its settings.
+This also covers a redirect that a site's service worker builds and Firefox's own upgrade of an
+address to `https://`. While the call waits, the redirect steps of a navigation the page starts by
+itself in that tab are checked the same way. Its limits:
 
 - A redirect step that comes after the call returned is still cancelled when it belongs to a load
-  that was under way then, however late it comes. For 5 minutes after the call returns, every load
-  in that tab is checked the same way, whoever starts it, such as a reload the page held back past
-  the call. A load still under way at the end of those 5 minutes is checked until it ends, and a
-  load started later is not, for example a reload that waits behind a leave-page question you
-  answer later.
+  that was under way then, however late it comes. For 5 minutes after the call returns, the
+  redirect steps of every load in that tab are checked the same way, whoever starts it, such as a
+  reload the page held back past the call. A load still under way at the end of those 5 minutes is
+  checked until it ends, and a load started later is not, for example a reload that waits behind a
+  leave-page question you answer later.
+- After Foxleash refused such a redirect step in a tab, Firefox can send a later load of that page
+  straight to the blocked site. Foxleash cancels that for the agent's own reload while the call
+  waits, but a reload the page holds back past the call, the page's own reload, and a step back or
+  forward onto that page can still reach the blocked site.
 - When you stop the session while the call still waits, every redirect step to an `http://` or
-  `https://` address of a load in that tab is cancelled from then until the call returns, and the
-  call fails with `session_stopped`. After the call returns, these loads are still checked,
-  against the blocklist only, and nothing else about them is stopped.
+  `https://` address of a load in that tab is cancelled from then until the call returns, and so
+  is, while the agent's reload waits, every load's first request to such an address on another
+  site than the page's. The call fails with `session_stopped`. After the call returns, these loads
+  are still checked, against the blocklist only, and nothing else about them is stopped.
 - A call can return before its step's redirect is cancelled, with the page the tab kept, when the
   page's own navigations ended the wait first.
 - A load you start yourself in that tab in those 5 minutes also stops at a redirect step to a
-  blocked site, with no message, and the tab keeps its page. Open the site in a new tab instead.
+  blocked site, with no message, and the tab keeps its page. While the agent's reload of that tab
+  waits, so does a load whose first address is a blocked site other than the page's. Open the
+  site in a new tab instead.
 - Without Foxleash's access to all websites in Firefox's add-on settings, Firefox shows Foxleash
   no request to a site outside the ones it may reach, so no such redirect step is cancelled.
 - Firefox hides requests to a few sites, such as addons.mozilla.org, from add-ons, so a redirect

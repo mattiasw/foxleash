@@ -3986,6 +3986,35 @@ describe("a load redirected to a site on the blocklist", { timeout: 10000 }, () 
     await assertHopCancelled(fake, timers, tab.id, reloaded);
   });
 
+  it("fails navigate reload at once when Firefox sends its first request to a blocked site", async () => {
+    const { fake, timers, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const loads = reloadNothing(fake);
+    const reloaded = call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    reloaded.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    await assertFirstRequestCancelled(fake, timers, tab.id, reloaded);
+  });
+
+  it("lets navigate reload go on when its first request is the page itself", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const reload = fake.browser.tabs.reload;
+    const answers: unknown[] = [];
+    fake.browser.tabs.reload = async (tabId, properties) => {
+      const first = { ...pageRequest(tabId, "https://a.example/"), requestId: "reload" };
+      answers.push(...fake.emitWebRequest("onBeforeRequest", first));
+      return reload(tabId, properties);
+    };
+    const result = await call("s1", "navigate", { tabId: tab.id, action: "reload" });
+    assert.ok(answers.length > 0);
+    assert.ok(answers.every((answer) => answer === undefined));
+    assert.ok("tab" in result);
+    assert.deepEqual(result.tab, tab);
+  });
+
   it("fails navigate reload of a tab Firefox unloaded at once", async () => {
     const { fake, timers, call, open, grant } = setup();
     await grant("https://a.example");
@@ -4036,6 +4065,18 @@ describe("a load redirected to a site on the blocklist", { timeout: 10000 }, () 
     stepped.catch(() => {});
     assert.equal(await begun(loads), tab.id);
     await assertHopCancelled(context.fake, context.timers, tab.id, stepped);
+  });
+
+  it("fails the reload of an address with a fragment a step back did not load again at once when its first request goes to a blocked site", async () => {
+    const context = setup();
+    const tab = await historyTab(context, "https://a.example/a#top");
+    const steps = recordSteps(context.fake, (tabId) => [pageRequest(tabId, "https://a.example/a")]);
+    const loads = reloadNothing(context.fake);
+    const stepped = context.call("s1", "navigate", { tabId: tab.id, action: "back" });
+    stepped.catch(() => {});
+    assert.equal(await begun(loads), tab.id);
+    assert.deepEqual(steps, [["back", tab.id]]);
+    await assertFirstRequestCancelled(context.fake, context.timers, tab.id, stepped);
   });
 
   it("fails the load that follows the user's approval at once", async () => {
@@ -4232,6 +4273,16 @@ function loadNothing(fake: FakeBrowser): number[] {
   return loads;
 }
 
+/** Makes each reload of a tab begin and commit nothing; returns the ids of the tabs reloaded. */
+function reloadNothing(fake: FakeBrowser): number[] {
+  const loads: number[] = [];
+  fake.browser.tabs.reload = async (tabId) => {
+    loads.push(tabId);
+    fake.emitStatus(tabId, "loading");
+  };
+  return loads;
+}
+
 /** The tab whose load began, once one did. */
 async function begun(loads: number[]): Promise<number> {
   for (let turn = 0; turn < 50 && loads.length === 0; turn += 1) await flush();
@@ -4301,6 +4352,31 @@ async function assertHopCancelled(
   // A watch of an earlier load of the tab that saw no request, as no load of the fake sends one,
   // judges it too.
   const judged = await Promise.all(answers.filter(Boolean));
+  assert.ok(judged.length > 0);
+  assert.ok(judged.every((answer) => isDeepStrictEqual(answer, { cancel: true })));
+  await assert.rejects(call, {
+    code: "site_blocked",
+    message: `Tab ${tabId}'s load was redirected to https://www.paypal.com, which is on Foxleash's blocklist; Foxleash stopped it before anything was requested there.`,
+  });
+  assert.equal(timers.now(), before);
+}
+
+/**
+ * The tab's top-level request goes to a blocklisted site off the page's site, as Firefox sends a
+ * reload after a cancelled hop: it is cancelled, and `call` fails as for a hop, with no time passed.
+ */
+async function assertFirstRequestCancelled(
+  fake: FakeBrowser,
+  timers: { now(): number },
+  tabId: number,
+  call: Promise<unknown>,
+): Promise<void> {
+  const before = timers.now();
+  const first = {
+    ...pageRequest(tabId, "https://www.paypal.com/signin?return=1"),
+    requestId: "load",
+  };
+  const judged = await Promise.all(fake.emitWebRequest("onBeforeRequest", first).filter(Boolean));
   assert.ok(judged.length > 0);
   assert.ok(judged.every((answer) => isDeepStrictEqual(answer, { cancel: true })));
   await assert.rejects(call, {

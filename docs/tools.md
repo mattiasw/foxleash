@@ -140,15 +140,21 @@ address.
   step before Firefox sends it, and `tab_open` or `navigate` fails at once with `site_blocked`,
   naming only that site. A redirect step Foxleash cannot check is cancelled the same way, and the
   call fails with `redirect_unchecked`. That holds for a reload and for going back or forward too,
-  and for a navigation the page starts by itself while the call waits. `tab_open` closes the tab
-  it made, unless it showed Foxleash's question about the site in that tab, which then stays on
-  the answered question; a tab `navigate` used keeps its page. The redirect steps of every load in
-  that tab in the 5 minutes after the call returns are cancelled the same way, whoever starts the
-  load, with no error, since the call has returned. So a reload or step back that the page holds
-  back past the call can return with the page the tab kept, and a load that a click or another act
-  starts there is cancelled with nothing about it in the act's result. A redirect to a site that
-  is only not approved still loads, and the tab comes back with only that site's address. Without
-  Foxleash's access to all websites, no such redirect step is seen or cancelled.
+  and for a navigation the page starts by itself while the call waits. A reload whose first
+  request Firefox sends to a blocked site, as it can after Foxleash refused a redirect step of an
+  earlier reload in that tab, is cancelled too, and `navigate` fails with `site_blocked`.
+  `tab_open` closes the tab it made, unless it showed Foxleash's question about the site in that
+  tab, which then stays on the answered question; a tab `navigate` used keeps its page. The
+  redirect steps of every load in that tab in the 5 minutes after the call returns are cancelled
+  the same way, whoever starts the load, with no error, since the call has returned. So a reload
+  or step back that the page holds back past the call can return with the page the tab kept, and a
+  load that a click or another act starts there is cancelled with nothing about it in the act's
+  result. After such a refused redirect step, Firefox can send a later load of that page straight
+  to the blocked site: Foxleash cancels that for the agent's own reload while the call waits, but a
+  reload the page holds back past the call, the page's own reload, and a step back or forward onto
+  that page can reach it. A redirect to a site that is only not approved still loads, and the tab
+  comes back with only that site's address. Without Foxleash's access to all websites, no such
+  redirect step is seen or cancelled.
   [Security](security.md#the-blocklist) has the limits.
 - When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
   to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that

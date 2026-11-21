@@ -454,11 +454,17 @@ export function createHandlers<Handle>({
     return selectNewTab(session, tab.id, generation);
   }
 
-  /** What a load's wait needs to have the session's redirect hops judged (ADR 0101). */
-  function hopsOf(session: string): {
+  /**
+   * What a load's wait needs to have the session's redirect hops judged (ADR 0101); `gated` is
+   * the address a reload was checked on, off whose site a first request is judged as a hop is.
+   */
+  function hopsOf(
+    session: string,
+    gated?: string,
+  ): {
     watch(tabId: number, refuse: (error: ToolError) => void): () => void;
   } {
-    return { watch: (tabId, refuse) => hops.watch(session, tabId, refuse) };
+    return { watch: (tabId, refuse) => hops.watch(session, tabId, refuse, gated) };
   }
 
   /**
@@ -847,7 +853,7 @@ export function createHandlers<Handle>({
         fragment
           ? () => browser.tabs.reload(tabId, { bypassCache: true })
           : () => browser.tabs.update(tabId, { url, loadReplace: true }),
-        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true, files, hops: hopsOf(session) },
+        { timeoutMs: HISTORY_RELOAD_TIMEOUT_MS, commit: true, files, hops: hopsOf(session, url) },
       );
     }
     return loaded;
@@ -1888,7 +1894,7 @@ export function createHandlers<Handle>({
       tabId,
       undefined,
       () => browser.tabs.reload(tabId, { bypassCache: true }),
-      { files, hops: hopsOf(session) },
+      { files, hops: hopsOf(session, url) },
     );
     // A reload cut off by its timeout gets no second wait.
     if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;

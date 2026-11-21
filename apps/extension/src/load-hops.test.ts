@@ -17,6 +17,8 @@ const TAB = 7;
 const SITE = "https://a.example";
 const UNAPPROVED = "https://c.example";
 const BLOCKED = "https://www.paypal.com";
+// The address a reload was checked on.
+const GATED = `${SITE}/page?x=1`;
 
 describe("load hops", { timeout: 10000 }, () => {
   it("lets a new request go on at once, unjudged", async () => {
@@ -499,9 +501,91 @@ describe("load hops", { timeout: 10000 }, () => {
     fake.emitWebRequest("onCompleted", ended("r1"));
     assert.equal(fake.activeWebRequestRegistrations().length, 3);
   });
+
+  it("cancels a reload's first request to a blocked site off the checked site while it waits, refusing first", async () => {
+    const { fake, refusals, order } = await setup({ gated: GATED });
+    const [answer] = fake.emitWebRequest(
+      "onBeforeRequest",
+      request("r1", `${BLOCKED}:8443/pay?card=1#top`),
+    );
+    assert.ok(answer instanceof Promise);
+    await answer.then((cancel) => {
+      assert.deepEqual(cancel, { cancel: true });
+      order.push("answered");
+    });
+    assert.deepEqual(order, ["refused", "answered"]);
+    assert.equal(refusals.length, 1);
+    assert.equal(refusals[0]?.code, "site_blocked");
+    assert.equal(
+      refusals[0]?.message,
+      `Tab ${TAB}'s load was redirected to ${BLOCKED}:8443, which is on Foxleash's blocklist; Foxleash stopped it before anything was requested there.`,
+    );
+  });
+
+  it("lets a reload's first request on the checked site go on at once without reading the view", async () => {
+    const { fake, refusals, viewReads } = await setup({ gated: GATED });
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r1", `${SITE}/other?y=2`));
+    assert.equal(answer, undefined);
+    const [dotted] = fake.emitWebRequest("onBeforeRequest", request("r2", "https://a.example./x"));
+    assert.equal(dotted, undefined);
+    assert.equal(viewReads(), 0);
+    assert.deepEqual(refusals, []);
+  });
+
+  it("lets a reload's first request to a site that is only unapproved go on, and judges its hops", async () => {
+    const { fake, refusals, viewReads } = await setup({ gated: GATED });
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r1", `${UNAPPROVED}/c`));
+    assert.ok(answer instanceof Promise);
+    assert.equal(await answer, undefined);
+    assert.equal(viewReads(), 1);
+    assert.equal(refusals.length, 0);
+    assert.deepEqual(await hop(fake, "r1", `${BLOCKED}/x`), { cancel: true });
+    assert.equal(refusals[0]?.code, "site_blocked");
+  });
+
+  it("judges no first request off the checked site once the wait ended", async () => {
+    const { fake, stop, refusals, reads } = await setup({ gated: GATED });
+    stop();
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r1", `${BLOCKED}/x`));
+    assert.equal(answer, undefined);
+    assert.equal(reads(), 0);
+    assert.deepEqual(refusals, []);
+  });
+
+  it("lets a reload's first request to an address that is not http or https go on without reading the view", async () => {
+    const { fake, refusals, viewReads } = await setup({ gated: GATED });
+    const [answer] = fake.emitWebRequest("onBeforeRequest", request("r1", "data:text/html,hi"));
+    assert.equal(await answer, undefined);
+    assert.equal(viewReads(), 0);
+    assert.deepEqual(refusals, []);
+  });
+
+  it("cancels a reload's first request to an http address with no site, without reading the view", async () => {
+    const { fake, refusals, viewReads } = await setup({ gated: GATED });
+    const [answer] = fake.emitWebRequest(
+      "onBeforeRequest",
+      request("r1", "http://bank.example../x"),
+    );
+    assert.deepEqual(await answer, { cancel: true });
+    assert.equal(viewReads(), 0);
+    assert.equal(refusals[0]?.code, "redirect_unchecked");
+  });
+
+  it("judges a reload's first request off the checked site also after a newer watch of the tab took over", async () => {
+    const { fake, hops, refusals } = await setup({ gated: GATED });
+    hops.watch("s1", TAB, () => {});
+    fake.emitWebRequest("onBeforeRequest", request("r0", `${SITE}/`));
+    const answers = fake.emitWebRequest("onBeforeRequest", request("r1", `${BLOCKED}/x`));
+    const judged = answers.filter((answer) => answer !== undefined);
+    assert.equal(judged.length, 1);
+    assert.ok(judged[0] instanceof Promise);
+    assert.deepEqual(await judged[0], { cancel: true });
+    assert.equal(refusals.length, 1);
+    assert.equal(refusals[0]?.code, "site_blocked");
+  });
 });
 
-async function setup() {
+async function setup({ gated }: { gated?: string } = {}) {
   const fake = createFakeBrowser();
   const timers = createFakeTimers();
   const groups = createSessionGroups(fake.browser);
@@ -532,10 +616,15 @@ async function setup() {
   });
   const refusals: ToolError[] = [];
   const order: string[] = [];
-  const stop = hops.watch("s1", TAB, (error) => {
-    refusals.push(error);
-    order.push("refused");
-  });
+  const stop = hops.watch(
+    "s1",
+    TAB,
+    (error) => {
+      refusals.push(error);
+      order.push("refused");
+    },
+    gated,
+  );
   return {
     fake,
     timers,
