@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
+import { setTimeout as sleep } from "node:timers/promises";
 import { ACT_QUIET_MS, ACT_RESPONSE_WAIT_MS, ACT_SETTLE_CAP_MS } from "@foxleash/protocol";
 import { type Firefox, isRecord, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
@@ -62,6 +63,9 @@ describe("acts wait for the page to settle in real Firefox", () => {
         await timed(() => harness.ok(session, "click", { tabId: warmUp.tabId, ref, view: false }))
       ).ms;
       await harness.ok(session, "tab_close", { tabId: warmUp.tabId });
+      // Firefox launches a spare content process soon after a tab takes one, and on two CPUs a
+      // launch slows an act it overlaps: let the warm-up's launches end before the next tab opens.
+      await sleep(4_000);
     },
     { timeout: 120_000 },
   );
