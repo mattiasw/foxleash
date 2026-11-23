@@ -25,3 +25,4 @@ export const EXTENSION_ID = "foxleash@mattiasw.com";
 export * from "./handshake.ts";
 export * from "./messages.ts";
 export * from "./methods.ts";
+export * from "./prompt-titles.ts";

@@ -10,8 +10,11 @@ Foxleash asks you in that tab whether to allow it: this session, always, or not 
 agent's call waits up to 30 seconds for your answer. When the question's window is not in front
 about 2 seconds after Foxleash shows it (for example, your desktop kept it behind another window),
 the call returns then, so the agent can tell you where to answer. The question stays open, and the
-agent's next call about it waits the full 30 seconds. After three refused or closed prompts, a
-session stops asking.
+agent's next call about it waits the full 30 seconds. A call that returns before you answered
+names the question's tab by its title, such as "Allow Foxleash on https://example.com?", and its
+window (the session's own window or yours), so the agent can tell you where it is. After you
+answer, the agent's next try loads the page in the question's tab instead of opening another tab.
+After three refused or closed prompts, a session stops asking.
 
 For a tab on a site you have not approved, the agent sees only the site's address (scheme, host
 and port), with no path, query or title. A local file shows only as `file:`.
@@ -61,7 +64,7 @@ The setting "Open each agent session in its own window" is off by default. With 
   allow the sites a task needs) brings that window to the front if your desktop allows it, so
   the question does not wait unseen behind your window. When your desktop keeps the window
   behind, a call waiting for your answer returns after about 2 seconds, so the agent can tell you
-  where the question is.
+  where the question is (which window, and the title of its tab).
 - The blank tab Firefox opens the window with closes once another tab in it is selected, and the
   window closes at once if the session's first tab cannot be opened.
 - When the session ends, Foxleash closes that window if it holds only blank tabs and is not your
@@ -684,7 +687,8 @@ recipe only when you click Save there; Discard drops it.
 
 - When you have a recipe with that name, the page shows your saved version and the changes to
   its steps.
-- The call returns at once with the page's tab id and does not tell the agent whether you saved.
+- The call returns at once naming the page by its tab title ("Save this recipe?" or "Update the
+  recipe <name>?") and tab id, and does not tell the agent whether you saved.
 - While the page is open, the session cannot open another recipe page or page asking for sites,
   or ask you about a site, and cannot close the page's tab or load another page in it.
 - After three recipe pages or pages asking for sites that you discarded, refused or closed,
@@ -713,8 +717,9 @@ never always.
   and your earlier answers still win.
 - The call waits up to 30 seconds for your answer, or returns after about 2 seconds when the page's
   window is not in front, for example when your desktop kept it behind another window; the page
-  stays open. It returns the sites now allowed, blocked and refused; when no site needs asking, it
-  returns at once without a page.
+  stays open, and the result names its window and quotes its title, "Allow Foxleash on these sites
+  for this session?". It returns the sites now allowed, blocked and refused; when no site needs
+  asking, it returns at once without a page.
 - The page is a recipe page, so the rules under `propose_recipe` apply to it: one recipe page or
   page asking for sites at a time, and none after three discarded, refused or closed without an
   answer.
@@ -737,7 +742,8 @@ always.
   site needs asking the call returns at once without a page.
 - The call waits up to 30 seconds for your answer, or returns after about 2 seconds when the page's
   window is not in front, for example when your desktop kept it behind another window; the page
-  stays open. It returns the sites now allowed, blocked and refused.
+  stays open, and the result names its window and quotes its title, "Allow Foxleash on these sites
+  for this session?". It returns the sites now allowed, blocked and refused.
 - Don't allow, or closing the page, fails the call and refuses nothing: each site still asks on
   its own when the agent opens it.
 - The same limits as for recipe pages apply: one such page or recipe page at a time, none beside

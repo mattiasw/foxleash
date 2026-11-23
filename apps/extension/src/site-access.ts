@@ -1,4 +1,10 @@
-import { MAX_TAB_TITLE, MAX_TAB_URL, type TabInfo } from "@foxleash/protocol";
+import {
+  MAX_TAB_TITLE,
+  MAX_TAB_URL,
+  PROMPT_PAGE_TITLE,
+  siteQuestionTitle,
+  type TabInfo,
+} from "@foxleash/protocol";
 import type { BrowserApi, MessageSender, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { ToolError } from "./handlers.ts";
 import { capText } from "./page-messages.ts";
@@ -70,18 +76,20 @@ export interface OpenPrompt {
   url: string;
   /** Whether a request is waiting for the answer. */
   waiting: boolean;
+  /** Where the prompt is, as `promptPlace` says it. */
+  place: string;
 }
 
 export interface SiteAccessDeps<Handle> {
   browser: Pick<BrowserApi, "storage" | "runtime" | "tabs" | "windows">;
-  groups: Pick<SessionGroups, "groupOf" | "showPromptWindow" | "windowInFront">;
+  groups: Pick<SessionGroups, "groupOf" | "showPromptWindow" | "windowInFront" | "isOwnWindow">;
   sessions: SessionMemory;
   timers: Timers<Handle>;
   /**
    * The session's open recipe page, which no site prompt may open beside; `question` says what it
-   * asks, such as "whether to save a recipe".
+   * asks, such as "whether to save a recipe", and `place` where it is, as `promptPlace` says it.
    */
-  otherPrompt?: (session: string) => { tabId: number; question: string } | undefined;
+  otherPrompt?: (session: string) => { tabId: number; question: string; place: string } | undefined;
 }
 
 export interface SiteAccess {
@@ -222,6 +230,8 @@ interface Prompt<Handle> {
   site: string;
   url: string;
   tabId: number;
+  /** The window Firefox last reported the tab in; undefined before that and once it left it. */
+  windowId: number | undefined;
   promptUrl: string;
   /** The tab has shown the prompt page, so leaving it closes the prompt. */
   committed: boolean;
@@ -277,6 +287,9 @@ export function createSiteAccess<Handle>({
   browser.tabs.onRemoved.addListener((tabId) => {
     answered.delete(tabId);
     for (const prompt of promptsIn(tabId)) drop(prompt, true);
+  });
+  browser.tabs.onDetached.addListener((tabId) => {
+    for (const prompt of promptsIn(tabId)) prompt.windowId = undefined;
   });
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (changeInfo.url !== undefined && changeInfo.url !== answered.get(tabId)?.promptUrl) {
@@ -404,7 +417,7 @@ export function createSiteAccess<Handle>({
     const prompt = prompts.get(session);
     if (prompt === undefined) return undefined;
     const { tabId, site, url } = prompt;
-    return { tabId, site, url, waiting: prompt.waiter !== undefined };
+    return { tabId, site, url, waiting: prompt.waiter !== undefined, place: placeOf(prompt) };
   }
 
   function askedUrl(session: string, tab: Tab): string | undefined {
@@ -626,15 +639,26 @@ export function createSiteAccess<Handle>({
   /** The user is never asked two things at once in one session. */
   function refuseBesideOtherPrompt(session: string): void {
     const page = otherPrompt?.(session);
-    if (page !== undefined) throw approvalPending(page.tabId, page.question);
+    if (page !== undefined) throw approvalPending(page.place, page.question);
   }
 
   /** The prompt, when a request for `site` may wait on it. */
   function joinable(prompt: Prompt<Handle>, site: string): Prompt<Handle> {
     if (prompt.site !== site || prompt.waiter !== undefined) {
-      throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
+      throw approvalPending(placeOf(prompt), `whether to allow ${prompt.site}`);
     }
     return prompt;
+  }
+
+  /** Where the prompt is now, with no await: results are built right before a load. */
+  function placeOf(prompt: Prompt<Handle>): string {
+    return promptPlace(
+      prompt.tabId,
+      prompt.seen ? siteQuestionTitle(prompt.site) : PROMPT_PAGE_TITLE,
+      prompt.windowId === undefined
+        ? undefined
+        : groups.isOwnWindow(prompt.session, prompt.windowId),
+    );
   }
 
   async function join(
@@ -666,6 +690,7 @@ export function createSiteAccess<Handle>({
       site,
       url,
       tabId,
+      windowId: undefined,
       promptUrl: promptUrl ?? newPromptUrl(),
       committed: false,
       port: undefined,
@@ -692,6 +717,7 @@ export function createSiteAccess<Handle>({
       }
       throw error;
     }
+    prompt.windowId = tab.windowId;
     // Stopped or ended while the page loaded: no window comes to the front for it.
     const wanted = () => !stoppedSessions.has(session) && generationOf(session) === generation;
     await groups.showPromptWindow(session, tab.windowId, wanted);
@@ -759,7 +785,7 @@ export function createSiteAccess<Handle>({
     waiter.reject(
       new ToolError(
         "approval_timeout",
-        `Foxleash is asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
+        `Foxleash is asking the user whether to allow ${prompt.site} ${placeOf(prompt)}, but that tab's Firefox window is not in front, so the user may not have seen the question. ${retryInPromptTab(prompt.tabId)}`,
       ),
     );
   }
@@ -773,7 +799,7 @@ export function createSiteAccess<Handle>({
       waiter.reject(
         new ToolError(
           "approval_timeout",
-          `Foxleash is still asking the user in tab ${prompt.tabId} whether to allow ${prompt.site}. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
+          `Foxleash is still asking the user whether to allow ${prompt.site} ${placeOf(prompt)}. ${retryInPromptTab(prompt.tabId)}`,
         ),
       );
     }
@@ -878,7 +904,7 @@ export function createSiteAccess<Handle>({
         stopWaiting(prompt)?.reject(
           new ToolError(
             "settings_write_failed",
-            `Firefox could not save the user's answer to always allow ${prompt.site}. The question is still open in tab ${prompt.tabId}.`,
+            `Firefox could not save the user's answer to always allow ${prompt.site}. The question is still open ${placeOf(prompt)}.`,
           ),
         );
         if (prompt.port !== undefined) post(prompt.port, { type: "error" });
@@ -983,13 +1009,36 @@ export function portShowsPage(
 
 /**
  * The refusal while a session's prompt waits for the user; `question` says what is asked, such
- * as "whether to allow https://example.com".
+ * as "whether to allow https://example.com", and `place` where, as `promptPlace` says it.
  */
-export function approvalPending(tabId: number, question: string): ToolError {
+export function approvalPending(place: string, question: string): ToolError {
   return new ToolError(
     "approval_pending",
-    `Foxleash is waiting for the user to answer in tab ${tabId} ${question}. Try again after the user has answered.`,
+    `Foxleash is waiting for the user to answer ${question} ${place}. Try again after the user has answered.`,
   );
+}
+
+/**
+ * Where a question is, in words the user can see in Firefox: its tab's title, its window when
+ * known (`own`: whether it is the window Foxleash made for the session), and the tab id for the
+ * agent's own calls.
+ */
+export function promptPlace(tabId: number, title: string, own: boolean | undefined): string {
+  const window =
+    own === undefined
+      ? ""
+      : own
+        ? " in the session's own Firefox window"
+        : " in the user's Firefox window";
+  return `in the tab titled ${JSON.stringify(title)}${window} (tab id ${tabId})`;
+}
+
+/**
+ * The instruction after a site question's wait ended unanswered: navigate on the question's tab
+ * loads the page there once the user allowed the site, where tab_open would open a second tab.
+ */
+function retryInPromptTab(tabId: number): string {
+  return `Tell the user where the question is and to answer it there. Then call navigate with tab id ${tabId} and the page's URL: once the user has allowed the site, it loads the page in that tab. Only if the user closed that tab, call tab_open with the page's URL instead.`;
 }
 
 export function siteBlocked(site: string): ToolError {

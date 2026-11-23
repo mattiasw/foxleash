@@ -2068,6 +2068,26 @@ describe("windowInFront", { timeout: 10000 }, () => {
   });
 });
 
+describe("isOwnWindow", { timeout: 10000 }, () => {
+  it("is true only for the window made for the session, until it closes", async () => {
+    const { fake, groups } = await windowSetup();
+    const user = fake.currentWindowId;
+    const page = await openPage(groups, fake, "s1", PAGE);
+    assert.notEqual(page.windowId, user);
+    assert.equal(groups.isOwnWindow("s1", page.windowId), true);
+    assert.equal(groups.isOwnWindow("s1", user), false);
+    assert.equal(groups.isOwnWindow("s2", page.windowId), false);
+    fake.closeWindow(page.windowId);
+    assert.equal(groups.isOwnWindow("s1", page.windowId), false);
+  });
+
+  it("is false with the setting off", async () => {
+    const { fake, groups } = await windowSetup({ on: false });
+    const page = await openPage(groups, fake, "s1", PAGE);
+    assert.equal(groups.isOwnWindow("s1", page.windowId), false);
+  });
+});
+
 describe("the fake's windows", { timeout: 10000 }, () => {
   it("reports a window focused in windows.get as in getAll, unless the desktop refuses focus", async () => {
     const fake = createFakeBrowser();

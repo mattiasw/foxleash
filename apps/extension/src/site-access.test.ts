@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import { MAX_TAB_TITLE, MAX_TAB_URL } from "@foxleash/protocol";
+import { MAX_TAB_TITLE, MAX_TAB_URL, PROMPT_PAGE_TITLE } from "@foxleash/protocol";
 import type { MessageSender, RuntimePort, Tab } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -20,6 +21,7 @@ import {
   createSiteAccess,
   FRONT_CHECK_MS,
   portShowsPage,
+  promptPlace,
   type SessionMemory,
   type SessionState,
   type SiteAccess,
@@ -441,8 +443,9 @@ const PROMPT_URL =
 const REFUSED = "The user did not allow Foxleash on https://a.example in this session.";
 const BUDGET =
   "Foxleash asks no more in this session after three refused or closed prompts. The user can forget those answers in Foxleash's settings, or start a new session, to be asked again.";
-const PENDING =
-  "Foxleash is waiting for the user to answer in tab 1 whether to allow https://a.example. Try again after the user has answered.";
+// Before the prompt page connected, its tab shows approve.html's static title.
+const PENDING = `Foxleash is waiting for the user to answer whether to allow https://a.example in the tab titled "Foxleash" in the user's Firefox window (tab id 1). Try again after the user has answered.`;
+const PENDING_SHOWN = `Foxleash is waiting for the user to answer whether to allow https://a.example ${askedIn(1)}. Try again after the user has answered.`;
 
 describe("check with prompts", () => {
   it("refuses a site the session refused, and any site once the budget is spent", async () => {
@@ -485,7 +488,7 @@ describe("check with prompts", () => {
     });
     await assert.rejects(access.check("s1", "https://b.example/"), {
       code: "approval_pending",
-      message: PENDING,
+      message: PENDING_SHOWN,
     });
     assert.deepEqual(await access.check("s2", "https://b.example/"), { decision: "ask" });
   });
@@ -493,14 +496,15 @@ describe("check with prompts", () => {
 
 describe("beside a recipe page", () => {
   const RECIPE_PENDING =
-    "Foxleash is waiting for the user to answer in tab 9 whether to save a recipe. Try again after the user has answered.";
+    'Foxleash is waiting for the user to answer whether to save a recipe in the tab titled "Save this recipe?" (tab id 9). Try again after the user has answered.';
 
   it("refuses to check or ask for an unapproved site while the session's recipe page is open", async () => {
     const fake = createFakeBrowser();
     const sessions: SessionMemory = new Map();
-    let page: { tabId: number; question: string } | undefined = {
+    let page: { tabId: number; question: string; place: string } | undefined = {
       tabId: 9,
       question: "whether to save a recipe",
+      place: 'in the tab titled "Save this recipe?" (tab id 9)',
     };
     const access = createSiteAccess({
       browser: fake.browser,
@@ -535,12 +539,15 @@ describe("beside a recipe page", () => {
       groups: createSessionGroups(fake.browser),
       sessions: new Map(),
       timers: createFakeTimers(),
-      otherPrompt: () => ({ tabId: 9, question: "whether to allow the recipe's sites" }),
+      otherPrompt: () => ({
+        tabId: 9,
+        question: "whether to allow the recipe's sites",
+        place: `in the tab titled "Allow Foxleash on these sites for this session?" in the user's Firefox window (tab id 9)`,
+      }),
     });
     await assert.rejects(access.check("s1", "https://b.example/"), {
       code: "approval_pending",
-      message:
-        "Foxleash is waiting for the user to answer in tab 9 whether to allow the recipe's sites. Try again after the user has answered.",
+      message: `Foxleash is waiting for the user to answer whether to allow the recipe's sites in the tab titled "Allow Foxleash on these sites for this session?" in the user's Firefox window (tab id 9). Try again after the user has answered.`,
     });
   });
 
@@ -552,7 +559,11 @@ describe("beside a recipe page", () => {
       groups: createSessionGroups(fake.browser),
       sessions,
       timers: createFakeTimers(),
-      otherPrompt: () => ({ tabId: 9, question: "whether to save a recipe" }),
+      otherPrompt: () => ({
+        tabId: 9,
+        question: "whether to save a recipe",
+        place: 'in the tab titled "Save this recipe?" (tab id 9)',
+      }),
     });
     const tab = fake.openTab({ active: true });
     await grantSite(fake.browser, "https://b.example");
@@ -636,6 +647,7 @@ describe("ask", () => {
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: true,
+      place: `in the tab titled "Foxleash" in the user's Firefox window (tab id ${tab.id})`,
     });
     assert.equal(answer.state, "pending");
     assert.equal(access.openPrompt("s2"), undefined);
@@ -687,6 +699,7 @@ describe("ask", () => {
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: true,
+      place: `in the tab titled "Foxleash" in the user's Firefox window (tab id ${created.id})`,
     });
     const answer = track(approval.answer);
     const page = connect(fake, created.id, promptUrl);
@@ -1227,7 +1240,7 @@ describe("answers", () => {
     assertRejected(
       answer,
       "settings_write_failed",
-      `Firefox could not save the user's answer to always allow https://a.example. The question is still open in tab ${tab.id}.`,
+      `Firefox could not save the user's answer to always allow https://a.example. The question is still open ${askedIn(tab.id)}.`,
     );
     assert.deepEqual(page.posted, [{ type: "error" }]);
     assert.deepEqual(access.openPrompt("s1"), {
@@ -1235,6 +1248,7 @@ describe("answers", () => {
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: false,
+      place: askedIn(tab.id),
     });
     page.deliver({ type: "answer", answer: "always" });
     await flush();
@@ -1326,16 +1340,13 @@ describe("waiting for the answer", () => {
     assert.equal(answer.state, "pending");
     timers.advance(1);
     await flush();
-    assertRejected(
-      answer,
-      "approval_timeout",
-      `Foxleash is still asking the user in tab ${tab.id} whether to allow https://a.example. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`,
-    );
+    assertRejected(answer, "approval_timeout", timedOut(tab.id));
     assert.deepEqual(access.openPrompt("s1"), {
       tabId: tab.id,
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: false,
+      place: askedIn(tab.id),
     });
     assert.deepEqual(page.posted, []);
   });
@@ -1485,6 +1496,57 @@ describe("waiting for the answer", () => {
   });
 });
 
+describe("where a question is", () => {
+  it("names the window once the tab reports it, and no window once the tab left it", async () => {
+    const { fake, access, timers, tab, ask } = setup();
+    const other = fake.openTab();
+    const { answer } = await ask();
+    connect(fake, tab.id);
+    fake.emitDetached(other.id);
+    assert.equal(access.openPrompt("s1")?.place, askedIn(tab.id));
+    fake.emitDetached(tab.id);
+    assert.equal(access.openPrompt("s1")?.place, askedIn(tab.id, "unknown"));
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", timedOut(tab.id, "unknown"));
+  });
+
+  it("names the session's own window for a question in it", async () => {
+    const { fake, access, groups, timers } = setup();
+    const { tab, promptUrl } = await ownWindowPrompt(fake, access, groups);
+    const approval = await access.ask("s1", "https://a.example/page", tab.id, {
+      generation: access.generation("s1"),
+      promptUrl,
+    });
+    const answer = track(approval.answer);
+    connect(fake, tab.id);
+    assert.equal(access.openPrompt("s1")?.place, askedIn(tab.id, "own"));
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(answer, "approval_timeout", timedOut(tab.id, "own"));
+  });
+
+  it("quotes the title approve.html carries before it shows the question", () => {
+    const page = readFileSync(new URL("./approve.html", import.meta.url), "utf8");
+    assert.ok(page.includes(`<title>${PROMPT_PAGE_TITLE}</title>`));
+  });
+
+  it("says the title, the window when known, and the tab id", () => {
+    assert.equal(
+      promptPlace(4, "Allow Foxleash on https://a.example?", true),
+      `in the tab titled "Allow Foxleash on https://a.example?" in the session's own Firefox window (tab id 4)`,
+    );
+    assert.equal(
+      promptPlace(4, "Save this recipe?", false),
+      `in the tab titled "Save this recipe?" in the user's Firefox window (tab id 4)`,
+    );
+    assert.equal(
+      promptPlace(4, 'Update the recipe "Trip"?', undefined),
+      `in the tab titled "Update the recipe \\"Trip\\"?" (tab id 4)`,
+    );
+  });
+});
+
 describe("a question whose window is not in front", () => {
   it("ends the wait once the page connected and the check finds the window behind, keeping the prompt", async () => {
     const { fake, access, sessions, timers, tab, ask } = setup();
@@ -1502,6 +1564,7 @@ describe("a question whose window is not in front", () => {
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: false,
+      place: askedIn(tab.id),
     });
     assert.deepEqual(page.posted, []);
     assert.equal(sessions.get("s1")?.closed ?? 0, 0);
@@ -1528,7 +1591,7 @@ describe("a question whose window is not in front", () => {
     connect(fake, tab.id);
     timers.advance(FRONT_CHECK_MS);
     await flush();
-    assertRejected(answer, "approval_timeout", behind(tab.id));
+    assertRejected(answer, "approval_timeout", behind(tab.id, "own"));
   });
 
   it("keeps waiting the full time when the session's own window came to the front", async () => {
@@ -1545,7 +1608,7 @@ describe("a question whose window is not in front", () => {
     assert.equal(answer.state, "pending");
     timers.advance(APPROVAL_WAIT_MS - FRONT_CHECK_MS);
     await flush();
-    assertRejected(answer, "approval_timeout", timedOut(tab.id));
+    assertRejected(answer, "approval_timeout", timedOut(tab.id, "own"));
   });
 
   it("checks when the page connects after the check was due", async () => {
@@ -2092,6 +2155,7 @@ describe("endSession", () => {
       site: "https://a.example",
       url: "https://a.example/page",
       waiting: false,
+      place: askedIn(tab.id),
     });
     const other = await groups.createTab("s1", { url: "about:blank", active: false }, PASS);
     const updates = fake.tabUpdates.length;
@@ -2745,12 +2809,26 @@ async function ownWindowPrompt(
   return { tab, promptUrl };
 }
 
-function behind(tabId: number): string {
-  return `Foxleash is asking the user in tab ${tabId} whether to allow https://a.example, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`;
+/** Where the question about https://a.example is once its page connected, in `window`. */
+function askedIn(tabId: number, window: "user" | "own" | "unknown" = "user"): string {
+  const where = {
+    user: " in the user's Firefox window",
+    own: " in the session's own Firefox window",
+    unknown: "",
+  }[window];
+  return `in the tab titled "Allow Foxleash on https://a.example?"${where} (tab id ${tabId})`;
 }
 
-function timedOut(tabId: number): string {
-  return `Foxleash is still asking the user in tab ${tabId} whether to allow https://a.example. Tell the user to answer there, then make the same tab_open or navigate call again; if the user closed that tab, call tab_open with the page's URL instead.`;
+function behind(tabId: number, window: "user" | "own" | "unknown" = "user"): string {
+  return `Foxleash is asking the user whether to allow https://a.example ${askedIn(tabId, window)}, but that tab's Firefox window is not in front, so the user may not have seen the question. ${retry(tabId)}`;
+}
+
+function timedOut(tabId: number, window: "user" | "own" | "unknown" = "user"): string {
+  return `Foxleash is still asking the user whether to allow https://a.example ${askedIn(tabId, window)}. ${retry(tabId)}`;
+}
+
+function retry(tabId: number): string {
+  return `Tell the user where the question is and to answer it there. Then call navigate with tab id ${tabId} and the page's URL: once the user has allowed the site, it loads the page in that tab. Only if the user closed that tab, call tab_open with the page's URL instead.`;
 }
 
 /** Counts `windows.get` calls from here on. */

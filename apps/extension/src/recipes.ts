@@ -6,6 +6,7 @@ import {
   MAX_RECIPES,
   type Recipe,
   type RecipeFields,
+  recipeLine,
 } from "@foxleash/protocol";
 import { warn } from "./log.ts";
 import { isRecord, RECIPE_KEY_PREFIX, type SettingsBrowser } from "./settings.ts";
@@ -243,10 +244,7 @@ function checkLine(
     return { problems: [{ field, text: `The ${field} must be text.` }] };
   const hidden = hiddenProblems(value, field, HIDDEN_IN_LINE);
   if (hidden.length > 0) return { problems: hidden };
-  const text = value
-    .normalize("NFC")
-    .replace(/\p{Zs}+/gu, " ")
-    .trim();
+  const text = recipeLine(value);
   const length = [...text].length;
   if (length === 0) return { problems: [{ field, text: missing }] };
   if (length > max) {

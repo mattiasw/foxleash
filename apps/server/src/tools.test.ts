@@ -55,7 +55,7 @@ const CLAUDE_CODE_DEFAULT = 50_000;
 const CLAUDE_CODE_CEILING = 500_000;
 const REDACTED_TABS = "A tab on a site the user has not approved shows only that site";
 const ASKS_FIRST =
-  "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer.";
+  "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer. When the call stops waiting before the user has answered, its result names the question's tab by title and window, for the user, and by tab id; after the user answers, call navigate with that tab id and the page's URL, which loads the page in that tab, and call tab_open only if the user closed that tab.";
 const EM_DASH = String.fromCodePoint(0x2014);
 const SETTLES =
   "After the act, Foxleash waits for the page to settle: a page the act loads until its document is ready, up to 10 seconds; otherwise until the page has not changed for 0.1 seconds and no request it began after the act is still open, at most 2 seconds; once a fetch or XMLHttpRequest the page began after the act has answered, Foxleash also waits until the page changes or 1.2 seconds have passed since that answer, within the same 2 seconds. The result's after gives element, the element that took the act (its role and name as read_page shows them), and page: loaded (the tab loaded another page; url is its address), loading (the tab was still loading another page when Foxleash stopped waiting; url once the page is known), changed (the page changed, then went quiet), unchanged (no change was seen within the wait), unsettled (the page was still changing, or waiting for a request it began after the act, at 2 seconds), closed (the tab closed) or unknown (Foxleash could not tell). openedTabs lists tabs that opened in this session's group, and requests counts the requests the page began after the act. refusedFiles lists the sites this session may not act on whose file Foxleash stopped the tab, a frame in it or a tab the act opened from loading: nothing of such a file was saved, and it loads only once its site is approved, which tab_open or navigate to that site asks the user for, unless the site is on the blocklist. Foxleash watches the elements, attributes and text of the page's own document and its shadow roots, and its fields' values; not frames, canvas drawing, or CSS animations and transitions. Since unchanged means only that no change was seen within the wait, read the page before repeating an act, also when requests shows that the page sent something.";
@@ -2255,12 +2255,44 @@ describe("propose_recipe", () => {
         content: [
           {
             type: "text",
-            text: `Waiting in Firefox: the user can edit, save or discard the recipe in tab ${tabId}.`,
+            text: `Waiting in Firefox: the user can edit, save or discard the recipe on the page Foxleash opened and selected in this session's Foxleash tab group, in the tab titled "Save this recipe?", or "Update the recipe ${RECIPE.name}?" when the user already has a recipe by that name (tab id ${tabId}).`,
           },
         ],
       });
       assert.deepEqual(calls, [{ method: "recipe_propose", params: RECIPE }]);
     }
+  });
+
+  it("escapes a quotation mark in the proposed name it quotes", LIMIT, async () => {
+    const { client } = await start(() => ({ tabId: 7 }));
+    const output = await client.callTool({
+      name: "propose_recipe",
+      arguments: { ...RECIPE, name: 'Say "hi"' },
+    });
+    assert.deepEqual(output, {
+      content: [
+        {
+          type: "text",
+          text: `Waiting in Firefox: the user can edit, save or discard the recipe on the page Foxleash opened and selected in this session's Foxleash tab group, in the tab titled "Save this recipe?", or "Update the recipe Say \\"hi\\"?" when the user already has a recipe by that name (tab id 7).`,
+        },
+      ],
+    });
+  });
+
+  it("quotes the proposed name as the page shows it", LIMIT, async () => {
+    const { client } = await start(() => ({ tabId: 7 }));
+    const output = await client.callTool({
+      name: "propose_recipe",
+      arguments: { ...RECIPE, name: "  Trip\u00a0\u00a0plan  " },
+    });
+    assert.deepEqual(output, {
+      content: [
+        {
+          type: "text",
+          text: `Waiting in Firefox: the user can edit, save or discard the recipe on the page Foxleash opened and selected in this session's Foxleash tab group, in the tab titled "Save this recipe?", or "Update the recipe Trip plan?" when the user already has a recipe by that name (tab id 7).`,
+        },
+      ],
+    });
   });
 
   it("refuses a result without a tab id it can read", LIMIT, async () => {

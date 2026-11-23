@@ -75,7 +75,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     const prompt = await promptOf("s1");
     await assert.rejects(pages.request("s1", prompt.tabId, "echo", {}, 0), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${prompt.tabId} whether to allow ${SITE}. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow ${SITE} in the tab titled "Foxleash" in the user's Firefox window (tab id ${prompt.tabId}). Try again after the user has answered.`,
     });
     assertNothingSent(fake);
     void opened.catch(() => {});

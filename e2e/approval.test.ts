@@ -277,6 +277,22 @@ describe("the approval prompt, in real Firefox", () => {
     await session.close();
   });
 
+  test("after a slow answer, navigate on the question's tab loads the page in that tab", {
+    timeout: 90_000,
+  }, async () => {
+    const { session, tabId, hits } = await answeredAfterTimeout();
+    const tabCount = tabsOf(await harness.ok(session, "tabs_list")).length;
+
+    const tab = tabOf(await harness.ok(session, "navigate", { tabId, url: site.url("/a") }));
+    assert.equal(tab.id, tabId);
+    assert.equal(tab.url, site.url("/a"));
+    assert.equal(tab.title, TITLES.a);
+    assert.deepEqual(await promptContexts(), []);
+    assert.equal(tabsOf(await harness.ok(session, "tabs_list")).length, tabCount);
+    assert.equal(site.hits("/a"), hits + 1);
+    await session.close();
+  });
+
   test("closing the prompt fails the call and remembers no refusal", async () => {
     const session = await connected();
     const hits = site.hits("/a");
@@ -337,7 +353,11 @@ describe("the approval prompt, in real Firefox", () => {
     assert.equal(await firefox.evaluate(prompt, "document.visibilityState"), "visible");
 
     const back = await harness.refused(session, "navigate", { tabId: background, action: "back" });
-    assert.ok(back.includes(`is waiting for the user to answer in tab ${background}`), back);
+    assert.ok(
+      back.includes(`is waiting for the user to answer whether to allow ${site.site} `),
+      back,
+    );
+    assert.ok(back.includes(`(tab id ${background})`), back);
     await firefox.closeContext(prompt);
     assert.ok((await navigating).includes("was closed without an answer"));
     assert.equal(site.hits("/a"), hits);
@@ -879,7 +899,7 @@ describe("the approval prompt, in real Firefox", () => {
     await harness.waitForArmed(prompt);
 
     const text = await harness.refused(session, "resize_window", { width: 900, height: 700 });
-    assert.ok(text.includes("Foxleash is waiting for the user to answer in tab"), text);
+    assert.ok(text.includes("Foxleash is waiting for the user to answer whether to allow"), text);
 
     await harness.resizeUnarms(resizing, prompt, { width: 900, height: 700 });
     await firefox.click(prompt, ANSWER.always);
@@ -952,12 +972,20 @@ describe("the approval prompt, in real Firefox", () => {
     await waitForQuestion(prompt, site.site);
     const text = await opening;
     assert.ok(Date.now() - started >= 29_000, `timed out after ${Date.now() - started} ms`);
-    assert.ok(text.includes("is still asking the user in tab"), text);
-    assert.ok(text.includes("make the same tab_open or navigate call again"), text);
+    const tabId = Number(/tab id (\d+)/.exec(text)?.[1]);
+    assert.ok(Number.isSafeInteger(tabId), text);
+    // The title the result quotes is the one the question's tab shows.
+    const title = String(await firefox.evaluate(prompt, "document.title"));
+    assert.equal(title, `Allow Foxleash on ${site.site}?`);
+    assert.ok(
+      text.includes(
+        `in the tab titled ${JSON.stringify(title)} in the user's Firefox window (tab id ${tabId})`,
+      ),
+      text,
+    );
+    assert.ok(text.includes(`call navigate with tab id ${tabId}`), text);
     assert.ok(text.includes("call tab_open with the page's URL instead"), text);
     assert.ok(!text.includes("action reload"), text);
-    const tabId = Number(/tab (\d+)/.exec(text)?.[1]);
-    assert.ok(Number.isSafeInteger(tabId), text);
     assert.deepEqual(await promptContexts(), [prompt]);
     assert.equal(site.hits("/a"), hits);
 

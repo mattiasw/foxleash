@@ -1,3 +1,4 @@
+import { siteQuestionTitle } from "@foxleash/protocol";
 import type { Port, Timers } from "./browser-api.ts";
 import { announce, armButtons, element, fieldsOf, REFOCUS } from "./page-ui.ts";
 
@@ -86,7 +87,7 @@ function receive(received: unknown): void {
 }
 
 function ask(site: string, url: string): void {
-  const question = `Allow Foxleash on ${site}?`;
+  const question = siteQuestionTitle(site);
   document.title = question;
   heading.textContent = question;
   const shown = displayedUrl(url);

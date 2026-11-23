@@ -386,7 +386,7 @@ describe("leave prompts beside an open question in real Firefox", () => {
     );
     assert.match(
       await harness.refused(session, "tab_select", { tabId }),
-      new RegExp(`waiting for the user to answer in tab ${question} `),
+      new RegExp(`waiting for the user to answer whether to allow .* \\(tab id ${question}\\)\\.`),
     );
     const ids = tabsOf(await harness.ok(session, "tabs_list")).map((tab) => tab.id);
     assert.ok(ids.includes(tabId), `tabs_list lists ${JSON.stringify(ids)}`);
@@ -432,7 +432,7 @@ describe("leave prompts beside an open question in real Firefox", () => {
     // Selecting the question's own tab is never refused, so this proves the question is open.
     assert.match(
       await harness.refused(session, "tab_select", { tabId: page.tabId }),
-      new RegExp(`waiting for the user to answer in tab ${question} `),
+      new RegExp(`waiting for the user to answer whether to allow .* \\(tab id ${question}\\)\\.`),
     );
     assert.deepEqual(
       await selected(),

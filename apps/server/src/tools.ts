@@ -54,8 +54,11 @@ import {
   READ_PAGE_MAX_CHARS,
   READ_PAGE_MAX_FINDS,
   READ_PAGE_MAX_MATCHES,
+  recipeLine,
+  SAVE_RECIPE_TITLE,
   UPLOAD_CHUNK_BYTES,
   UPLOAD_MAX_BYTES,
+  updateRecipeTitle,
 } from "@foxleash/protocol";
 import type { McpServer, ToolCallback } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
@@ -102,7 +105,7 @@ const SETTLES = `After the act, Foxleash waits for the page to settle: a page th
 const VIEW_MAX = PAGE_VIEW_MAX_CHARS.toLocaleString("en-US");
 const ENDS_WITH_VIEW = `The result ends with a view of the page in the tab: the first time this session gets that page in the tab, the page as read_page shows it, cut to its most relevant lines past ${VIEW_MAX} characters; after that, only the lines that changed since, or a line saying nothing changed. view false leaves the view out.`;
 const ASKS_FIRST =
-  "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer.";
+  "On a site the user has not approved, Foxleash first asks the user in the tab and waits for the answer. When the call stops waiting before the user has answered, its result names the question's tab by title and window, for the user, and by tab id; after the user answers, call navigate with that tab id and the page's URL, which loads the page in that tab, and call tab_open only if the user closed that tab.";
 const LOADS_UNTIL_READY =
   "With a URL, it returns once the page's document is ready: images and other parts of the page may still be loading, and then the title it returns is empty.";
 const STOPS_FILES =
@@ -1075,7 +1078,7 @@ export function registerTools(
         content: [
           {
             type: "text",
-            text: `Waiting in Firefox: the user can edit, save or discard the recipe in tab ${tabId}.`,
+            text: `Waiting in Firefox: the user can edit, save or discard the recipe on the page Foxleash opened and selected in this session's Foxleash tab group, in the tab titled ${JSON.stringify(SAVE_RECIPE_TITLE)}, or ${JSON.stringify(updateRecipeTitle(recipeLine(name)))} when the user already has a recipe by that name (tab id ${tabId}).`,
           },
         ],
       };

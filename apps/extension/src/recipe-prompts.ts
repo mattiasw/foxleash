@@ -1,4 +1,12 @@
-import { MAX_RECIPES, type RecipeFields, type Result } from "@foxleash/protocol";
+import {
+  MAX_RECIPES,
+  PROMPT_PAGE_TITLE,
+  type RecipeFields,
+  type Result,
+  RUN_PAGE_TITLE,
+  SAVE_RECIPE_TITLE,
+  updateRecipeTitle,
+} from "@foxleash/protocol";
 import type { BrowserApi, Port, RuntimePort, Tab, Timers } from "./browser-api.ts";
 import { recipeNotFound, ToolError } from "./handlers.ts";
 import { checkRecipe, findRecipe, lookOf, readRecipes, saveRecipe } from "./recipes.ts";
@@ -13,6 +21,7 @@ import {
   fieldsOf,
   portShowsPage,
   post,
+  promptPlace,
   type SiteAccess,
   type SiteState,
   sessionStopped,
@@ -36,7 +45,7 @@ export interface RecipePromptsDeps<Handle> {
   browser: Pick<BrowserApi, "runtime" | "tabs" | "windows" | "storage">;
   groups: Pick<
     SessionGroups,
-    "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow" | "windowInFront"
+    "createTab" | "ensureGroup" | "closeTab" | "showPromptWindow" | "windowInFront" | "isOwnWindow"
   >;
   access: Pick<
     SiteAccess,
@@ -60,8 +69,8 @@ export interface RecipePrompts {
    * page, when no site is askable. Each list in the order of `sites`.
    */
   request(session: string, sites: string[]): Promise<Result<"sites_request">>;
-  /** The session's open recipe page, and what it asks. */
-  openPrompt(session: string): { tabId: number; question: string } | undefined;
+  /** The session's open recipe page, what it asks, and where it is, as `promptPlace` says it. */
+  openPrompt(session: string): { tabId: number; question: string; place: string } | undefined;
   /**
    * Detaches the session's propose page, which can still save, ends its run page, and forgets the
    * session's budget.
@@ -77,6 +86,8 @@ interface ProposePrompt extends PageState {
   kind: "propose";
   /** The proposal, normalized by checkRecipe. */
   recipe: RecipeFields;
+  /** The title the page was last sent, which it shows. */
+  title: string;
 }
 
 interface RunPrompt<Handle> extends PageState {
@@ -117,6 +128,8 @@ interface RunWaiter<Handle> {
 interface PageState {
   session: string;
   tabId: number;
+  /** The window Firefox last reported the tab in; undefined once it left it. */
+  windowId: number | undefined;
   pageUrl: string;
   /** The tab has shown the page, so leaving it closes the prompt. */
   committed: boolean;
@@ -153,6 +166,9 @@ export function createRecipePrompts<Handle>({
   browser.runtime.onConnect.addListener(connect);
   browser.tabs.onRemoved.addListener((tabId) => {
     for (const prompt of promptsIn(tabId)) drop(prompt);
+  });
+  browser.tabs.onDetached.addListener((tabId) => {
+    for (const prompt of promptsIn(tabId)) prompt.windowId = undefined;
   });
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     for (const prompt of promptsIn(tabId)) {
@@ -192,7 +208,9 @@ export function createRecipePrompts<Handle>({
       kind: "propose",
       session,
       recipe,
+      title: PROMPT_PAGE_TITLE,
       tabId: tab.id,
+      windowId: tab.windowId,
       pageUrl,
       committed: false,
       port: undefined,
@@ -216,6 +234,7 @@ export function createRecipePrompts<Handle>({
       // Loaded rather than only selected: a page the user selected before the prompt was
       // recorded loads again and connects.
       shown = await browser.tabs.update(tab.id, { url: pageUrl, active: true, loadReplace: true });
+      prompt.windowId = shown.windowId;
     } catch (error) {
       if (isLive(prompt)) {
         abandon(prompt);
@@ -303,6 +322,7 @@ export function createRecipePrompts<Handle>({
       askable,
       waiters: [],
       tabId: tab.id,
+      windowId: tab.windowId,
       pageUrl,
       committed: false,
       port: undefined,
@@ -318,6 +338,7 @@ export function createRecipePrompts<Handle>({
       // Answered, closed or ended meanwhile: the waiters, this one too, are settled.
       if (!isLive(prompt)) return answer;
       shown = await browser.tabs.update(tab.id, { url: pageUrl, active: true, loadReplace: true });
+      prompt.windowId = shown.windowId;
     } catch (error) {
       if (!isLive(prompt)) return answer;
       abandon(prompt);
@@ -347,7 +368,7 @@ export function createRecipePrompts<Handle>({
   function refuseOpening(session: string): void {
     refuseBesideSitePrompt(session);
     const page = open.get(session);
-    if (page !== undefined) throw recipePromptOpen(page);
+    if (page !== undefined) throw recipePromptOpen(page, placeOf(page));
     refuseOverBudget(session);
   }
 
@@ -357,7 +378,7 @@ export function createRecipePrompts<Handle>({
     const page = open.get(session);
     if (page !== undefined) {
       if (page.kind === "run" && page.key === key) return page;
-      throw recipePromptOpen(page);
+      throw recipePromptOpen(page, placeOf(page));
     }
     refuseOverBudget(session);
     // It asks about sites, so it opens no more once the session's site prompts stopped asking.
@@ -367,7 +388,16 @@ export function createRecipePrompts<Handle>({
 
   function refuseBesideSitePrompt(session: string): void {
     const site = access.openPrompt(session);
-    if (site !== undefined) throw approvalPending(site.tabId, `whether to allow ${site.site}`);
+    if (site !== undefined) throw approvalPending(site.place, `whether to allow ${site.site}`);
+  }
+
+  /** Where the page is now, with no await: results are built right before a load. */
+  function placeOf(page: RecipePage<Handle>): string {
+    return promptPlace(
+      page.tabId,
+      page.kind === "run" ? RUN_PAGE_TITLE : page.title,
+      page.windowId === undefined ? undefined : groups.isOwnWindow(page.session, page.windowId),
+    );
   }
 
   function refuseOverBudget(session: string): void {
@@ -439,8 +469,8 @@ export function createRecipePrompts<Handle>({
       new ToolError(
         "approval_timeout",
         prompt.recipe === undefined
-          ? `Foxleash is asking the user in tab ${prompt.tabId} to allow the sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call request_sites with the same sites again.`
-          : `Foxleash is asking the user in tab ${prompt.tabId} to allow the recipe's sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call start_recipe with the same name again.`,
+          ? `Foxleash is asking the user to allow the sites ${placeOf(prompt)}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user where the question is and to answer it there, then call request_sites with the same sites again.`
+          : `Foxleash is asking the user to allow the recipe's sites ${placeOf(prompt)}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
       ),
     );
   }
@@ -459,8 +489,8 @@ export function createRecipePrompts<Handle>({
         new ToolError(
           "approval_timeout",
           prompt.recipe === undefined
-            ? `Foxleash is still asking the user in tab ${prompt.tabId} to allow the sites. Tell the user to answer there, then call request_sites with the same sites again.`
-            : `Foxleash is still asking the user in tab ${prompt.tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+            ? `Foxleash is still asking the user to allow the sites ${placeOf(prompt)}. Tell the user where the question is and to answer it there, then call request_sites with the same sites again.`
+            : `Foxleash is still asking the user to allow the recipe's sites ${placeOf(prompt)}. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
         ),
       );
     }
@@ -500,10 +530,12 @@ export function createRecipePrompts<Handle>({
     postTo(prompt, { type: "ended" });
   }
 
-  function openPrompt(session: string): { tabId: number; question: string } | undefined {
+  function openPrompt(
+    session: string,
+  ): { tabId: number; question: string; place: string } | undefined {
     const prompt = open.get(session);
     if (prompt === undefined) return undefined;
-    return { tabId: prompt.tabId, question: questionOf(prompt) };
+    return { tabId: prompt.tabId, question: questionOf(prompt), place: placeOf(prompt) };
   }
 
   function endSession(session: string): void {
@@ -543,6 +575,8 @@ export function createRecipePrompts<Handle>({
     }
     prompt.port = port;
     prompt.seen = true;
+    // A page that connects has just loaded: it carries its static title until it gets a proposal.
+    if (prompt.kind === "propose") prompt.title = PROMPT_PAGE_TITLE;
     if (prompt.kind === "run") {
       for (const waiter of [...prompt.waiters]) {
         if (waiter.front !== undefined && waiter.front.timer === undefined) {
@@ -607,6 +641,7 @@ export function createRecipePrompts<Handle>({
     // A stored name that looks the same is the recipe this proposal updates: saving under the
     // proposed name would be refused as taken.
     if (current !== undefined) prompt.recipe = { ...prompt.recipe, name: current.name };
+    prompt.title = current === undefined ? SAVE_RECIPE_TITLE : updateRecipeTitle(current.name);
     post(
       port,
       current === undefined
@@ -662,6 +697,9 @@ export function createRecipePrompts<Handle>({
         problems: [{ field: "name", text: `A recipe named ${taken} exists.` }],
       });
     } else if (result.reason === "changed") {
+      // The page shows the stored version it was sent, and retitles itself for it.
+      prompt.title =
+        result.current === undefined ? SAVE_RECIPE_TITLE : updateRecipeTitle(result.current.name);
       postTo(
         prompt,
         result.current === undefined
@@ -788,10 +826,10 @@ export function createRecipePrompts<Handle>({
   }
 }
 
-function recipePromptOpen(page: RecipePage<unknown>): ToolError {
+function recipePromptOpen(page: RecipePage<unknown>, place: string): ToolError {
   return new ToolError(
     "recipe_prompt_open",
-    `Foxleash is still asking the user in tab ${page.tabId} ${questionOf(page)}. Try again after the user has answered there.`,
+    `Foxleash is still asking the user ${questionOf(page)} ${place}. Try again after the user has answered there.`,
   );
 }
 

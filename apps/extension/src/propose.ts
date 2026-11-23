@@ -1,4 +1,9 @@
-import type { Recipe, RecipeFields } from "@foxleash/protocol";
+import {
+  type Recipe,
+  type RecipeFields,
+  SAVE_RECIPE_TITLE,
+  updateRecipeTitle,
+} from "@foxleash/protocol";
 import type { Port, Timers } from "./browser-api.ts";
 import { type DiffLine, lineDiff } from "./line-diff.ts";
 import {
@@ -308,12 +313,12 @@ function shownValues(recipe: RecipeFields): Values {
 function showCurrent(): void {
   if (current === undefined) {
     currentSection.hidden = true;
-    ask("Save this recipe?");
+    ask(SAVE_RECIPE_TITLE);
     diff.replaceChildren();
     return;
   }
   currentSection.hidden = false;
-  ask(`Update the recipe ${current.name}?`);
+  ask(updateRecipeTitle(current.name));
   const stored = shownValues(current);
   currentValues.name.textContent = stored.name;
   currentValues.description.textContent = stored.description;

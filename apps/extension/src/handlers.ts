@@ -1933,12 +1933,12 @@ export function createHandlers<Handle>({
   function keepPrompt(session: string, tabId: number): void {
     const shown = access.openPrompt(session);
     if (shown?.tabId === tabId)
-      throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);
+      throw approvalPending(shown.place, `whether to allow ${shown.site}`);
     const page = recipes.openPrompt(session);
     if (page?.tabId === tabId) {
       throw new ToolError(
         "recipe_prompt_open",
-        `Foxleash is asking the user in tab ${tabId} ${page.question}; leave that tab open.`,
+        `Foxleash is asking the user ${page.question} ${page.place}; leave that tab open.`,
       );
     }
   }
@@ -1952,12 +1952,12 @@ export function createHandlers<Handle>({
   function keepPromptInView(session: string, tabId?: number): void {
     const shown = access.openPrompt(session);
     if (shown !== undefined && shown.tabId !== tabId)
-      throw approvalPending(shown.tabId, `whether to allow ${shown.site}`);
+      throw approvalPending(shown.place, `whether to allow ${shown.site}`);
     const page = recipes.openPrompt(session);
     if (page !== undefined && page.tabId !== tabId) {
       throw new ToolError(
         "recipe_prompt_open",
-        `Foxleash is still asking the user in tab ${page.tabId} ${page.question}. Try again after the user has answered there.`,
+        `Foxleash is still asking the user ${page.question} ${page.place}. Try again after the user has answered there.`,
       );
     }
   }
@@ -2071,7 +2071,7 @@ export async function allowedSiteFor(
 ): Promise<string> {
   const prompt = access.openPrompt(session);
   if (prompt?.tabId === tabId)
-    throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
+    throw approvalPending(prompt.place, `whether to allow ${prompt.site}`);
   const site = siteOf(url);
   if (site === undefined) throw pageNotWeb(tabId);
   const view = await access.view(session);
@@ -2601,7 +2601,7 @@ function retryUrl(prompt: OpenPrompt, target: NavigationTarget): string {
     if (target.kind === "url" && siteOf(target.url) === prompt.site) return target.url;
     if (isReload(target)) return prompt.url;
   }
-  throw approvalPending(prompt.tabId, `whether to allow ${prompt.site}`);
+  throw approvalPending(prompt.place, `whether to allow ${prompt.site}`);
 }
 
 function isReload(target: NavigationTarget): boolean {

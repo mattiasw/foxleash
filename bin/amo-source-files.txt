@@ -84,6 +84,7 @@ packages/protocol/src/handshake.ts
 packages/protocol/src/index.ts
 packages/protocol/src/messages.ts
 packages/protocol/src/methods.ts
+packages/protocol/src/prompt-titles.ts
 packages/protocol/tsconfig.json
 packages/tsconfig/base.json
 packages/tsconfig/package.json

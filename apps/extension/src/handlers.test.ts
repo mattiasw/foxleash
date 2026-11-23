@@ -7,9 +7,11 @@ import {
   MAX_NETWORK_PATTERN,
   MAX_NETWORK_TYPES,
   type MethodName,
+  PROMPT_PAGE_TITLE,
   PROTOCOL_VERSION,
   type ProbeResult,
   type Result,
+  RUN_PAGE_TITLE,
   type TabInfo,
 } from "@foxleash/protocol";
 import { createActSettle, MIN_SETTLE_MS } from "./act-settle.ts";
@@ -2894,7 +2896,15 @@ describe("navigate back and forward to a page Firefox loads again", { timeout: 1
     let stepped = false;
     const openPrompt = context.access.openPrompt;
     t.mock.method(context.access, "openPrompt", (session: string) =>
-      stepped ? { tabId: tab.id, site: "https://c.example" } : openPrompt(session),
+      stepped
+        ? {
+            tabId: tab.id,
+            site: "https://c.example",
+            url: "https://c.example/",
+            waiting: false,
+            place: placeIn(tab.id, "Allow Foxleash on https://c.example?"),
+          }
+        : openPrompt(session),
     );
     const steps = recordSteps(context.fake, (tabId) => {
       stepped = true;
@@ -3320,7 +3330,15 @@ describe("navigate reload that Firefox lands on about:blank", { timeout: 10000 }
     let landed = false;
     const openPrompt = access.openPrompt;
     t.mock.method(access, "openPrompt", (session: string) =>
-      landed ? { tabId: tab.id, site: "https://c.example" } : openPrompt(session),
+      landed
+        ? {
+            tabId: tab.id,
+            site: "https://c.example",
+            url: "https://c.example/",
+            waiting: false,
+            place: placeIn(tab.id, "Allow Foxleash on https://c.example?"),
+          }
+        : openPrompt(session),
     );
     reloadToBlank(fake, () => {
       landed = true;
@@ -5189,7 +5207,7 @@ describe("approval", { timeout: 10000 }, () => {
     held.resolve();
     await assert.rejects(approved, {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://b.example ${placeIn(tab.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(prompt.tabId, tab.id);
     assert.equal(loadsOf(fake, "https://a.example/b"), 0);
@@ -5221,7 +5239,7 @@ describe("approval", { timeout: 10000 }, () => {
     held.resolve();
     await assert.rejects(answered, {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://b.example ${placeIn(tab.id, "Allow Foxleash on https://b.example?")}. Try again after the user has answered.`,
     });
     assert.equal(second.site, "https://b.example");
     assert.equal(loadsOf(fake, "https://a.example/x"), 0);
@@ -5239,7 +5257,7 @@ describe("approval", { timeout: 10000 }, () => {
     });
     await page("s1");
     const { tabId } = await promptOf("s1");
-    const message = `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`;
+    const message = `Foxleash is waiting for the user to answer whether to allow https://a.example ${placeIn(tabId, "Allow Foxleash on https://a.example?")}. Try again after the user has answered.`;
     const refusals: Record<string, unknown>[] = [
       { url: "https://a.example/y" },
       { action: "reload" },
@@ -5539,7 +5557,7 @@ describe("probe_input", { timeout: 10000 }, () => {
     const prompt = await promptOf("s1");
     await assert.rejects(call("s1", "probe_input", { tabId: prompt.tabId }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${prompt.tabId} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://a.example ${placeIn(prompt.tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.deepEqual(fake.injections, []);
     void opened.catch(() => {});
@@ -5751,7 +5769,7 @@ describe("tab_select", { timeout: 10000 }, () => {
     assert.equal(prompt.tabId, other.id);
     await assert.rejects(call("s1", "tab_select", { tabId: approved.id }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${other.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://b.example ${placeIn(other.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.get(other.id)?.active, true);
     assert.equal(fake.tabs.get(approved.id)?.active, false);
@@ -5798,7 +5816,7 @@ describe("tab_select", { timeout: 10000 }, () => {
     assert.equal(fake.tabs.get(pageTab)?.active, true);
     await assert.rejects(call("s1", "tab_select", { tabId: tab.id }), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${pageTab} whether to save a recipe. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to save a recipe ${placeIn(pageTab, PROMPT_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     assert.equal(fake.tabs.get(pageTab)?.active, true);
     assert.equal(fake.tabs.get(tab.id)?.active, false);
@@ -5879,7 +5897,7 @@ describe("tab_close", { timeout: 10000 }, () => {
     const { tabId } = await promptOf("s1");
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://a.example ${placeIn(tabId, "Allow Foxleash on https://a.example?")}. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
   });
@@ -6292,7 +6310,7 @@ describe("resize_window", { timeout: 10000 }, () => {
     fake.ungroup(other.id);
     await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${other.id} whether to allow https://b.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://b.example ${placeIn(other.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.deepEqual(resizes(fake), []);
   });
@@ -6309,7 +6327,7 @@ describe("resize_window", { timeout: 10000 }, () => {
     assert.ok("tabId" in proposed);
     await assert.rejects(call("s1", "resize_window", { width: 900, height: 700 }), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to save a recipe ${placeIn(proposed.tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     assert.deepEqual(resizes(fake), []);
   });
@@ -10455,7 +10473,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     fake.openTab();
     const tabId = await proposed(env);
     await grant("https://a.example");
-    const keep = `Foxleash is asking the user in tab ${tabId} whether to save a recipe; leave that tab open.`;
+    const keep = `Foxleash is asking the user whether to save a recipe ${placeIn(tabId, PROMPT_PAGE_TITLE)}; leave that tab open.`;
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
       message: keep,
@@ -10475,7 +10493,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     });
     await assert.rejects(call("s1", "navigate", { tabId, url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to save a recipe ${placeIn(tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
     assert.match(fake.tabs.get(tabId)?.url ?? "", /propose\.html\?id=/);
@@ -10488,7 +10506,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     const tabs = fake.tabs.size;
     await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to save a recipe ${placeIn(tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.size, tabs);
   });
@@ -10524,7 +10542,7 @@ describe("recipe_propose", { timeout: 10000 }, () => {
     await proposing;
     await assert.rejects(opening, {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to save a recipe ${placeIn(tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     await flush();
     assert.equal(fake.tabs.has(prompt.id), false);
@@ -10696,12 +10714,12 @@ describe("recipe_run", { timeout: 10000 }, () => {
     const tabs = fake.tabs.size;
     await assert.rejects(call("s1", "tab_open", { url: "https://b.example/" }), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow the recipe's sites ${placeIn(tabId, RUN_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(fake.tabs.size, tabs);
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
-      message: `Foxleash is asking the user in tab ${tabId} whether to allow the recipe's sites; leave that tab open.`,
+      message: `Foxleash is asking the user whether to allow the recipe's sites ${placeIn(tabId, RUN_PAGE_TITLE)}; leave that tab open.`,
     });
     assert.equal(fake.tabs.has(tabId), true);
   });
@@ -10774,7 +10792,7 @@ describe("sites_request", { timeout: 10000 }, () => {
     assert.deepEqual(page.posted, [
       { type: "sites", sites: [{ site: "https://shop.example", state: "askable" }] },
     ]);
-    const keep = `Foxleash is asking the user in tab ${tabId} whether to allow the sites the agent asked for; leave that tab open.`;
+    const keep = `Foxleash is asking the user whether to allow the sites the agent asked for ${placeIn(tabId, RUN_PAGE_TITLE)}; leave that tab open.`;
     await assert.rejects(call("s1", "tab_close", { tabId }), {
       code: "recipe_prompt_open",
       message: keep,
@@ -12287,3 +12305,17 @@ describe("a request whose session ends while it runs", { timeout: 10000 }, () =>
     assert.deepEqual(pageCalls, []);
   });
 });
+
+/** Where a question is: its tab's title, in `window`, and its tab id. */
+function placeIn(
+  tabId: number | undefined,
+  title: string,
+  window: "user" | "own" | "unknown" = "user",
+): string {
+  const where = {
+    user: " in the user's Firefox window",
+    own: " in the session's own Firefox window",
+    unknown: "",
+  }[window];
+  return `in the tab titled ${JSON.stringify(title)}${where} (tab id ${tabId})`;
+}

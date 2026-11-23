@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, it } from "node:test";
-import type { Recipe, RecipeFields, Result } from "@foxleash/protocol";
+import {
+  PROMPT_PAGE_TITLE,
+  type Recipe,
+  type RecipeFields,
+  type Result,
+  RUN_PAGE_TITLE,
+  SAVE_RECIPE_TITLE,
+} from "@foxleash/protocol";
 import type { MessageSender } from "./browser-api.ts";
 import {
   createFakeBrowser,
@@ -12,7 +20,7 @@ import {
 } from "./fake-browser.ts";
 import { ToolError } from "./handlers.ts";
 import { createRecipePrompts, type RecipePrompts } from "./recipe-prompts.ts";
-import { readRecipes } from "./recipes.ts";
+import { deleteRecipe, readRecipes } from "./recipes.ts";
 import { createSessionGroups } from "./session-groups.ts";
 import { grantSite, SESSION_GROUPS_KEY } from "./settings.ts";
 import {
@@ -68,7 +76,11 @@ describe("propose", { timeout: 10000 }, () => {
     assert.equal(tab.groupId, group?.id);
     assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
     assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
     assert.equal(recipes.openPrompt("s2"), undefined);
   });
 
@@ -104,7 +116,11 @@ describe("propose", { timeout: 10000 }, () => {
       throw new Error("No window");
     };
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
   });
 
   it("refuses a second page while one is open, naming its tab", async () => {
@@ -113,7 +129,7 @@ describe("propose", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${tabId} whether to save a recipe. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to save a recipe ${pageIn(tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     assert.deepEqual(created, []);
   });
@@ -136,6 +152,7 @@ describe("propose", { timeout: 10000 }, () => {
     assert.deepEqual(recipes.openPrompt("s1"), {
       tabId: opened[0]?.value.tabId,
       question: SAVING,
+      place: pageIn(opened[0]?.value.tabId, PROMPT_PAGE_TITLE),
     });
   });
 
@@ -146,11 +163,11 @@ describe("propose", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.propose("s1", RECIPE), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://a.example ${pageIn(tab.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.deepEqual(created, []);
     const { tabId } = await recipes.propose("s2", RECIPE);
-    const pending = `Foxleash is waiting for the user to answer in tab ${tabId} whether to save a recipe. Try again after the user has answered.`;
+    const pending = `Foxleash is waiting for the user to answer whether to save a recipe ${pageIn(tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`;
     await assert.rejects(access.check("s2", "https://b.example/"), {
       code: "approval_pending",
       message: pending,
@@ -195,7 +212,7 @@ describe("propose", { timeout: 10000 }, () => {
     removal.resolve();
     await assert.rejects(proposing, {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://a.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://a.example ${pageIn(tab.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.equal(recipes.openPrompt("s1"), undefined);
     assert.deepEqual(
@@ -224,7 +241,11 @@ describe("propose", { timeout: 10000 }, () => {
       [],
     );
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
   });
 
   it("ends a page that connected before its group failed, and forgets it without charging", async () => {
@@ -247,7 +268,11 @@ describe("propose", { timeout: 10000 }, () => {
       assert.equal(fake.tabs.has(tabId), false);
     }
     const opened = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { ...opened, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      ...opened,
+      question: SAVING,
+      place: pageIn(opened.tabId, PROMPT_PAGE_TITLE),
+    });
   });
 
   it("drops a page that connected before it loaded once its tab navigates away, and leaves the tab to the user", async () => {
@@ -310,7 +335,11 @@ describe("propose", { timeout: 10000 }, () => {
       await assert.rejects(proposing);
     }
     const { tabId } = await recipes.propose("s1", RECIPE);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
   });
 
   it("opens nothing and closes the unloaded tab when the user stops the session while its group is made", async () => {
@@ -498,7 +527,11 @@ describe("the propose page", { timeout: 10000 }, () => {
     reloaded.deliver({ type: "ready" });
     await flush();
     assert.deepEqual(reloaded.posted, [{ type: "propose", fields: RECIPE }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
   });
 
   it("ignores messages from an older page once a newer one connected, and from a gone one", async () => {
@@ -514,7 +547,12 @@ describe("the propose page", { timeout: 10000 }, () => {
     newer.deliver({ type: "answer", answer: "discard" });
     await flush();
     assert.deepEqual(newer.posted, []);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    // The newer page never asked for the proposal, so it kept its static title.
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 
@@ -545,7 +583,11 @@ describe("the propose page", { timeout: 10000 }, () => {
     await flush();
     assert.deepEqual(named.posted, []);
     assert.equal(named.disconnected, false);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, PROMPT_PAGE_TITLE),
+    });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 
@@ -572,7 +614,11 @@ describe("the propose page", { timeout: 10000 }, () => {
     }
     await flush();
     assert.equal(page.posted.length, 1);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     assert.deepEqual(await readRecipes(fake.browser), []);
   });
 });
@@ -700,7 +746,11 @@ describe("saving", { timeout: 10000 }, () => {
       type: "problems",
       problems: [{ field: "name", text: "A recipe named Taken exists." }],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     await saveAgain(fake, page);
   });
 
@@ -728,7 +778,11 @@ describe("saving", { timeout: 10000 }, () => {
     page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: NEW });
     await flush();
     assert.deepEqual(page.posted.at(-1), { type: "changed", current: STORED });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, "Update the recipe Receipt?"),
+    });
     assert.equal((await readRecipes(fake.browser))[0]?.steps, STORED.steps);
     const token = { name: STORED.name, savedAt: STORED.savedAt };
     page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: token });
@@ -765,7 +819,11 @@ describe("saving", { timeout: 10000 }, () => {
         { text: "Foxleash keeps at most 100 recipes. Delete one in Foxleash's settings first." },
       ],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     await fake.browser.storage.local.remove("recipe:R0");
     await saveAgain(fake, page);
   });
@@ -780,7 +838,11 @@ describe("saving", { timeout: 10000 }, () => {
       type: "problems",
       problems: [{ text: "Firefox could not save the recipe. Try again." }],
     });
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     await saveAgain(fake, page);
   });
 
@@ -872,7 +934,11 @@ describe("discarding and closing", { timeout: 10000 }, () => {
     const { tabId, page } = await shown(fake, recipes);
     await fake.browser.tabs.reload(tabId);
     await flush();
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     fake.navigateByUser(tabId, "https://a.example/");
     assert.deepEqual(page.posted.at(-1), { type: "ended" });
     assert.equal(recipes.openPrompt("s1"), undefined);
@@ -923,7 +989,11 @@ describe("discarding and closing", { timeout: 10000 }, () => {
     const other = fake.openTab();
     fake.navigateByUser(other.id, "https://a.example/");
     fake.removeTab(other.id);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
   });
 });
 
@@ -987,7 +1057,11 @@ describe("endSession", { timeout: 10000 }, () => {
     recipes.endSession("s1");
     const next = await recipes.propose("s1", RECIPE);
     assert.notEqual(next.tabId, tabId);
-    assert.deepEqual(recipes.openPrompt("s1"), { ...next, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      ...next,
+      question: SAVING,
+      place: pageIn(next.tabId, PROMPT_PAGE_TITLE),
+    });
   });
 
   it("ends a session without a page", () => {
@@ -1081,14 +1155,22 @@ describe("run", { timeout: 10000 }, () => {
     // The refusals were charged nothing: a third discarded page would refuse this one.
     await spend(fake, recipes, 2);
     const { tabId } = await openRun(fake, recipes);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
   });
 
   it("finds the recipe by its normalized name", async () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP);
     const { tabId } = await openRun(fake, recipes, "s1", " Trip ");
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
   });
 
   it("opens one selected page, created unloaded, in the session's group, drawing attention", async () => {
@@ -1104,7 +1186,11 @@ describe("run", { timeout: 10000 }, () => {
     assert.equal(tab.groupId, (await groups.groupOf("s1"))?.id);
     assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
     assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
     assert.equal(recipes.openPrompt("s2"), undefined);
   });
 
@@ -1163,7 +1249,11 @@ describe("run", { timeout: 10000 }, () => {
     for (let turn = 0; turn < 10; turn += 1) await flush();
     const pages = [...fake.tabs.values()].filter(({ url }) => url.includes("run.html"));
     assert.equal(pages.length, 1);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId: pages[0]?.id, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId: pages[0]?.id,
+      question: ALLOWING,
+      place: pageIn(pages[0]?.id, RUN_PAGE_TITLE),
+    });
     // One for the page shown, one for the call that joined it.
     const attention = { windowId: pages[0]?.windowId, drawAttention: true };
     assert.deepEqual(fake.windowUpdates, [attention, attention]);
@@ -1222,7 +1312,11 @@ describe("run", { timeout: 10000 }, () => {
       throw new Error("No window");
     };
     const { answer, tabId } = await openRun(fake, recipes);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
     connect(fake, tabId).deliver({ type: "answer", answer: "allow" });
     await flush();
     assert.equal(answer.state, "resolved");
@@ -1254,7 +1348,7 @@ describe("run", { timeout: 10000 }, () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP, { ...TRIP, name: "Other" });
     const { tabId } = await openRun(fake, recipes);
-    const open = `Foxleash is still asking the user in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered there.`;
+    const open = `Foxleash is still asking the user whether to allow the recipe's sites ${pageIn(tabId, RUN_PAGE_TITLE)}. Try again after the user has answered there.`;
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Other"), { code: "recipe_prompt_open", message: open });
     await assert.rejects(recipes.propose("s1", RECIPE), {
@@ -1264,7 +1358,7 @@ describe("run", { timeout: 10000 }, () => {
     const proposed = await recipes.propose("s2", RECIPE);
     await assert.rejects(recipes.run("s2", "Trip"), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to save a recipe ${pageIn(proposed.tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     assert.equal(created.length, 1);
   });
@@ -1277,11 +1371,11 @@ describe("run", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.run("s1", "Trip"), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://e.example ${pageIn(tab.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.deepEqual(created, []);
     const { tabId } = await openRun(fake, recipes, "s2");
-    const pending = `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the recipe's sites. Try again after the user has answered.`;
+    const pending = `Foxleash is waiting for the user to answer whether to allow the recipe's sites ${pageIn(tabId, RUN_PAGE_TITLE)}. Try again after the user has answered.`;
     await assert.rejects(access.check("s2", "https://e.example/"), {
       code: "approval_pending",
       message: pending,
@@ -1891,10 +1985,14 @@ describe("waiting for a run page", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+      `Foxleash is still asking the user to allow the recipe's sites ${pageIn(tabId, RUN_PAGE_TITLE)}. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
     );
     assert.equal(joined.state, "pending");
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
     timers.advance(10_000);
     await flush();
     assertRejected(joined, "approval_timeout");
@@ -1941,9 +2039,13 @@ describe("a run page whose window is not in front", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is asking the user in tab ${tabId} to allow the sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call request_sites with the same sites again.`,
+      `Foxleash is asking the user to allow the sites ${pageIn(tabId, RUN_PAGE_TITLE)}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user where the question is and to answer it there, then call request_sites with the same sites again.`,
     );
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ASKING_SITES,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
     assert.equal(timers.pending(), 0);
     page.deliver({ type: "answer", answer: "allow" });
     await flush();
@@ -1960,9 +2062,13 @@ describe("a run page whose window is not in front", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is asking the user in tab ${tabId} to allow the recipe's sites, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user to answer it in Firefox, then call start_recipe with the same name again.`,
+      `Foxleash is asking the user to allow the recipe's sites ${pageIn(tabId, RUN_PAGE_TITLE)}, but that tab's Firefox window is not in front, so the user may not have seen the question. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
     );
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ALLOWING });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ALLOWING,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
     page.deliver({ type: "answer", answer: "no" });
     await flush();
     fake.currentWindowId = 1;
@@ -1982,7 +2088,7 @@ describe("a run page whose window is not in front", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is still asking the user in tab ${tabId} to allow the recipe's sites. Tell the user to answer there, then call start_recipe with the same name again.`,
+      `Foxleash is still asking the user to allow the recipe's sites ${pageIn(tabId, RUN_PAGE_TITLE)}. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
     );
   });
 
@@ -2366,7 +2472,11 @@ describe("request", { timeout: 10000 }, () => {
     assert.equal(tab.groupId, (await groups.groupOf("s1"))?.id);
     assert.deepEqual(fake.tabUpdates, [{ tabId, url: tab.url, active: true, loadReplace: true }]);
     assert.deepEqual(fake.windowUpdates, [{ windowId: tab.windowId, drawAttention: true }]);
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ASKING_SITES,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
   });
 
   it("sends the page only the sites and their states, again after a reload", async () => {
@@ -2504,9 +2614,13 @@ describe("request", { timeout: 10000 }, () => {
     assertRejected(
       answer,
       "approval_timeout",
-      `Foxleash is still asking the user in tab ${tabId} to allow the sites. Tell the user to answer there, then call request_sites with the same sites again.`,
+      `Foxleash is still asking the user to allow the sites ${pageIn(tabId, RUN_PAGE_TITLE)}. Tell the user where the question is and to answer it there, then call request_sites with the same sites again.`,
     );
-    assert.deepEqual(recipes.openPrompt("s1"), { tabId, question: ASKING_SITES });
+    assert.deepEqual(recipes.openPrompt("s1"), {
+      tabId,
+      question: ASKING_SITES,
+      place: pageIn(tabId, RUN_PAGE_TITLE),
+    });
   });
 
   it("joins one page and one click for the same sites in any order, each in its own order", async () => {
@@ -2536,7 +2650,7 @@ describe("request", { timeout: 10000 }, () => {
     const { fake, recipes } = setup();
     await seed(fake, TRIP);
     const { tabId } = await openRequest(fake, recipes);
-    const open = `Foxleash is still asking the user in tab ${tabId} whether to allow the sites the agent asked for. Try again after the user has answered there.`;
+    const open = `Foxleash is still asking the user whether to allow the sites the agent asked for ${pageIn(tabId, RUN_PAGE_TITLE)}. Try again after the user has answered there.`;
     const created = recordCreates(fake);
     for (const opening of [
       () => recipes.request("s1", ["https://a.example"]),
@@ -2549,12 +2663,12 @@ describe("request", { timeout: 10000 }, () => {
     const run = await openRun(fake, recipes, "s2");
     await assert.rejects(recipes.request("s2", SITES), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${run.tabId} whether to allow the recipe's sites. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to allow the recipe's sites ${pageIn(run.tabId, RUN_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     const proposed = await recipes.propose("s3", RECIPE);
     await assert.rejects(recipes.request("s3", SITES), {
       code: "recipe_prompt_open",
-      message: `Foxleash is still asking the user in tab ${proposed.tabId} whether to save a recipe. Try again after the user has answered there.`,
+      message: `Foxleash is still asking the user whether to save a recipe ${pageIn(proposed.tabId, PROMPT_PAGE_TITLE)}. Try again after the user has answered there.`,
     });
     assert.equal(created.length, 2);
   });
@@ -2577,13 +2691,13 @@ describe("request", { timeout: 10000 }, () => {
     const created = recordCreates(fake);
     await assert.rejects(recipes.request("s1", SITES), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tab.id} whether to allow https://e.example. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow https://e.example ${pageIn(tab.id, PROMPT_PAGE_TITLE)}. Try again after the user has answered.`,
     });
     assert.deepEqual(created, []);
     const { tabId } = await openRequest(fake, recipes, "s2");
     await assert.rejects(access.check("s2", "https://e.example/"), {
       code: "approval_pending",
-      message: `Foxleash is waiting for the user to answer in tab ${tabId} whether to allow the sites the agent asked for. Try again after the user has answered.`,
+      message: `Foxleash is waiting for the user to answer whether to allow the sites the agent asked for ${pageIn(tabId, RUN_PAGE_TITLE)}. Try again after the user has answered.`,
     });
   });
 
@@ -2641,6 +2755,131 @@ describe("request", { timeout: 10000 }, () => {
   });
 });
 
+describe("where a recipe page is", { timeout: 10000 }, () => {
+  it("quotes the title the propose page was last sent", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, STORED);
+    const { tabId, page } = await shown(fake, recipes);
+    const update = pageIn(tabId, "Update the recipe Receipt?");
+    assert.equal(recipes.openPrompt("s1")?.place, update);
+    await assert.rejects(recipes.propose("s1", RECIPE), {
+      code: "recipe_prompt_open",
+      message: `Foxleash is still asking the user whether to save a recipe ${update}. Try again after the user has answered there.`,
+    });
+    await deleteRecipe(fake.browser, STORED.name);
+    const token = { name: STORED.name, savedAt: STORED.savedAt };
+    page.deliver({ type: "answer", answer: "save", fields: RECIPE, shown: token });
+    await flush();
+    assert.deepEqual(page.posted.at(-1), { type: "changed" });
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, SAVE_RECIPE_TITLE));
+  });
+
+  it("quotes the stored name of a recipe whose name only looks the same", async () => {
+    const { fake, recipes } = setup();
+    await seed(fake, { ...STORED, name: "Rec\u200deipt" });
+    const { tabId } = await shown(fake, recipes);
+    assert.equal(
+      recipes.openPrompt("s1")?.place,
+      pageIn(tabId, "Update the recipe Rec\u200deipt?"),
+    );
+  });
+
+  it("keeps the title a page shows when the stored recipes cannot be read", async () => {
+    const { fake, recipes } = setup();
+    const { tabId } = await recipes.propose("s1", RECIPE);
+    const page = connect(fake, tabId);
+    failRead(fake, 1);
+    page.deliver({ type: "ready" });
+    await flush();
+    assert.equal(fieldsOfMessage(page.posted[0]).type, "problems");
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, PROMPT_PAGE_TITLE));
+  });
+
+  it("quotes the static title again once the page loaded again and the stored recipes cannot be read", async () => {
+    const { fake, recipes } = setup();
+    const { tabId } = await shown(fake, recipes);
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, SAVE_RECIPE_TITLE));
+    await fake.browser.tabs.reload(tabId);
+    await flush();
+    const reloaded = connect(fake, tabId);
+    failRead(fake, 1);
+    reloaded.deliver({ type: "ready" });
+    await flush();
+    assert.equal(fieldsOfMessage(reloaded.posted[0]).type, "problems");
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, PROMPT_PAGE_TITLE));
+  });
+
+  it("names the session's own window for pages in it", async () => {
+    const { fake, recipes, timers } = setup();
+    await fake.browser.storage.local.set({ sessionWindow: true });
+    await seed(fake, TRIP);
+    const { tabId, page } = await shown(fake, recipes);
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, SAVE_RECIPE_TITLE, "own"));
+    page.deliver({ type: "answer", answer: "discard" });
+    const run = await shownRun(fake, recipes);
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(
+      run.answer,
+      "approval_timeout",
+      `Foxleash is still asking the user to allow the recipe's sites ${pageIn(run.tabId, RUN_PAGE_TITLE, "own")}. Tell the user where the question is and to answer it there, then call start_recipe with the same name again.`,
+    );
+  });
+
+  it("names no window once the page's tab left its window", async () => {
+    const { fake, recipes, timers } = setup();
+    const { answer, tabId } = await shownRequest(fake, recipes);
+    const other = fake.openTab();
+    fake.emitDetached(other.id);
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, RUN_PAGE_TITLE));
+    fake.emitDetached(tabId);
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, RUN_PAGE_TITLE, "unknown"));
+    timers.advance(APPROVAL_WAIT_MS);
+    await flush();
+    assertRejected(
+      answer,
+      "approval_timeout",
+      `Foxleash is still asking the user to allow the sites ${pageIn(tabId, RUN_PAGE_TITLE, "unknown")}. Tell the user where the question is and to answer it there, then call request_sites with the same sites again.`,
+    );
+  });
+
+  it("learns the window again when the page's tab left its window before the page loaded", async () => {
+    const { fake, recipes } = setup();
+    const release = holdGroups(fake);
+    const proposing = recipes.propose("s1", RECIPE);
+    const tabId = await pageTab(fake);
+    await flush();
+    fake.emitDetached(tabId);
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, PROMPT_PAGE_TITLE, "unknown"));
+    release();
+    await proposing;
+    assert.equal(recipes.openPrompt("s1")?.place, pageIn(tabId, PROMPT_PAGE_TITLE));
+
+    const releaseRun = holdGroups(fake);
+    const asking = track(recipes.request("s2", SITES));
+    let run: { tabId: number } | undefined;
+    for (let turn = 0; turn < 50 && run === undefined; turn += 1) {
+      await flush();
+      run = recipes.openPrompt("s2");
+    }
+    assert.ok(run !== undefined);
+    fake.emitDetached(run.tabId);
+    assert.equal(recipes.openPrompt("s2")?.place, pageIn(run.tabId, RUN_PAGE_TITLE, "unknown"));
+    releaseRun();
+    for (let turn = 0; turn < 10; turn += 1) await flush();
+    assert.equal(recipes.openPrompt("s2")?.place, pageIn(run.tabId, RUN_PAGE_TITLE));
+    assert.equal(asking.state, "pending");
+  });
+
+  it("quotes the titles propose.html and run.html carry", () => {
+    const propose = readFileSync(new URL("./propose.html", import.meta.url), "utf8");
+    assert.ok(propose.includes(`<title>${PROMPT_PAGE_TITLE}</title>`));
+    const run = readFileSync(new URL("./run.html", import.meta.url), "utf8");
+    assert.ok(run.includes(`<title>${RUN_PAGE_TITLE}</title>`));
+    assert.ok(run.includes(`>${RUN_PAGE_TITLE}</h1>`));
+  });
+});
+
 describe("isBlankPage", { timeout: 10000 }, () => {
   it("holds only for a propose page that no open or detached prompt shows", async () => {
     const { fake, recipes } = setup();
@@ -2679,7 +2918,11 @@ describe("isBlankPage", { timeout: 10000 }, () => {
   it("treats __proto__ as an ordinary session", async () => {
     const { fake, recipes } = setup();
     const { tabId, page } = await shown(fake, recipes, "__proto__");
-    assert.deepEqual(recipes.openPrompt("__proto__"), { tabId, question: SAVING });
+    assert.deepEqual(recipes.openPrompt("__proto__"), {
+      tabId,
+      question: SAVING,
+      place: pageIn(tabId, SAVE_RECIPE_TITLE),
+    });
     assert.equal(recipes.openPrompt("constructor"), undefined);
     recipes.endSession("__proto__");
     page.deliver({ type: "answer", answer: "discard" });
@@ -3039,4 +3282,18 @@ function failRead(fake: FakeBrowser, nth: number): void {
     }
     return get(keys);
   };
+}
+
+/** Where a recipe page is: its tab's title, in `window`, and its tab id. */
+function pageIn(
+  tabId: number | undefined,
+  title: string,
+  window: "user" | "own" | "unknown" = "user",
+): string {
+  const where = {
+    user: " in the user's Firefox window",
+    own: " in the session's own Firefox window",
+    unknown: "",
+  }[window];
+  return `in the tab titled ${JSON.stringify(title)}${where} (tab id ${tabId})`;
 }

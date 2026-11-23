@@ -10,6 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The add-on is installed from its page on Firefox Add-ons, and Firefox keeps it up to date.
+- When the agent's call returns before you answered a question, the agent can now tell you which
+  window the question is in and the title of its tab, instead of a tab number Firefox does not
+  show. After you answer a site question late, the agent's next try loads the page in the
+  question's tab instead of opening another one.
 
 ## [0.6.0] - 2026-11-21
 

@@ -214,6 +214,14 @@ describe("each agent session in its own window, in real Firefox", () => {
       );
       const window = await windowOf(promptTab);
       assert.notEqual(window.id, userWindow);
+      const refused = await harness.refused(asking, "resize_window", { width: 900, height: 700 });
+      const title = JSON.stringify(`Allow Foxleash on ${other.site}?`);
+      assert.ok(
+        refused.includes(
+          `in the tab titled ${title} in the session's own Firefox window (tab id ${promptTab})`,
+        ),
+        refused,
+      );
       await firefox.click(prompt, 'button[data-answer="once"]');
       const tab = tabOf(await opening);
       assert.equal(tab.id, promptTab);
@@ -296,8 +304,9 @@ describe("each agent session in its own window, in real Firefox", () => {
       t.diagnostic(`tab_open returned after ${elapsed} ms`);
       assert.ok(elapsed < 15_000, `tab_open returned after ${elapsed} ms`);
       assert.ok(text.includes("window is not in front"), text);
-      const promptTab = Number(/tab (\d+)/.exec(text)?.[1]);
+      const promptTab = Number(/tab id (\d+)/.exec(text)?.[1]);
       assert.ok(Number.isInteger(promptTab), text);
+      assert.ok(text.includes("in the user's Firefox window"), text);
       assert.equal((await windowOf(promptTab)).id, userWindow);
     } finally {
       await asking.close();

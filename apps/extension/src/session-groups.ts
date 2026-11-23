@@ -68,6 +68,11 @@ export interface SessionGroups {
    * it closed. Never rejects.
    */
   windowInFront(windowId: number): Promise<boolean>;
+  /**
+   * Whether `windowId` is the window this made for the session, while it still counts as the
+   * session's.
+   */
+  isOwnWindow(session: string, windowId: number): boolean;
 }
 
 /**
@@ -120,6 +125,7 @@ export function createSessionGroups(
     rememberedSessionOf,
     showPromptWindow,
     windowInFront,
+    isOwnWindow,
   };
 
   async function groupOf(session: string): Promise<TabGroup | undefined> {
@@ -235,7 +241,7 @@ export function createSessionGroups(
     wanted: () => boolean,
   ): Promise<void> {
     try {
-      if (ownWindows.get(session)?.id !== windowId) {
+      if (!isOwnWindow(session, windowId)) {
         if (!wanted()) return;
         await browser.windows.update(windowId, { drawAttention: true });
         return;
@@ -259,6 +265,10 @@ export function createSessionGroups(
       (window) => window.focused !== false,
       () => true,
     );
+  }
+
+  function isOwnWindow(session: string, windowId: number): boolean {
+    return ownWindows.get(session)?.id === windowId;
   }
 
   /** Runs the task after every task already queued for the session has settled. */
