@@ -8,6 +8,7 @@ import {
   createHarness,
   EXTENSION_DIST,
   type Harness,
+  messageOf,
   type Session,
   stillPending,
   tabOf,
@@ -63,6 +64,52 @@ const HOST_FIT = `(() => {
     inside: rects.every((rect) => rect.left >= 0 && rect.right <= width),
     page: document.documentElement.scrollWidth <= width,
   });
+})()`;
+// One line per event, kept in a page global: the time, the type, the key, the target, where focus
+// came from (focus) or goes (blur), the answer buttons and how many are unarmed, as ARMED_STATE
+// counts them, the page's focus and its visibility. Capture listeners on window also see focus
+// events aimed at elements; the window's own focus and blur are taken where the page takes them.
+const RECORD_INPUT = `(() => {
+  if (window.__inputRecord !== undefined) return true;
+  const entries = [];
+  window.__inputRecord = entries;
+  const start = performance.now();
+  const name = (target) => {
+    if (target === null) return "-";
+    if (target === window) return "window";
+    if (target === document) return "document";
+    return target.id || target.dataset?.answer || target.nodeName.toLowerCase();
+  };
+  const add = (event) => {
+    const parts = [Math.round(performance.now() - start), event.type];
+    if (event instanceof KeyboardEvent) parts.push(JSON.stringify(event.key));
+    parts.push(name(event.target));
+    if (event.type === "focus") parts.push("from=" + name(event.relatedTarget));
+    if (event.type === "blur") parts.push("to=" + name(event.relatedTarget));
+    parts.push(
+      "buttons=" + document.querySelectorAll("button[data-answer]").length,
+      "unarmed=" + document.querySelectorAll('button[data-answer][aria-disabled="true"]').length,
+      "focus=" + document.hasFocus(),
+      document.visibilityState,
+    );
+    entries.push(parts.join(" "));
+    if (entries.length > 80) entries.shift();
+  };
+  window.addEventListener("keydown", add, { capture: true });
+  window.addEventListener("keyup", add, { capture: true });
+  for (const type of ["focus", "blur"]) {
+    window.addEventListener(type, (event) => event.target !== window && add(event), { capture: true });
+    window.addEventListener(type, (event) => event.target === window && add(event));
+  }
+  document.addEventListener("visibilitychange", add);
+  return true;
+})()`;
+const INPUT_RECORD = `(() => {
+  const lines = window.__inputRecord === undefined ? ["no input record in " + location.href] : [...window.__inputRecord];
+  const active = document.activeElement;
+  const focused = active === null ? "none" : active.id || active.dataset?.answer || active.nodeName.toLowerCase();
+  lines.push("status " + JSON.stringify(document.getElementById("status")?.textContent ?? null) + ", focus on " + focused);
+  return lines.join("\\n");
 })()`;
 
 // One Firefox for the file. Neither fixture site is seeded, so every session is asked for both.
@@ -460,14 +507,13 @@ describe("the approval prompt, in real Firefox", () => {
       await harness.waitForArmed(prompt);
       await firefox.keys(prompt, [KEY.tab, KEY.tab]);
       assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
-      await firefox.activate(elsewhere);
-      await firefox.activate(prompt);
+      await harness.showElsewhereAndBack(prompt, elsewhere);
+      await harness.waitForArmed(prompt);
       assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
       await pressRefused(prompt, [KEY.enter]);
       await harness.waitForArmed(prompt);
       await firefox.keys(prompt, [KEY.tab, KEY.tab]);
-      await firefox.activate(elsewhere);
-      await firefox.activate(prompt);
+      await harness.showElsewhereAndBack(prompt, elsewhere);
       await harness.waitForArmed(prompt);
       assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "once");
       await pressRefused(prompt, [" "]);
@@ -562,12 +608,15 @@ describe("the approval prompt, in real Firefox", () => {
 
   test("refused key presses start the second again and send focus back to the question", async () => {
     const session = await connected();
+    let recorded: string | undefined;
     try {
       const hits = site.hits("/a");
       const existing = await promptContexts();
       const opening = pending(harness.ok(session, "tab_open", { url: site.url("/a") }));
       const prompt = await harness.promptContext(existing);
       await waitForQuestion(prompt, site.site);
+      await recordInput(prompt);
+      recorded = prompt;
       const elsewhere = await firefox.openContext("about:blank");
 
       // Focus on Allow this session from before the buttons armed does not count, nor does the
@@ -601,13 +650,13 @@ describe("the approval prompt, in real Firefox", () => {
       await harness.waitForArmed(prompt);
       await firefox.keys(prompt, [KEY.tab]);
       assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "no");
-      await firefox.activate(elsewhere);
-      await firefox.activate(prompt);
-      await firefox.keys(prompt, [KEY.enter]);
+      await harness.showElsewhereAndBack(prompt, elsewhere);
+      assert.equal(await firefox.evaluate(prompt, FOCUSED_ANSWER), "no");
+      await pressRefused(prompt, [KEY.enter]);
       await sleep(1100);
       await firefox.keys(prompt, [KEY.enter]);
       await sleep(TYPING_GAP_MS);
-      await firefox.keys(prompt, [KEY.enter, KEY.tab, KEY.enter]);
+      await pressRefused(prompt, [KEY.enter, KEY.tab, KEY.enter]);
       await stillPending(opening, PENDING_MS);
       assert.equal(site.hits("/a"), hits);
 
@@ -650,6 +699,12 @@ describe("the approval prompt, in real Firefox", () => {
       assert.equal(tab.url, site.url("/a"));
       assert.equal(site.hits("/a"), hits + 1);
       await firefox.closeContext(elsewhere);
+    } catch (error: unknown) {
+      if (recorded === undefined) throw error;
+      throw new Error(
+        `${messageOf(error)}\n--- prompt input record ---\n${await inputRecord(recorded)}`,
+        { cause: error },
+      );
     } finally {
       await session.close();
     }
@@ -1086,6 +1141,24 @@ describe("the approval prompt, in real Firefox", () => {
     await firefox.keys(context, keys);
     await waitForStatus(context, REFOCUS);
     assert.equal(await firefox.evaluate(context, FOCUSED_ID), "heading");
+  }
+
+  /**
+   * Records in the prompt page each key, focus, blur and visibility event with the arming as the
+   * page left it: the page's window and document listeners were registered first, so they have run
+   * for that event. A button's own listeners run after, and change nothing an entry shows.
+   */
+  async function recordInput(context: string): Promise<void> {
+    await firefox.evaluate(context, RECORD_INPUT);
+  }
+
+  /** The input record, with the status and the focused element; never throws. */
+  async function inputRecord(context: string): Promise<string> {
+    try {
+      return String(await firefox.evaluate(context, INPUT_RECORD));
+    } catch (error: unknown) {
+      return `input record unreadable: ${messageOf(error)}`;
+    }
   }
 
   /** Focuses an answer button by script, from wherever focus is. */

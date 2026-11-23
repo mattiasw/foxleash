@@ -132,6 +132,13 @@ export interface Harness {
   waitForArmed(context: string, buttons?: number): Promise<void>;
   /**
    * Requires the page's answer buttons, three unless given, to be armed in a focused, visible
+   * page; shows the tab `elsewhere` and waits until the page reports every button unarmed; then
+   * shows the page again and waits until it reports focus and visibility. A switch away and back
+   * within milliseconds can go unseen by the page, which then keeps a counted focus.
+   */
+  showElsewhereAndBack(context: string, elsewhere: string, buttons?: number): Promise<void>;
+  /**
+   * Requires the page's answer buttons, three unless given, to be armed in a focused, visible
    * page; resizes the window through `session`; waits until the page's viewport has changed and
    * its `resize` event has run; then requires every button to be unarmed with the page still
    * focused and visible.
@@ -243,6 +250,27 @@ export function createHarness(): Harness {
     const state = await firefox.evaluate(context, ARMED_STATE);
     if (state !== expected) {
       throw new Error(`${when}, the page has ${String(state)}, not ${expected}${diagnostics()}`);
+    }
+  }
+
+  async function waitForArming(
+    firefox: Firefox,
+    context: string,
+    accept: (state: string) => boolean,
+    what: string,
+  ): Promise<void> {
+    try {
+      await pollUntil(
+        async () => {
+          const state = await firefox.evaluate(context, ARMED_STATE);
+          if (typeof state === "string" && accept(state)) return true;
+          throw new Error(`the page has ${String(state)}`);
+        },
+        PAGE_TIMEOUT_MS,
+        what,
+      );
+    } catch (error: unknown) {
+      throw new Error(`${messageOf(error)}${diagnostics()}`, { cause: error });
     }
   }
 
@@ -481,14 +509,38 @@ export function createHarness(): Harness {
       const firefox = currentFirefox();
       const armed = `${buttons} buttons, 0 unarmed;`;
       await firefox.activate(context);
-      await pollUntil(
-        async () => {
-          const state = await firefox.evaluate(context, ARMED_STATE);
-          if (typeof state === "string" && state.startsWith(armed)) return true;
-          throw new Error(`the page has ${String(state)}`);
-        },
-        PAGE_TIMEOUT_MS,
+      await waitForArming(
+        firefox,
+        context,
+        (state) => state.startsWith(armed),
         "the page's answer buttons to arm",
+      );
+    },
+
+    async showElsewhereAndBack(context, elsewhere, buttons = 3) {
+      assertOpen();
+      const firefox = currentFirefox();
+      // Only an armed, shown page proves by unarming that it saw the switch.
+      await expectArming(
+        firefox,
+        context,
+        `${buttons} buttons, 0 unarmed; ${SHOWN}`,
+        "before the switch away",
+      );
+      await firefox.activate(elsewhere);
+      const unarmed = `${buttons} buttons, ${buttons} unarmed;`;
+      await waitForArming(
+        firefox,
+        context,
+        (state) => state.startsWith(unarmed),
+        "the page's answer buttons to unarm while another tab is shown",
+      );
+      await firefox.activate(context);
+      await waitForArming(
+        firefox,
+        context,
+        (state) => state.endsWith(SHOWN),
+        "the page to be focused and visible again",
       );
     },
 
@@ -585,13 +637,24 @@ export function createHarness(): Harness {
  * `await` of the same promise still sees the outcome and nothing goes unhandled meanwhile.
  */
 export async function stillPending(promise: Promise<unknown>, ms: number): Promise<void> {
-  let settled = false;
-  const mark = () => {
-    settled = true;
-  };
-  promise.then(mark, mark);
+  const started = Date.now();
+  // Formatted only after the wait: a handler that throws would leave the call looking pending.
+  let settled: { after: number; how: () => string } | undefined;
+  promise.then(
+    (value: unknown) => {
+      settled = {
+        after: Date.now() - started,
+        how: () => `resolved with ${JSON.stringify(value)}`,
+      };
+    },
+    (reason: unknown) => {
+      settled = { after: Date.now() - started, how: () => `rejected: ${messageOf(reason)}` };
+    },
+  );
   await sleep(ms);
-  assert.equal(settled, false, `the call settled within ${ms} ms`);
+  if (settled !== undefined) {
+    assert.fail(`the call settled ${settled.after} ms into the ${ms} ms wait: ${settled.how()}`);
+  }
 }
 
 /** `os.tmpdir()`, or literal /tmp when the host's longest socket path would not fit under it. */
@@ -617,7 +680,7 @@ function childEnv(home: string, run: string): Record<string, string> {
   };
 }
 
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
