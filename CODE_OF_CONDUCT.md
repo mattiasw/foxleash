@@ -40,5 +40,7 @@ item, in the `...` menu of that comment, issue or pull request. To report a pers
 maintainer included, use "Block or report" on their GitHub profile. Both kinds of report go to
 GitHub's staff. The maintainer moderates the project's spaces.
 
+To reach the maintainer privately, write to <mattias@mattiaswallander.com>.
+
 Report a security vulnerability as [SECURITY.md](SECURITY.md) describes instead, not in a
 public place.
