@@ -9,6 +9,7 @@ import {
   SETUP_COMMAND,
   UPDATE_COMMAND,
 } from "../packages/protocol/src/index.ts";
+import { listingBullets } from "./check-release.ts";
 
 const ROOT = path.join(import.meta.dirname, "..");
 
@@ -33,18 +34,39 @@ describe("the setup command and the Node.js requirement", () => {
 
 describe("the add-on page address", () => {
   test("is an add-on page on AMO whose last segment is a slug or the add-on id", () => {
-    const match = /^https:\/\/addons\.mozilla\.org\/firefox\/addon\/([^/]+)\/$/.exec(
-      ADDON_PAGE_URL,
-    );
-    const segment = match?.[1];
+    const segment = addonPageSegment();
     assert.ok(segment !== undefined, `${ADDON_PAGE_URL} is not an add-on page on AMO`);
     assert.ok(
       segment === EXTENSION_ID || /^(?!\d+$)[a-z0-9-]+$/.test(segment),
       `${ADDON_PAGE_URL} ends in neither the add-on id nor a lower-case slug`,
     );
   });
+
+  test("ends in the slug the listing gives AMO", () => {
+    const items = listingBullets(read("docs/amo/listing.md"), "## Listing details");
+    if (typeof items === "string") assert.fail(items);
+    const slugs = items
+      .filter((item) => item.text.startsWith("Slug:"))
+      .map((item) => item.text.slice("Slug:".length).trim());
+    assert.equal(slugs.length, 1, "the listing's Listing details section has no single Slug item");
+    const [slug] = slugs;
+    assert.ok(slug !== undefined && slug !== "", "the listing's Slug item is empty");
+    const segment = addonPageSegment();
+    assert.ok(segment !== undefined, `${ADDON_PAGE_URL} is not an add-on page on AMO`);
+    // The address by add-on id names no slug to compare with.
+    if (segment === EXTENSION_ID) return;
+    assert.equal(
+      slug,
+      segment,
+      `the listing's slug differs from the last segment of ${ADDON_PAGE_URL}`,
+    );
+  });
 });
 
 function read(file: string): string {
   return readFileSync(path.join(ROOT, file), "utf8");
+}
+
+function addonPageSegment(): string | undefined {
+  return /^https:\/\/addons\.mozilla\.org\/firefox\/addon\/([^/]+)\/$/.exec(ADDON_PAGE_URL)?.[1];
 }

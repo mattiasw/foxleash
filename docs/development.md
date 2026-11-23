@@ -424,9 +424,9 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
    Then move local `main` to the pushed commit with `git switch main`,
    `git merge --ff-only release/x.y.z` and `git branch -d release/x.y.z`.
 6. Once CI has passed on the pushed commit, sign the XPI from the clean copy,
-   `artifacts/foxleash-x.y.z.xpi`, as an unlisted version on addons.mozilla.org. First run
-   `npm run check:release -- built x.y.z` (with `--dir <path>` when you sign copies kept
-   elsewhere, and then take both files below from that folder) and stop on a failure.
+   `artifacts/foxleash-x.y.z.xpi`, as a listed version on addons.mozilla.org (ADR 0105).
+   First run `npm run check:release -- built x.y.z` (with `--dir <path>` when you sign copies
+   kept elsewhere, and then take both files below from that folder) and stop on a failure.
    `built` also compares the XPI's files with CI's build of the tagged commit. When the
    digests differ, do not sign: this machine built another extension than CI did, and the fix
    is a build change, not a looser check.
@@ -434,13 +434,24 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
    `--source-dir`. Before extracting, check the entry names again as in step 5. Then extract
    it, stop on any unzip warning, and check that the folder holds exactly the XPI's files, as
    regular files (web-ext follows a symbolic link).
-   Run `web-ext sign` with `--channel unlisted`, with `WEB_EXT_API_KEY` and
+   Before each listed submission, set what differs between the add-on's listing on AMO and
+   `docs/amo/listing.md` at the tag, each section where the file's preface says: AMO takes a
+   listed version only when the add-on has a name, a summary and categories, and Mozilla
+   reviews each version against the whole listing.
+   Run `web-ext sign` with `--channel listed`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
    attached by `--upload-source-code artifacts/foxleash-source-x.y.z.zip`, and with
    `--amo-metadata` naming a JSON file whose `version` object carries
-   `"compatibility": ["firefox"]` and `approval_notes`. The approval notes are the body of the
-   Permissions section of `docs/amo/listing.md`, which goes with every version; the
-   compatibility follows its Compatibility section.
+   `"compatibility": ["firefox"]`, `approval_notes` and the license. The approval notes are the
+   body of the Permissions section of `docs/amo/listing.md`, which goes with every version; the
+   compatibility follows its Compatibility section and the license its Listing details
+   section: `"license": "<slug>"` for a license on AMO's list, otherwise
+   `"custom_license": { "name": { "en-US": "<name>" }, "text": { "en-US": "<text>" } }` with
+   the custom license name and text given there, never both.
+   A listed version can wait for Mozilla's review, and web-ext's wait can end before the review
+   does: web-ext then reports `Approval: timeout exceeded`, and the version's file has the
+   status `unreviewed` on AMO. Fetch the signed file once AMO has approved it (its status is
+   then `public`); steps 7 and 8 follow.
 7. Put the signed XPI in `web-ext-artifacts/foxleash-x.y.z.xpi` and run
    `npm run check:release -- artifacts x.y.z`.
 8. Create a draft GitHub release for the tag `vx.y.z` with `foxleash-x.y.z.xpi` attached,
@@ -573,9 +584,6 @@ at the release commit:
    `LICENSE` or description alone could restore an old `dist`.
 2. `npm pack ./apps/server/dist` and check that the tarball holds exactly the five files above.
 3. `npm publish ./apps/server/dist --access public`.
-
-Setup's add-on page answers only once the add-on is listed on Firefox Add-ons; until then, a
-signed `.xpi` goes in with `--xpi`.
 
 ## Probing synthetic input
 

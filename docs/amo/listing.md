@@ -26,6 +26,10 @@
 >   submitted for, and why.
 > - **Screenshots**: AMO's screenshots of the add-on, uploaded from `docs/amo/screenshots/`
 >   with the captions given there, in that order; not pasted text.
+> - **Listing details**: the add-on's other fields on AMO (slug, category, license, homepage,
+>   support site), set on the add-on and its versions, not pasted text. The slug is the last
+>   segment of `ADDON_PAGE_URL` unless that address is the one by add-on id, in which case
+>   the slug line holds the slug AMO has for the add-on.
 >
 > The release check fails when the Summary, the Description or the Permissions section is
 > longer than AMO takes.
@@ -140,7 +144,7 @@ Why Foxleash requests each permission:
 
 Firefox for Android: not supported (no native messaging or tab groups).
 
-The native messaging host is the foxleash program (apps/server/, Node.js 24) from the same repository, private during development: not extension code, not in the source archive. We provide it on request.
+The native messaging host is the foxleash program (apps/server/, Node.js 24), in the same public repository, https://github.com/mattiasw/foxleash: not extension code, not in the source archive.
 
 ## Data collection and handling
 
@@ -247,3 +251,14 @@ The files are 1280x800, AMO's recommended size; `npm run screenshots:amo` retake
 - `docs/amo/screenshots/1-approval-prompt.png`: Before the agent opens a site you have not allowed, Foxleash asks you in Firefox.
 - `docs/amo/screenshots/2-tab-group.png`: The pages the agent opens stay together in an orange Foxleash tab group.
 - `docs/amo/screenshots/3-settings.png`: In the settings you can see and stop running agent sessions, revoke the sites you allowed and edit the list of blocked sites.
+
+## Listing details
+
+- Slug: foxleash
+- Category: other
+- License: GPL-3.0-or-later, given to AMO as a custom license, because AMO's license list has no GPL-3.0-or-later slug and GPL-3.0-only would misstate the license
+- Custom license name: GNU General Public License, version 3 or later
+- Custom license text: Foxleash is free software under the GNU General Public License, version 3 or later (GPL-3.0-or-later). The full text: https://github.com/mattiasw/foxleash/blob/main/LICENSE
+- Homepage: https://github.com/mattiasw/foxleash
+- Support site: https://github.com/mattiasw/foxleash/issues
+- Support email: none
