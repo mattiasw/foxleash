@@ -42,6 +42,7 @@ import { parseConsoleResult } from "./console-messages.ts";
 import type { ConsoleRecording } from "./console-recording.ts";
 import { type Downloads, downloadNameProblem } from "./downloads.ts";
 import type { FileGuard } from "./file-guard.ts";
+import { CATCHER_OPTIONS, catchFilePickers } from "./file-picker-catcher.ts";
 import { foreignFramePlan } from "./foreign-frames.ts";
 import { watchFrameErrors } from "./frame-errors.ts";
 import type { LoadHops } from "./load-hops.ts";
@@ -1438,22 +1439,54 @@ export function createHandlers<Handle>({
         "upload_file",
         { ref, files: handed },
         generation,
-        () => watch.sent(),
+        () => {
+          navigations.acted(session, tabId);
+          watch.sent();
+        },
+        (site) => installCatcher(tabId, site),
       );
-      // The reply comes from the page's content process: only its own target is read.
+      // The reply comes from the page's content process: only its own target and picker are read.
       const target = isRecord(reply) ? ownField(reply, "target") : undefined;
-      if (target !== "input" && target !== "drop") {
+      const picker = isRecord(reply) ? ownField(reply, "picker") : undefined;
+      if (
+        (target !== "input" && target !== "drop") ||
+        (picker !== undefined && (picker !== true || target !== "input"))
+      ) {
         throw new ToolError(
           "page_error",
           `Foxleash could not complete the request in the page in tab ${tabId}.`,
         );
       }
       const listed = files.map(({ name, size }) => ({ name, size }));
-      result = { target, files: listed, after: await watch.after(reply) };
+      result = {
+        target,
+        ...(picker === true ? { picker: true } : {}),
+        files: listed,
+        after: await watch.after(reply),
+      };
     } finally {
       watch.stop();
     }
     return viewed ? withActView(session, tabId, result, [ref], started, generation) : result;
+  }
+
+  /**
+   * Puts the file picker catcher into the top document of the tab, for a button or link that
+   * upload_file clicks. Runs only after the page tools' gate; a failure leaves the click route to
+   * refuse in the page.
+   */
+  async function installCatcher(tabId: number, site: string): Promise<void> {
+    try {
+      await browser.scripting.executeScript({
+        target: { tabId, frameIds: [0] },
+        func: catchFilePickers,
+        args: [site, CATCHER_OPTIONS],
+        world: "MAIN",
+        injectImmediately: true,
+      });
+    } catch {
+      // The content script refuses the click route without the catcher's answer.
+    }
   }
 
   /**

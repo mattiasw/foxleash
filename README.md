@@ -317,7 +317,8 @@ are simulated. Some things therefore do not work:
 
 - actions that need a real user gesture: opening pop-up windows and new tabs (unless you
   allow pop-ups for the site), writing to the clipboard, entering fullscreen, opening a file
-  picker,
+  picker (when the agent names a button that would open one, `upload_file` clicks it and gives
+  the files to the page instead),
 - sites that ignore simulated events.
 
 The agent is told about these limits and asks you to take such steps yourself.

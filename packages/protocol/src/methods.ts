@@ -490,6 +490,11 @@ export interface ActAfter {
 export const UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
 /** The most bytes one upload_chunk carries: its base64 and envelope stay under 1 MB. */
 export const UPLOAD_CHUNK_BYTES = 512 * 1024;
+/**
+ * How long upload_file waits after its click for the page to ask for a file picker: Firefox's
+ * transient user activation lasts as long, so a page could not open one later after a real click.
+ */
+export const UPLOAD_PICKER_WAIT_MS = 5_000;
 /** The largest file download saves. */
 export const DOWNLOAD_MAX_BYTES = 100 * 1024 * 1024;
 
@@ -560,6 +565,11 @@ export interface Methods {
     };
     result: {
       target: "input" | "drop";
+      /**
+       * True when Foxleash clicked `ref` and put the files into the file field the page opened,
+       * with `target` "input"; an extension older than the field sends none.
+       */
+      picker?: true;
       files: { name: string; size: number }[];
       after?: ActAfter;
       view?: PageView;

@@ -181,6 +181,97 @@ describe("page script requests", { timeout: 10000 }, () => {
     assertNothingSent(fake);
   });
 
+  it("runs prepare with the checked site after the content script's injection, before the message", async () => {
+    const { fake, pages, open, grant, timers } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/page`);
+    fake.setContentScript(tab.id, answering("clicked"));
+    const timersBefore = timers.pending();
+    const seen: unknown[] = [];
+    const prepare = async (site: string) => {
+      seen.push(["prepare", site, fake.injections.length, fake.tabMessages.length]);
+    };
+    const onSend = () => seen.push(["send", fake.tabMessages.length]);
+    assert.equal(await pages.request("s1", tab.id, "click", {}, 0, onSend, prepare), "clicked");
+    assert.deepEqual(seen, [
+      ["prepare", SITE, 1, 0],
+      ["send", 0],
+    ]);
+    assert.equal(fake.tabMessages.length, 1);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
+  it("does not run prepare when the gate refuses or the content script is not injected", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const approvedNot = await open("s1");
+    fake.navigateByUser(approvedNot.id, "https://c.example/");
+    await flush();
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, contentScript(SITE));
+    let prepared = 0;
+    const prepare = async () => {
+      prepared += 1;
+    };
+    await rejectsWith(
+      pages.request("s1", approvedNot.id, "upload_file", {}, 0, undefined, prepare),
+      "site_not_approved",
+    );
+    fake.allUrls = false;
+    await rejectsWith(
+      pages.request("s1", tab.id, "upload_file", {}, 0, undefined, prepare),
+      "site_access_withheld",
+    );
+    fake.allUrls = true;
+    fake.injectionResults = [{ frameId: 0, error: new Error("refused") }];
+    await rejectsWith(
+      pages.request("s1", tab.id, "upload_file", {}, 0, undefined, prepare),
+      "page_unreachable",
+    );
+    assert.equal(prepared, 0);
+    assert.deepEqual(fake.tabMessages, []);
+  });
+
+  it("sends the request when prepare fails", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, contentScript(SITE));
+    const rejecting = () => Promise.reject(new Error("no catcher"));
+    const throwing = (): Promise<void> => {
+      throw new Error("no catcher");
+    };
+    for (const prepare of [rejecting, throwing]) {
+      assert.deepEqual(await pages.request("s1", tab.id, "echo", { a: 1 }, 0, undefined, prepare), {
+        echoed: { a: 1 },
+      });
+    }
+    assert.equal(fake.tabMessages.length, 2);
+  });
+
+  it("times out a prepare that never settles within the injection's limit, sending nothing", async () => {
+    const { fake, pages, open, grant, timers } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, contentScript(SITE));
+    const timersBefore = timers.pending();
+    const prepare = () => new Promise<void>(() => {});
+    const { request, settled } = track(
+      pages.request("s1", tab.id, "upload_file", {}, 0, undefined, prepare),
+    );
+    await flush();
+    timers.advance(PAGE_INJECTION_MS - 1);
+    await flush();
+    assert.equal(settled(), false);
+    timers.advance(1);
+    await assert.rejects(request, {
+      code: "page_timeout",
+      message: `Foxleash could not get into the page in tab ${tab.id} in time; try again.`,
+    });
+    assert.deepEqual(fake.tabMessages, []);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
   it("acts on a site the session allowed only for itself", async () => {
     const { fake, pages, open, sessions } = setup();
     const tab = await open("s1");
@@ -635,6 +726,30 @@ describe("page script requests", { timeout: 10000 }, () => {
   it("bounds both waits below the host's 60 s request timeout, as probe_input does", () => {
     assert.equal(PAGE_INJECTION_MS, 20_000);
     assert.equal(PAGE_REPLY_MS, 10_000);
+  });
+
+  for (const type of ["click", "drag", "type", "press_key", "fill_form", "upload_file"]) {
+    it(`says ${type} ran when its page went away before the answer`, async () => {
+      const { fake, pages, open, grant } = setup();
+      await grant(SITE);
+      const tab = await open("s1", `${SITE}/`);
+      await assert.rejects(pages.request("s1", tab.id, type, {}, 0), {
+        code: "page_changed",
+        message: `The page in tab ${tab.id} changed after ${type} ran; read the page before you repeat it.`,
+      });
+      assert.equal(fake.tabMessages.length, 1);
+    });
+  }
+
+  it("tells a read to try again when its page went away before the answer", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    await assert.rejects(pages.request("s1", tab.id, "read_page", {}, 0), {
+      code: "page_changed",
+      message: `The page in tab ${tab.id} changed while Foxleash was working in it; try again.`,
+    });
+    assert.equal(fake.tabMessages.length, 1);
   });
 
   it("refuses when no content script answers in the tab", async () => {
@@ -1316,6 +1431,30 @@ describe("page script requests", { timeout: 10000 }, () => {
       land(fake, tab.id, NEXT, answering("clicked"));
       assert.equal(await request, "clicked");
       assert.equal(injections, 2);
+      assert.equal(fake.tabMessages.length, 1);
+    });
+
+    it("runs prepare again in a second run, in the page the navigation brings", async (t) => {
+      const { fake, pages, tab } = await grantedTab();
+      let injections = 0;
+      t.mock.method(fake.browser.scripting, "executeScript", async () => {
+        injections += 1;
+        return [{ frameId: 0, result: null }];
+      });
+      const seen: unknown[] = [];
+      const prepare = async (site: string) => {
+        seen.push([site, injections]);
+        if (injections === 1) begin(fake, tab.id, NEXT);
+      };
+      const request = pages.request("s1", tab.id, "upload_file", {}, 0, undefined, prepare);
+      await flush();
+      assert.deepEqual(fake.tabMessages, []);
+      land(fake, tab.id, NEXT, answering("uploaded"));
+      assert.equal(await request, "uploaded");
+      assert.deepEqual(seen, [
+        [SITE, 1],
+        [SITE, 2],
+      ]);
       assert.equal(fake.tabMessages.length, 1);
     });
 

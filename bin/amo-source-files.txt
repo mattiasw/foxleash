@@ -23,6 +23,7 @@ apps/extension/src/downloads.ts
 apps/extension/src/element-rect.ts
 apps/extension/src/element-refs.ts
 apps/extension/src/file-guard.ts
+apps/extension/src/file-picker-catcher.ts
 apps/extension/src/first-run.ts
 apps/extension/src/flat-tree.ts
 apps/extension/src/foreign-frames.ts

@@ -64,7 +64,20 @@ if (!Object.hasOwn(globalThis, STARTED)) {
     },
     element_rect: (params) => elementRect(params, { refs }),
     password_fields: () => passwordFieldsRevealed({ passwordFields }),
-    upload_file: act(watched, (params) => uploadFile(params, { refs }), byRef),
+    upload_file: act(
+      watched,
+      (params) =>
+        uploadFile(params, {
+          refs,
+          passwordFields,
+          pointer,
+          click: (ref) =>
+            withoutProtectedGetSubmit(memory, () =>
+              actions.click({ ref, button: "left", doubleClick: false }, { refs, pointer }),
+            ),
+        }),
+      byRef,
+    ),
     click: act(
       watched,
       (params) =>

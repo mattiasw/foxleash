@@ -2,6 +2,8 @@
 
 **Status:** Accepted, 2026-11-18.
 
+Amended 2026-11-24: the click upload_file makes on a button or link runs under the same guard ([0107](0107-upload-file-catches-the-file-picker-a-click-opens.md)).
+
 ## Context
 
 Foxleash withholds the values of protected fields from text results: password fields, one-time
@@ -22,8 +24,8 @@ ran before the browser submitted the form.
 
 ## Decision
 
-While `click` or `press_key` runs, the content script (`withoutProtectedGetSubmit` in
-`apps/extension/src/content.ts`) cancels a submission that the page did not cancel itself, that is
+While `click`, `press_key` or the click `upload_file` makes on a button or link runs, the content
+script (`withoutProtectedGetSubmit` in `apps/extension/src/content.ts`) cancels a submission that the page did not cancel itself, that is
 sent with GET and whose form would send the value of a protected field, and the act then fails
 with the code `protected_get_form` (`apps/extension/src/page-messages.ts`), whose message names
 the field. The refusal takes precedence over the act's result; an error the act throws itself
@@ -56,7 +58,8 @@ sent.
   with a message saying Foxleash could not check the form.
 - **Synchronous.** `actions.click` and `input.pressKey` fire the submit event synchronously
   (`button.click()`, `requestSubmit`, the synthetic click's activation behaviour), so the guard
-  is synchronous. Other act tools send no click or Enter that submits and get no guard.
+  is synchronous. `upload_file` clicks a button or link through `actions.click` under the same
+  guard. Other act tools send no click or Enter that submits and get no guard.
 - A submit event a page script makes during the act is not told apart from the browser's: at
   worst it is refused needlessly.
 

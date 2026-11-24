@@ -76,7 +76,9 @@ export interface PageScripts {
    * element is refused, unsent, when the tab began loading another page since the request started
    * or the request waited for one. Refused with `session_ended`, unsent, once the session ended
    * after `generation` was read. `onSend` runs right before each send of the request's message to
-   * the page, after the waits and the gate's checks.
+   * the page, after the waits and the gate's checks. `prepare` runs with the checked site on each
+   * run, after the gate's checks and the content script's injection and before the message, within
+   * the injection's time limit; its failure does not refuse the request.
    */
   request(
     session: string,
@@ -85,6 +87,7 @@ export interface PageScripts {
     params: Record<string, unknown>,
     generation: number,
     onSend?: () => void,
+    prepare?: (site: string) => Promise<void>,
   ): Promise<unknown>;
 }
 
@@ -104,6 +107,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     params: Record<string, unknown>,
     generation: number,
     onSend?: () => void,
+    prepare?: (site: string) => Promise<void>,
   ): Promise<unknown> {
     const started = navigations.begun(tabId);
     let late = false;
@@ -118,6 +122,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         params,
         { started, late: () => late, generation },
         onSend,
+        prepare,
       );
     } finally {
       timers.clearTimeout(cutoff);
@@ -137,6 +142,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     params: Record<string, unknown>,
     { started, late, generation }: { started: number; late: () => boolean; generation: number },
     onSend: (() => void) | undefined,
+    prepare: ((site: string) => Promise<void>) | undefined,
   ): Promise<unknown> {
     const acting = ACTING_REQUEST_TYPES.includes(type);
     const blind = aimsWithoutRef(type, params);
@@ -153,7 +159,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         if (acting && !(await mayReachAllSites(browser))) throw actNeedsAllSites(tabId);
         // A fresh tag for every message, so no two documents can take the same one.
         const tag = TAGLESS_REQUEST_TYPES.includes(type) ? null : await reserveTag(tabId);
-        await inject(tabId, site);
+        await inject(tabId, site, prepare);
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
         if (blind && (waited || navigations.begun(tabId) > started)) throw unseenPage(tabId, type);
@@ -165,8 +171,8 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         const reply = await bounded(
           () => browser.tabs.sendMessage(tabId, message, { frameId: 0 }),
           PAGE_REPLY_MS,
-          // The document went away, or the reply could not be cloned.
-          pageChanged(tabId),
+          // The document went away, or the reply could not be cloned. An act sent has run.
+          acting ? pageChanged(tabId, type) : pageChanged(tabId),
           replyTimeout(tabId, type),
         );
         if (acting) await checkAfterAct(session, tabId, site, type, late);
@@ -268,9 +274,15 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     }
   }
 
-  async function inject(tabId: number, site: string): Promise<void> {
+  /** Injects the content script, then runs `prepare`, all within PAGE_INJECTION_MS. */
+  async function inject(
+    tabId: number,
+    site: string,
+    prepare: ((site: string) => Promise<void>) | undefined,
+  ): Promise<void> {
     const refused = await bounded(
       async () => {
+        let injected = false;
         try {
           const frames = await browser.scripting.executeScript({
             target: { tabId, frameIds: [0] },
@@ -279,9 +291,17 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
             injectImmediately: true,
           });
           const top = frames.find((frame) => frame.frameId === 0);
-          if (top !== undefined && top.error === undefined) return undefined;
+          injected = top !== undefined && top.error === undefined;
         } catch {
           // Asked below, like a frame that refused the script.
+        }
+        if (injected) {
+          try {
+            await prepare?.(site);
+          } catch {
+            // A preparation that failed leaves the page's handler to refuse what needed it.
+          }
+          return undefined;
         }
         // Resolved, not thrown: bounded turns every rejection, a refused `contains` too, into
         // pageUnreachable.

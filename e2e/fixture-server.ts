@@ -46,6 +46,7 @@ export const TITLES = {
   shotForeignInner: "Fixture shot foreign inner",
   shotForeignPageFrame: "Fixture shot foreign page frame",
   upload: "Fixture upload",
+  uploadHeld: "Fixture upload held",
   act: "Fixture act",
   actLinks: "Fixture act links",
   actNewTab: "Fixture act new tab",
@@ -805,6 +806,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, PROTECTED_SENT_PAGE);
     } else if (path === "/upload") {
       sendHtml(response, UPLOAD_PAGE);
+    } else if (path === "/upload-held") {
+      sendHtml(response, UPLOAD_HELD_PAGE);
     } else if (path === "/act") {
       sendHtml(response, ACT_PAGE);
     } else if (path === "/act-links") {
@@ -3382,9 +3385,17 @@ function foreignFramePage(other: string): string {
 }
 
 // Four file fields, one taking several files, one with no label and one with an explicit textbox
-// role, a drop zone that cancels dragover and drop, and a button that takes no drops. The page
-// keeps the files each target got in window.received and the events it saw in window.events, with
-// the drops that reached the document.
+// role, a drop zone that cancels dragover and drop, and a region that takes no drops. Compose has
+// Gmail's shape: once a drag with files enters, it shows a drop area over itself in a later task,
+// and only that area takes the drop, while the whole section cancels dragover. Late drop area
+// shows its drop area only after the first dragover. Not taken cancels dragover but not the drop.
+// Attach files makes a file field it never adds to the document and calls its click(), as Gmail's
+// does; Show picker calls showPicker() on a hidden file field in a later task; No picker does
+// nothing; Forged picker hands a file field of another document over as if the catcher had caught
+// it, and Forged text field a text field of its own that says its type is file. Send form would
+// send a filled password field with GET; Leave this page leads to another.
+// The page keeps the files each target got in window.received and the events it saw in
+// window.events, with the drops that reached the document.
 const UPLOAD_PAGE = `<!doctype html>
 <html><head><meta charset="utf-8"><title>${TITLES.upload}</title></head>
 <body>
@@ -3394,18 +3405,47 @@ const UPLOAD_PAGE = `<!doctype html>
 <input id="unnamed" type="file">
 <input id="typed" type="file" role="textbox" aria-label="Typed file">
 <section id="zone" aria-label="Drop zone"><p>Drop files here</p></section>
-<button id="plain" type="button">No drops</button>
+<section id="plain" aria-label="No drops"><p>Takes nothing</p></section>
+<section id="compose" aria-label="Compose" style="position: relative">
+<div id="subject" role="textbox" aria-label="Subject" contenteditable="true" style="min-height: 1.5em"></div>
+<div id="body" role="textbox" aria-label="Message body" contenteditable="true" style="height: 120px"></div>
+<div id="overlay" hidden style="position: absolute; inset: 0; background: #eef">Drop to attach</div>
+</section>
+<section id="late" aria-label="Late drop area" style="position: relative">
+<p>Drop files here, once the page is ready</p>
+<div id="late-overlay" hidden style="position: absolute; inset: 0; background: #efe">Drop now</div>
+</section>
+<section id="notaken" aria-label="Not taken"><p>Takes the drag, not the files</p></section>
+<div id="attach" role="button" tabindex="0" aria-label="Attach files">Attach</div>
+<button id="picker" type="button">Show picker</button>
+<input id="hidden-picker" type="file" hidden>
+<button id="nopicker" type="button">No picker</button>
+<button id="forged" type="button">Forged picker</button>
+<button id="forged-text" type="button">Forged text field</button>
+<form action="/upload-sent" method="get">
+<input type="password" name="pin" aria-label="PIN" value="pin-Q7xa">
+<button id="send" type="submit">Send form</button>
+</form>
+<a id="leave" href="/act">Leave this page</a>
 </main>
 <script>
-window.received = { single: [], many: [], unnamed: [], typed: [], zone: [] };
-window.events = { single: [], many: [], unnamed: [], typed: [], zone: [], documentDrops: 0 };
-for (const id of ["single", "many", "unnamed", "typed"]) {
-  const input = document.getElementById(id);
-  input.addEventListener("input", () => window.events[id].push("input"));
+window.received = {
+  single: [], many: [], unnamed: [], typed: [], zone: [], compose: [], late: [], attach: [],
+  picker: [], forged: [], forgedText: [],
+};
+window.events = {
+  single: [], many: [], unnamed: [], typed: [], zone: [], compose: [], late: [], notaken: [],
+  attach: [], picker: [], forged: [], forgedText: [], documentDrops: 0,
+};
+function record(key, input) {
+  input.addEventListener("input", () => window.events[key].push("input"));
   input.addEventListener("change", () => {
-    window.events[id].push("change");
-    window.received[id] = Array.from(input.files);
+    window.events[key].push("change");
+    window.received[key] = Array.from(input.files);
   });
+}
+for (const id of ["single", "many", "unnamed", "typed"]) {
+  record(id, document.getElementById(id));
 }
 const zone = document.getElementById("zone");
 zone.addEventListener("dragenter", (event) => event.preventDefault());
@@ -3415,8 +3455,103 @@ zone.addEventListener("drop", (event) => {
   window.events.zone.push("drop");
   window.received.zone = Array.from(event.dataTransfer.files);
 });
+const compose = document.getElementById("compose");
+const overlay = document.getElementById("overlay");
+let depth = 0;
+for (const type of ["dragenter", "dragleave", "dragover", "drop"]) {
+  compose.addEventListener(type, (event) => {
+    window.events.compose.push(type + " " + event.target.id);
+  });
+}
+compose.addEventListener("dragenter", (event) => {
+  depth += 1;
+  if (depth === 1 && Array.from(event.dataTransfer.types).includes("Files")) {
+    setTimeout(() => {
+      overlay.hidden = false;
+    }, 0);
+  }
+});
+compose.addEventListener("dragleave", () => {
+  depth -= 1;
+  if (depth === 0) overlay.hidden = true;
+});
+compose.addEventListener("dragover", (event) => event.preventDefault());
+overlay.addEventListener("drop", (event) => {
+  if (overlay.hidden) return;
+  event.preventDefault();
+  overlay.hidden = true;
+  depth = 0;
+  window.received.compose = Array.from(event.dataTransfer.files);
+  window.dropPoint = { x: event.clientX, y: event.clientY };
+});
+const late = document.getElementById("late");
+const lateOverlay = document.getElementById("late-overlay");
+let lateSeen = false;
+late.addEventListener("dragover", (event) => {
+  if (!lateSeen) {
+    lateSeen = true;
+    setTimeout(() => {
+      lateOverlay.hidden = false;
+    }, 0);
+  }
+  if (!lateOverlay.hidden) event.preventDefault();
+});
+lateOverlay.addEventListener("drop", (event) => {
+  if (lateOverlay.hidden) return;
+  event.preventDefault();
+  window.events.late.push("drop");
+  window.received.late = Array.from(event.dataTransfer.files);
+});
+const notaken = document.getElementById("notaken");
+notaken.addEventListener("dragenter", (event) => event.preventDefault());
+notaken.addEventListener("dragover", (event) => event.preventDefault());
+notaken.addEventListener("drop", () => {
+  window.events.notaken.push("drop");
+});
+document.getElementById("attach").addEventListener("click", () => {
+  const input = document.createElement("input");
+  input.type = "file";
+  input.multiple = true;
+  record("attach", input);
+  input.click();
+});
+const hiddenPicker = document.getElementById("hidden-picker");
+record("picker", hiddenPicker);
+document.getElementById("picker").addEventListener("click", () => {
+  setTimeout(() => hiddenPicker.showPicker(), 0);
+});
+document.getElementById("forged").addEventListener("click", () => {
+  const input = document.implementation.createHTMLDocument("").createElement("input");
+  input.type = "file";
+  record("forged", input);
+  window.dispatchEvent(new CustomEvent("foxleash-file-picker-caught", { detail: input }));
+});
+document.getElementById("forged-text").addEventListener("click", () => {
+  const input = document.createElement("input");
+  Object.defineProperty(input, "type", { value: "file" });
+  record("forgedText", input);
+  window.dispatchEvent(new CustomEvent("foxleash-file-picker-caught", { detail: input }));
+});
 document.addEventListener("drop", () => {
   window.events.documentDrops += 1;
+});
+</script>
+</body></html>
+`;
+
+// Takes the name Foxleash's file picker catcher installs under before the catcher can, so no
+// catcher answers upload_file; the page counts the clicks its button gets.
+const UPLOAD_HELD_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.uploadHeld}</title></head>
+<body>
+<main>
+<button id="held" type="button">Attach held</button>
+</main>
+<script>
+Object.defineProperty(window, "__foxleashFilePicker", { value: "the page's own" });
+window.clicks = 0;
+document.getElementById("held").addEventListener("click", () => {
+  window.clicks += 1;
 });
 </script>
 </body></html>

@@ -130,7 +130,7 @@ Foxleash asks before it opens a page on a site you have not approved, and it ref
 
 If your agent can also run programs on your computer, it can talk to the Foxleash program directly, and then some of these checks do not apply to it, as the privacy policy describes. Your agent's own permission settings still apply on top of this, but do not rely on them alone. Avoid using Foxleash on sites where a mistake is costly (banking, health records, admin panels with destructive actions), and stay nearby while it works.
 
-Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (writing to the clipboard, entering fullscreen, opening a file picker, and opening pop-up windows and new tabs unless you allow pop-ups for the site) do not work, and neither do sites that ignore simulated events.
+Firefox gives extensions no way to produce real user input, so all clicks and keystrokes are simulated. Actions that need a real user gesture (writing to the clipboard, entering fullscreen, opening a file picker, and opening pop-up windows and new tabs unless you allow pop-ups for the site) do not work, and neither do sites that ignore simulated events. A file picker never opens, but when the agent uploads files with a page's button that would open one, such as Attach files, Foxleash clicks it and gives the files to the page instead.
 
 Foxleash does not work on Firefox for Android. It does not run in Firefox's private windows, so the agent never sees or acts in them, and it does not work at all when Firefox is set to never remember history, which makes every window private.
 

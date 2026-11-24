@@ -673,8 +673,37 @@ ask for `batch` too to keep it. Foxleash's own checks apply to every step.
 ### `upload_file`
 
 `upload_file` uploads files from your computer, given the files and an element from
-`read_page`. A file field gets the files as if you had picked them; any other element gets them
-dropped on it, which works only where the page takes dropped files.
+`read_page`. A file field gets the files as if you had picked them; a button or link that opens
+a file picker, such as an Attach files button, is clicked and the page's file field gets them;
+any other element gets them dropped on it.
+
+A button or link is an element whose role in `read_page` is `button` or `link`, such as a
+`<button>`, an `<a href>` or a `<div role="button">`. Foxleash clicks it as `click` does, with
+the same refusals (a link or form that leads to another site, a form that would send a protected
+field with GET, an element that is hidden or covered), and no file picker opens: when the page
+asks to open one for a file field of the page, with `click()` or `showPicker()`, Foxleash puts the
+files into that field instead, with the same checks and the same `input` and `change` events as
+for a file field it names, and says it clicked the element and filled the field the page opened.
+The page may ask straight away or up to 5 seconds after the click, the time Firefox allows a
+page to open a picker after a real click. When it asks for none in that time, the call is refused
+after the 5 seconds with a message that says the click happened, so the agent reads the page
+rather than clicking again; the click may have opened a menu or a dialog with a button or link to
+use (an item whose role is `menuitem` gets a drop, as any other element does). A drop zone with
+the role `button` is clicked too, not dropped on. When the page does not let Foxleash take its
+file picker, the call is refused without a click. One such upload at a time runs in a page;
+a second is refused while the first waits. A click that loads another page ends the call with a
+message that says `upload_file` ran.
+
+A drop is sent as a drag from outside the page would be. Foxleash scrolls the element into view
+and drops at the centre of its visible part; an element that shows nothing in the viewport, is
+covered there by another element, or is a frame is refused, as for a click, before any drag
+event. After the drag enters, Foxleash pauses twice, about 20 ms each (about a second each in a
+tab that is not shown), so the page can show a drop area over the element, as Gmail's compose
+window does; when one appears at the point, the drag moves onto it and the drop lands there. A
+drop area that a page shows later than that is missed. The drop is refused when the page does not
+take the drag (it does not cancel `dragover`), and also when it takes the drag but not the files
+(it does not cancel the `drop`), with a message that says to use a file field or the button that
+opens the page's file picker instead.
 
 Foxleash reads files only from the upload folders, never files or folders whose names start with
 a dot, files named like keys or files that hold a PEM, OpenSSH, PuTTY, PGP or age private key,

@@ -38,6 +38,7 @@ import {
   type WindowUpdate,
 } from "./fake-browser.ts";
 import { createFileGuard } from "./file-guard.ts";
+import { CATCHER_OPTIONS, catchFilePickers } from "./file-picker-catcher.ts";
 import {
   BLANK_RELOAD_TIMEOUT_MS,
   CAPTURE_TIMEOUT_MS,
@@ -6833,6 +6834,25 @@ describe("wait_for", { timeout: 10000 }, () => {
     });
   });
 
+  it("returns at once for a navigation that finished since the session's upload_file", async () => {
+    const { fake, call, open, grant, replyWith } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    replyWith(async () => ({ target: "input", picker: true }));
+    await call("s1", "upload_file", {
+      tabId: tab.id,
+      ref: "b5",
+      upload: "u1",
+      files: [{ name: "a.txt", type: "text/plain", size: 1 }],
+    });
+    fake.navigateByUser(tab.id, "https://a.example/next");
+    await flush();
+    assert.deepEqual(await call("s1", "wait_for", { tabId: tab.id, navigation: true }), {
+      tab: { ...tab, url: "https://a.example/next", title: "Title of https://a.example/next" },
+    });
+  });
+
   it("keeps another session's act in the tab from moving this session's mark", async () => {
     const { fake, call, open, grant, replyWith, timers } = setup();
     await grant("https://a.example");
@@ -10164,7 +10184,64 @@ describe("upload_file", { timeout: 10000 }, () => {
     });
   });
 
-  it("refuses a reply without a target it knows as page_error", async () => {
+  it("puts the file picker catcher into the tab's top document, in the main world, before the page call", async () => {
+    const { call, fake, replyWith } = setup();
+    let injectedFirst = 0;
+    replyWith(async () => {
+      injectedFirst = fake.injections.length;
+      return { target: "input" };
+    });
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    await call("s1", "upload_file", valid());
+    assert.equal(injectedFirst, 1);
+    assert.deepEqual(fake.injections, [
+      {
+        tabId: 3,
+        frameIds: [0],
+        func: catchFilePickers,
+        args: [PAGE_SITE, CATCHER_OPTIONS],
+        world: "MAIN",
+        injectImmediately: true,
+      },
+    ]);
+  });
+
+  it("injects no catcher for a call refused before its page request", async () => {
+    const { call, fake } = setup();
+    await assert.rejects(call("s1", "upload_file", { ...valid(), ref: 5 }), {
+      code: "invalid_params",
+    });
+    await assert.rejects(call("s1", "upload_file", valid()), { code: "invalid_params" });
+    assert.deepEqual(fake.injections, []);
+  });
+
+  it("answers the upload when the catcher cannot be injected", async () => {
+    const { call, fake, prepareErrors, replyWith } = setup();
+    replyWith(async () => ({ target: "drop" }));
+    fake.failNextInjection(new Error("Missing host permission for the tab"));
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    assert.deepEqual(await call("s1", "upload_file", valid()), {
+      target: "drop",
+      files: [{ name: "a.txt", size: 1 }],
+      after: UNKNOWN,
+    });
+    assert.equal(fake.injections.length, 1);
+    assert.deepEqual(prepareErrors, []);
+  });
+
+  it("says when the files went into the file field the page opened", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ target: "input", picker: true }));
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    assert.deepEqual(await call("s1", "upload_file", valid()), {
+      target: "input",
+      picker: true,
+      files: [{ name: "a.txt", size: 1 }],
+      after: UNKNOWN,
+    });
+  });
+
+  it("refuses a reply without a target it knows, or with a picker it does not, as page_error", async () => {
     const { call, replyWith } = setup();
     for (const reply of [
       undefined,
@@ -10174,6 +10251,10 @@ describe("upload_file", { timeout: 10000 }, () => {
       { target: "file" },
       {},
       Object.create({ target: "input" }),
+      { target: "input", picker: false },
+      { target: "input", picker: "yes" },
+      { target: "input", picker: null },
+      { target: "drop", picker: true },
     ]) {
       await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
       replyWith(async () => reply);
@@ -11326,6 +11407,8 @@ function setup({
   };
   const uploads = createUploads(timers);
   const pageCalls: PageCall[] = [];
+  // What a request's preparation rejected with, which the real page scripts ignore.
+  const prepareErrors: unknown[] = [];
   let pageReply: PageReply = defaultReply;
   const pages = {
     async request(
@@ -11335,7 +11418,14 @@ function setup({
       params: Record<string, unknown>,
       generation: number,
       onSend?: () => void,
+      prepare?: (site: string) => Promise<void>,
     ) {
+      // As the real page scripts prepare, after the gate, going on after a failure.
+      try {
+        await prepare?.(PAGE_SITE);
+      } catch (error: unknown) {
+        prepareErrors.push(error);
+      }
       // As the real page scripts refuse, right before they send.
       refuseIfEnded(access, session, generation);
       pageCalls.push({ session, tabId, type, params });
@@ -11508,6 +11598,7 @@ function setup({
     uploads,
     views,
     pageCalls,
+    prepareErrors,
     replyWith,
     liveWith,
     networkReads,
@@ -11611,6 +11702,8 @@ function assertMaskedAndRemoved(calls: CssCall[], tabId: number, frameIds: numbe
 
 /** What an act reports after a reply without a watch, as the fake content script's are. */
 const UNKNOWN = { page: "unknown" };
+/** The site the fake page scripts hand to a request's preparation. */
+const PAGE_SITE = "https://a.example";
 
 /** No remembered password field revealed for a screenshot, an empty tree for anything else. */
 async function defaultReply(type: string): Promise<unknown> {

@@ -813,7 +813,7 @@ function frameLine(element: Element, level: number, page: PageMemory): Line {
  * The role an element's line shows, or undefined when it has no line of its own: no role,
  * generic, none or presentation, unless it is interactive.
  */
-function roleOf(element: Element, page: PageMemory): string | undefined {
+export function roleOf(element: Element, page: PageMemory): string | undefined {
   const explicit = explicitRole(element.getAttribute("role"));
   const implicit = implicitRole(element, page);
   let role: string | undefined;

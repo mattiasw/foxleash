@@ -43,8 +43,35 @@ interface PageFile {
 }
 
 interface Received {
-  files: Record<"single" | "many" | "unnamed" | "typed" | "zone", PageFile[]>;
-  events: Record<"single" | "many" | "unnamed" | "typed" | "zone", string[]> & {
+  files: Record<
+    | "single"
+    | "many"
+    | "unnamed"
+    | "typed"
+    | "zone"
+    | "compose"
+    | "late"
+    | "attach"
+    | "picker"
+    | "forged"
+    | "forgedText",
+    PageFile[]
+  >;
+  events: Record<
+    | "single"
+    | "many"
+    | "unnamed"
+    | "typed"
+    | "zone"
+    | "compose"
+    | "late"
+    | "notaken"
+    | "attach"
+    | "picker"
+    | "forged"
+    | "forgedText",
+    string[]
+  > & {
     documentDrops: number;
   };
 }
@@ -59,7 +86,24 @@ describe("upload_file in real Firefox", () => {
   let allowed = "";
   let tabId = -1;
   let context = "";
-  const refs = { single: "", many: "", unnamed: "", typed: "", zone: "", plain: "" };
+  const refs = {
+    single: "",
+    many: "",
+    unnamed: "",
+    typed: "",
+    zone: "",
+    plain: "",
+    body: "",
+    late: "",
+    notaken: "",
+    attach: "",
+    picker: "",
+    nopicker: "",
+    forged: "",
+    forgedText: "",
+    send: "",
+    leave: "",
+  };
   const big = randomBytes(1_500_000);
 
   before(
@@ -96,7 +140,17 @@ describe("upload_file in real Firefox", () => {
         ["unnamed", new RegExp(`^ *button \\[${REF}\\] file field$`, "m")],
         ["typed", new RegExp(`^ *textbox "Typed file" \\[${REF}\\] file field$`, "m")],
         ["zone", new RegExp(`^ *region "Drop zone" \\[${REF}\\]$`, "m")],
-        ["plain", new RegExp(`^ *button "No drops" \\[${REF}\\]$`, "m")],
+        ["plain", new RegExp(`^ *region "No drops" \\[${REF}\\]$`, "m")],
+        ["body", new RegExp(`^ *textbox "Message body" \\[${REF}\\]`, "m")],
+        ["late", new RegExp(`^ *region "Late drop area" \\[${REF}\\]$`, "m")],
+        ["notaken", new RegExp(`^ *region "Not taken" \\[${REF}\\]$`, "m")],
+        ["attach", new RegExp(`^ *button "Attach files" \\[${REF}\\]$`, "m")],
+        ["picker", new RegExp(`^ *button "Show picker" \\[${REF}\\]$`, "m")],
+        ["nopicker", new RegExp(`^ *button "No picker" \\[${REF}\\]$`, "m")],
+        ["forged", new RegExp(`^ *button "Forged picker" \\[${REF}\\]$`, "m")],
+        ["forgedText", new RegExp(`^ *button "Forged text field" \\[${REF}\\]$`, "m")],
+        ["send", new RegExp(`^ *button "Send form" \\[${REF}\\]$`, "m")],
+        ["leave", new RegExp(`^ *link "Leave this page" \\[${REF}\\]`, "m")],
       ] as const) {
         const ref = pattern.exec(tree)?.[1];
         assert.ok(ref !== undefined, `no ref for ${pattern} in:\n${tree}`);
@@ -241,6 +295,168 @@ describe("upload_file in real Firefox", () => {
     assert.equal(before.events.documentDrops, 1);
   });
 
+  test("a drop on a compose window's body lands on the drop area the window shows", async () => {
+    const result = await upload(refs.body, [join(allowed, "notes.txt"), join(allowed, "big.bin")]);
+    assert.equal(result.isError, false, result.text);
+    assert.ok(
+      result.text.startsWith(`Dropped 2 files on ${refs.body} in tab ${tabId}:`),
+      result.text,
+    );
+    const page = await received();
+    assert.deepEqual(page.files.compose, [
+      { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+      { name: "big.bin", size: big.length, type: "", sha256: sha256(big) },
+    ]);
+    assert.deepEqual(page.events.compose, [
+      "dragenter body",
+      "dragenter overlay",
+      "dragleave body",
+      "dragover overlay",
+      "dragover overlay",
+      "drop overlay",
+    ]);
+    const { point, box } = JSON.parse(
+      String(
+        await firefox.evaluate(
+          context,
+          `JSON.stringify({ point: window.dropPoint, box: document.getElementById("body").getBoundingClientRect() })`,
+        ),
+      ),
+    );
+    assert.ok(
+      point.x >= box.left && point.x <= box.right && point.y >= box.top && point.y <= box.bottom,
+      JSON.stringify({ point, box }),
+    );
+  });
+
+  test("a drop area the page shows after the first dragover gets the drop", async () => {
+    const result = await upload(refs.late, [join(allowed, "photo.png")]);
+    assert.equal(result.isError, false, result.text);
+    const page = await received();
+    assert.deepEqual(page.files.late, [
+      { name: "photo.png", size: 16, type: "image/png", sha256: sha256("not really a png") },
+    ]);
+    assert.deepEqual(page.events.late, ["drop"]);
+  });
+
+  test("a place that takes the drag but not the dropped files is refused", async () => {
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.notaken,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(
+      text.includes(
+        "The page showed that it takes a drag there but did not take the dropped files. Give upload_file the ref of a file field, or of the button that opens the page's file picker.",
+      ),
+      text,
+    );
+    assert.deepEqual((await received()).events.notaken, ["drop"]);
+  });
+
+  test("a button whose page opens a file field it never adds gets the files into that field", async () => {
+    const result = await upload(refs.attach, [
+      join(allowed, "notes.txt"),
+      join(allowed, "big.bin"),
+    ]);
+    assert.equal(result.isError, false, result.text);
+    assert.ok(
+      result.text.startsWith(
+        `Clicked ${refs.attach} in tab ${tabId} and put 2 files into the file field the page opened:`,
+      ),
+      result.text,
+    );
+    const page = await received();
+    assert.deepEqual(page.files.attach, [
+      { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+      { name: "big.bin", size: big.length, type: "", sha256: sha256(big) },
+    ]);
+    assert.deepEqual(page.events.attach, ["input", "change"]);
+    assert.equal(
+      await firefox.evaluate(
+        context,
+        `[Object.getOwnPropertyDescriptor(HTMLElement.prototype, "click").value, Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "showPicker").value].every((method) => String(method).includes("[native code]"))`,
+      ),
+      true,
+    );
+  });
+
+  test("a button whose page asks a hidden file field for its picker later gets the file into it", async () => {
+    const result = await upload(refs.picker, [join(allowed, "photo.png")]);
+    assert.equal(result.isError, false, result.text);
+    assert.ok(
+      result.text.startsWith(
+        `Clicked ${refs.picker} in tab ${tabId} and put 1 file into the file field the page opened:`,
+      ),
+      result.text,
+    );
+    const page = await received();
+    assert.deepEqual(page.files.picker, [
+      { name: "photo.png", size: 16, type: "image/png", sha256: sha256("not really a png") },
+    ]);
+    assert.deepEqual(page.events.picker, ["input", "change"]);
+  });
+
+  test("a button that opens no file picker is refused, saying it was clicked", async () => {
+    const before = await received();
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.nopicker,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(
+      text.includes(
+        `Foxleash clicked ${refs.nopicker}, but the page opened no file picker within 5 seconds`,
+      ),
+      text,
+    );
+    assert.deepEqual(await received(), before);
+  });
+
+  test("a file field of another document that the page hands over gets nothing", async () => {
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.forged,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(
+      text.includes(
+        `Foxleash clicked ${refs.forged}, but the page opened no file picker within 5 seconds`,
+      ),
+      text,
+    );
+    const page = await received();
+    assert.deepEqual(page.events.forged, []);
+    assert.deepEqual(page.files.forged, []);
+  });
+
+  test("a text field that the page hands over as a file field gets nothing", async () => {
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.forgedText,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(
+      text.includes(
+        `Foxleash clicked ${refs.forgedText}, but the page opened no file picker within 5 seconds`,
+      ),
+      text,
+    );
+    assert.deepEqual((await received()).events.forgedText, []);
+  });
+
+  test("a button that would send a protected field with GET is refused, and the page stays", async () => {
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.send,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(text.includes("The form would put the value of protected field"), text);
+    assert.equal(text.includes("pin-Q7xa"), false, text);
+    const listed = tabsOf(await harness.ok(session, "tabs_list")).find(({ id }) => id === tabId);
+    assert.equal(listed?.url, fixtures.url("/upload"));
+  });
+
   test("a dotfile and a file outside the folder are refused, and the page gets nothing", async () => {
     const before = await received();
     const dot = await harness.refused(session, "upload_file", {
@@ -291,6 +507,43 @@ describe("upload_file in real Firefox", () => {
       false,
       JSON.stringify(contexts),
     );
+  });
+
+  // Last on the upload tab: it leaves the page.
+  test("a link that leads to another page says upload_file ran, not to try again", async () => {
+    const text = await harness.refused(session, "upload_file", {
+      tabId,
+      ref: refs.leave,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(text.includes("read the page before you repeat it"), text);
+    assert.equal(text.includes("try again"), false, text);
+  });
+
+  // In a tab of its own, opened last: a tab in front slows the timers of the upload tab.
+  test("a button in a page where no catcher answers is refused without a click", async () => {
+    const url = fixtures.url("/upload-held");
+    const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+    assert.equal(tab.title, TITLES.uploadHeld);
+    const found = (await firefox.contexts()).find((each) => each.url === url);
+    assert.ok(found !== undefined, `no tab shows ${url}`);
+    const read = await harness.call(session, "read_page", { tabId: tab.id });
+    assert.equal(read.isError, false, read.text);
+    const tree = untrustedContent(read.text) ?? "";
+    const ref = new RegExp(`^ *button "Attach held" \\[${REF}\\]$`, "m").exec(tree)?.[1];
+    assert.ok(ref !== undefined, tree);
+    const text = await harness.refused(session, "upload_file", {
+      tabId: tab.id,
+      ref,
+      paths: [join(allowed, "notes.txt")],
+    });
+    assert.ok(
+      text.includes(
+        `Foxleash could not get ready to take the file picker ${ref} may open, so it did not click it`,
+      ),
+      text,
+    );
+    assert.equal(await firefox.evaluate(found.context, "window.clicks"), 0);
   });
 
   function upload(ref: string, paths: string[], args: Record<string, unknown> = {}) {

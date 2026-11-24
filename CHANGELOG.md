@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `upload_file` with a button or link that opens a file picker, such as Gmail's Attach files,
+  clicks it and gives the files to the page, instead of a file picker that never opens.
 - While Firefox's optional "Access your data for all websites" is off for Foxleash, the settings
   page says so, with a button that asks Firefox to turn it on, and the steps to turn it on in the
   add-ons manager. So do the question whether to allow a site and the page where the agent asks
@@ -30,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `upload_file` now drops files where a page shows a drop area once a drag starts, as Gmail's
+  compose window does, so they reach it, and a drop the page does not take is reported as refused
+  instead of as dropped.
 - When Firefox's optional "Access your data for all websites" is off for Foxleash, the tools that
   read or act in a page, all but `read_network`, now say that Firefox withholds the site's access
   and how to turn it on, instead of saying Foxleash could not get into the page, and `wait_for`

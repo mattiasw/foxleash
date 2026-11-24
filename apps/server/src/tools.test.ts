@@ -289,7 +289,7 @@ describe("tools", () => {
       "view",
     ]);
     for (const words of [
-      "With ref of a file field, Foxleash sets the field's files; any other element gets the files dropped on it",
+      "With ref of a file field, Foxleash sets the field's files. With ref of a button or link that opens a file picker, such as an Attach files button, Foxleash clicks it as click does and puts the files into the file field the page asks to open, instead of a file picker; if the page asks for none within 5 seconds, the call is refused, but the click has happened. Any other element gets the files dropped on it at its visible centre, onto the drop area a page shows over it once a drag starts, if any; a drop the page does not take is refused.",
       "by default the folder Foxleash was started in",
       "(unless it is the home folder or contains it, or lies in a folder whose name starts with a dot), and the desktop's download folder (XDG_DOWNLOAD_DIR in user-dirs.dirs, or ~/Downloads when that names none)",
       "FOXLEASH_UPLOAD_DIRS in the MCP client's configuration; no tool can change them",
@@ -3823,6 +3823,35 @@ describe("upload_file", () => {
     );
   });
 
+  it("says it clicked the ref and filled the file field the page opened", LIMIT, async () => {
+    await writeFile(join(folder, "a.png"), "a");
+    await writeFile(join(folder, "b.csv"), "bb");
+    const { client } = await startUpload(() => ({ target: "input", picker: true }));
+    const two = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["a.png", "b.csv"] },
+    });
+    assert.equal(
+      text(two),
+      [
+        `Clicked ${REF} in tab 5 and put 2 files into the file field the page opened:`,
+        `- ${JSON.stringify(join(folder, "a.png"))}, 1 byte`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+      ].join("\n"),
+    );
+    const one = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["b.csv"] },
+    });
+    assert.equal(
+      text(one),
+      [
+        `Clicked ${REF} in tab 5 and put 1 file into the file field the page opened:`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+      ].join("\n"),
+    );
+  });
+
   it("quotes a path whose name holds a line break", LIMIT, async () => {
     const name = "two\nlines.txt";
     await writeFile(join(folder, name), "t");
@@ -3953,7 +3982,16 @@ describe("upload_file", () => {
 
   it("refuses an upload result it cannot read", LIMIT, async () => {
     await writeFile(join(folder, "r.txt"), "r");
-    for (const result of [null, "input", { target: "file" }, Object.create({ target: "input" })]) {
+    for (const result of [
+      null,
+      "input",
+      { target: "file" },
+      Object.create({ target: "input" }),
+      { target: "input", picker: false },
+      { target: "input", picker: "yes" },
+      { target: "input", picker: null },
+      { target: "drop", picker: true },
+    ]) {
       const { client, logs } = await startUpload((method) =>
         method === "upload_file" ? result : { received: 1 },
       );

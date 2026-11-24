@@ -248,6 +248,18 @@ does not count.
 Once the extension has updated, it refuses uploads from an older Foxleash program, whose checks
 miss some keys, until you update the program.
 
+When the agent names a button or link, `upload_file` clicks it and gives the files to the file
+field whose picker the page asks to open. For that, a small script of Foxleash's own runs in the
+page itself, as the page's own scripts do. It is put there only for an `upload_file` call in the
+tab the call names, only after the same checks as every page tool, only in the top page and only
+on the approved site. Foxleash arms it right before the click, and it stays armed until the call
+ends, 10 seconds at most. It fills only a file field of that page, at most one per call, with
+that call's files, which still come only from the upload folders, and keeps none: Foxleash checks
+the field and sets the files outside the page's reach. The page can see the script, and can arm
+it, stop it or make it catch another of its own file fields, which changes nothing beyond that
+same page, which gets the call's files either way. While it is armed, a click of your own on the
+page's upload control opens no picker either: the agent's files go into that field.
+
 An agent that can run programs on your computer can upload a file without these checks (see
 [The risk](#the-risk)).
 
@@ -372,7 +384,8 @@ A form sent with GET puts the values of its fields in the address of the page it
 would get that address in the action's result, in `tabs_list` and in `read_network` (which hides,
 as a best effort, the values of fields named like credentials; see
 [Request addresses](#request-addresses)), and it stays in the tab's history and the site's logs.
-So when a `click`, or Enter with `press_key`, would send a form with GET while the form would send
+So when a `click`, Enter with `press_key`, or the click `upload_file` makes on a button or link
+would send a form with GET while the form would send
 the value of a protected field, Foxleash cancels the submission and refuses the action, naming the
 field, and the agent asks you to send the form. A form without a `method` attribute is sent with
 GET, and a submit button's `formmethod` counts. A

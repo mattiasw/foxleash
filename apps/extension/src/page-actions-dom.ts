@@ -45,7 +45,7 @@ export interface ActionPage {
 }
 
 /** Where the events go: the element hit at the point, and the ref that names the target. */
-interface Located {
+export interface Located {
   hit: Element;
   point: Point;
   ref: string;
@@ -67,7 +67,7 @@ const FRAMES: ReadonlySet<string> = new Set(["iframe", "frame", "object", "embed
 const TABINDEX = /^[\t\n\f\r ]*[-+]?[0-9]/;
 // Pages finish starting a drag in a later task (SortableJS: a setTimeout 0 after dragstart), as a
 // real drag's first dragover comes with a later mouse move.
-const DRAG_START_MS = 20;
+export const DRAG_START_MS = 20;
 const LEFT = 0;
 const RIGHT = 2;
 
@@ -162,7 +162,11 @@ export async function drag(options: DragOptions, page: ActionPage): Promise<Resu
  * The target's point and the element hit there. An element is scrolled into view first when
  * `scrollFirst` is set, and must then show some of itself, uncovered, at the point.
  */
-function locate(target: PointTarget, refs: ElementRefs<Element>, scrollFirst: boolean): Located {
+export function locate(
+  target: PointTarget,
+  refs: ElementRefs<Element>,
+  scrollFirst: boolean,
+): Located {
   if (target.ref === undefined) return locatePoint({ x: target.x, y: target.y }, refs);
   const { ref } = target;
   const lookup = refs.resolve(ref);
@@ -275,7 +279,7 @@ function viewport(): Viewport {
 }
 
 /** The innermost element at the point, inside shadow roots too, closed ones included. */
-function deepElementAt(point: Point): Element | null {
+export function deepElementAt(point: Point): Element | null {
   let hit = document.elementFromPoint(point.x, point.y);
   while (hit !== null) {
     const inner = shadowRootOf(hit)?.elementFromPoint(point.x, point.y) ?? null;
@@ -588,7 +592,7 @@ async function dropOnEnd(
 }
 
 /** One turn of the content script's timers, which Firefox runs after the page's earlier ones. */
-function timerTurn(): Promise<void> {
+export function timerTurn(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 0));
 }
 
@@ -756,13 +760,21 @@ function sendMouse(target: Element, type: string, init: MouseEventInit): boolean
   return target.dispatchEvent(new (viewOf(target).MouseEvent)(type, init));
 }
 
-function sendDrag(target: Element, type: string, point: Point, transfer: DataTransfer): boolean {
+/** `relatedTarget` is the element the drag left for, or came from, when it moved between two. */
+export function sendDrag(
+  target: Element,
+  type: string,
+  point: Point,
+  transfer: DataTransfer,
+  relatedTarget?: Element,
+): boolean {
   const event = new (viewOf(target).DragEvent)(type, {
     bubbles: true,
     cancelable: type !== "dragleave" && type !== "dragend",
     composed: true,
     clientX: point.x,
     clientY: point.y,
+    relatedTarget: relatedTarget ?? null,
     dataTransfer: transfer,
   });
   return target.dispatchEvent(event);
