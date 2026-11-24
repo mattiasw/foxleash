@@ -9,6 +9,17 @@
   <body>
     <main>
       <h1>Foxleash settings</h1>
+      <section id="website-access" aria-labelledby="website-access-heading" hidden>
+        <h2 id="website-access-heading">Access to websites</h2>
+        <p>Firefox is not giving Foxleash access to all websites. On a site Firefox withholds,
+          Foxleash cannot read or act in pages, also when you allowed the site in Foxleash. Firefox
+          lists this access as optional, but Foxleash needs it.</p>
+        <div class="actions">
+          <button type="button" id="website-access-give">Give Foxleash access to all websites</button>
+        </div>
+        <p>Firefox then asks you to confirm. You can also <span id="website-access-steps"></span>.</p>
+      </section>
+      <p id="website-access-status" role="status" aria-live="polite" tabindex="-1"></p>
       <section aria-labelledby="program-heading">
         <h2 id="program-heading" tabindex="-1">The Foxleash program</h2>
         <p id="program-status" role="status" aria-live="polite">Checking whether the Foxleash

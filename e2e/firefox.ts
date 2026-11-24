@@ -371,7 +371,8 @@ export interface LaunchOptions {
   restoreSession?: boolean;
   /**
    * Installs the extension without its optional access to websites, as when the user turned off
-   * "Access your data for all websites" in about:addons.
+   * "Access your data for all websites" in about:addons. Firefox then grants
+   * `permissions.request` without its prompt, which WebDriver cannot answer.
    */
   withholdSiteAccess?: boolean;
   /**
@@ -1047,6 +1048,11 @@ function buildUserJs(
       "extensions.originControls.grantByDefault",
       false,
       "Install the add-on without its optional access to websites, as when the user turned off 'Access your data for all websites'.",
+    ]);
+    prefs.push([
+      "extensions.webextOptionalPermissionPrompts",
+      false,
+      "Grant permissions.request without Firefox's prompt, which WebDriver cannot answer.",
     ]);
   }
   if (!headless) {

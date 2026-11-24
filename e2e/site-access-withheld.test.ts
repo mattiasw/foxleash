@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { after, before, describe, test } from "node:test";
-import type { Firefox } from "./firefox.ts";
+import { ALL_WEBSITES_ACCESS_STEPS } from "@foxleash/protocol";
+import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
 import {
   createHarness,
@@ -15,10 +16,10 @@ import {
 describe("page tools while Firefox withholds access to websites", () => {
   let harness: Harness;
   let fixtures: FixtureServer;
-  // biome-ignore lint/correctness/noUnusedVariables: kept for tests that end the withheld state
   let firefox: Firefox;
   let session: Session;
   let tabId = -1;
+  let settings = "";
 
   /** The page-tool refusal for the tab opened by the first test. */
   function withheld(): string {
@@ -85,4 +86,53 @@ describe("page tools while Firefox withholds access to websites", () => {
     assert.ok(result.text.includes(withheld()), result.text);
     assert.ok(elapsed < 5_000, `wait_for took ${Math.round(elapsed)} ms`);
   });
+
+  // The tests below end the withheld state, so they come last.
+  test("the settings page warns while Firefox withholds access to all websites", async () => {
+    settings = await harness.settingsPage();
+    await waitFor('document.getElementById("website-access").hidden', false, "the warning shown");
+    assert.equal(
+      await firefox.evaluate(
+        settings,
+        'document.getElementById("website-access-steps").textContent',
+      ),
+      ALL_WEBSITES_ACCESS_STEPS,
+    );
+    await waitFor(
+      'document.getElementById("website-access-status").textContent',
+      "Firefox is not giving Foxleash access to all websites.",
+      "the withheld announcement",
+    );
+  });
+
+  test("the warning's button gives the access, hides the warning and announces it", async () => {
+    await firefox.click(settings, "#website-access-give");
+    await waitFor('document.getElementById("website-access").hidden', true, "the warning hidden");
+    await waitFor(
+      'document.getElementById("website-access-status").textContent',
+      "Firefox now gives Foxleash access to all websites.",
+      "the grant announcement",
+    );
+    assert.equal(
+      await firefox.evaluate(settings, "document.activeElement?.id ?? null"),
+      "website-access-status",
+    );
+  });
+
+  test("get_page_text reads the page once the access is given", async () => {
+    const result = await harness.ok(session, "get_page_text", { tabId });
+    assert.ok(JSON.stringify(result).includes(TITLES.a), JSON.stringify(result));
+  });
+
+  async function waitFor(expression: string, expected: unknown, what: string): Promise<void> {
+    await pollUntil(
+      async () => {
+        const value = await firefox.evaluate(settings, expression);
+        if (value === expected) return true;
+        throw new Error(`the page shows ${String(value)}`);
+      },
+      PAGE_TIMEOUT_MS,
+      `${what}: ${String(expected)}`,
+    );
+  }
 });

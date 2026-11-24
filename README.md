@@ -159,6 +159,8 @@ The extension's settings page, in the Firefox add-ons manager, has:
 
 - the state of the Foxleash program on this computer: connected, not found, with the command
   that installs it, or too old for the add-on or newer than it, with what to do,
+- a warning while Firefox withholds Foxleash's access to all websites, with a button that asks
+  Firefox for it,
 - the sites you allowed always, each with a Revoke button,
 - each running agent session, numbered in the order it started, with a Stop this session
   button, and the sites you allowed or refused for it and the prompts you closed without an

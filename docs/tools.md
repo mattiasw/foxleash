@@ -28,8 +28,9 @@ These tools also need Firefox to give Foxleash access to the site. Firefox lists
 to all websites as optional, and you can turn it off. Without it, each of these tools but
 `read_network` tells the agent that Firefox has not given Foxleash access to the site and asks it
 to have you turn it on: open about:addons in Firefox, click Foxleash, then the Permissions tab,
-and under "Optional" turn on "Access your data for all websites". An update of the add-on never
-turns this access back on.
+and under "Optional" turn on "Access your data for all websites". While this access is off,
+Foxleash's settings page says so, with a button that asks Firefox for it. An update of the add-on
+never turns this access back on.
 
 ## Sessions and tabs
 

@@ -44,6 +44,13 @@ export interface FakeBrowser {
   grantedOrigins: Set<string>;
   /** The `origins` of every `permissions.contains` call, in order. */
   permissionChecks: string[][];
+  /** The `origins` of every `permissions.request` call, in order. */
+  permissionRequests: string[][];
+  /**
+   * What `permissions.request` resolves to, or rejects with when an Error; true grants
+   * `<all_urls>` as `setAllUrls(true)` does when the request names it.
+   */
+  requestAnswer: boolean | Error;
   version: string;
   /** How many times `runtime.openOptionsPage` ran. */
   optionsPageOpened: number;
@@ -491,6 +498,13 @@ export function createFakeBrowser(): FakeBrowser {
         fake.permissionChecks.push([...origins]);
         return fake.allUrls || origins.every((origin) => fake.grantedOrigins.has(origin));
       },
+      request: ({ origins }) => {
+        fake.permissionRequests.push([...origins]);
+        const answer = fake.requestAnswer;
+        if (answer instanceof Error) return Promise.reject(answer);
+        if (answer && origins.includes("<all_urls>") && !fake.allUrls) fake.setAllUrls(true);
+        return Promise.resolve(answer);
+      },
       onAdded,
       onRemoved,
     },
@@ -774,6 +788,8 @@ export function createFakeBrowser(): FakeBrowser {
     allUrls: true,
     grantedOrigins: new Set(),
     permissionChecks: [],
+    permissionRequests: [],
+    requestAnswer: true,
     version: "0.1.0",
     optionsPageOpened: 0,
     badgeText: new Map(),

@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- While Firefox's optional "Access your data for all websites" is off for Foxleash, the settings
+  page says so, with a button that asks Firefox to turn it on, and the steps to turn it on in the
+  add-ons manager.
+
 ### Changed
 
 - The add-on is installed from its page on Firefox Add-ons, and Firefox keeps it up to date.

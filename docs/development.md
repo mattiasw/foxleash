@@ -183,7 +183,10 @@ A test that needs Firefox to withhold Foxleash's access to websites starts it wi
 `harness.startFirefox(EXTENSION_DIST, { withholdSiteAccess: true })`, which sets
 `extensions.originControls.grantByDefault` to `false`, so Firefox installs the add-on with its
 optional access off, as when the user turned off "Access your data for all websites" in
-about:addons. `e2e/site-access-withheld.test.ts` starts Firefox this way.
+about:addons. It also sets `extensions.webextOptionalPermissionPrompts` to `false`, so Firefox
+grants `permissions.request` without its prompt, which WebDriver cannot answer; a test can then
+give the access back with a click on the settings page's button. A request still needs the
+user's input, such as `firefox.click`. `e2e/site-access-withheld.test.ts` starts Firefox this way.
 
 A test that reloads the extension, as `browser.runtime.reload()` does, calls
 `harness.reloadExtension()`. It evaluates the reload in the settings page, waits until Firefox

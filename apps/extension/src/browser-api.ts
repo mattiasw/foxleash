@@ -24,6 +24,8 @@ export interface BrowserApi {
   };
   permissions: {
     contains(permissions: { origins: string[] }): Promise<boolean>;
+    /** Firefox allows this only while it handles the user's input, such as a click. */
+    request(permissions: { origins: string[] }): Promise<boolean>;
     onAdded: BrowserEvent<(permissions: Permissions) => void>;
     onRemoved: BrowserEvent<(permissions: Permissions) => void>;
   };

@@ -110,6 +110,11 @@ li .actions {
   flex-shrink: 0;
 }
 
+#website-access {
+  border: 1px solid CanvasText;
+  padding: 0 1rem 1rem;
+}
+
 :focus-visible {
   outline: 2px solid;
   outline-offset: 2px;

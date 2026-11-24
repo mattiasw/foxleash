@@ -32,8 +32,12 @@ import {
 } from "./settings.ts";
 import { parseBlocklist } from "./site.ts";
 import type { SessionAnswers } from "./site-access.ts";
+import { watchWebsiteAccess } from "./website-access.ts";
 
-declare const browser: SettingsBrowser & { runtime: Pick<BrowserApi["runtime"], "sendMessage"> };
+declare const browser: SettingsBrowser & {
+  runtime: Pick<BrowserApi["runtime"], "sendMessage">;
+  permissions: Pick<BrowserApi["permissions"], "contains" | "request" | "onAdded" | "onRemoved">;
+};
 
 const READ_FAILED = "Could not read Foxleash's settings.";
 const ANSWERS_FAILED = "Could not read the answers of running sessions.";
@@ -81,6 +85,9 @@ const recipesStatus = element("recipes-status");
 const recipesHeading = element("recipes-heading");
 const recipeAdd = element("recipe-add");
 const recipeUndo = element("recipe-undo");
+const websiteAccess = element("website-access");
+const websiteAccessGive = element("website-access-give");
+const websiteAccessStatus = element("website-access-status");
 const editor = element("recipe-editor");
 const editorHeading = element("recipe-editor-heading");
 const editorFields: Record<RecipeProblem["field"], { field: TextField; errors: HTMLElement }> = {
@@ -137,6 +144,18 @@ watchProgram({
   page: document,
   timers,
 });
+watchWebsiteAccess({
+  elements: {
+    warning: websiteAccess,
+    button: websiteAccessGive,
+    steps: element("website-access-steps"),
+  },
+  browser,
+  announce: (text) => announce(websiteAccessStatus, text),
+  beforeChange: (hiding) => {
+    if (hiding && websiteAccess.contains(document.activeElement)) websiteAccessStatus.focus();
+  },
+});
 // The background has no event for changed answers; coming back to the page reads them again.
 window.addEventListener("focus", refreshAnswers);
 // Inline in the add-ons manager, coming back to its tab need not focus this page.
@@ -154,6 +173,8 @@ recipeUndo.addEventListener("click", undo);
 // Delete moves focus to Undo, and Cancel to Add, where a held Enter would go on to act.
 ignoreHeldEnter(recipeUndo);
 ignoreHeldEnter(recipeAdd);
+// Focus returns to the button when Firefox's prompt closes.
+ignoreHeldEnter(websiteAccessGive);
 
 function element(id: string): HTMLElement {
   return pageElement(id, "settings page");
