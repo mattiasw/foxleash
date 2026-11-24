@@ -12,6 +12,12 @@ Amended 2026-11-24: `OLDEST_SERVED_PROTOCOL` is capped by the newest release npm
 older than the limit ([measurements](../measurements/npm-release-age-limits.md)); current numbers
 and steps are dropped.
 
+Amended 2026-11-24: the cap is the lowest `PROTOCOL_VERSION` among the releases npx installs for
+`npx foxleash setup` and `npx foxleash@latest setup` under any limit up to 14 days, picked as
+npm-pick-manifest does (listed versions only, `<=latest` for the tag, deprecated ones last), since
+the newest release published 14 days earlier is not always what npx installs
+([measurements](../measurements/npm-release-age-limits.md#how-npx-picks-a-release-2026-11-24)).
+
 ## Context
 
 Firefox updates the add-on by itself, at a moment it chooses. The installed program (the
@@ -58,11 +64,13 @@ The rules for later changes:
   read or sent.
 - A method name, and the fields of the hello and the welcome, stay while a served version uses
   them.
-- `OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the newest release npm has
-  served for 14 days; raised to that number, the steps below it are deleted. Under an npm
-  release-age limit `npx foxleash@latest setup` installs the newest release older than the limit,
-  so a limit of up to 14 days never leaves a program the add-on refuses.
-  `npm run check:release -- protocol` enforces it.
+- `OLDEST_SERVED_PROTOCOL` is never above the lowest `PROTOCOL_VERSION` among the releases
+  `npx foxleash setup` and `npx foxleash@latest setup` install under an npm release-age limit of
+  up to 14 days; raised to that number, the steps below it are deleted. npx picks only versions
+  npm lists, takes the version the `latest` tag names once it is old enough (the bare command only
+  when it is not deprecated), and otherwise the highest old-enough version (at or below `latest`
+  for the tag), deprecated ones last. So a limit of up to 14 days never leaves a program the
+  add-on refuses. `npm run check:release -- protocol` enforces it.
 - A fix to a safeguard that runs in the server, such as the untrusted-content marking or the
   upload folder policy, is made binding by raising the number in the fix release and letting the
   step for the version left behind refuse the requests the fix protects.
@@ -96,3 +104,11 @@ The rules for later changes:
   before this change), check exactly and refuse a newer extension.
 - An add-on older than the server is still refused. That stays possible on release days, because
   Firefox looks for add-on updates on an interval.
+- npm ranks a release whose `engines.node` the user's Node does not satisfy after the others, so a
+  release that raises `engines.node` (the package declares `>=24`) leaves users of an older Node
+  with the release before it from `npx foxleash setup`. The window is not held for them: the check
+  assumes a Node that satisfies every release.
+- The check reads npm when the window moves. A later `npm deprecate`, or a publish of an older
+  line that moves `latest` back (`npm publish` sets `latest` unless given `--tag`), can make npx
+  install an older release, so neither is done while it would hand out a release below
+  `OLDEST_SERVED_PROTOCOL`.

@@ -2841,26 +2841,85 @@ describe("protocol", () => {
     });
   }
 
-  const NPM_TIMES = key("npm", "view", "foxleash", "time", "--json");
-  type Release = { tag: string; protocol: number; oldest?: number; published?: string };
+  const LISTING_CALL = ["npm", "view", "foxleash", "versions", "time", "dist-tags", "--json"];
+  const DEPRECATIONS_CALL = [
+    "npm",
+    "view",
+    "foxleash@>=0.0.0",
+    "name",
+    "version",
+    "deprecated",
+    "--json",
+  ];
+  const NPM_LISTING = key(...LISTING_CALL);
+  const NPM_DEPRECATIONS = key(...DEPRECATIONS_CALL);
+  const LISTING_COMMAND = `\`${LISTING_CALL.join(" ")}\``;
+  const DEPRECATIONS_COMMAND = `\`${DEPRECATIONS_CALL.join(" ")}\``;
+  type Release = {
+    tag: string;
+    protocol: number;
+    oldest?: number;
+    published?: string;
+    /** npm's deprecation message. */
+    deprecated?: string;
+    /** In npm's `versions`; by default when it has a publish time. */
+    listed?: boolean;
+    /** Reachable from HEAD as a tag; true by default. */
+    tagged?: boolean;
+  };
+  type WindowOptions = { listing?: Reply; deprecations?: Reply; latest?: string };
 
-  /** The working tree's numbers and the releases, newest first, with npm's publish times. */
-  function windowTree(current: number, oldest: number, releases: Release[], npm?: Reply): Tree {
+  const daysAgo = (days: number): string => new Date(NOW - days * 86_400_000).toISOString();
+
+  /**
+   * The working tree's numbers and the releases, with what npm reports about them. The latest
+   * dist-tag is the highest listed release unless `latest` names another.
+   */
+  function windowTree(
+    current: number,
+    oldest: number,
+    releases: Release[],
+    options: WindowOptions = {},
+  ): Tree {
     const tree: Tree = { files: { [PROTOCOL]: protocolSource(current, oldest) }, commands: {} };
-    tree.commands[TAGS] = releases.map((release) => release.tag).join("\n");
-    const times: Record<string, string> = {
+    const tagged = releases.filter((release) => release.tagged !== false);
+    tree.commands[TAGS] = tagged.map((release) => release.tag).join("\n");
+    for (const release of tagged) {
+      tree.commands[show(`refs/tags/${release.tag}`, PROTOCOL)] = protocolSource(
+        release.protocol,
+        release.oldest,
+      );
+    }
+    const time: Record<string, string> = {
       created: "2026-09-01T10:00:00.000Z",
       modified: "2026-10-17T10:00:00.000Z",
       "0.0.0-stage": "2026-09-01T10:00:00.000Z",
     };
     for (const release of releases) {
-      tree.commands[show(`refs/tags/${release.tag}`, PROTOCOL)] = protocolSource(
-        release.protocol,
-        release.oldest,
-      );
-      if (release.published !== undefined) times[release.tag.slice(1)] = release.published;
+      if (release.published !== undefined) time[release.tag.slice(1)] = release.published;
     }
-    tree.commands[NPM_TIMES] = npm ?? json(times);
+    const listed = releases
+      .filter((release) => release.listed ?? release.published !== undefined)
+      .toSorted((a, b) => compareVersions(a.tag.slice(1), b.tag.slice(1)));
+    const versions = listed.map((release) => release.tag.slice(1));
+    const latest = options.latest ?? versions.at(-1) ?? "0.0.0-stage";
+    tree.commands[NPM_LISTING] =
+      options.listing ??
+      json({ versions: ["0.0.0-stage", ...versions], time, "dist-tags": { latest } });
+    const entries = listed.map((release) => ({
+      name: "foxleash",
+      version: release.tag.slice(1),
+      ...(release.deprecated === undefined ? {} : { deprecated: release.deprecated }),
+    }));
+    tree.commands[NPM_DEPRECATIONS] =
+      options.deprecations ??
+      (entries.length === 0
+        ? new CommandError(
+            DEPRECATIONS_CALL.join(" "),
+            1,
+            "npm error code E404\nnpm error 404 No match found for version >=0.0.0",
+          )
+        : json(entries.length === 1 ? entries[0] : entries));
     return tree;
   }
 
@@ -2870,6 +2929,12 @@ describe("protocol", () => {
 
   const AGE_HINT =
     "a user whose npm release-age limit still hides the newer releases would get a program the add-on refuses";
+  const lowest = (tag: string, protocol: number, command: string, where: string): string =>
+    `${tag} has the lowest PROTOCOL_VERSION, ${protocol}, of the releases npx installs under an npm release-age limit of up to 14 days: \`${command}\` installs it under a limit of ${where}`;
+  const above = (oldest: number, tag: string, protocol: number, command: string, where: string) =>
+    `OLDEST_SERVED_PROTOCOL ${oldest} is above the PROTOCOL_VERSION ${protocol} of ${tag}, which \`${command}\` installs under an npm release-age limit of ${where}: ${AGE_HINT}`;
+  const BARE = "npx foxleash setup";
+  const AT_LATEST = "npx foxleash@latest setup";
 
   test("a window that did not move makes no npm call", () => {
     const env = fakeEnv(windowTree(7, 6, [{ tag: "v0.4.1", protocol: 7, oldest: 6 }]));
@@ -2893,7 +2958,7 @@ describe("protocol", () => {
     assert.deepEqual(npmCalls(env), []);
     const moved = fakeEnv(windowTree(7, 6, [{ tag: "v0.4.1", protocol: 6, oldest: 5 }]));
     checkProtocol(moved);
-    assert.deepEqual(npmCalls(moved), [["npm", "view", "foxleash", "time", "--json"]]);
+    assert.deepEqual(npmCalls(moved), [LISTING_CALL]);
   });
 
   test("a raise to the protocol of a release npm has served for exactly 14 days passes", () => {
@@ -2903,39 +2968,32 @@ describe("protocol", () => {
     ]);
     assert.deepEqual(protocol(tree), [
       { level: "INFO", text: "protocol 7, oldest served 6, v0.5.0 has 7" },
-      {
-        level: "INFO",
-        text: "v0.4.1 is the newest release npm has served for 14 days (published 2026-10-04), with PROTOCOL_VERSION 6",
-      },
+      { level: "INFO", text: lowest("v0.4.1", 6, BARE, "1 to 14 days (published 2026-10-04)") },
     ]);
   });
 
-  test("a raise past the protocol of the newest release npm has served for 14 days fails", () => {
+  test("a raise past the protocol of the release npm has served for 14 days fails", () => {
     const tree = windowTree(7, 7, [
       { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-10-04T12:00:00.001Z" },
       { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-09-20T08:30:00.000Z" },
     ]);
+    const where = "13.9 to 14 days (published 2026-09-20)";
     assert.deepEqual(protocol(tree), [
       { level: "INFO", text: "protocol 7, oldest served 7, v0.5.0 has 7" },
-      {
-        level: "INFO",
-        text: "v0.4.1 is the newest release npm has served for 14 days (published 2026-09-20), with PROTOCOL_VERSION 6",
-      },
-      {
-        level: "FAIL",
-        text: `OLDEST_SERVED_PROTOCOL 7 is above the PROTOCOL_VERSION 6 of v0.4.1, the newest release npm has served for 14 days (published 2026-09-20): ${AGE_HINT}`,
-      },
+      { level: "INFO", text: lowest("v0.4.1", 6, BARE, where) },
+      { level: "FAIL", text: above(7, "v0.4.1", 6, BARE, where) },
     ]);
   });
 
-  test("the releases are measured newest first, whatever order git lists them in", () => {
+  test("npm's versions are ranked as numbers, not as text", () => {
     const tree = windowTree(7, 6, [
       { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-09-20T08:30:00.000Z" },
+      { tag: "v0.10.1", protocol: 7, oldest: 5, published: daysAgo(1) },
       { tag: "v0.10.0", protocol: 7, oldest: 5, published: "2026-09-21T08:30:00.000Z" },
     ]);
     assert.deepEqual(texts(protocol(tree), "INFO"), [
-      "protocol 7, oldest served 6, v0.10.0 has 7",
-      "v0.10.0 is the newest release npm has served for 14 days (published 2026-09-21), with PROTOCOL_VERSION 7",
+      "protocol 7, oldest served 6, v0.10.1 has 7",
+      lowest("v0.10.0", 7, BARE, "1 to 14 days (published 2026-09-21)"),
     ]);
   });
 
@@ -2956,74 +3014,340 @@ describe("protocol", () => {
     assert.deepEqual(texts(protocol(unpublished), "FAIL"), [noOld]);
   });
 
-  const npmReplies: [string, Reply, string][] = [
+  test("0.0.0-stage is never picked, though npm lists it", () => {
+    const env = fakeEnv(
+      windowTree(7, 7, [{ tag: "v0.5.0", protocol: 7, oldest: 6, published: daysAgo(10) }]),
+    );
+    assert.deepEqual(texts(checkProtocol(env), "FAIL"), [
+      "no release has been on npm for 14 days, so OLDEST_SERVED_PROTOCOL 7 may not rise above the 6 that v0.5.0 serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses",
+    ]);
+    assert.deepEqual(npmCalls(env), [LISTING_CALL]);
+  });
+
+  /** Releases whose 14-day pick is v0.7.0 until npm hides it; the working tree raises to 8. */
+  function hiddenRelease(v070: Partial<Release>, options?: WindowOptions): Tree {
+    return windowTree(
+      8,
+      8,
+      [
+        { tag: "v0.7.1", protocol: 8, oldest: 7, published: daysAgo(5) },
+        { tag: "v0.7.0", protocol: 8, published: daysAgo(15), ...v070 },
+        { tag: "v0.6.0", protocol: 7, published: daysAgo(30) },
+      ],
+      options,
+    );
+  }
+
+  test("a raise to the protocol of the release npx installs under a 14-day limit passes", () => {
+    const env = fakeEnv(hiddenRelease({}));
+    assert.deepEqual(checkProtocol(env), [
+      { level: "INFO", text: "protocol 8, oldest served 8, v0.7.1 has 8" },
+      { level: "INFO", text: lowest("v0.7.0", 8, BARE, "5 to 14 days (published 2026-10-03)") },
+    ]);
+    assert.deepEqual(npmCalls(env), [LISTING_CALL, DEPRECATIONS_CALL]);
+  });
+
+  const hidden: [string, Tree, string][] = [
+    ["deprecated", hiddenRelease({ deprecated: "use 0.7.1" }), "5 to 14 days"],
     [
-      "a failing npm view",
-      new CommandError("npm view foxleash time --json", 1, "npm error code E404"),
-      "npm publish times: `npm view foxleash time --json` failed (status 1): npm error code E404",
+      "in npm's publish times but not in its versions",
+      hiddenRelease({ listed: false }),
+      "5 to 14 days",
     ],
     [
-      "text that is not JSON",
-      "not json",
-      "npm publish times: `npm view foxleash time --json` printed no JSON: ",
+      "passed over by a latest dist-tag on 0.6.0",
+      hiddenRelease({}, { latest: "0.6.0" }),
+      "0 to 14 days",
+    ],
+  ];
+  for (const [name, tree, limits] of hidden) {
+    test(`a release ${name} is not what npx installs, so the raise fails`, () => {
+      assert.deepEqual(texts(protocol(tree), "FAIL"), [
+        above(8, "v0.6.0", 7, BARE, `${limits} (published 2026-09-18)`),
+      ]);
+    });
+  }
+
+  test("npx foxleash setup passes over a deprecated latest dist-tag", () => {
+    const releases = (deprecated: string): Release[] => [
+      { tag: "v0.7.0", protocol: 8, oldest: 7, published: daysAgo(20), deprecated },
+      { tag: "v0.6.0", protocol: 7, published: daysAgo(30) },
+    ];
+    assert.deepEqual(texts(protocol(windowTree(8, 8, releases("broken"))), "FAIL"), [
+      above(8, "v0.6.0", 7, BARE, "0 to 14 days (published 2026-09-18)"),
+    ]);
+    assert.deepEqual(texts(protocol(windowTree(8, 8, releases(""))), "INFO"), [
+      "protocol 8, oldest served 8, v0.7.0 has 8",
+      lowest("v0.7.0", 8, BARE, "0 to 14 days (published 2026-09-28)"),
+    ]);
+  });
+
+  test("a shorter limit that picks a lower protocol fails the raise", () => {
+    const tree = windowTree(8, 8, [
+      { tag: "v0.7.1", protocol: 8, oldest: 7, published: daysAgo(1) },
+      { tag: "v0.7.0", protocol: 8, published: daysAgo(20), deprecated: "broken" },
+      { tag: "v0.6.5", protocol: 7, published: daysAgo(5) },
+    ]);
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      above(8, "v0.6.5", 7, BARE, "1 to 5 days (published 2026-10-13)"),
+    ]);
+  });
+
+  test("a release published at the check's clock counts for the shortest limit", () => {
+    const tree = windowTree(8, 8, [
+      { tag: "v0.7.0", protocol: 8, oldest: 7, published: daysAgo(20), deprecated: "broken" },
+      { tag: "v0.6.1", protocol: 7, published: daysAgo(0) },
+    ]);
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      above(8, "v0.6.1", 7, BARE, "0 to 0 days (published 2026-10-18)"),
+    ]);
+  });
+
+  test("a release npx installs that has no tag fails", () => {
+    const tree = windowTree(8, 8, [
+      { tag: "v0.7.1", protocol: 8, published: daysAgo(20), tagged: false },
+      { tag: "v0.7.0", protocol: 8, oldest: 7, published: daysAgo(30) },
+    ]);
+    assert.deepEqual(protocol(tree), [
+      { level: "INFO", text: "protocol 8, oldest served 8, v0.7.0 has 8" },
+      {
+        level: "FAIL",
+        text: "`npx foxleash setup` installs foxleash 0.7.1 under an npm release-age limit of 0 to 14 days, but no release tag v0.7.1 is reachable from HEAD, so its PROTOCOL_VERSION cannot be read",
+      },
+    ]);
+  });
+
+  test("a listed release with no publish time counts as old enough", () => {
+    const tree = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6, published: daysAgo(1) },
+      { tag: "v0.4.1", protocol: 6, listed: true },
+    ]);
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      above(7, "v0.4.1", 6, BARE, "1 to 14 days (npm has no publish time for it)"),
+    ]);
+  });
+
+  test("a latest dist-tag younger than every release at or below it fails", () => {
+    const tree = windowTree(
+      8,
+      8,
+      [
+        { tag: "v0.7.0", protocol: 8, oldest: 7, published: daysAgo(30) },
+        { tag: "v0.5.0", protocol: 7, oldest: 6, published: daysAgo(3) },
+      ],
+      { latest: "0.5.0" },
+    );
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      "`npx foxleash@latest setup` installs nothing under an npm release-age limit of 3 to 14 days: no listed release at or below the latest dist-tag 0.5.0 is that old, so OLDEST_SERVED_PROTOCOL 8 may not rise above the 7 that v0.7.0 serves",
+    ]);
+  });
+
+  test("npx foxleash@latest setup picks at or below a latest dist-tag moved back", () => {
+    const tree = windowTree(
+      9,
+      9,
+      [
+        { tag: "v0.8.0", protocol: 9, oldest: 8, published: daysAgo(20) },
+        { tag: "v0.7.2", protocol: 8, oldest: 7, published: daysAgo(2) },
+        { tag: "v0.7.0", protocol: 8, published: daysAgo(25) },
+      ],
+      { latest: "0.7.2" },
+    );
+    assert.deepEqual(texts(protocol(tree), "FAIL"), [
+      above(9, "v0.7.0", 8, AT_LATEST, "2 to 14 days (published 2026-09-23)"),
+    ]);
+  });
+
+  const latestReplies: [string, WindowOptions, string][] = [
+    ["no output", { listing: "" }, "npm has no latest dist-tag for foxleash"],
+    [
+      "a latest dist-tag on a version npm does not list",
+      {
+        listing: new CommandError(
+          LISTING_CALL.join(" "),
+          1,
+          "npm error code E404\nnpm error 404 No match found for version 0.9.0",
+        ),
+      },
+      "the latest dist-tag of foxleash names 0.9.0, which npm does not list in its versions",
     ],
     [
-      "a JSON array",
-      "[]",
-      "npm publish times: `npm view foxleash time --json` printed no JSON object",
+      "no latest dist-tag",
+      {
+        listing: json({
+          versions: ["0.0.0-stage", "0.5.0"],
+          time: { "0.5.0": "2026-09-01T00:00:00.000Z" },
+          "dist-tags": {},
+        }),
+      },
+      "npm has no latest dist-tag for foxleash",
     ],
     [
-      "a JSON string",
-      '"x"',
-      "npm publish times: `npm view foxleash time --json` printed no JSON object",
+      "a latest dist-tag on a prerelease",
+      { latest: "0.0.0-stage" },
+      'the latest dist-tag of foxleash names "0.0.0-stage", not a version x.y.z',
+    ],
+    [
+      "a latest dist-tag outside the versions",
+      { latest: "0.9.0" },
+      "the latest dist-tag of foxleash names 0.9.0, which npm does not list in its versions",
+    ],
+  ];
+  for (const [name, options, expected] of latestReplies) {
+    test(`${name} from npm is one FAIL and no further npm call`, () => {
+      const tree = windowTree(
+        7,
+        7,
+        [{ tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-09-01T00:00:00.000Z" }],
+        options,
+      );
+      const env = fakeEnv(tree);
+      assert.deepEqual(texts(checkProtocol(env), "FAIL"), [`npm releases: ${expected}`]);
+      assert.deepEqual(npmCalls(env), [LISTING_CALL]);
+    });
+  }
+
+  /** A listing of 0.5.0 and 0.4.1 in which 0.5.0 has the publish time `time`. */
+  const timeOf = (time: unknown): string =>
+    json({
+      versions: ["0.4.1", "0.5.0"],
+      time: { "0.4.1": "2026-08-01T00:00:00.000Z", "0.5.0": time },
+      "dist-tags": { latest: "0.5.0" },
+    });
+  const entry = (version: string): Record<string, string> => ({ name: "foxleash", version });
+  const npmReplies: [string, WindowOptions, string][] = [
+    [
+      "a failing listing",
+      { listing: new CommandError(LISTING_CALL.join(" "), 1, "npm error code ETIMEDOUT") },
+      `${LISTING_COMMAND} failed (status 1): npm error code ETIMEDOUT`,
+    ],
+    ["a listing that is not JSON", { listing: "not json" }, `${LISTING_COMMAND} printed no JSON: `],
+    [
+      "a listing that is a JSON array",
+      { listing: "[]" },
+      `${LISTING_COMMAND} printed no JSON object`,
+    ],
+    [
+      "a listing that is a JSON string",
+      { listing: '"x"' },
+      `${LISTING_COMMAND} printed no JSON object`,
+    ],
+    [
+      "a listing without versions",
+      { listing: json({ time: {}, "dist-tags": { latest: "0.5.0" } }) },
+      `${LISTING_COMMAND} printed no list of versions`,
+    ],
+    [
+      "a listing with a version that is not text",
+      { listing: json({ versions: ["0.5.0", 1], time: {}, "dist-tags": { latest: "0.5.0" } }) },
+      `${LISTING_COMMAND} printed no list of versions`,
+    ],
+    [
+      "a listing without publish times",
+      { listing: json({ versions: ["0.5.0"], time: [], "dist-tags": { latest: "0.5.0" } }) },
+      `${LISTING_COMMAND} printed no publish times`,
+    ],
+    [
+      "a listing without dist-tags",
+      { listing: json({ versions: ["0.5.0"], time: {}, "dist-tags": "0.5.0" }) },
+      `${LISTING_COMMAND} printed no dist-tags`,
     ],
     [
       "a time that is not a date",
-      json({ "0.5.0": "soon" }),
-      'npm publish times: npm gives no publish time for 0.5.0: "soon"',
+      { listing: timeOf("soon") },
+      'npm gives no publish time for 0.5.0: "soon"',
     ],
-    [
-      "a time that is a number",
-      json({ "0.5.0": 1 }),
-      "npm publish times: npm gives no publish time for 0.5.0: 1",
-    ],
+    ["a time that is a number", { listing: timeOf(1) }, "npm gives no publish time for 0.5.0: 1"],
     [
       "a time without its zone",
-      json({ "0.5.0": "2026-09-01T10:00:00.000" }),
-      'npm publish times: npm gives no publish time for 0.5.0: "2026-09-01T10:00:00.000"',
+      { listing: timeOf("2026-09-01T10:00:00.000") },
+      'npm gives no publish time for 0.5.0: "2026-09-01T10:00:00.000"',
     ],
     [
       "a time after a prefix",
-      json({ "0.5.0": "x2026-09-01T10:00:00.000Z" }),
-      'npm publish times: npm gives no publish time for 0.5.0: "x2026-09-01T10:00:00.000Z"',
+      { listing: timeOf("x2026-09-01T10:00:00.000Z") },
+      'npm gives no publish time for 0.5.0: "x2026-09-01T10:00:00.000Z"',
     ],
     [
       "a time that is not on the clock",
-      json({ "0.5.0": "2026-09-01T25:00:00.000Z" }),
-      'npm publish times: npm gives no publish time for 0.5.0: "2026-09-01T25:00:00.000Z"',
+      { listing: timeOf("2026-09-01T25:00:00.000Z") },
+      'npm gives no publish time for 0.5.0: "2026-09-01T25:00:00.000Z"',
     ],
     [
       "a day that is not on the calendar",
-      json({ "0.5.0": "2026-02-30T10:00:00.000Z" }),
-      'npm publish times: npm gives no publish time for 0.5.0: "2026-02-30T10:00:00.000Z"',
+      { listing: timeOf("2026-02-30T10:00:00.000Z") },
+      'npm gives no publish time for 0.5.0: "2026-02-30T10:00:00.000Z"',
+    ],
+    [
+      "a failing deprecation listing",
+      {
+        deprecations: new CommandError(DEPRECATIONS_CALL.join(" "), 1, "npm error code E404"),
+      },
+      `${DEPRECATIONS_COMMAND} failed (status 1): npm error code E404`,
+    ],
+    [
+      "an empty deprecation listing",
+      { deprecations: "" },
+      `${DEPRECATIONS_COMMAND} printed no JSON: `,
+    ],
+    [
+      "a deprecation listing that is not JSON",
+      { deprecations: "not json" },
+      `${DEPRECATIONS_COMMAND} printed no JSON: `,
+    ],
+    [
+      "a deprecation listing that is a JSON string",
+      { deprecations: '"0.5.0"' },
+      `${DEPRECATIONS_COMMAND} printed no JSON object or array`,
+    ],
+    [
+      "a deprecation listing of bare versions",
+      { deprecations: json(["0.5.0", "0.4.1"]) },
+      `${DEPRECATIONS_COMMAND} printed an entry without a version: "0.5.0"`,
+    ],
+    [
+      "a deprecation listing with an entry without a version",
+      { deprecations: json([{ name: "foxleash" }, entry("0.4.1")]) },
+      `${DEPRECATIONS_COMMAND} printed an entry without a version: {"name":"foxleash"}`,
+    ],
+    [
+      "a deprecation that is not text",
+      { deprecations: json([{ ...entry("0.5.0"), deprecated: true }, entry("0.4.1")]) },
+      `${DEPRECATIONS_COMMAND} printed a deprecation of 0.5.0 that is not text: true`,
+    ],
+    [
+      "a deprecation listing that misses a listed version",
+      { deprecations: json(entry("0.5.0")) },
+      `${LISTING_COMMAND} and ${DEPRECATIONS_COMMAND} list different versions: 0.4.1, 0.5.0 against 0.5.0`,
+    ],
+    [
+      "a deprecation listing with another version",
+      { deprecations: json([entry("0.4.1"), entry("0.6.0")]) },
+      `${LISTING_COMMAND} and ${DEPRECATIONS_COMMAND} list different versions: 0.4.1, 0.5.0 against 0.4.1, 0.6.0`,
+    ],
+    [
+      "a deprecation listing with an extra version",
+      { deprecations: json([entry("0.4.1"), entry("0.5.0"), entry("0.6.0")]) },
+      `${LISTING_COMMAND} and ${DEPRECATIONS_COMMAND} list different versions: 0.4.1, 0.5.0 against 0.4.1, 0.5.0, 0.6.0`,
     ],
   ];
-  for (const [name, reply, expected] of npmReplies) {
+  for (const [name, options, expected] of npmReplies) {
     test(`${name} from npm is one FAIL and no release is named`, () => {
       const tree = windowTree(
         7,
         7,
         [
-          { tag: "v0.5.0", protocol: 7, oldest: 6 },
-          { tag: "v0.4.1", protocol: 6, oldest: 5 },
+          { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-09-01T00:00:00.000Z" },
+          { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-08-01T00:00:00.000Z" },
         ],
-        reply,
+        options,
       );
       const findings = protocol(tree);
       assert.deepEqual(texts(findings, "INFO"), ["protocol 7, oldest served 7, v0.5.0 has 7"]);
       const fails = texts(findings, "FAIL");
       assert.equal(fails.length, 1);
-      assert.equal(fails[0]?.slice(0, expected.length), expected);
+      const prefixed = `npm releases: ${expected}`;
+      assert.equal(fails[0]?.slice(0, prefixed.length), prefixed);
     });
   }
 
@@ -3085,7 +3409,11 @@ describe("protocol", () => {
     const tree = secondReleaseTree();
     tree.files[PROTOCOL] = protocolSource(6, 3);
     tree.commands[show("refs/tags/v0.1.0", PROTOCOL)] = protocolSource(3, 2);
-    tree.commands[NPM_TIMES] = json({ "0.1.0": "2026-10-10T00:00:00.000Z" });
+    tree.commands[NPM_LISTING] = json({
+      versions: ["0.1.0"],
+      time: { "0.1.0": "2026-10-10T00:00:00.000Z" },
+      "dist-tags": { latest: "0.1.0" },
+    });
     assert.deepEqual(texts(preRoll(tree, "minor"), "FAIL"), [
       "no release has been on npm for 14 days, so OLDEST_SERVED_PROTOCOL 3 may not rise above the 2 that v0.1.0 serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses",
     ]);

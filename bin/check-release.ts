@@ -78,6 +78,9 @@ type Run = {
 };
 type Severity = "info" | "low" | "moderate" | "high" | "critical";
 type Advisory = { name: string; severity: Severity; title: string; url: string };
+type Published = { at: number; day: string };
+type ListedRelease = { version: string; published: Published | undefined };
+type NpxPick = { command: string; lo: number; hi: number; release: ListedRelease | undefined };
 
 const SUBCOMMANDS = [
   "changelog",
@@ -142,6 +145,18 @@ const MANIFEST = "apps/extension/manifest.json";
 const PROTOCOL = "packages/protocol/src/index.ts";
 // The published npm package, as apps/server/build.ts names it; the workspace's own name is private.
 const NPM_PACKAGE = "foxleash";
+const NPM_LISTING = ["view", NPM_PACKAGE, "versions", "time", "dist-tags", "--json"];
+// With `name`, every entry has two keys, so npm view does not print the versions alone and drop
+// the deprecations.
+const NPM_DEPRECATIONS = [
+  "view",
+  `${NPM_PACKAGE}@>=0.0.0`,
+  "name",
+  "version",
+  "deprecated",
+  "--json",
+];
+const NO_LATEST = `npm has no latest dist-tag for ${NPM_PACKAGE}`;
 // ADR 0072: a user whose npm release-age limit is at most this many days still gets a program
 // that the add-on serves.
 const SERVED_RELEASE_AGE_DAYS = 14;
@@ -949,9 +964,9 @@ export function checkProtocol(env: Env): Finding[] {
  * The extension serves every protocol from OLDEST_SERVED_PROTOCOL up to PROTOCOL_VERSION, so the
  * oldest may not be above what the latest release shipped: that release's server would stop
  * working at the next add-on update. When the oldest rises above what the latest release served,
- * it may also not pass what the newest release npm has served for SERVED_RELEASE_AGE_DAYS shipped,
- * the program npx hands a user whose release-age limit hides the newer ones. `tag` is undefined
- * when listing the tags failed, which is already a FAIL.
+ * it may also not pass what any release npx installs under a release-age limit of up to
+ * SERVED_RELEASE_AGE_DAYS shipped, the program a user whose limit hides the newer ones gets. `tag`
+ * is undefined when listing the tags failed, which is already a FAIL.
  */
 function checkProtocolServed(env: Env, tag: string | null | undefined, findings: Finding[]): void {
   const source = attempt(findings, "protocol source", () => env.readFile(PROTOCOL));
@@ -1051,89 +1066,275 @@ function declarationLines(text: string, name: string): string[] {
 }
 
 /**
- * A user whose npm release-age limit hides the newer releases gets the newest release older than
- * the limit from npx, so OLDEST_SERVED_PROTOCOL may not pass the PROTOCOL_VERSION of the newest
- * release npm has served for SERVED_RELEASE_AGE_DAYS (ADR 0072).
+ * A user whose npm release-age limit hides the newer releases gets the release npm picks for that
+ * limit, so OLDEST_SERVED_PROTOCOL may not pass the lowest PROTOCOL_VERSION among the releases
+ * `npx foxleash setup` and `npx foxleash@latest setup` install under any limit up to
+ * SERVED_RELEASE_AGE_DAYS (ADR 0072).
  */
 function checkServedReleaseAge(
   env: Env,
   oldest: number,
-  latest: string,
+  latestTag: string,
   latestOldest: number,
   findings: Finding[],
 ): void {
-  const times = attempt(findings, "npm publish times", () => publishTimes(env));
-  if (times === undefined) return;
-  const tags = attempt(findings, "release tags", () => releaseTags(env).valid);
-  if (tags === undefined) return;
-  const served = attempt(findings, "npm publish times", () =>
-    newestServedRelease(tags, times, env.now()),
-  );
-  if (served === undefined) return;
-  if (served === null) {
+  const listing = attempt(findings, "npm releases", () => npmListing(env));
+  if (listing === undefined) return;
+  const now = env.now();
+  const window = now - SERVED_RELEASE_AGE_DAYS * DAY_MS;
+  if (!listing.releases.some((release) => oldEnough(release, window))) {
     findings.push(
       fail(
-        `no release has been on npm for ${SERVED_RELEASE_AGE_DAYS} days, so OLDEST_SERVED_PROTOCOL ${oldest} may not rise above the ${latestOldest} that ${latest} serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses`,
+        `no release has been on npm for ${SERVED_RELEASE_AGE_DAYS} days, so OLDEST_SERVED_PROTOCOL ${oldest} may not rise above the ${latestOldest} that ${latestTag} serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses`,
       ),
     );
     return;
   }
-  const protocol = attempt(findings, `tag ${served.tag}`, () =>
-    protocolConstant(
-      env.sh("git", ["show", `refs/tags/${served.tag}:${PROTOCOL}`]),
-      "PROTOCOL_VERSION",
-    ),
+  const latest = attempt(findings, "npm releases", () =>
+    latestRelease(listing.latest, listing.releases),
   );
-  if (protocol === undefined) return;
-  findings.push(
-    info(
-      `${served.tag} is the newest release npm has served for ${SERVED_RELEASE_AGE_DAYS} days (published ${served.day}), with PROTOCOL_VERSION ${protocol}`,
-    ),
+  if (latest === undefined) return;
+  const deprecated = attempt(findings, "npm releases", () =>
+    npmDeprecations(env, listing.releases),
   );
-  if (oldest > protocol) {
+  if (deprecated === undefined) return;
+  const tags = attempt(findings, "release tags", () => releaseTags(env).valid);
+  if (tags === undefined) return;
+  const picks = npxPicks(listing.releases, latest, deprecated, window, now);
+  const nothing = picks.find((pick) => pick.release === undefined);
+  if (nothing !== undefined) {
     findings.push(
       fail(
-        `OLDEST_SERVED_PROTOCOL ${oldest} is above the PROTOCOL_VERSION ${protocol} of ${served.tag}, the newest release npm has served for ${SERVED_RELEASE_AGE_DAYS} days (published ${served.day}): a user whose npm release-age limit still hides the newer releases would get a program the add-on refuses`,
+        `\`${nothing.command}\` installs nothing under an npm release-age limit of ${limits(nothing)}: no listed release at or below the latest dist-tag ${latest.version} is that old, so OLDEST_SERVED_PROTOCOL ${oldest} may not rise above the ${latestOldest} that ${latestTag} serves`,
+      ),
+    );
+    return;
+  }
+  const firsts = new Map<string, { pick: NpxPick; release: ListedRelease }>();
+  for (const pick of picks) {
+    if (pick.release !== undefined && !firsts.has(pick.release.version)) {
+      firsts.set(pick.release.version, { pick, release: pick.release });
+    }
+  }
+  const untagged = [...firsts.values()].filter(
+    ({ release }) => !tags.includes(`v${release.version}`),
+  );
+  for (const { pick, release } of untagged) {
+    findings.push(
+      fail(
+        `\`${pick.command}\` installs ${NPM_PACKAGE} ${release.version} under an npm release-age limit of ${limits(pick)}, but no release tag v${release.version} is reachable from HEAD, so its PROTOCOL_VERSION cannot be read`,
+      ),
+    );
+  }
+  if (untagged.length > 0) return;
+  const measured: { pick: NpxPick; release: ListedRelease; tag: string; protocol: number }[] = [];
+  for (const { pick, release } of firsts.values()) {
+    const tag = `v${release.version}`;
+    const protocol = attempt(findings, `tag ${tag}`, () =>
+      protocolConstant(env.sh("git", ["show", `refs/tags/${tag}:${PROTOCOL}`]), "PROTOCOL_VERSION"),
+    );
+    if (protocol === undefined) return;
+    measured.push({ pick, release, tag, protocol });
+  }
+  const bound = measured.reduce((lowest, next) =>
+    next.protocol < lowest.protocol ? next : lowest,
+  );
+  const published =
+    bound.release.published === undefined
+      ? "npm has no publish time for it"
+      : `published ${bound.release.published.day}`;
+  findings.push(
+    info(
+      `${bound.tag} has the lowest PROTOCOL_VERSION, ${bound.protocol}, of the releases npx installs under an npm release-age limit of up to ${SERVED_RELEASE_AGE_DAYS} days: \`${bound.pick.command}\` installs it under a limit of ${limits(bound.pick)} (${published})`,
+    ),
+  );
+  if (oldest > bound.protocol) {
+    findings.push(
+      fail(
+        `OLDEST_SERVED_PROTOCOL ${oldest} is above the PROTOCOL_VERSION ${bound.protocol} of ${bound.tag}, which \`${bound.pick.command}\` installs under an npm release-age limit of ${limits(bound.pick)} (${published}): a user whose npm release-age limit still hides the newer releases would get a program the add-on refuses`,
       ),
     );
   }
 }
 
-/** npm's publish time of each version of the package, keyed by version. */
-function publishTimes(env: Env): Record<string, unknown> {
-  const command = `npm view ${NPM_PACKAGE} time --json`;
-  const output = env.sh("npm", ["view", NPM_PACKAGE, "time", "--json"]);
-  let times: unknown;
+/** The x.y.z versions npm lists for the package, with their publish times, and its latest dist-tag. */
+function npmListing(env: Env): { latest: unknown; releases: ListedRelease[] } {
+  const command = `npm ${NPM_LISTING.join(" ")}`;
+  let output: string;
   try {
-    times = parseJson(output);
+    output = env.sh("npm", NPM_LISTING);
+  } catch (error) {
+    // npm view replaces the latest dist-tag with the version it names, which it then cannot find.
+    const unlisted =
+      error instanceof CommandError ? /No match found for version (\S+)/.exec(error.stderr) : null;
+    if (unlisted?.[1] !== undefined) throw new Error(unlistedLatest(unlisted[1]));
+    throw error;
+  }
+  // npm view prints nothing when no version carries the latest dist-tag.
+  if (output === "") throw new Error(NO_LATEST);
+  let parsed: unknown;
+  try {
+    parsed = parseJson(output);
   } catch (error) {
     throw new Error(
       `\`${command}\` printed no JSON: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
-  if (!isRecord(times)) throw new Error(`\`${command}\` printed no JSON object`);
-  return times;
+  if (!isRecord(parsed)) throw new Error(`\`${command}\` printed no JSON object`);
+  const versions = field(parsed, "versions");
+  if (!Array.isArray(versions) || !versions.every((item) => typeof item === "string")) {
+    throw new Error(`\`${command}\` printed no list of versions`);
+  }
+  const time = field(parsed, "time");
+  if (!isRecord(time)) throw new Error(`\`${command}\` printed no publish times`);
+  const distTags = field(parsed, "dist-tags");
+  if (!isRecord(distTags)) throw new Error(`\`${command}\` printed no dist-tags`);
+  const releases = versions
+    .filter((version) => VERSION.test(version))
+    .map((version) => {
+      const value = field(time, version);
+      return { version, published: value === undefined ? undefined : publishTime(value, version) };
+    });
+  return { latest: field(distTags, "latest"), releases };
+}
+
+function unlistedLatest(version: string): string {
+  return `the latest dist-tag of ${NPM_PACKAGE} names ${version}, which npm does not list in its versions`;
+}
+
+/** npm-pick-manifest counts a version with no publish time as old enough. */
+function oldEnough(release: ListedRelease, cutoff: number): boolean {
+  return release.published === undefined || release.published.at <= cutoff;
+}
+
+/** The listed release the latest dist-tag names. */
+function latestRelease(latest: unknown, releases: readonly ListedRelease[]): ListedRelease {
+  if (typeof latest !== "string") throw new Error(NO_LATEST);
+  if (!VERSION.test(latest)) {
+    throw new Error(
+      `the latest dist-tag of ${NPM_PACKAGE} names ${JSON.stringify(latest)}, not a version x.y.z`,
+    );
+  }
+  const release = releases.find((candidate) => candidate.version === latest);
+  if (release === undefined) throw new Error(unlistedLatest(latest));
+  return release;
 }
 
 /**
- * The newest of `tags` (newest first) that npm published at least SERVED_RELEASE_AGE_DAYS days
- * before `now`, as npm's own release-age cutoff counts; null when there is none. A tag npm has no
- * time for was never published there.
+ * The listed versions npm marks deprecated. Its output must name exactly the versions of the
+ * listing, so a shape npm was not measured printing fails instead of hiding a deprecation.
  */
-function newestServedRelease(
-  tags: readonly string[],
-  times: Record<string, unknown>,
-  now: number,
-): { tag: string; day: string } | null {
-  const cutoff = now - SERVED_RELEASE_AGE_DAYS * DAY_MS;
-  for (const tag of tags) {
-    const version = tag.slice(1);
-    const time = field(times, version);
-    if (time === undefined) continue;
-    const published = publishTime(time, version);
-    if (published.at <= cutoff) return { tag, day: published.day };
+function npmDeprecations(env: Env, releases: readonly ListedRelease[]): Set<string> {
+  const command = `npm ${NPM_DEPRECATIONS.join(" ")}`;
+  const output = env.sh("npm", NPM_DEPRECATIONS);
+  let parsed: unknown;
+  try {
+    parsed = parseJson(output);
+  } catch (error) {
+    throw new Error(
+      `\`${command}\` printed no JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
   }
-  return null;
+  // npm view prints one matching version as an object, several as an array.
+  const entries: unknown[] | undefined = isRecord(parsed)
+    ? [parsed]
+    : Array.isArray(parsed)
+      ? parsed
+      : undefined;
+  if (entries === undefined) throw new Error(`\`${command}\` printed no JSON object or array`);
+  const versions: string[] = [];
+  const deprecated = new Set<string>();
+  for (const entry of entries) {
+    const version = field(entry, "version");
+    if (typeof version !== "string") {
+      throw new Error(
+        `\`${command}\` printed an entry without a version: ${JSON.stringify(entry)}`,
+      );
+    }
+    const message = field(entry, "deprecated");
+    if (message !== undefined && typeof message !== "string") {
+      throw new Error(
+        `\`${command}\` printed a deprecation of ${version} that is not text: ${JSON.stringify(message)}`,
+      );
+    }
+    versions.push(version);
+    // npm-pick-manifest tests `!mani.deprecated`, so an empty message is no deprecation.
+    if (message !== undefined && message !== "") deprecated.add(version);
+  }
+  const listed = releases.map((release) => release.version).toSorted();
+  const shown = versions.toSorted();
+  if (listed.length !== shown.length || listed.some((version, index) => version !== shown[index])) {
+    throw new Error(
+      `\`npm ${NPM_LISTING.join(" ")}\` and \`${command}\` list different versions: ${listed.join(", ")} against ${shown.join(", ")}`,
+    );
+  }
+  return deprecated;
+}
+
+/**
+ * What `npx foxleash setup` and `npx foxleash@latest setup` install at each cutoff where npm's
+ * pick can change: the window and every publish inside it, ascending. A pick holds for the limits
+ * from the age of the next cutoff at which that command installs another release up to its own
+ * cutoff's age. The rules are npm-pick-manifest 11.0.3's (lib/index.js), as npm 11.16.0 ships
+ * it; engines are assumed satisfied (ADR 0072).
+ */
+function npxPicks(
+  releases: readonly ListedRelease[],
+  latest: ListedRelease,
+  deprecated: ReadonlySet<string>,
+  window: number,
+  now: number,
+): NpxPick[] {
+  const inside = releases.flatMap(({ published }) =>
+    published !== undefined && published.at > window && published.at <= now ? [published.at] : [],
+  );
+  const cutoffs = [...new Set([window, ...inside])].sort((a, b) => a - b);
+  // Lines 151-182: live versions first, then the highest.
+  const best = (candidates: readonly ListedRelease[]): ListedRelease | undefined =>
+    candidates.toSorted(
+      (a, b) =>
+        Number(deprecated.has(a.version)) - Number(deprecated.has(b.version)) ||
+        compareVersions(b.version, a.version),
+    )[0];
+  const picks = cutoffs.flatMap((cutoff, index) => {
+    const next = cutoffs[index + 1];
+    const hi = days(now - cutoff);
+    const lo = next === undefined ? 0 : days(now - next);
+    const candidates = releases.filter((release) => oldEnough(release, cutoff));
+    const old = oldEnough(latest, cutoff);
+    // Lines 115-132: the bare name is the range `*`, which takes latest only when it is not
+    // deprecated, and otherwise ranks every candidate.
+    const bare = old && !deprecated.has(latest.version) ? latest : best(candidates);
+    // Lines 97-104: the tag takes latest once it is old enough, else picks from `<=latest`.
+    const tagged = old
+      ? latest
+      : best(candidates.filter((release) => compareVersions(release.version, latest.version) <= 0));
+    return [
+      { command: `npx ${NPM_PACKAGE} setup`, lo, hi, release: bare },
+      { command: `npx ${NPM_PACKAGE}@latest setup`, lo, hi, release: tagged },
+    ];
+  });
+  const merged: NpxPick[] = [];
+  const open = new Map<string, NpxPick>();
+  for (const pick of picks) {
+    const current = open.get(pick.command);
+    if (current !== undefined && current.release === pick.release) {
+      current.lo = pick.lo;
+    } else {
+      merged.push(pick);
+      open.set(pick.command, pick);
+    }
+  }
+  return merged;
+}
+
+/** Whole tenths of a day, rounded down. */
+function days(ms: number): number {
+  return Math.floor((ms / DAY_MS) * 10) / 10;
+}
+
+function limits(pick: NpxPick): string {
+  return `${pick.lo} to ${pick.hi} days`;
 }
 
 /**

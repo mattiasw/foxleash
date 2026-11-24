@@ -308,12 +308,16 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `PROTOCOL_VERSION` is below the tag's, and when `OLDEST_SERVED_PROTOCOL` is above the tag's.
   Without a previous tag it skips the comparison with a release and says so. When
   `OLDEST_SERVED_PROTOCOL` is above the oldest protocol the latest tag serves (that tag's
-  `OLDEST_SERVED_PROTOCOL`, or its `PROTOCOL_VERSION` when it has none), it reads npm's publish
-  times with `npm view foxleash time --json`, prints the newest tagged release npm published at
-  least 14 days earlier, and fails when `OLDEST_SERVED_PROTOCOL` is above that release's
-  `PROTOCOL_VERSION`, when there is no such release, or when the npm call fails or prints no
-  usable times. It queries npm only when the window moved, so an ordinary CI run makes no network
-  request.
+  `OLDEST_SERVED_PROTOCOL`, or its `PROTOCOL_VERSION` when it has none), it runs
+  `npm view foxleash versions time dist-tags --json` and
+  `npm view 'foxleash@>=0.0.0' name version deprecated --json`, works out the release
+  `npx foxleash setup` and `npx foxleash@latest setup` install under every release-age limit up
+  to 14 days as npm picks it, prints the one with the lowest `PROTOCOL_VERSION`, and fails when
+  `OLDEST_SERVED_PROTOCOL` is above it, when no release is 14 days old, when npm's `latest`
+  dist-tag is missing or names no listed version x.y.z, when `npx foxleash@latest setup` would
+  install nothing under such a limit, when a picked release has no tag, or when an npm call fails
+  or prints output it cannot read. It queries npm only when the window moved, so an ordinary CI
+  run makes no network request.
 - `pre-roll [--bump=patch|minor|major]`: the changelog shape; HEAD is `main`, equal to
   origin's `main`, with a clean working tree; every version field agrees; the latest tag is
   on origin; Unreleased has entries; the bump is at least what the change types need
@@ -396,10 +400,11 @@ shape only: when it cannot serve the old shape without relaxing a safeguard, it 
 request with a `ToolError`. The unit test in `served-protocols.test.ts` fails until each version
 in the window has its step.
 
-`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the newest release npm has
-served for 14 days, and so never above the latest release's: a user with an npm release-age limit
-gets the newest release older than the limit from `npx foxleash@latest setup`, so the extension
-keeps serving what such a user still gets, for limits up to 14 days.
+`OLDEST_SERVED_PROTOCOL` is never above the lowest `PROTOCOL_VERSION` among the releases
+`npx foxleash setup` and `npx foxleash@latest setup` install under an npm release-age limit of up
+to 14 days, and so never above the latest release's. npx picks as npm does: only versions npm
+lists, deprecated ones last, and the `latest` tag bounds `npx foxleash@latest setup`. So the
+extension keeps serving what a user with such a limit still gets, for limits up to 14 days.
 `npm run check:release -- protocol` checks it, in CI and in `pre-roll`. It may be raised to that
 number, and the steps below it are then deleted. Programs from before ADR 0072
 (protocol 3 to 5) check the protocol exactly and refuse a newer extension, so the window serves
