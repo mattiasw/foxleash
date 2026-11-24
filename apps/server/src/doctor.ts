@@ -8,6 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, statSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import type { Readable, Writable } from "node:stream";
 import {
+  ALL_WEBSITES_ACCESS_STEPS,
   EXTENSION_ID,
   NATIVE_HOST_NAME,
   type PartInfo,
@@ -619,7 +620,7 @@ function checkExtension(path: string, welcome: WelcomeMessage, report: Report): 
     report.line(
       "FAIL",
       "extension permissions",
-      "access to all websites is not granted; open about:addons, Foxleash, Permissions, and allow it",
+      `access to all websites is not granted; ${ALL_WEBSITES_ACCESS_STEPS}`,
     );
   } else if (allUrls === true) {
     report.line("ok", "extension permissions", "access to all websites granted");

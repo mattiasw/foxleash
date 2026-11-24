@@ -35,8 +35,15 @@ export interface FakeBrowser {
   ports: FakePort[];
   /** The window Firefox puts new tabs and groups in when no window is given. */
   currentWindowId: number;
-  /** What `permissions.contains({ origins: ["<all_urls>"] })` answers. */
+  /**
+   * What `permissions.contains({ origins: ["<all_urls>"] })` answers; when true, `contains` also
+   * answers true for any other origin.
+   */
   allUrls: boolean;
+  /** The origins `permissions.contains` answers true for while `allUrls` is false. */
+  grantedOrigins: Set<string>;
+  /** The `origins` of every `permissions.contains` call, in order. */
+  permissionChecks: string[][];
   version: string;
   /** How many times `runtime.openOptionsPage` ran. */
   optionsPageOpened: number;
@@ -480,7 +487,10 @@ export function createFakeBrowser(): FakeBrowser {
       onClicked,
     },
     permissions: {
-      contains: async () => fake.allUrls,
+      contains: async ({ origins }) => {
+        fake.permissionChecks.push([...origins]);
+        return fake.allUrls || origins.every((origin) => fake.grantedOrigins.has(origin));
+      },
       onAdded,
       onRemoved,
     },
@@ -762,6 +772,8 @@ export function createFakeBrowser(): FakeBrowser {
     ports: [],
     currentWindowId: 1,
     allUrls: true,
+    grantedOrigins: new Set(),
+    permissionChecks: [],
     version: "0.1.0",
     optionsPageOpened: 0,
     badgeText: new Map(),

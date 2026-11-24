@@ -13,6 +13,10 @@ export const NATIVE_HOST_NAME = "foxleash";
 /** The command that installs the Foxleash program on this computer. */
 export const SETUP_COMMAND = "npx foxleash setup";
 
+/** How the user turns on Foxleash's access to all websites; it completes "ask the user to". */
+export const ALL_WEBSITES_ACCESS_STEPS =
+  'open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites"';
+
 /** The oldest Node.js major version the foxleash program runs on. */
 export const MINIMUM_NODE_MAJOR = 24;
 

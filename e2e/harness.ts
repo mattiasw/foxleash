@@ -79,7 +79,7 @@ export interface Session {
 
 type StartOptions = Pick<
   LaunchOptions,
-  "holdBeforeUnloadPrompts" | "restoreSession" | "headless"
+  "holdBeforeUnloadPrompts" | "restoreSession" | "withholdSiteAccess" | "headless"
 > & {
   /** Leaves open the welcome page the extension opens when it is installed. */
   keepWelcome?: boolean;

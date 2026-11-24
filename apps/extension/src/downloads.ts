@@ -1,4 +1,4 @@
-import { DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
+import { ALL_WEBSITES_ACCESS_STEPS, DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
 import type { BrowserApi, Cancel, DownloadDelta, RequestDetails, Timers } from "./browser-api.ts";
 import { refuseIfEnded, ToolError } from "./handlers.ts";
 import { siteOf, withoutFragment } from "./site.ts";
@@ -348,7 +348,7 @@ function hopBlocked(site: string): ToolError {
 function noAccessToAllSites(): ToolError {
   return new ToolError(
     "download_failed",
-    "Foxleash needs access to all websites to download a file: open about:addons, Foxleash, Permissions, and allow it. Nothing was saved.",
+    `Foxleash needs access to all websites to download a file. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Nothing was saved.`,
   );
 }
 

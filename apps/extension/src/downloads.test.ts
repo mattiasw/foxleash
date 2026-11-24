@@ -727,7 +727,7 @@ describe("download", { timeout: 10000 }, () => {
     const refusal = {
       code: "download_failed",
       message:
-        "Foxleash needs access to all websites to download a file: open about:addons, Foxleash, Permissions, and allow it. Nothing was saved.",
+        'Foxleash needs access to all websites to download a file. Ask the user to open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites". Nothing was saved.',
     };
     fake.allUrls = false;
     await assert.rejects(downloads.save("s1", URL_A, "x.pdf", 0), refusal);

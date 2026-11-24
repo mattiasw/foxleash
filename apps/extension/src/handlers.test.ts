@@ -8369,6 +8369,94 @@ describe("screenshot", { timeout: 10000 }, () => {
     assert.deepEqual(await call("s1", "screenshot", { tabId: tab.id }), { data: PNG });
   });
 
+  it("says the screenshot needs access to all websites when the capture is refused without it", async () => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/secret-path");
+    const timersBefore = timers.pending();
+    fake.allUrls = false;
+    fake.grantedOrigins.add("https://a.example/*");
+    fake.failNextCapture(new Error("Missing host permission for https://a.example/secret-path"));
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "site_access_withheld",
+      message: `Foxleash needs access to all websites to take a screenshot of tab ${tab.id}. Ask the user to open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites". Firefox lists this access as optional, but Foxleash needs it.`,
+    });
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+    assert.equal(timers.pending(), timersBefore);
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+  });
+
+  it("fails a refused capture as before when Firefox does not answer whether it has access to all websites", async (t) => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.allUrls = false;
+    fake.grantedOrigins.add("https://a.example/*");
+    fake.failNextCapture(new Error("boom"));
+    t.mock.method(fake.browser.permissions, "contains", () =>
+      Promise.reject(new Error("no answer")),
+    );
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+  });
+
+  it("fails a refused capture as before when asking for access to all websites throws", async (t) => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.allUrls = false;
+    fake.grantedOrigins.add("https://a.example/*");
+    fake.failNextCapture(new Error("boom"));
+    t.mock.method(fake.browser.permissions, "contains", () => {
+      throw new Error("no answer");
+    });
+    await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+  });
+
+  it("fails a refused capture once CAPTURE_TIMEOUT_MS passes when the access check never settles", async (t) => {
+    const { fake, call, open, grant, timers } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const timersBefore = timers.pending();
+    fake.allUrls = false;
+    fake.grantedOrigins.add("https://a.example/*");
+    fake.failNextCapture(new Error("boom"));
+    t.mock.method(fake.browser.permissions, "contains", () => new Promise(() => {}));
+    let settled = false;
+    const shot = call("s1", "screenshot", { tabId: tab.id });
+    shot.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await flush();
+    assert.equal(fake.captures.length, 1);
+    timers.advance(CAPTURE_TIMEOUT_MS - 1);
+    await flush();
+    assert.equal(settled, false);
+    assert.deepEqual(
+      fake.cssCalls.map((css) => css.method),
+      ["insertCSS"],
+    );
+    timers.advance(1);
+    await assert.rejects(shot, {
+      code: "screenshot_failed",
+      message: `Firefox could not take a screenshot of tab ${tab.id}.`,
+    });
+    assert.equal(timers.pending(), timersBefore);
+    await flush();
+    assertMaskedAndRemoved(fake.cssCalls, tab.id, [0]);
+  });
+
   it("refuses a capture that is not a PNG data URL", async () => {
     const { fake, call, open, grant } = setup();
     await grant("https://a.example");

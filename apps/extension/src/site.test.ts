@@ -10,6 +10,7 @@ import {
   parseBlocklist,
   redactedUrl,
   siteOf,
+  sitePattern,
 } from "./site.ts";
 
 const SITES: [string, string | undefined][] = [
@@ -103,6 +104,24 @@ describe("hostOf", () => {
       assert.equal(hostOf(site), host);
     });
   }
+});
+
+describe("sitePattern", () => {
+  it("gives the match pattern of the site's scheme and host", () => {
+    assert.equal(sitePattern("https://mail.google.com"), "https://mail.google.com/*");
+  });
+
+  it("leaves out the port", () => {
+    assert.equal(sitePattern("http://127.0.0.1:8123"), "http://127.0.0.1/*");
+  });
+
+  it("keeps the brackets of an IPv6 host", () => {
+    assert.equal(sitePattern("http://[::1]:8080"), "http://[::1]/*");
+  });
+
+  it("is undefined for a site that does not parse", () => {
+    assert.equal(sitePattern("not a url"), undefined);
+  });
 });
 
 describe("matchesDomain", () => {

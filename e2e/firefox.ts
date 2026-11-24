@@ -370,6 +370,11 @@ export interface LaunchOptions {
    */
   restoreSession?: boolean;
   /**
+   * Installs the extension without its optional access to websites, as when the user turned off
+   * "Access your data for all websites" in about:addons.
+   */
+  withholdSiteAccess?: boolean;
+  /**
    * Firefox runs headless unless this is false. False draws its window on the X display named by
    * `DISPLAY` and hides the marks Firefox puts on a window WebDriver controls, for screenshots of
    * the whole window.
@@ -393,11 +398,12 @@ export async function launchFirefox({
   lifetimeSeconds = FIREFOX_LIFETIME_SECONDS,
   holdBeforeUnloadPrompts = false,
   restoreSession = false,
+  withholdSiteAccess = false,
   headless = true,
 }: LaunchOptions): Promise<Firefox> {
   writeFileSync(
     join(profileDir, "user.js"),
-    buildUserJs(downloadDir, holdBeforeUnloadPrompts, restoreSession, headless),
+    buildUserJs(downloadDir, holdBeforeUnloadPrompts, restoreSession, withholdSiteAccess, headless),
   );
   if (!headless) {
     mkdirSync(join(profileDir, "chrome"), { recursive: true });
@@ -948,6 +954,7 @@ function buildUserJs(
   downloadDir: string,
   holdBeforeUnloadPrompts: boolean,
   restoreSession: boolean,
+  withholdSiteAccess: boolean,
   headless: boolean,
 ): string {
   const prefs: Array<[string, string | number | boolean, string]> = [
@@ -1033,6 +1040,13 @@ function buildUserJs(
       "dom.require_user_interaction_for_beforeunload",
       false,
       "Show a page's beforeunload prompt without a click on the page first, so a test can make one appear.",
+    ]);
+  }
+  if (withholdSiteAccess) {
+    prefs.push([
+      "extensions.originControls.grantByDefault",
+      false,
+      "Install the add-on without its optional access to websites, as when the user turned off 'Access your data for all websites'.",
     ]);
   }
   if (!headless) {

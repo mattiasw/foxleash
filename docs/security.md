@@ -651,8 +651,8 @@ quarantines. Foxleash does not see a redirect step to one of them, so it cannot 
 Firefox sends that request; the file is not saved when such a step is the last one.
 
 `download` refuses while Foxleash lacks access to all websites in Firefox's add-on settings
-(about:addons, Foxleash, Permissions): Firefox would then not show it the redirect steps to sites
-outside that access.
+(about:addons, Foxleash, the Permissions tab, "Access your data for all websites" under
+"Optional"): Firefox would then not show it the redirect steps to sites outside that access.
 
 ### Files a page loads in the agent's tabs
 

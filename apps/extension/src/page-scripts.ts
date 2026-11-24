@@ -1,4 +1,4 @@
-import { aimsWithoutRef, type MethodName } from "@foxleash/protocol";
+import { ALL_WEBSITES_ACCESS_STEPS, aimsWithoutRef, type MethodName } from "@foxleash/protocol";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
 import {
@@ -20,6 +20,7 @@ import {
 } from "./page-messages.ts";
 import type { SessionGroups } from "./session-groups.ts";
 import { isRecord, TAG_MARK_KEY } from "./settings.ts";
+import { sitePattern } from "./site.ts";
 import type { SiteAccess } from "./site-access.ts";
 import type { TabNavigations } from "./tab-navigations.ts";
 
@@ -57,7 +58,7 @@ const ACTING_REQUEST_TYPES: readonly string[] = [
 const TAGLESS_REQUEST_TYPES: readonly string[] = ["page_changes"];
 
 export interface PageScriptsDeps<Handle> {
-  browser: Pick<BrowserApi, "tabs" | "scripting" | "storage">;
+  browser: Pick<BrowserApi, "tabs" | "scripting" | "storage" | "permissions">;
   groups: Pick<SessionGroups, "groupOf">;
   access: Pick<SiteAccess, "view" | "openPrompt" | "generation">;
   timers: Timers<Handle>;
@@ -149,7 +150,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         const site = await allowedPageSite(deps, session, tabId);
         // A fresh tag for every message, so no two documents can take the same one.
         const tag = TAGLESS_REQUEST_TYPES.includes(type) ? null : await reserveTag(tabId);
-        await inject(tabId);
+        await inject(tabId, site);
         await checkAgain(session, tabId, site);
         if (moved()) throw pageChanged(tabId);
         if (blind && (waited || navigations.begun(tabId) > started)) throw unseenPage(tabId, type);
@@ -264,15 +265,28 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
     }
   }
 
-  async function inject(tabId: number): Promise<void> {
-    const frames = await bounded(
-      () =>
-        browser.scripting.executeScript({
-          target: { tabId, frameIds: [0] },
-          files: [CONTENT_SCRIPT],
-          // The script only adds a listener, so it need not wait for the page to finish loading.
-          injectImmediately: true,
-        }),
+  async function inject(tabId: number, site: string): Promise<void> {
+    const refused = await bounded(
+      async () => {
+        try {
+          const frames = await browser.scripting.executeScript({
+            target: { tabId, frameIds: [0] },
+            files: [CONTENT_SCRIPT],
+            // The script only adds a listener, so it need not wait for the page to finish loading.
+            injectImmediately: true,
+          });
+          const top = frames.find((frame) => frame.frameId === 0);
+          if (top !== undefined && top.error === undefined) return undefined;
+        } catch {
+          // Asked below, like a frame that refused the script.
+        }
+        // Resolved, not thrown: bounded turns every rejection, a refused `contains` too, into
+        // pageUnreachable.
+        const pattern = sitePattern(site);
+        if (pattern === undefined) return pageUnreachable(tabId);
+        const granted = await browser.permissions.contains({ origins: [pattern] });
+        return granted === false ? siteAccessWithheld(tabId) : pageUnreachable(tabId);
+      },
       PAGE_INJECTION_MS,
       // Neutral, and without Firefox's text, which can repeat the URL.
       pageUnreachable(tabId),
@@ -281,8 +295,7 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
         `Foxleash could not get into the page in tab ${tabId} in time; try again.`,
       ),
     );
-    const top = frames.find((frame) => frame.frameId === 0);
-    if (top === undefined || top.error !== undefined) throw pageUnreachable(tabId);
+    if (refused !== undefined) throw refused;
   }
 
   /**
@@ -453,6 +466,13 @@ function pageUnreachable(tabId: number): ToolError {
   return new ToolError(
     "page_unreachable",
     `Firefox did not let Foxleash into the page in tab ${tabId}.`,
+  );
+}
+
+function siteAccessWithheld(tabId: number): ToolError {
+  return new ToolError(
+    "site_access_withheld",
+    `Firefox has not given Foxleash access to this site, so Foxleash cannot read or act in the page in tab ${tabId}. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
   );
 }
 

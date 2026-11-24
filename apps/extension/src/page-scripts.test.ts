@@ -375,6 +375,85 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.deepEqual(fake.tabMessages, []);
   });
 
+  it("says Firefox withholds the site when it refuses the injection without the site's access", async () => {
+    const { fake, pages, open, grant, timers } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/secret-path`);
+    const timersBefore = timers.pending();
+    fake.allUrls = false;
+    fake.failNextInjection(new Error(`Missing host permission for ${SITE}/secret-path`));
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
+      code: "site_access_withheld",
+      message: `Firefox has not given Foxleash access to this site, so Foxleash cannot read or act in the page in tab ${tab.id}. Ask the user to open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites". Firefox lists this access as optional, but Foxleash needs it.`,
+    });
+    assert.deepEqual(fake.permissionChecks, [[`${SITE}/*`]]);
+    assert.deepEqual(fake.tabMessages, []);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
+  it("refuses as unreachable when Firefox gave the site's access but refused the injection", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.allUrls = false;
+    fake.grantedOrigins.add(`${SITE}/*`);
+    fake.failNextInjection(new Error("boom"));
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
+      code: "page_unreachable",
+      message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
+    });
+    assert.deepEqual(fake.tabMessages, []);
+  });
+
+  it("asks for the site's access without its port", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant("https://a.example:8443");
+    const tab = await open("s1", "https://a.example:8443/");
+    fake.allUrls = false;
+    fake.failNextInjection(new Error("boom"));
+    await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "site_access_withheld");
+    assert.deepEqual(fake.permissionChecks, [["https://a.example/*"]]);
+    assert.deepEqual(fake.tabMessages, []);
+  });
+
+  it("refuses as unreachable when Firefox does not answer whether it gave the site's access", async (t) => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.allUrls = false;
+    fake.failNextInjection(new Error("boom"));
+    t.mock.method(fake.browser.permissions, "contains", () =>
+      Promise.reject(new Error("no answer")),
+    );
+    await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
+      code: "page_unreachable",
+      message: `Firefox did not let Foxleash into the page in tab ${tab.id}.`,
+    });
+    assert.deepEqual(fake.tabMessages, []);
+  });
+
+  it("times out a refused injection whose access check never settles, sending nothing", async (t) => {
+    const { fake, pages, open, grant, timers } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    const timersBefore = timers.pending();
+    fake.allUrls = false;
+    fake.failNextInjection(new Error("boom"));
+    t.mock.method(fake.browser.permissions, "contains", () => new Promise(() => {}));
+    const { request, settled } = track(pages.request("s1", tab.id, "echo", {}, 0));
+    await flush();
+    timers.advance(PAGE_INJECTION_MS - 1);
+    await flush();
+    assert.equal(settled(), false);
+    timers.advance(1);
+    await assert.rejects(request, {
+      code: "page_timeout",
+      message: `Foxleash could not get into the page in tab ${tab.id} in time; try again.`,
+    });
+    assert.deepEqual(fake.tabMessages, []);
+    assert.equal(timers.pending(), timersBefore);
+  });
+
   const failures: { name: string; frames: { frameId: number; error?: unknown }[] }[] = [
     { name: "an error in frame 0", frames: [{ frameId: 0, error: new Error("boom") }] },
     { name: "an error that is null", frames: [{ frameId: 0, error: null }] },
@@ -389,6 +468,18 @@ describe("page script requests", { timeout: 10000 }, () => {
       fake.setContentScript(tab.id, contentScript(SITE));
       fake.injectionResults = frames;
       await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "page_unreachable", name);
+      assert.deepEqual(fake.tabMessages, []);
+    });
+  }
+  for (const { name, frames } of failures) {
+    it(`says Firefox withholds the site for an injection with ${name} without the site's access`, async () => {
+      const { fake, pages, open, grant } = setup();
+      await grant(SITE);
+      const tab = await open("s1", `${SITE}/`);
+      fake.setContentScript(tab.id, contentScript(SITE));
+      fake.allUrls = false;
+      fake.injectionResults = frames;
+      await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "site_access_withheld", name);
       assert.deepEqual(fake.tabMessages, []);
     });
   }

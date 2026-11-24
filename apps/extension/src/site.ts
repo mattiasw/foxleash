@@ -36,6 +36,15 @@ export function hostOf(site: string): string {
   return words.flatMap((word) => [word >> 8, word & 0xff]).join(".");
 }
 
+/**
+ * The match pattern of a site's scheme and host: a match pattern takes no port, so a site with
+ * one gives the pattern of its host on any port. Undefined when the site does not parse.
+ */
+export function sitePattern(site: string): string | undefined {
+  const parsed = URL.parse(site);
+  return parsed === null ? undefined : `${parsed.protocol}//${parsed.hostname}/*`;
+}
+
 /** Whether a blocklist pattern covers the host: the domain itself or any of its subdomains. */
 export function matchesDomain(host: string, pattern: string): boolean {
   return host === pattern || host.endsWith(`.${pattern}`);

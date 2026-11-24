@@ -17,6 +17,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   show. After you answer a site question late, the agent's next try loads the page in the
   question's tab instead of opening another one.
 
+### Fixed
+
+- When Firefox's optional "Access your data for all websites" is off for Foxleash, the tools that
+  read or act in a page, all but `read_network`, now say that Firefox withholds the site's access
+  and how to turn it on, instead of saying Foxleash could not get into the page, and `wait_for`
+  stops at once instead of waiting out its timeout.
+
 ## [0.6.0] - 2026-11-21
 
 ### Added

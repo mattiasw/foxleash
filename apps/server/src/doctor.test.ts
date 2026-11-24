@@ -1143,7 +1143,7 @@ describe("doctor, the extension", () => {
     const result = await runDoctor(f);
     assert.deepEqual(section(result, ["extension", "extension permissions"]), [
       extensionOk(),
-      "FAIL extension permissions: access to all websites is not granted; open about:addons, Foxleash, Permissions, and allow it",
+      'FAIL extension permissions: access to all websites is not granted; open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites"',
     ]);
     assert.equal(result.code, 1);
   });

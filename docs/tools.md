@@ -24,6 +24,13 @@ ask: `read_page`, `get_page_text`, `read_console`, `read_network`, `screenshot`,
 `hover`, `scroll`, `drag`, `type`, `fill_form`, `press_key`, `upload_file`, and `wait_for` when
 it waits for text or a selector.
 
+These tools also need Firefox to give Foxleash access to the site. Firefox lists Foxleash's access
+to all websites as optional, and you can turn it off. Without it, each of these tools but
+`read_network` tells the agent that Firefox has not given Foxleash access to the site and asks it
+to have you turn it on: open about:addons in Firefox, click Foxleash, then the Permissions tab,
+and under "Optional" turn on "Access your data for all websites". An update of the add-on never
+turns this access back on.
+
 ## Sessions and tabs
 
 ### The tab group
@@ -265,6 +272,8 @@ Some pages and frames cannot be captured:
 - A page Foxleash cannot get into, such as a PDF shown in Firefox's viewer, cannot be captured,
   and neither can a page with such a PDF in a frame or with a frame that never finishes loading.
 - A frame showing a certificate error or a blocked-site warning stops a screenshot.
+- A screenshot needs Foxleash's access to all websites, also on a site you gave Foxleash access
+  to on its own in Firefox's extensions panel.
 
 These frames do not stop a screenshot:
 
@@ -588,6 +597,8 @@ in it, or until a navigation in a tab finishes: 10 seconds unless the agent asks
   attributes.
 - Waiting for text or a selector while the tab loads another page, as right after a click or a
   form submit, checks that page once it has arrived.
+- Waiting for text or a selector stops at once when Firefox has not given Foxleash access to the
+  site.
 
 ## `batch`
 
@@ -656,8 +667,10 @@ agent can move it from there.
   blocklist; nothing was requested there and nothing was saved." A redirect that leads through
   another site and back to an approved one fails too. Firefox hides requests to a few sites,
   such as addons.mozilla.org, from add-ons, so a redirect to one of them is not cancelled.
-- `download` needs Foxleash's access to all websites (about:addons, Foxleash, Permissions) and
-  refuses without it, since Firefox would not show it the redirects to sites outside that access.
+- `download` needs Foxleash's access to all websites (open about:addons in Firefox, click
+  Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all
+  websites") and refuses without it, since Firefox would not show it the redirects to sites
+  outside that access.
 - An `http://` address is fetched over plain http, as the page's own requests to it are, so the
   file and your cookies for the site that are not marked Secure travel unencrypted. Only where
   Firefox itself requires https for the host, as HTTPS-Only Mode does for a host name or a site

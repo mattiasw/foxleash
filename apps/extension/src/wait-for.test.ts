@@ -63,6 +63,18 @@ describe("waitForPage", { timeout: 10000 }, () => {
     assert.equal(requests.length, 1);
   });
 
+  it("rejects at once when Firefox withholds the site's access, and asks no more", async () => {
+    const { timers, pages, requests, fail } = setup();
+    const refusal = new ToolError("site_access_withheld", "Withheld.");
+    const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 0);
+    fail(refusal);
+    await assert.rejects(waiting, (error: unknown) => error === refusal);
+    assert.equal(timers.pending(), 0);
+    timers.advance(20_000);
+    await flush();
+    assert.equal(requests.length, 1);
+  });
+
   it("rejects at once when the session ended, asking with the generation it was given", async () => {
     const { timers, pages, requests, fail } = setup();
     const waiting = waitForPage({ pages, timers }, "s1", 4, { text: "a" }, 10_000, 3);

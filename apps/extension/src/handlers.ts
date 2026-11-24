@@ -1,5 +1,6 @@
 import {
   type ActAfter,
+  ALL_WEBSITES_ACCESS_STEPS,
   DEFAULT_NETWORK_LIMIT,
   DEFAULT_WAIT_FOR_MS,
   type FoundTree,
@@ -1352,6 +1353,12 @@ export function createHandlers<Handle>({
     } catch (error: unknown) {
       if (error === timeout) throw timeout;
       if (error instanceof ToolError && error.code === "session_ended") throw error;
+      // Raced against the capture's timer, so the finally below always runs in time.
+      const allSites = await Promise.race([
+        Promise.resolve().then(() => browser.permissions.contains({ origins: ["<all_urls>"] })),
+        timedOut,
+      ]).catch(() => undefined);
+      if (allSites === false) throw screenshotNeedsAllSites(tabId);
       // Firefox's own error text can repeat the page's URL.
       throw screenshotFailedError(tabId);
     } finally {
@@ -2368,6 +2375,13 @@ function screenshotTimeout(tabId: number): ToolError {
 function screenshotFailedError(tabId: number): ToolError {
   const failed = screenshotFailed(tabId);
   return new ToolError(failed.code, failed.message);
+}
+
+function screenshotNeedsAllSites(tabId: number): ToolError {
+  return new ToolError(
+    "site_access_withheld",
+    `Foxleash needs access to all websites to take a screenshot of tab ${tabId}. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
+  );
 }
 
 /**

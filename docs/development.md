@@ -179,6 +179,12 @@ After a restart the test connects a new MCP session: sessions end with the Firef
 The extension's `storage.local`, and so the settings, carries over the restart, though the add-on
 is installed again (measured, ADR 0081); `e2e/foreign-file-restart.test.ts` depends on that.
 
+A test that needs Firefox to withhold Foxleash's access to websites starts it with
+`harness.startFirefox(EXTENSION_DIST, { withholdSiteAccess: true })`, which sets
+`extensions.originControls.grantByDefault` to `false`, so Firefox installs the add-on with its
+optional access off, as when the user turned off "Access your data for all websites" in
+about:addons. `e2e/site-access-withheld.test.ts` starts Firefox this way.
+
 A test that reloads the extension, as `browser.runtime.reload()` does, calls
 `harness.reloadExtension()`. It evaluates the reload in the settings page, waits until Firefox
 has closed that page with the old add-on, then until a settings page it opens shows the reloaded
