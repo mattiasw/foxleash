@@ -40,6 +40,9 @@ server, and from there to the agent.
 npx foxleash setup
 ```
 
+If npx says `No versions available for foxleash`, see
+[With an npm release-age limit](#with-an-npm-release-age-limit).
+
 `npx foxleash setup` does four things:
 
 1. It copies the Foxleash program to `~/.local/share/foxleash/`, where it stays when npm clears
@@ -80,8 +83,23 @@ all websites. Firefox lists that access as optional, but Foxleash needs it to re
 pages: it is the switch "Access your data for all websites" on Foxleash's Permissions tab in
 about:addons.
 
-- **Update:** `npx foxleash@latest setup`, then restart Firefox and your MCP client.
+- **Update:** `npx foxleash@latest setup`, then restart Firefox and your MCP client. With an npm
+  release-age limit, see [With an npm release-age limit](#with-an-npm-release-age-limit).
 - **Remove:** `npx foxleash uninstall`, then remove the extension in Firefox.
+
+### With an npm release-age limit
+
+With a release-age limit (`min-release-age` or `before` in your npm configuration), npx takes the
+newest Foxleash release older than the limit, and fails with `No versions available for foxleash`
+when there is none. To take the latest release anyway, override your setting right after `npx` in
+a Foxleash command: `npx --min-release-age=0 foxleash@latest setup` for `min-release-age`, or
+`npx --before=2099-01-01 foxleash@latest setup` for `before`. Use the one that matches your
+setting: an npm older than 11.15 refuses or ignores the other.
+
+This is safe because the foxleash package has no dependencies, so only Foxleash skips your limit.
+`min-release-age-exclude` in `.npmrc` does not help, because npx ignores it. With a
+`min-release-age` of 14 days or less you can also wait: the release npx gives you always works
+with the current add-on.
 
 ### From a checkout
 

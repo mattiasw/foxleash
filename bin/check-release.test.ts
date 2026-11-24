@@ -58,6 +58,7 @@ const HEAD = "a".repeat(40);
 const OTHER = "c".repeat(40);
 const TAG_SHA = "b".repeat(40);
 const TODAY = "2026-10-18";
+const NOW = Date.parse(`${TODAY}T12:00:00.000Z`);
 const ORIGIN_URL = "git@github.com:owner/repo.git";
 const WORKSPACES = ["apps/extension", "apps/server", "packages/protocol", "packages/tsconfig"];
 
@@ -692,6 +693,9 @@ function fakeEnv(tree: Tree): FakeEnv {
     },
     today() {
       return TODAY;
+    },
+    now() {
+      return NOW;
     },
     listTools() {
       if (tree.tools === undefined) throw new Error("no tools scripted in the test");
@@ -2837,6 +2841,256 @@ describe("protocol", () => {
     });
   }
 
+  const NPM_TIMES = key("npm", "view", "foxleash", "time", "--json");
+  type Release = { tag: string; protocol: number; oldest?: number; published?: string };
+
+  /** The working tree's numbers and the releases, newest first, with npm's publish times. */
+  function windowTree(current: number, oldest: number, releases: Release[], npm?: Reply): Tree {
+    const tree: Tree = { files: { [PROTOCOL]: protocolSource(current, oldest) }, commands: {} };
+    tree.commands[TAGS] = releases.map((release) => release.tag).join("\n");
+    const times: Record<string, string> = {
+      created: "2026-09-01T10:00:00.000Z",
+      modified: "2026-10-17T10:00:00.000Z",
+      "0.0.0-stage": "2026-09-01T10:00:00.000Z",
+    };
+    for (const release of releases) {
+      tree.commands[show(`refs/tags/${release.tag}`, PROTOCOL)] = protocolSource(
+        release.protocol,
+        release.oldest,
+      );
+      if (release.published !== undefined) times[release.tag.slice(1)] = release.published;
+    }
+    tree.commands[NPM_TIMES] = npm ?? json(times);
+    return tree;
+  }
+
+  function npmCalls(env: FakeEnv): string[][] {
+    return env.calls.filter((call) => call[0] === "npm");
+  }
+
+  const AGE_HINT =
+    "a user whose npm release-age limit still hides the newer releases would get a program the add-on refuses";
+
+  test("a window that did not move makes no npm call", () => {
+    const env = fakeEnv(windowTree(7, 6, [{ tag: "v0.4.1", protocol: 7, oldest: 6 }]));
+    assert.deepEqual(checkProtocol(env), [
+      { level: "INFO", text: "protocol 7, oldest served 6, v0.4.1 has 7" },
+    ]);
+    assert.deepEqual(npmCalls(env), []);
+    const lower = fakeEnv(windowTree(7, 5, [{ tag: "v0.4.1", protocol: 7, oldest: 6 }]));
+    assert.deepEqual(texts(checkProtocol(lower), "FAIL"), []);
+    assert.deepEqual(npmCalls(lower), []);
+    const first = fakeEnv(protocolTree(6, 3, 3));
+    checkProtocol(first);
+    assert.deepEqual(npmCalls(first), []);
+  });
+
+  test("a tag without OLDEST_SERVED_PROTOCOL served its PROTOCOL_VERSION", () => {
+    const env = fakeEnv(windowTree(7, 6, [{ tag: "v0.4.1", protocol: 6 }]));
+    assert.deepEqual(checkProtocol(env), [
+      { level: "INFO", text: "protocol 7, oldest served 6, v0.4.1 has 6" },
+    ]);
+    assert.deepEqual(npmCalls(env), []);
+    const moved = fakeEnv(windowTree(7, 6, [{ tag: "v0.4.1", protocol: 6, oldest: 5 }]));
+    checkProtocol(moved);
+    assert.deepEqual(npmCalls(moved), [["npm", "view", "foxleash", "time", "--json"]]);
+  });
+
+  test("a raise to the protocol of a release npm has served for exactly 14 days passes", () => {
+    const tree = windowTree(7, 6, [
+      { tag: "v0.5.0", protocol: 7, oldest: 5, published: "2026-10-17T10:00:00.000Z" },
+      { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-10-04T12:00:00.000Z" },
+    ]);
+    assert.deepEqual(protocol(tree), [
+      { level: "INFO", text: "protocol 7, oldest served 6, v0.5.0 has 7" },
+      {
+        level: "INFO",
+        text: "v0.4.1 is the newest release npm has served for 14 days (published 2026-10-04), with PROTOCOL_VERSION 6",
+      },
+    ]);
+  });
+
+  test("a raise past the protocol of the newest release npm has served for 14 days fails", () => {
+    const tree = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-10-04T12:00:00.001Z" },
+      { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-09-20T08:30:00.000Z" },
+    ]);
+    assert.deepEqual(protocol(tree), [
+      { level: "INFO", text: "protocol 7, oldest served 7, v0.5.0 has 7" },
+      {
+        level: "INFO",
+        text: "v0.4.1 is the newest release npm has served for 14 days (published 2026-09-20), with PROTOCOL_VERSION 6",
+      },
+      {
+        level: "FAIL",
+        text: `OLDEST_SERVED_PROTOCOL 7 is above the PROTOCOL_VERSION 6 of v0.4.1, the newest release npm has served for 14 days (published 2026-09-20): ${AGE_HINT}`,
+      },
+    ]);
+  });
+
+  test("the releases are measured newest first, whatever order git lists them in", () => {
+    const tree = windowTree(7, 6, [
+      { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-09-20T08:30:00.000Z" },
+      { tag: "v0.10.0", protocol: 7, oldest: 5, published: "2026-09-21T08:30:00.000Z" },
+    ]);
+    assert.deepEqual(texts(protocol(tree), "INFO"), [
+      "protocol 7, oldest served 6, v0.10.0 has 7",
+      "v0.10.0 is the newest release npm has served for 14 days (published 2026-09-21), with PROTOCOL_VERSION 7",
+    ]);
+  });
+
+  test("no release npm has served for 14 days fails", () => {
+    const noOld = `no release has been on npm for 14 days, so OLDEST_SERVED_PROTOCOL 7 may not rise above the 6 that v0.5.0 serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses`;
+    const young = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-10-04T12:00:00.001Z" },
+      { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-10-10T00:00:00.000Z" },
+    ]);
+    assert.deepEqual(protocol(young), [
+      { level: "INFO", text: "protocol 7, oldest served 7, v0.5.0 has 7" },
+      { level: "FAIL", text: noOld },
+    ]);
+    const unpublished = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6 },
+      { tag: "v0.4.1", protocol: 6, oldest: 5 },
+    ]);
+    assert.deepEqual(texts(protocol(unpublished), "FAIL"), [noOld]);
+  });
+
+  const npmReplies: [string, Reply, string][] = [
+    [
+      "a failing npm view",
+      new CommandError("npm view foxleash time --json", 1, "npm error code E404"),
+      "npm publish times: `npm view foxleash time --json` failed (status 1): npm error code E404",
+    ],
+    [
+      "text that is not JSON",
+      "not json",
+      "npm publish times: `npm view foxleash time --json` printed no JSON: ",
+    ],
+    [
+      "a JSON array",
+      "[]",
+      "npm publish times: `npm view foxleash time --json` printed no JSON object",
+    ],
+    [
+      "a JSON string",
+      '"x"',
+      "npm publish times: `npm view foxleash time --json` printed no JSON object",
+    ],
+    [
+      "a time that is not a date",
+      json({ "0.5.0": "soon" }),
+      'npm publish times: npm gives no publish time for 0.5.0: "soon"',
+    ],
+    [
+      "a time that is a number",
+      json({ "0.5.0": 1 }),
+      "npm publish times: npm gives no publish time for 0.5.0: 1",
+    ],
+    [
+      "a time without its zone",
+      json({ "0.5.0": "2026-09-01T10:00:00.000" }),
+      'npm publish times: npm gives no publish time for 0.5.0: "2026-09-01T10:00:00.000"',
+    ],
+    [
+      "a time after a prefix",
+      json({ "0.5.0": "x2026-09-01T10:00:00.000Z" }),
+      'npm publish times: npm gives no publish time for 0.5.0: "x2026-09-01T10:00:00.000Z"',
+    ],
+    [
+      "a time that is not on the clock",
+      json({ "0.5.0": "2026-09-01T25:00:00.000Z" }),
+      'npm publish times: npm gives no publish time for 0.5.0: "2026-09-01T25:00:00.000Z"',
+    ],
+    [
+      "a day that is not on the calendar",
+      json({ "0.5.0": "2026-02-30T10:00:00.000Z" }),
+      'npm publish times: npm gives no publish time for 0.5.0: "2026-02-30T10:00:00.000Z"',
+    ],
+  ];
+  for (const [name, reply, expected] of npmReplies) {
+    test(`${name} from npm is one FAIL and no release is named`, () => {
+      const tree = windowTree(
+        7,
+        7,
+        [
+          { tag: "v0.5.0", protocol: 7, oldest: 6 },
+          { tag: "v0.4.1", protocol: 6, oldest: 5 },
+        ],
+        reply,
+      );
+      const findings = protocol(tree);
+      assert.deepEqual(texts(findings, "INFO"), ["protocol 7, oldest served 7, v0.5.0 has 7"]);
+      const fails = texts(findings, "FAIL");
+      assert.equal(fails.length, 1);
+      assert.equal(fails[0]?.slice(0, expected.length), expected);
+    });
+  }
+
+  test("a tag with two OLDEST_SERVED_PROTOCOL lines is one FAIL and no npm call", () => {
+    const tree = windowTree(7, 7, [{ tag: "v0.4.1", protocol: 7, oldest: 6 }]);
+    tree.commands[show("refs/tags/v0.4.1", PROTOCOL)] =
+      `${protocolSource(7, 6)}/*\nexport const OLDEST_SERVED_PROTOCOL = 5;\n*/\n`;
+    const env = fakeEnv(tree);
+    assert.deepEqual(checkProtocol(env), [
+      { level: "INFO", text: "protocol 7, oldest served 7, v0.4.1 has 7" },
+      {
+        level: "FAIL",
+        text: `tag v0.4.1: 2 lines declare OLDEST_SERVED_PROTOCOL in ${PROTOCOL}: expected one`,
+      },
+    ]);
+    assert.deepEqual(npmCalls(env), []);
+  });
+
+  test("an oldest above the latest tag's protocol makes no npm call", () => {
+    const env = fakeEnv(windowTree(8, 8, [{ tag: "v0.4.1", protocol: 7, oldest: 6 }]));
+    assert.deepEqual(texts(checkProtocol(env), "FAIL"), [
+      "OLDEST_SERVED_PROTOCOL 8 is above the PROTOCOL_VERSION 7 of v0.4.1 (current 8): the extension would not serve the server of v0.4.1",
+    ]);
+    assert.deepEqual(npmCalls(env), []);
+  });
+
+  test("a failing second tag listing is one FAIL and no release is named", () => {
+    const tree = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-09-01T00:00:00.000Z" },
+    ]);
+    const env = fakeEnv(tree);
+    const sh = env.sh;
+    let listings = 0;
+    env.sh = (command, args) => {
+      if (command === "git" && args[0] === "tag" && ++listings === 2) {
+        throw new CommandError("git tag", 128, "fatal: gone");
+      }
+      return sh(command, args);
+    };
+    assert.deepEqual(checkProtocol(env), [
+      { level: "INFO", text: "protocol 7, oldest served 7, v0.5.0 has 7" },
+      { level: "FAIL", text: "release tags: `git tag` failed (status 128): fatal: gone" },
+    ]);
+  });
+
+  test("an unreadable release measured against is one FAIL naming it", () => {
+    const tree = windowTree(7, 7, [
+      { tag: "v0.5.0", protocol: 7, oldest: 6, published: "2026-10-10T00:00:00.000Z" },
+      { tag: "v0.4.1", protocol: 6, oldest: 5, published: "2026-09-01T00:00:00.000Z" },
+    ]);
+    tree.commands[show("refs/tags/v0.4.1", PROTOCOL)] = "export const NOTHING = 3;\n";
+    assert.deepEqual(protocol(tree), [
+      { level: "INFO", text: "protocol 7, oldest served 7, v0.5.0 has 7" },
+      { level: "FAIL", text: `tag v0.4.1: ${missing("PROTOCOL_VERSION")}` },
+    ]);
+  });
+
+  test("pre-roll applies the npm age rule too", () => {
+    const tree = secondReleaseTree();
+    tree.files[PROTOCOL] = protocolSource(6, 3);
+    tree.commands[show("refs/tags/v0.1.0", PROTOCOL)] = protocolSource(3, 2);
+    tree.commands[NPM_TIMES] = json({ "0.1.0": "2026-10-10T00:00:00.000Z" });
+    assert.deepEqual(texts(preRoll(tree, "minor"), "FAIL"), [
+      "no release has been on npm for 14 days, so OLDEST_SERVED_PROTOCOL 3 may not rise above the 2 that v0.1.0 serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses",
+    ]);
+  });
+
   test("pre-roll reports the same FAIL, using the tag it already read", () => {
     const tree = secondReleaseTree();
     tree.files[PROTOCOL] = protocolSource(6, 4);
@@ -4580,6 +4834,7 @@ describe("real git", () => {
     assert.deepEqual(env.readdir("sub"), ["b.txt"]);
     assert.equal(env.shBytes("git", ["show", "HEAD:a.txt"]).toString(), "a\n");
     assert.match(env.today(), /^\d{4}-\d{2}-\d{2}$/);
+    assert.ok(Math.abs(env.now() - Date.now()) < 60_000);
   });
 
   // What releaseFiles' tree ships, listed here rather than computed by the code under test.

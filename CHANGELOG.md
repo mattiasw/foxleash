@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   window the question is in and the title of its tab, instead of a tab number Firefox does not
   show. After you answer a site question late, the agent's next try loads the page in the
   question's tab instead of opening another one.
+- After a release that changes how the add-on and the program talk, the add-on keeps working with
+  the program of the newest release npm has served for 14 days and every release after it, so an
+  npm release-age limit of up to 14 days no longer leaves the add-on refusing the program. The
+  README says what to run when npx says "No versions available for foxleash".
 
 ### Fixed
 

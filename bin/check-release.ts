@@ -29,6 +29,8 @@ export type Env = {
   shBytes(command: string, args: readonly string[]): Buffer;
   /** The local date as YYYY-MM-DD. */
   today(): string;
+  /** The current time in milliseconds since the epoch. */
+  now(): number;
   /** The names of the tools that `registerTools` in `apps/server/src/tools.ts` registers. */
   listTools(): string[];
 };
@@ -138,6 +140,13 @@ const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
 const MANIFEST = "apps/extension/manifest.json";
 const PROTOCOL = "packages/protocol/src/index.ts";
+// The published npm package, as apps/server/build.ts names it; the workspace's own name is private.
+const NPM_PACKAGE = "foxleash";
+// ADR 0072: a user whose npm release-age limit is at most this many days still gets a program
+// that the add-on serves.
+const SERVED_RELEASE_AGE_DAYS = 14;
+const DAY_MS = 86_400_000;
+const NPM_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
@@ -939,8 +948,10 @@ export function checkProtocol(env: Env): Finding[] {
 /**
  * The extension serves every protocol from OLDEST_SERVED_PROTOCOL up to PROTOCOL_VERSION, so the
  * oldest may not be above what the latest release shipped: that release's server would stop
- * working at the next add-on update. `tag` is undefined when listing the tags failed, which is
- * already a FAIL.
+ * working at the next add-on update. When the oldest rises above what the latest release served,
+ * it may also not pass what the newest release npm has served for SERVED_RELEASE_AGE_DAYS shipped,
+ * the program npx hands a user whose release-age limit hides the newer ones. `tag` is undefined
+ * when listing the tags failed, which is already a FAIL.
  */
 function checkProtocolServed(env: Env, tag: string | null | undefined, findings: Finding[]): void {
   const source = attempt(findings, "protocol source", () => env.readFile(PROTOCOL));
@@ -950,15 +961,16 @@ function checkProtocolServed(env: Env, tag: string | null | undefined, findings:
       : attempt(findings, "working tree", () => protocolConstant(source, name));
   const current = read("PROTOCOL_VERSION");
   const oldest = read("OLDEST_SERVED_PROTOCOL");
-  const released =
+  const tagSource =
     typeof tag === "string"
       ? attempt(findings, `tag ${tag}`, () =>
-          protocolConstant(
-            env.sh("git", ["show", `refs/tags/${tag}:${PROTOCOL}`]),
-            "PROTOCOL_VERSION",
-          ),
+          env.sh("git", ["show", `refs/tags/${tag}:${PROTOCOL}`]),
         )
       : undefined;
+  const released =
+    tagSource === undefined
+      ? undefined
+      : attempt(findings, `tag ${tag}`, () => protocolConstant(tagSource, "PROTOCOL_VERSION"));
   if (current !== undefined && oldest !== undefined && oldest > current) {
     findings.push(fail(`OLDEST_SERVED_PROTOCOL ${oldest} is above PROTOCOL_VERSION ${current}`));
   }
@@ -986,6 +998,31 @@ function checkProtocolServed(env: Env, tag: string | null | undefined, findings:
     const numbers = `protocol ${current}, oldest served ${oldest}`;
     findings.push(info(released === undefined ? numbers : `${numbers}, ${tag} has ${released}`));
   }
+  if (
+    typeof tag !== "string" ||
+    tagSource === undefined ||
+    released === undefined ||
+    oldest === undefined ||
+    oldest > released
+  ) {
+    return;
+  }
+  const tagOldest = attempt(
+    findings,
+    `tag ${tag}`,
+    () => declaredProtocolConstant(tagSource, "OLDEST_SERVED_PROTOCOL") ?? released,
+  );
+  if (tagOldest !== undefined && oldest > tagOldest) {
+    checkServedReleaseAge(env, oldest, tag, tagOldest, findings);
+  }
+}
+
+/**
+ * Like `protocolConstant`, but undefined when no line declares `name`: a tag from before
+ * OLDEST_SERVED_PROTOCOL existed served its PROTOCOL_VERSION only.
+ */
+function declaredProtocolConstant(text: string, name: string): number | undefined {
+  return declarationLines(text, name).length === 0 ? undefined : protocolConstant(text, name);
 }
 
 /**
@@ -994,10 +1031,7 @@ function checkProtocolServed(env: Env, tag: string | null | undefined, findings:
  * ambiguous instead of hiding the real declaration.
  */
 function protocolConstant(text: string, name: string): number {
-  const declarations =
-    text.match(
-      new RegExp(`^[ \\t]*(?:export[ \\t]+)?(?:const|let|var)[ \\t]+${name}\\b.*$`, "gm"),
-    ) ?? [];
+  const declarations = declarationLines(text, name);
   if (declarations.length > 1) {
     throw new Error(`${declarations.length} lines declare ${name} in ${PROTOCOL}: expected one`);
   }
@@ -1006,6 +1040,117 @@ function protocolConstant(text: string, name: string): number {
     throw new Error(`no line "export const ${name} = <number>;" in ${PROTOCOL}`);
   }
   return Number(match[1]);
+}
+
+function declarationLines(text: string, name: string): string[] {
+  return (
+    text.match(
+      new RegExp(`^[ \\t]*(?:export[ \\t]+)?(?:const|let|var)[ \\t]+${name}\\b.*$`, "gm"),
+    ) ?? []
+  );
+}
+
+/**
+ * A user whose npm release-age limit hides the newer releases gets the newest release older than
+ * the limit from npx, so OLDEST_SERVED_PROTOCOL may not pass the PROTOCOL_VERSION of the newest
+ * release npm has served for SERVED_RELEASE_AGE_DAYS (ADR 0072).
+ */
+function checkServedReleaseAge(
+  env: Env,
+  oldest: number,
+  latest: string,
+  latestOldest: number,
+  findings: Finding[],
+): void {
+  const times = attempt(findings, "npm publish times", () => publishTimes(env));
+  if (times === undefined) return;
+  const tags = attempt(findings, "release tags", () => releaseTags(env).valid);
+  if (tags === undefined) return;
+  const served = attempt(findings, "npm publish times", () =>
+    newestServedRelease(tags, times, env.now()),
+  );
+  if (served === undefined) return;
+  if (served === null) {
+    findings.push(
+      fail(
+        `no release has been on npm for ${SERVED_RELEASE_AGE_DAYS} days, so OLDEST_SERVED_PROTOCOL ${oldest} may not rise above the ${latestOldest} that ${latest} serves: a user whose npm release-age limit hides the newer releases would get a program the add-on refuses`,
+      ),
+    );
+    return;
+  }
+  const protocol = attempt(findings, `tag ${served.tag}`, () =>
+    protocolConstant(
+      env.sh("git", ["show", `refs/tags/${served.tag}:${PROTOCOL}`]),
+      "PROTOCOL_VERSION",
+    ),
+  );
+  if (protocol === undefined) return;
+  findings.push(
+    info(
+      `${served.tag} is the newest release npm has served for ${SERVED_RELEASE_AGE_DAYS} days (published ${served.day}), with PROTOCOL_VERSION ${protocol}`,
+    ),
+  );
+  if (oldest > protocol) {
+    findings.push(
+      fail(
+        `OLDEST_SERVED_PROTOCOL ${oldest} is above the PROTOCOL_VERSION ${protocol} of ${served.tag}, the newest release npm has served for ${SERVED_RELEASE_AGE_DAYS} days (published ${served.day}): a user whose npm release-age limit still hides the newer releases would get a program the add-on refuses`,
+      ),
+    );
+  }
+}
+
+/** npm's publish time of each version of the package, keyed by version. */
+function publishTimes(env: Env): Record<string, unknown> {
+  const command = `npm view ${NPM_PACKAGE} time --json`;
+  const output = env.sh("npm", ["view", NPM_PACKAGE, "time", "--json"]);
+  let times: unknown;
+  try {
+    times = parseJson(output);
+  } catch (error) {
+    throw new Error(
+      `\`${command}\` printed no JSON: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+  if (!isRecord(times)) throw new Error(`\`${command}\` printed no JSON object`);
+  return times;
+}
+
+/**
+ * The newest of `tags` (newest first) that npm published at least SERVED_RELEASE_AGE_DAYS days
+ * before `now`, as npm's own release-age cutoff counts; null when there is none. A tag npm has no
+ * time for was never published there.
+ */
+function newestServedRelease(
+  tags: readonly string[],
+  times: Record<string, unknown>,
+  now: number,
+): { tag: string; day: string } | null {
+  const cutoff = now - SERVED_RELEASE_AGE_DAYS * DAY_MS;
+  for (const tag of tags) {
+    const version = tag.slice(1);
+    const time = field(times, version);
+    if (time === undefined) continue;
+    const published = publishTime(time, version);
+    if (published.at <= cutoff) return { tag, day: published.day };
+  }
+  return null;
+}
+
+/**
+ * An npm publish time such as `2026-11-22T21:23:09.515Z`: the instant and its UTC day. Date.parse
+ * rolls a day past the month's end over, so the calendar is checked apart.
+ */
+function publishTime(value: unknown, version: string): { at: number; day: string } {
+  const match = typeof value === "string" ? NPM_TIME.exec(value) : null;
+  const at = match === null ? Number.NaN : Date.parse(match[0]);
+  if (
+    match === null ||
+    Number.isNaN(at) ||
+    !isCalendarDate(Number(match[1]), Number(match[2]), Number(match[3]))
+  ) {
+    throw new Error(`npm gives no publish time for ${version}: ${JSON.stringify(value)}`);
+  }
+  return { at, day: match[0].slice(0, 10) };
 }
 
 export function checkPostRoll(env: Env, version: string): Finding[] {
@@ -1330,6 +1475,15 @@ function info(text: string): Finding {
  * `vX.Y.Z` are a FAIL each and never used.
  */
 export function latestTag(env: Env, findings: Finding[]): string | null {
+  const { valid, malformed } = releaseTags(env);
+  for (const name of malformed) {
+    findings.push(fail(`the tag ${JSON.stringify(name)} is not a release tag vX.Y.Z`));
+  }
+  return valid[0] ?? null;
+}
+
+/** The `v*` tags reachable from HEAD: the `vX.Y.Z` ones newest first, and the others. */
+function releaseTags(env: Env): { valid: string[]; malformed: string[] } {
   // --no-column: column.ui=always would print several tags on one line.
   const output = env.sh("git", [
     "tag",
@@ -1340,15 +1494,11 @@ export function latestTag(env: Env, findings: Finding[]): string | null {
     "--sort=-v:refname",
     "v*",
   ]);
-  let latest: string | null = null;
-  for (const name of lines(output)) {
-    if (!TAG.test(name)) {
-      findings.push(fail(`the tag ${JSON.stringify(name)} is not a release tag vX.Y.Z`));
-    } else if (latest === null || compareVersions(name.slice(1), latest.slice(1)) > 0) {
-      latest = name;
-    }
-  }
-  return latest;
+  const names = lines(output);
+  const valid = names
+    .filter((name) => TAG.test(name))
+    .sort((a, b) => compareVersions(b.slice(1), a.slice(1)));
+  return { valid, malformed: names.filter((name) => !TAG.test(name)) };
 }
 
 function lines(text: string): string[] {
@@ -2704,6 +2854,9 @@ export function realEnv(root: string): Env {
     },
     today() {
       return localDate(new Date());
+    },
+    now() {
+      return Date.now();
     },
     listTools() {
       const args = ["--input-type=module", "-e", LIST_TOOLS_SCRIPT];

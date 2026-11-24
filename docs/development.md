@@ -306,7 +306,14 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `PROTOCOL_VERSION` from the same file at the latest tag, and prints the three numbers. It fails
   when a constant cannot be read, when `OLDEST_SERVED_PROTOCOL` is above `PROTOCOL_VERSION`, when
   `PROTOCOL_VERSION` is below the tag's, and when `OLDEST_SERVED_PROTOCOL` is above the tag's.
-  Without a previous tag it skips the comparison with a release and says so.
+  Without a previous tag it skips the comparison with a release and says so. When
+  `OLDEST_SERVED_PROTOCOL` is above the oldest protocol the latest tag serves (that tag's
+  `OLDEST_SERVED_PROTOCOL`, or its `PROTOCOL_VERSION` when it has none), it reads npm's publish
+  times with `npm view foxleash time --json`, prints the newest tagged release npm published at
+  least 14 days earlier, and fails when `OLDEST_SERVED_PROTOCOL` is above that release's
+  `PROTOCOL_VERSION`, when there is no such release, or when the npm call fails or prints no
+  usable times. It queries npm only when the window moved, so an ordinary CI run makes no network
+  request.
 - `pre-roll [--bump=patch|minor|major]`: the changelog shape; HEAD is `main`, equal to
   origin's `main`, with a clean working tree; every version field agrees; the latest tag is
   on origin; Unreleased has entries; the bump is at least what the change types need
@@ -389,7 +396,10 @@ shape only: when it cannot serve the old shape without relaxing a safeguard, it 
 request with a `ToolError`. The unit test in `served-protocols.test.ts` fails until each version
 in the window has its step.
 
-`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the latest release;
+`OLDEST_SERVED_PROTOCOL` is never above the `PROTOCOL_VERSION` of the newest release npm has
+served for 14 days, and so never above the latest release's: a user with an npm release-age limit
+gets the newest release older than the limit from `npx foxleash@latest setup`, so the extension
+keeps serving what such a user still gets, for limits up to 14 days.
 `npm run check:release -- protocol` checks it, in CI and in `pre-roll`. It may be raised to that
 number, and the steps below it are then deleted. Programs from before ADR 0072
 (protocol 3 to 5) check the protocol exactly and refuse a newer extension, so the window serves
@@ -398,7 +408,8 @@ programs from the first release that carries it on.
 A release publishes its add-on before its server: a server refuses an add-on older than itself,
 so its program is made available only once its add-on version can be installed. The workflow
 that publishes the npm package checks that AMO serves the version first (see
-[npm package](#npm-package)).
+[npm package](#npm-package)). Publishing to npm early is no way out of the 14-day rule, for the
+same reason (ADR 0072).
 
 ## Releasing
 

@@ -3,7 +3,7 @@ export const PROTOCOL_VERSION = 7;
 
 /**
  * The oldest protocol version the extension still serves; never above the `PROTOCOL_VERSION`
- * of the latest release.
+ * of the newest release npm has served for 14 days (ADR 0072).
  */
 export const OLDEST_SERVED_PROTOCOL = 6;
 
