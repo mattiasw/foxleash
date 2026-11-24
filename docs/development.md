@@ -627,9 +627,12 @@ workflow has no other trigger and two jobs:
   `npm publish --provenance --access public`.
 
 No npm token is stored anywhere. On npmjs.com the package `foxleash` has a trusted publisher:
-GitHub Actions in this repository, the workflow file `publish.yml` and the environment `npm`.
-The environment allows only tags that match `v*` to use it. npm attaches provenance that links
-each version to the commit and the workflow run that built it.
+GitHub Actions in this repository, the workflow file `publish.yml` and the environment `npm`,
+allowed to run `npm publish` but not `npm dist-tag`. The environment allows only tags that match
+`v*` to use it. The package's publishing access requires two-factor authentication and refuses
+tokens, so a version comes from the workflow or from a maintainer publishing with two-factor
+authentication. npm attaches provenance that links each version to the commit and the workflow
+run that built it.
 
 A failed run is re-run from the repository's Actions page with "Re-run all jobs", which replays
 the same release event; the build's artifact is kept for one day. When AMO did not serve the
