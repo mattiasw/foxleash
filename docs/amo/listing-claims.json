@@ -356,6 +356,28 @@
       ]
     },
     {
+      "listing": "replaces the values in request addresses that look like sign-in credentials",
+      "evidence": [
+        { "file": "apps/extension/src/url-credentials.ts", "contains": "const CREDENTIAL_WORDS" },
+        { "file": "apps/extension/src/url-credentials.ts", "contains": "\"token\"" },
+        { "file": "apps/extension/src/url-credentials.ts", "contains": ".replace(JWT, REDACTED)" },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "capText(redactUrlCredentials(details.url), MAX_NETWORK_URL)"
+        },
+        {
+          "file": "apps/extension/src/network-log.ts",
+          "contains": "redactUrlCredentials(details.redirectUrl),"
+        },
+        { "file": "apps/extension/src/network-log.ts", "contains": "\"referer\"" },
+        { "file": "apps/extension/src/network-log.ts", "contains": "redactLinkCredentials(" },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "return network.read(session, tabId, site, options);"
+        }
+      ]
+    },
+    {
       "listing": "It never runs code received from outside the extension",
       "evidence": [{ "file": "apps/extension/manifest.json", "lacks": "userScripts" }]
     },

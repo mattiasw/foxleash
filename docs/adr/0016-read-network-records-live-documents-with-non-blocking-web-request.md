@@ -2,6 +2,8 @@
 
 **Status:** Accepted, 2026-10-22. Its rule "Non-blocking listeners only" and its rejected alternative "Response bodies" are superseded by [0071](0071-read-network-captures-response-bodies-with-a-stream-filter.md), 2026-11-17. Amended by [0099](0099-download-cancels-redirect-hops-to-sites-the-session-may-not-act-on.md), 2026-11-19: while a download runs, a blocking listener on requests that belong to no tab cancels a redirect hop of the download's own fetch to a site the session may not act on. Amended by [0101](0101-agent-loads-cancel-redirect-hops-to-blocklisted-sites.md), 2026-11-19: while a load the agent started in a tab of a session's group runs, a blocking listener on that tab's top-level requests cancels a redirect hop to a blocklisted site.
 
+Amended 2026-11-24: request URLs, redirect targets and the values of address headers (Location, Content-Location, Referer, Refresh, Link) get credential-like parameter values and JWTs redacted at record time, before the cut, so pattern matches only the redacted URL.
+
 ## Context
 
 `read_network` returns the network requests of a page in the agent's tab group: URL, method,
@@ -57,7 +59,11 @@ commit's.
   ignored.
 - **Redaction at record time.** The values of `Cookie`, `Set-Cookie`, `Authorization` and
   `Proxy-Authorization` are replaced with `[redacted]`, the name compared in lowercase before any
-  cut, so an unredacted value never sits in the log. `binaryValue` is never read.
+  cut, so an unredacted value never sits in the log. `binaryValue` is never read. In URLs,
+  redirect targets and the address headers, the values of parameters named like credentials
+  (token, key, password, session, code and the like, also nested in another parameter's value)
+  and JWT-shaped strings after the host are replaced the same way, as a best effort, keeping the
+  name and the site; `pattern` matches the redacted URL.
 - **Bounds.** Per page, the newest 500 requests and at most 4,000,000 UTF-16 units across all
   their strings; older requests are dropped and the result says `truncated`. URLs and redirect
   targets are cut to 2,000 units; header names and values, method, type and error to 1,000; at
@@ -101,6 +107,7 @@ commit's.
   same-site page restored from the back-forward cache.
 - A redirect hop that an earlier same-site page's request makes after the commit lands in the new
   page's list.
-- URLs and other headers can still carry tokens; the listing's `authenticationInfo` declaration
+- Addresses can still carry tokens in parameters with other names, in the path and in the
+  user-info, and other headers can carry them too; the listing's `authenticationInfo` declaration
   says so.
 - A result that does not fit in one tool result is cut to the newest requests that do.

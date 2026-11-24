@@ -2809,6 +2809,10 @@ describe("read_network", () => {
       "Only the requests whose type is exactly one of these, such as main_frame, script, stylesheet, image, font or xmlhttprequest (fetch and XMLHttpRequest)",
     );
     assert.equal(
+      described("pattern"),
+      "Plain text, case-sensitive, that the request's URL as shown, with credential values redacted, must contain",
+    );
+    assert.equal(
       described("failed"),
       "true: only the requests that failed, with status 400 or above or an error",
     );
@@ -2831,6 +2835,8 @@ describe("read_network", () => {
       "a redirect, or a request with no status or error yet, has not failed",
       "pattern, types and failed all apply before limit",
       "The values of the Cookie, Set-Cookie, Authorization and Proxy-Authorization headers, and of a request's Content-Length header, are replaced with [redacted].",
+      "As a best effort, the values of parameters whose names look like credentials (such as authtoken, token, access_token, api_key, key, password, session, sig or code) and JWT-shaped strings are replaced with [redacted] in each request's URL and redirect target and in its Location, Content-Location, Referer, Refresh and Link headers, the parameter name kept;",
+      "a parameter whose value holds such a parameter, such as an encoded address, has its whole value replaced. pattern matches the URL as shown.",
       "With body true, each request that sent a body includes requestBody, its shape and never a value or a length:",
       "kind is form (each name once, filled by its first value), json (the keys of a JSON object or array, at most 4 deep, of an array only its first element, named []) or other.",
       "Each field gives the kind of its value (text for a form value; string, number, boolean, null, object or array for JSON) and, for text, strings, objects and arrays, whether it is filled; an other body says whether it is filled when Foxleash got its bytes.",

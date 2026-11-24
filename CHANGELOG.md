@@ -31,6 +31,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and how to turn it on, instead of saying Foxleash could not get into the page, and `wait_for`
   stops at once instead of waiting out its timeout.
 
+### Security
+
+- `read_network` now hides, as a best effort, credential-like values in request addresses,
+  redirect targets and address headers (such as a session token a web app puts in `?authtoken=`,
+  an `access_token` in a redirect, or a JWT), showing the parameter name with `[redacted]`.
+
 ## [0.6.0] - 2026-11-21
 
 ### Added

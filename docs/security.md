@@ -367,11 +367,13 @@ value when the site sends it back (see [Response bodies](#response-bodies) and
 ### Forms sent with GET
 
 A form sent with GET puts the values of its fields in the address of the page it opens. The agent
-would get that address in the action's result, in `tabs_list` and in `read_network`, and it stays
-in the tab's history and the site's logs. So when a `click`, or Enter with `press_key`, would send
-a form with GET while the form would send the value of a protected field, Foxleash cancels the
-submission and refuses the action, naming the field, and the agent asks you to send the form. A
-form without a `method` attribute is sent with GET, and a submit button's `formmethod` counts. A
+would get that address in the action's result, in `tabs_list` and in `read_network` (which hides,
+as a best effort, the values of fields named like credentials; see
+[Request addresses](#request-addresses)), and it stays in the tab's history and the site's logs.
+So when a `click`, or Enter with `press_key`, would send a form with GET while the form would send
+the value of a protected field, Foxleash cancels the submission and refuses the action, naming the
+field, and the agent asks you to send the form. A form without a `method` attribute is sent with
+GET, and a submit button's `formmethod` counts. A
 protected field counts when the form sends it: when it has a name and a value and is not
 disabled. A custom form element that holds a protected field with a value, in its own shadow tree
 or among the elements it contains, counts too, named or not, since its script decides what the
@@ -381,12 +383,13 @@ works as before, and so do forms sent with POST.
 This does not cover:
 
 - a form you send yourself with GET: the page's address then holds its values, protected ones
-  included, and `tabs_list`, `read_network` and the result of the agent's next action show it;
+  included, and `tabs_list`, `read_network` and the result of the agent's next action show it
+  (`read_network` hides, as a best effort, the values of fields named like credentials);
 - a form the page's own scripts send after the agent's click or Enter: with the form's `submit()`,
   also from the button's own click handler or from a link whose address runs a script
   (`javascript:`), later, such as from a timer, or by handling the submission and putting the
   values in the page's address or in the address of a request the script makes, which
-  `read_network` shows;
+  `read_network` shows, apart from the values of fields named like credentials, as a best effort;
 - a page's script that stops the browser's submit event before it reaches Foxleash, that adds
   values to the form when it is sent, or that adds a listener, a form or a shadow root while the
   action runs.
@@ -516,8 +519,9 @@ Exceptions and limits:
   `a[1]`) only the first, but the number of other distinct plain names, and which of them are
   empty, show: a code typed into one box per digit, each box with a name of its own, shows its
   length.
-- A form sent with GET puts its values in the URL, which `read_network` shows (see
-  [Forms sent with GET](#forms-sent-with-get)).
+- A form sent with GET puts its values in the URL, which `read_network` shows, apart from the
+  values of fields named like credentials, as a best effort (see
+  [Forms sent with GET](#forms-sent-with-get) and [Request addresses](#request-addresses)).
 - A JSON body that Firefox cuts at its limit for request bodies (16,777,216 bytes by default)
   turns from `json` to `other`. An agent that can make the page send about 16 MiB in another
   field of the same body can find the body's exact length from where it turns.
@@ -553,6 +557,56 @@ Exceptions and limits:
   tab that kept posting a 1,000,000-byte form of 111,112 fields grew that process by about 60 to
   90 MiB a second for as long as it sent, in headless Firefox 160.0.1 (ADR 0085).
 - A response body can repeat what a request sent (see [Response bodies](#response-bodies)).
+
+### Request addresses
+
+Web apps put credentials in addresses: a session token in the query string, an OAuth access token
+in the fragment of a redirect target, a signature in a signed download link. As a best effort,
+`read_network` replaces such values with `[redacted]` and keeps the parameter name:
+
+- It applies to each request's URL and redirect target, and to the values of its `Location`,
+  `Content-Location`, `Referer`, `Refresh` and `Link` headers (in `Link`, each `<...>` target and
+  each quoted parameter value, such as an `anchor` or `imagesrcset` address, on its own).
+- A query, fragment or `;name=value` path parameter has its value replaced when its name, after
+  percent-decoding and ignoring case, punctuation and trailing digits, is auth, authcode,
+  authorization, code, jwt, logincode, oobcode, otp, pass, passcode, pw, pwd, session, sid, sig
+  or ticket, ends in key, signature, sessionid, sessid or verifier, or contains token, password,
+  passwd, secret or credential. OAuth's `token_type` and `token_type_hint`, whose values are never secret, are
+  kept. In a form name such as `user[password]` each bracketed part counts on its own, and in a
+  name with `/`, `?`, `#` or `;`, such as the hash route `#/callback?code=`, the part after the
+  last of them.
+- A parameter whose value holds such a parameter with a value, as it is or under up to three
+  levels of percent-encoding, has its whole value replaced: an encoded redirect address, or an
+  analytics request carrying the page's address. A query or fragment part without a name, or
+  whose name holds such a parameter, is replaced whole.
+- Every JWT-shaped string after the host is replaced, whatever its parameter is called, also in
+  the path.
+- The scheme, user-info, host and port of a request's URL and redirect target stay as they are,
+  so the site Foxleash decides on is the same.
+- Foxleash redacts when it records the request, before it cuts the address to its length limit,
+  so the full value is never kept, and `pattern` matches the address as shown: it cannot find a
+  hidden value one character at a time.
+- Foxleash reads the first 16,384 characters of an address and leaves out the rest, so that a page
+  sending very long addresses cannot keep it busy. The kept part is cut to 2,000 characters for a
+  URL and 1,000 for a header value anyway.
+
+Some values that are not credentials are hidden too, such as a `pageToken` cursor, a `code` that
+is a country code or a support `ticket` number.
+
+Exceptions and limits:
+
+- A parameter with another name shows its value, and so does a value without a name, such as a
+  key written alone after `#`.
+- A credential in the path that is neither a JWT nor a `;name=value` parameter shows, and so does
+  the user-info part (`user:password@`).
+- A parameter nested under more than three levels of percent-encoding, or inside JSON or another
+  format in a value (`state=%7B%22access_token%22%3A...`), shows.
+- A JWT right after a letter, digit, `_` or `-` keeps its first segment, which is not secret, or
+  shows whole when no later segment starts like a JWT, as in an encrypted one.
+- Other headers, such as a custom `X-Api-Key`, show their values. Response bodies have their own
+  rule (see [Response bodies](#response-bodies)).
+- Other tools show addresses as they are: tab URLs in the results of `tabs_list`, `tab_open`,
+  `navigate` and `wait_for`, and link addresses in `read_page`.
 
 ### Response bodies
 

@@ -31,6 +31,7 @@ import type { SessionGroups } from "./session-groups.ts";
 import { onSettingsChanged } from "./settings.ts";
 import { siteOf, withoutFragment } from "./site.ts";
 import type { SiteAccess, SiteView } from "./site-access.ts";
+import { redactLinkCredentials, redactUrlCredentials } from "./url-credentials.ts";
 
 export { REDACTED };
 
@@ -64,6 +65,13 @@ export const REDACTED_HEADERS: ReadonlySet<string> = new Set([
 export const REDACTED_REQUEST_HEADERS: ReadonlySet<string> = new Set([
   ...REDACTED_HEADERS,
   "content-length",
+]);
+/** Lowercase names of headers whose value is an address: it gets the address redaction. */
+export const URL_HEADERS: ReadonlySet<string> = new Set([
+  "location",
+  "content-location",
+  "referer",
+  "refresh",
 ]);
 
 export interface NetworkLogDeps {
@@ -597,7 +605,10 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
     captures.get(details.requestId)?.capture.release();
     update(details.tabId, details.requestId, true, (request) => {
       request.status = details.statusCode;
-      request.redirectUrl = capText(details.redirectUrl, MAX_NETWORK_URL).text;
+      request.redirectUrl = capText(
+        redactUrlCredentials(details.redirectUrl),
+        MAX_NETWORK_URL,
+      ).text;
       request.fromCache = details.fromCache;
       request.durationMs = details.timeStamp - request.startTime;
     });
@@ -753,7 +764,10 @@ export function createNetworkLog({ browser, groups, access, now }: NetworkLogDep
   }
 }
 
-/** The headers as Foxleash keeps them: capped, and those named in `redacted` without a value. */
+/**
+ * The headers as Foxleash keeps them: capped, those named in `redacted` without a value, and
+ * credential-like values in address headers redacted.
+ */
 export function redactHeaders(
   headers: readonly HttpHeader[] | undefined,
   redacted: ReadonlySet<string> = REDACTED_HEADERS,
@@ -762,8 +776,15 @@ export function redactHeaders(
     name: capText(name, MAX_NETWORK_HEADER).text,
     value: redacted.has(name.toLowerCase())
       ? REDACTED
-      : capText(value ?? "", MAX_NETWORK_HEADER).text,
+      : capText(addressesRedacted(name, value ?? ""), MAX_NETWORK_HEADER).text,
   }));
+}
+
+/** An address header's value with credential-like values redacted, before the cut. */
+function addressesRedacted(name: string, value: string): string {
+  const lower = name.toLowerCase();
+  if (lower === "link") return redactLinkCredentials(value);
+  return URL_HEADERS.has(lower) ? redactUrlCredentials(value) : value;
 }
 
 /** Whether it is the request of the log's document: its URL, started between the tab's commits. */
@@ -774,7 +795,7 @@ function loads(page: Page, log: Log): boolean {
 
 function entryOf(details: RequestDetails): Entry {
   const request: NetworkRequest = {
-    url: capText(details.url, MAX_NETWORK_URL).text,
+    url: capText(redactUrlCredentials(details.url), MAX_NETWORK_URL).text,
     method: capText(details.method, MAX_NETWORK_HEADER).text,
     type: capText(details.type, MAX_NETWORK_HEADER).text,
     startTime: details.timeStamp,

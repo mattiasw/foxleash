@@ -49,7 +49,7 @@ const ELEMENT_TOKEN = new RegExp(
 const FIELD_TOKEN = new RegExp(String.raw`(?<![A-Za-z0-9_])(${TOKEN_NAME}=)[^&\s"'<]+`, "gi");
 /** Where a JWT starts: not inside a base64url run, or right after a %-escape such as %20. */
 const JWT_START = "(?:(?<![A-Za-z0-9_-])|(?<=%[0-9A-Fa-f]{2}))eyJ";
-const JWT = new RegExp(String.raw`${JWT_START}[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){1,4}`, "g");
+export const JWT = new RegExp(String.raw`${JWT_START}[A-Za-z0-9_-]*(?:\.[A-Za-z0-9_-]*){1,4}`, "g");
 /** A JWT cut inside its first segment at the end of the text. */
 const UNFINISHED_JWT = new RegExp(`${JWT_START}[A-Za-z0-9_-]*$`);
 const TEXT_TYPES: ReadonlySet<string> = new Set([

@@ -332,6 +332,34 @@ the cache.
   an earlier one left them out of.
 - The values of the `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` headers,
   and of a request's `Content-Length` header, are replaced with `[redacted]`.
+- As a best effort, credential-like values in addresses are replaced with `[redacted]`, the
+  parameter name kept: in each request's URL and redirect target, and in the values of its
+  `Location`, `Content-Location`, `Referer`, `Refresh` and `Link` headers. That covers the value
+  of a query, fragment or `;name=value` path parameter whose name, ignoring case, punctuation and
+  trailing digits, is auth, authcode, authorization, code, jwt, logincode, oobcode, otp, pass,
+  passcode, pw, pwd, session, sid, sig or ticket, ends in key, signature, sessionid, sessid or
+  verifier, or contains token, password, passwd, secret or credential, except `token_type` and
+  `token_type_hint`. In a `Link` header, each `<...>` target and each quoted parameter value
+  counts on its own. In a form name such as `user[password]` each bracketed part counts, and in a
+  name with `/`, `?`, `#` or `;`, such as a hash route's `#/callback?code=`, the part after the
+  last of them. A parameter whose value holds such a parameter, as it is or under up to three
+  levels of percent-encoding (an encoded redirect address, say), has its whole value replaced; a
+  query or fragment part without a name, or whose name holds one, is replaced whole. Every
+  JWT-shaped string after the host is replaced too. `pattern` matches the URL as shown, so it
+  cannot find a hidden value. Some values that are not credentials are hidden as well, such as a
+  `pageToken` cursor, a `code` that is a country code or a support `ticket` number. Not covered:
+  - parameters with other names, and a value without a name (such as a key written alone after
+    `#`);
+  - a credential in the path that is neither a JWT nor a `;name=value` parameter, and the
+    user-info part (`user:password@`);
+  - a parameter nested under more than three levels of encoding, or inside JSON or another format
+    in a value (`state=%7B%22access_token%22%3A...`);
+  - a JWT glued to a letter, digit, `_` or `-` before it, which keeps its first segment, or shows
+    whole when no later segment starts like a JWT (an encrypted one, say);
+  - other headers, such as a custom `X-Api-Key`; response bodies follow their own rule (below);
+  - anything after the first 16,384 characters of an address, which is left out;
+  - addresses other tools show: tab URLs in `tabs_list`, `tab_open`, `navigate` and `wait_for`
+    results, and link addresses in `read_page`.
 - With `body`, each request that sent a body includes `requestBody`: its shape, never a value, a
   length or a size. Its `kind` is `form`, `json` or `other`. A form lists each field name once,
   filled by its first value. A JSON object or array lists its keys, at most 4 deep, and of an

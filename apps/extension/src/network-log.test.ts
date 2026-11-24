@@ -37,6 +37,7 @@ import {
   REDACTED_REQUEST_HEADERS,
   redactHeaders,
   SHAPING_ALLOWANCE_MS,
+  URL_HEADERS,
 } from "./network-log.ts";
 import { bodyShape } from "./request-body.ts";
 import { createSessionGroups } from "./session-groups.ts";
@@ -46,6 +47,8 @@ import { createSiteAccess, PROMPT_PAGE, type SessionMemory } from "./site-access
 const SITE = "https://a.example";
 const URL_A = `${SITE}/page`;
 const OTHER = "https://b.example";
+const JWT = "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxIn0.c2lnbmF0dXJl";
+const HEX = "a8f3".repeat(16);
 const NONE: Result<"read_network"> = { recording: false, requests: [], truncated: false };
 const ALL: NetworkReadOptions = {
   failed: false,
@@ -363,6 +366,35 @@ describe("network log", { timeout: 10000 }, () => {
       [...REDACTED_HEADERS],
       ["cookie", "set-cookie", "authorization", "proxy-authorization"],
     );
+  });
+
+  it("redacts credential values in the address headers in any letter case, in both sets", () => {
+    const headers: HttpHeader[] = [
+      { name: "LOCATION", value: "/cb#access_token=v&state=s" },
+      { name: "Content-Location", value: "https://a.example/r?sig=v" },
+      { name: "referer", value: "https://a.example/reset?reset_password_token=v" },
+      { name: "Refresh", value: "0; url=/next?code=v" },
+      { name: "LINK", value: "<https://cdn.test/x?sig=v>; rel=preload, <https://cdn.test/y>" },
+      { name: "X-Debug", value: "/p?token=v" },
+      { name: "Cookie", value: "token=v" },
+      { name: "Authorization", value: `Bearer ${JWT}` },
+    ];
+    const expected = [
+      { name: "LOCATION", value: `/cb#access_token=${REDACTED}&state=s` },
+      { name: "Content-Location", value: `https://a.example/r?sig=${REDACTED}` },
+      { name: "referer", value: `https://a.example/reset?reset_password_token=${REDACTED}` },
+      { name: "Refresh", value: `0; url=/next?code=${REDACTED}` },
+      {
+        name: "LINK",
+        value: `<https://cdn.test/x?sig=${REDACTED}>; rel=preload, <https://cdn.test/y>`,
+      },
+      { name: "X-Debug", value: "/p?token=v" },
+      { name: "Cookie", value: REDACTED },
+      { name: "Authorization", value: REDACTED },
+    ];
+    assert.deepEqual(redactHeaders(headers), expected);
+    assert.deepEqual(redactHeaders(headers, REDACTED_REQUEST_HEADERS), expected);
+    assert.deepEqual([...URL_HEADERS], ["location", "content-location", "referer", "refresh"]);
   });
 
   it("caps urls, methods, types, errors, header names, values and counts", async () => {
@@ -1309,6 +1341,104 @@ describe("network log", { timeout: 10000 }, () => {
     });
   });
 
+  it("redacts credential values in urls and redirect targets, and matches the pattern on them", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const id = request(tab.id, `${SITE}/api?&return=everything&authtoken=${HEX}&appid=x`);
+    fake.emitWebRequest(
+      "onBeforeRedirect",
+      redirectOf(tab.id, id, `${SITE}/cb#access_token=${HEX}&state=s`),
+    );
+    const hop = request(tab.id, `${SITE}/login?next=%2F`);
+    fake.emitWebRequest("onBeforeRedirect", redirectOf(tab.id, hop, `${SITE}/cb?state=${JWT}`));
+    assert.deepEqual(
+      read(tab.id).requests.map(({ url, redirectUrl }) => [url, redirectUrl]),
+      [
+        [
+          `${SITE}/api?&return=everything&authtoken=${REDACTED}&appid=x`,
+          `${SITE}/cb#access_token=${REDACTED}&state=s`,
+        ],
+        [`${SITE}/login?next=%2F`, `${SITE}/cb?state=${REDACTED}`],
+      ],
+    );
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: "authtoken=a8" }).requests, []);
+    assert.deepEqual(read(tab.id, { ...ALL, pattern: HEX }).requests, []);
+    assert.deepEqual(urlsOf(read(tab.id, { ...ALL, pattern: `authtoken=${REDACTED}` })), [
+      `${SITE}/api?&return=everything&authtoken=${REDACTED}&appid=x`,
+    ]);
+  });
+
+  it("redacts a url, a redirect target and an address header before cutting them", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    /** An address whose token value starts five characters before `max`, and runs past it. */
+    function crossing(start: string, max: number): { raw: string; stored: string } {
+      const head = `${start}?a=${"x".repeat(max - 5 - start.length - "?a=&token=".length)}&token=`;
+      assert.equal(head.length, max - 5);
+      const stored = `${head}${REDACTED}`.slice(0, max);
+      assert.ok(stored.endsWith("token=[reda"));
+      return { raw: `${head}${"v".repeat(100)}`, stored };
+    }
+    const url = crossing(`${SITE}/`, MAX_NETWORK_URL);
+    const target = crossing(`${SITE}/next`, MAX_NETWORK_URL);
+    const location = crossing("/cb", MAX_NETWORK_HEADER);
+    const id = request(tab.id, url.raw);
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1040,
+        statusCode: 302,
+        responseHeaders: [{ name: "Location", value: location.raw }],
+      }),
+    );
+    fake.emitWebRequest("onBeforeRedirect", redirectOf(tab.id, id, target.raw));
+    const [stored] = read(tab.id).requests;
+    assert.equal(stored?.url, url.stored);
+    assert.equal(stored?.redirectUrl, target.stored);
+    assert.deepEqual(stored?.responseHeaders, [{ name: "Location", value: location.stored }]);
+  });
+
+  it("redacts credential values in the address headers a request sends and receives", async () => {
+    const { fake, read, request, tabIn } = setup();
+    const tab = await tabIn("s1", URL_A);
+    const id = request(tab.id, `${SITE}/api`);
+    fake.emitWebRequest("onSendHeaders", {
+      requestId: id,
+      tabId: tab.id,
+      timeStamp: 1001,
+      requestHeaders: [
+        { name: "Referer", value: `${SITE}/reset?reset_password_token=${HEX}` },
+        { name: "X-Debug", value: `/p?token=${HEX}` },
+      ],
+    });
+    fake.emitWebRequest(
+      "onHeadersReceived",
+      headersEvent({
+        requestId: id,
+        tabId: tab.id,
+        timeStamp: 1100,
+        statusCode: 302,
+        responseHeaders: [
+          { name: "location", value: `${SITE}/cb#access_token=${HEX}` },
+          { name: "Location", value: `/cb#access_token=${HEX}` },
+          { name: "Link", value: `<https://cdn.test/x?sig=${HEX}>; rel=preload` },
+        ],
+      }),
+    );
+    const [stored] = read(tab.id).requests;
+    assert.deepEqual(stored?.requestHeaders, [
+      { name: "Referer", value: `${SITE}/reset?reset_password_token=${REDACTED}` },
+      { name: "X-Debug", value: `/p?token=${HEX}` },
+    ]);
+    assert.deepEqual(stored?.responseHeaders, [
+      { name: "location", value: `${SITE}/cb#access_token=${REDACTED}` },
+      { name: "Location", value: `/cb#access_token=${REDACTED}` },
+      { name: "Link", value: `<https://cdn.test/x?sig=${REDACTED}>; rel=preload` },
+    ]);
+  });
+
   it("keeps only the requests whose type is exactly one of the given types", async () => {
     const { read, request, tabIn } = setup();
     const tab = await tabIn("s1", URL_A);
@@ -2176,8 +2306,9 @@ describe("network log response bodies", { timeout: 10000 }, () => {
     sessions.set("s1", { allowed: new Set([OTHER]), refused: new Set(), closed: 0 });
     await grantSite(fake.browser, "https://c.example");
     await flush();
+    // A redacted value leaves each URL's site as it was.
     for (const url of [`${OTHER}/api`, "https://c.example/api", `${SITE}/api`]) {
-      respond(fake, tab.id, request(tab.id, url), "{}");
+      respond(fake, tab.id, request(tab.id, `${url}?token=v`), "{}");
     }
     const bodies = () => read(tab.id).requests.map((entry) => entry.responseBody?.text);
     assert.deepEqual(bodies(), ["{}", "{}", "{}"]);
