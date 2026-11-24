@@ -434,10 +434,11 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
    `--source-dir`. Before extracting, check the entry names again as in step 5. Then extract
    it, stop on any unzip warning, and check that the folder holds exactly the XPI's files, as
    regular files (web-ext follows a symbolic link).
-   Before each listed submission, set what differs between the add-on's listing on AMO and
-   `docs/amo/listing.md` at the tag, each section where the file's preface says: AMO takes a
-   listed version only when the add-on has a name, a summary and categories, and Mozilla
-   reviews each version against the whole listing.
+   Each release sets the add-on's summary, description, privacy policy, category, homepage,
+   support site and support email on AMO from `docs/amo/listing.md` at the tag, changing only
+   what differs, before it submits the version: AMO takes a listed version only when the add-on
+   has a name, a summary and categories, and Mozilla reviews each version against the whole
+   listing.
    Run `web-ext sign` with `--channel listed`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
    attached by `--upload-source-code artifacts/foxleash-source-x.y.z.zip`, and with

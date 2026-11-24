@@ -16,20 +16,25 @@
 >
 > - **Name**, **Summary**, **Description**: the add-on fields of those names. AMO takes at
 >   most 50 characters for the name, 250 for the summary, which may hold no URL, and 15,000
->   for the description.
+>   for the description. Each release sets the summary and the description from this file at
+>   its tag before it submits the version.
 > - **Permissions**: the notes to reviewers ("Notes to Reviewer", the version's
 >   `approval_notes`), given with every version. AMO takes at most 3,000 characters.
 > - **Data collection and handling**: the add-on's privacy policy. AMO keeps it apart from
->   the add-on and version metadata (it has its own page and API endpoint), so it is set on
->   its own, not through the submission metadata. AMO takes at most 150,000 characters.
+>   the add-on and version metadata (it has its own page and API endpoint), and each release
+>   sets it on that endpoint from this file at its tag before it submits the version. AMO
+>   takes at most 150,000 characters.
 > - **Compatibility**: not text for AMO. It says which applications each version is
 >   submitted for, and why.
 > - **Screenshots**: AMO's screenshots of the add-on, uploaded from `docs/amo/screenshots/`
 >   with the captions given there, in that order; not pasted text.
 > - **Listing details**: the add-on's other fields on AMO (slug, category, license, homepage,
->   support site), set on the add-on and its versions, not pasted text. The slug is the last
->   segment of `ADDON_PAGE_URL` unless that address is the one by add-on id, in which case
->   the slug line holds the slug AMO has for the add-on.
+>   support site, support email), set on the add-on and its versions, not pasted text. Each
+>   release sets the category, homepage, support site and support email from this file at its
+>   tag before it submits the version, and the license goes with each version. The slug must
+>   already match: the release stops when AMO's slug differs and never changes it. The slug is
+>   the last segment of `ADDON_PAGE_URL` unless that address is the one by add-on id, in which
+>   case the slug line holds the slug AMO has for the add-on.
 >
 > The release check fails when the Summary, the Description or the Permissions section is
 > longer than AMO takes.
