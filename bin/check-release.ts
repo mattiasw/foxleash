@@ -44,7 +44,8 @@ export type Command =
   | { name: "post-bump"; version: string }
   | { name: "pre-push" }
   | { name: "built"; version: string; dir: string | undefined }
-  | { name: "artifacts"; version: string; unsigned: string | undefined };
+  | { name: "artifacts"; version: string; unsigned: string | undefined }
+  | { name: "tag"; tag: string };
 export type Usage = { usage: string };
 export type CheckResult = Usage | { findings: Finding[] };
 
@@ -86,6 +87,7 @@ const SUBCOMMANDS = [
   "pre-push",
   "built",
   "artifacts",
+  "tag",
 ];
 const BUMPS: readonly string[] = ["patch", "minor", "major"];
 const CHANGE_TYPES = ["Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"];
@@ -201,6 +203,7 @@ const USAGE = [
   "  pre-push                                 the release commits, the tag and the artifacts",
   "  built <version> [--dir <path>]           the source archive is the tagged commit's, the XPI is CI's build of it",
   "  artifacts <version> [--unsigned <path>]  the signed XPI holds the unsigned XPI's files",
+  "  tag <tag>                                the tag is v<version>, HEAD is its commit, and the commit is on origin/main",
   "exit status: 0 ok, 1 a check failed, 2 usage error, 3 a warning needs confirmation",
 ];
 
@@ -263,6 +266,12 @@ export function parseArgs(argv: readonly string[]): Command | Usage {
     if (name === "artifacts") return { name, version, unsigned };
     return { name, version };
   }
+  if (name === "tag") {
+    const [tag, extra] = positionals;
+    if (tag === undefined) return { usage: "tag needs a <tag>" };
+    if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
+    return { name, tag };
+  }
   const [extra] = positionals;
   if (extra !== undefined) return { usage: `unexpected argument ${JSON.stringify(extra)}` };
   if (name === "pre-roll") return { name, bump };
@@ -302,6 +311,8 @@ function runCommand(command: Command, env: Env): CheckResult {
       return { findings: checkBuilt(env, command.version, command.dir) };
     case "artifacts":
       return { findings: checkArtifacts(env, command.version, command.unsigned) };
+    case "tag":
+      return { findings: checkTag(env, command.tag) };
   }
 }
 
@@ -1264,6 +1275,34 @@ function sameJson(a: Buffer | undefined, b: Buffer | undefined): boolean {
   }
 }
 
+/**
+ * The checks before the tag's package is published: the tag is `v` and the version of every
+ * version field, HEAD is the tag's commit, and that commit is on origin's main.
+ */
+export function checkTag(env: Env, tag: string): Finding[] {
+  const findings: Finding[] = [];
+  const wellFormed = TAG.test(tag);
+  if (!wellFormed)
+    findings.push(fail(`the tag ${JSON.stringify(tag)} is not a release tag vX.Y.Z`));
+  const { version } = checkVersionSources(env, findings);
+  if (version !== undefined && tag !== `v${version}`) {
+    findings.push(
+      fail(`the tag ${JSON.stringify(tag)} is not v${version}, the version of every version field`),
+    );
+  }
+  const head = attempt(findings, "HEAD", () => commitSha(env, "HEAD"));
+  // A malformed tag is never handed to git.
+  const commit = wellFormed
+    ? attempt(findings, `commit of ${tag}`, () => commitSha(env, `refs/tags/${tag}^{commit}`))
+    : undefined;
+  if (head !== undefined && commit !== undefined && commit !== head) {
+    findings.push(fail(`the tag ${tag} is at ${commit}, not at HEAD ${head}`));
+  }
+  attempt(findings, "fetch", () => fetchMain(env));
+  attempt(findings, "origin/main", () => checkOnOriginMain(env, tag, head, findings));
+  return findings;
+}
+
 /** Runs one check; an exception becomes a FAIL naming the check, and the caller carries on. */
 function attempt<T>(findings: Finding[], name: string, check: () => T): T | undefined {
   try {
@@ -2101,6 +2140,20 @@ function checkDescendsFromOriginMain(env: Env, findings: Finding[]): void {
   } catch (error) {
     if (!(error instanceof CommandError) || error.status !== 1) throw error;
     findings.push(fail("HEAD does not descend from origin/main; rebase on it first"));
+  }
+}
+
+function checkOnOriginMain(
+  env: Env,
+  tag: string,
+  sha: string | undefined,
+  findings: Finding[],
+): void {
+  try {
+    env.sh("git", ["merge-base", "--is-ancestor", "HEAD", ORIGIN_MAIN]);
+  } catch (error) {
+    if (!(error instanceof CommandError) || error.status !== 1) throw error;
+    findings.push(fail(`the tag ${JSON.stringify(tag)} (${sha ?? "HEAD"}) is not on origin/main`));
   }
 }
 

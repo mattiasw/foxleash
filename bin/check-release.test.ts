@@ -31,6 +31,7 @@ import {
   checkPrePush,
   checkPreRoll,
   checkProtocol,
+  checkTag,
   ciDigests,
   compareVersions,
   type Env,
@@ -148,6 +149,8 @@ const lsRemote = (tag: string): string =>
   key("git", "ls-remote", "--tags", "origin", `refs/tags/${tag}`);
 const tagList = (tag: string): string => key("git", "tag", "--list", tag);
 const revTag = (tag: string): string => key("git", "rev-parse", `refs/tags/${tag}`);
+const revCommit = (tag: string): string => key("git", "rev-parse", `refs/tags/${tag}^{commit}`);
+const ON_MAIN = key("git", "merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main");
 const catFile = (tag: string): string => key("git", "cat-file", "-t", `refs/tags/${tag}`);
 const unzipManifest = (xpi: string): string => key("unzip", "-UU", "-p", xpi, "manifest.json");
 const unzipEntry = (archive: string, name: string): string =>
@@ -571,6 +574,14 @@ function sourceCommands(version: string, files: Record<string, string>): Tree["c
     commands[catBlob(HEAD, file)] = content;
   }
   return commands;
+}
+
+/** Version 0.2.0 everywhere, tagged v0.2.0 at HEAD, and HEAD on origin's main. */
+function tagTree(): Tree {
+  return {
+    files: packageFiles("0.2.0"),
+    commands: { [REV_HEAD]: HEAD, [revCommit("v0.2.0")]: HEAD, [FETCH]: "", [ON_MAIN]: "" },
+  };
 }
 
 type Advisory = { name: string; severity: string; title: string; url: string };
@@ -3861,6 +3872,74 @@ describe("npm audit", () => {
   });
 });
 
+describe("tag", () => {
+  test("passes for v<version> at HEAD, on origin/main", () => {
+    assertClean(checkTag(fakeEnv(tagTree()), "v0.2.0"));
+  });
+
+  test("fails when the tag is not the version of the version fields", () => {
+    const tree = tagTree();
+    tree.commands[revCommit("v0.2.1")] = HEAD;
+    assertOnlyFail(
+      checkTag(fakeEnv(tree), "v0.2.1"),
+      /^the tag "v0\.2\.1" is not v0\.2\.0, the version of every version field$/,
+    );
+  });
+
+  test("fails when the version fields disagree", () => {
+    const tree = tagTree();
+    tree.files = packageFiles("0.2.0", { "apps/server/package.json": "0.1.0" });
+    assertOnlyFail(
+      checkTag(fakeEnv(tree), "v0.2.0"),
+      /^apps\/server\/package\.json has version "0\.1\.0", expected 0\.2\.0/,
+    );
+  });
+
+  test("fails when the tag's commit is not HEAD", () => {
+    const tree = tagTree();
+    tree.commands[revCommit("v0.2.0")] = OTHER;
+    assertOnlyFail(
+      checkTag(fakeEnv(tree), "v0.2.0"),
+      new RegExp(`^the tag v0\\.2\\.0 is at ${OTHER}, not at HEAD ${HEAD}$`),
+    );
+  });
+
+  test("fails when HEAD is not on origin/main", () => {
+    const tree = tagTree();
+    tree.commands[ON_MAIN] = new CommandError("git merge-base", 1, "");
+    assertOnlyFail(
+      checkTag(fakeEnv(tree), "v0.2.0"),
+      new RegExp(`^the tag "v0\\.2\\.0" \\(${HEAD}\\) is not on origin/main$`),
+    );
+  });
+
+  test("a merge-base that fails otherwise is a FAIL naming the git failure", () => {
+    const tree = tagTree();
+    tree.commands[ON_MAIN] = new CommandError("git merge-base", 128, "fatal: bad object");
+    assertOnlyFail(
+      checkTag(fakeEnv(tree), "v0.2.0"),
+      /^origin\/main: `git merge-base` failed \(status 128\): fatal: bad object$/,
+    );
+  });
+
+  test("a failed fetch is a FAIL", () => {
+    const tree = tagTree();
+    tree.commands[FETCH] = new CommandError("git fetch", 128, "no network");
+    assertOnlyFail(checkTag(fakeEnv(tree), "v0.2.0"), /^fetch: `git fetch` failed/);
+  });
+
+  for (const tag of ["1.2.3", "v1.2", "v01.2.3", "v1.2.3-rc.1", "v1.2.3\n", ""]) {
+    test(`fails for the malformed tag ${JSON.stringify(tag)}, without asking git for it`, () => {
+      const env = fakeEnv(tagTree());
+      assertFail(checkTag(env, tag), /is not a release tag vX\.Y\.Z$/);
+      assert.deepEqual(
+        env.calls.filter((call) => call.some((arg) => arg.startsWith("refs/tags/"))),
+        [],
+      );
+    });
+  }
+});
+
 describe("artifacts", () => {
   const base = realpathSync(mkdtempSync(path.join(os.tmpdir(), "foxleash-check-release-zip-")));
   after(() => rmSync(base, { recursive: true, force: true }));
@@ -5131,6 +5210,23 @@ describe("real git", () => {
     assert.equal(git(dir, "tag", "--list", "v0.2.0"), "v0.2.0");
   });
 
+  test("tag peels an annotated or lightweight tag and refuses a commit off origin/main", () => {
+    const dir = repo(packageFiles("0.2.0"));
+    withOrigin(dir);
+    git(dir, "tag", "-a", "-m", "v0.2.0", "v0.2.0");
+    assertClean(checkTag(realEnv(dir), "v0.2.0"));
+    git(dir, "tag", "-d", "v0.2.0");
+    git(dir, "tag", "v0.2.0");
+    assertClean(checkTag(realEnv(dir), "v0.2.0"));
+    commit(dir, "Not pushed", { "x.txt": "x\n" });
+    git(dir, "tag", "-f", "-a", "-m", "v0.2.0", "v0.2.0");
+    const head = git(dir, "rev-parse", "HEAD");
+    assertOnlyFail(
+      checkTag(realEnv(dir), "v0.2.0"),
+      new RegExp(`^the tag "v0\\.2\\.0" \\(${head}\\) is not on origin/main$`),
+    );
+  });
+
   /** A repository holding the listing fixture, tagged v0.1.0. */
   function listingRepo(): string {
     const dir = repo({
@@ -5603,6 +5699,26 @@ describe("runCli", () => {
     assert.equal(out.at(-1), "check-release: protocol failed");
   });
 
+  test("exit 2 with the usage block when tag has no tag or one argument too many", () => {
+    for (const [argv, problem] of [
+      [["tag"], "check-release: tag needs a <tag>"],
+      [["tag", "v0.2.0", "x"], 'check-release: unexpected argument "x"'],
+    ] as const) {
+      const { status, out, err } = cli(tagTree(), ...argv);
+      assert.equal(status, 2);
+      assert.deepEqual(out, []);
+      assert.equal(err[0], problem);
+      assert.equal(err[1], "usage: npm run check:release -- <subcommand>");
+    }
+  });
+
+  test("exit 0 with the ok line when the tag checks pass", () => {
+    const { status, out, err } = cli(tagTree(), "tag", "v0.2.0");
+    assert.equal(status, 0);
+    assert.deepEqual(err, []);
+    assert.equal(out.at(-1), "check-release: tag ok");
+  });
+
   test("parseArgs builds each command", () => {
     assert.deepEqual(parseArgs(["changelog"]), { name: "changelog" });
     assert.deepEqual(parseArgs(["pre-roll"]), { name: "pre-roll", bump: undefined });
@@ -5632,6 +5748,9 @@ describe("runCli", () => {
       version: "1.0.0",
       unsigned: "-x.xpi",
     });
+    assert.deepEqual(parseArgs(["tag", "v1.2.3"]), { name: "tag", tag: "v1.2.3" });
+    assert.deepEqual(parseArgs(["tag"]), { usage: "tag needs a <tag>" });
+    assert.deepEqual(parseArgs(["tag", "v1.2.3", "x"]), { usage: 'unexpected argument "x"' });
   });
 
   test("the script runs the CLI when started directly", () => {

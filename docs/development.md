@@ -60,7 +60,9 @@ It checks the workflows in `.github/workflows/` too: each sets its token's permi
 top level, as `permissions: {}` or a block of scopes, and names its actions by commit (see
 [Dependency updates](#dependency-updates)). In `ci.yml` that block is exactly `contents: read`;
 a job that needs more lists every scope it needs in a block of its own, which replaces the
-top-level one.
+top-level one. In `publish.yml` only the job that runs no project code holds the identity token,
+and the tests run its checks against crafted tarballs and AMO answers (see
+[npm package](#npm-package)).
 
 The test scripts, `npm run e2e` included, use `bin/test-reporter.ts`: a passing run prints a
 line of counts (and, where coverage is measured, a line of coverage totals), a failing test is
@@ -338,6 +340,11 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `artifacts/foxleash-<version>.xpi`), byte for byte except `manifest.json`, which may differ
   only in its JSON formatting (AMO's signed copy drops the final newline), and its manifest
   has `<version>`.
+- `tag <tag>`: the tag is `v` and an `x.y.z` version, that version is the version of every
+  version field, HEAD is the tag's commit (an annotated tag is peeled to its commit), and that
+  commit is on origin's `main`, which it fetches first. It does not require an annotated tag:
+  `actions/checkout` can turn the tag it checks out into a lightweight one, and `pre-push` has
+  already checked the annotation before the push.
 
 `pre-roll` and `pre-push` also run `npm audit` on `package-lock.json`, development packages
 included, and fail on each advisory of high or critical severity and when the audit cannot
@@ -350,7 +357,8 @@ source `apps/extension/manifest.json` has no `version`.
 The exit status is 0 when every check passes, 1 when one fails, 2 on a usage error, and 3
 when nothing fails but a warning (such as a bigger bump than the changes need, or a
 breaking change mentioned in a smaller bump) needs your confirmation. CI runs the
-`changelog`, `listing` and `protocol` checks.
+`changelog`, `listing` and `protocol` checks, and the publish workflow runs `tag` (see
+[npm package](#npm-package)).
 
 ## Protocol versions
 
@@ -379,7 +387,9 @@ number, and the steps below it are then deleted. Programs from before ADR 0072
 programs from the first release that carries it on.
 
 A release publishes its add-on before its server: a server refuses an add-on older than itself,
-so its program is made available only once its add-on version can be installed.
+so its program is made available only once its add-on version can be installed. The workflow
+that publishes the npm package checks that AMO serves the version first (see
+[npm package](#npm-package)).
 
 ## Releasing
 
@@ -456,7 +466,8 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
 7. Put the signed XPI in `web-ext-artifacts/foxleash-x.y.z.xpi` and run
    `npm run check:release -- artifacts x.y.z`.
 8. Create a draft GitHub release for the tag `vx.y.z` with `foxleash-x.y.z.xpi` attached,
-   review it and publish it.
+   review it and publish it. Publishing it starts the publish workflow, which publishes the npm
+   package of that version (see [npm package](#npm-package)).
 
 ### AMO screenshots
 
@@ -577,14 +588,44 @@ package's `license` is not exactly one of MIT, ISC, BSD-2-Clause, BSD-3-Clause a
 `LICENCE`, bare or with `.md` or `.txt`, in any case), or when a license or NOTICE file is empty
 or not a regular file.
 
-The workspace `@foxleash/server` stays private; only the generated folder is published. By hand,
-at the release commit:
+The workspace `@foxleash/server` stays private; only the generated folder is published. GitHub
+Actions publishes it (`.github/workflows/publish.yml`, ADR 0106) when a GitHub release is
+published, step 8 of [Releasing](#releasing), so nobody runs an npm command for a release. The
+workflow has no other trigger and two jobs:
 
-1. `npm ci`, then `npm run build -w @foxleash/server`. This runs `build.ts` itself: turbo's
-   cached `build` keys on `apps/server`'s files only, so a change to the root `README.md`,
-   `LICENSE` or description alone could restore an old `dist`.
-2. `npm pack ./apps/server/dist` and check that the tarball holds exactly the five files above.
-3. `npm publish ./apps/server/dist --access public`.
+- `build`, whose token may only read the repository, checks out the tagged commit with its
+  history, runs `npm ci` and then `npm run check:release -- tag <tag>` (see
+  [Release checks](#release-checks)): the tag is `v` and the version of every version field,
+  HEAD is its commit, and that commit is on origin's `main`. It then asks AMO's public API,
+  without credentials, every minute for up to 30 minutes whether AMO serves that version as a
+  public, listed version, and fails when it does not (see [Protocol versions](#protocol-versions)).
+  It runs `npm run lint`, `npm run typecheck` and `npm test`, then
+  `npm run build -w @foxleash/server`, which runs `build.ts` itself: turbo's cached `build` keys
+  on `apps/server`'s files only, so a change to the root `README.md`, `LICENSE` or description
+  alone could restore an old `dist`. It packs `apps/server/dist` with `npm pack` and refuses the
+  result unless it is exactly one file, `foxleash-<version>.tgz`, holding exactly the five files
+  above, each once and each a regular file. The tarball is kept as an artifact of the run for one
+  day.
+- `publish` runs after `build`, in the GitHub environment `npm`, and is the only job that gets
+  the identity token that npm's trusted publishing takes instead of a stored token. It runs no
+  project code: no checkout, no install, no npm script. It refuses an npm older than 11.5.1, the
+  first with trusted publishing; a build version that is not `x.y.z` or whose `v` form is not the
+  release's tag; and the downloaded tarball unless it passes the same checks as in `build`. It
+  unpacks the five files and refuses a `package.json` that is not exactly one JSON object with
+  the name `foxleash` and the tag's version, or that has a `publishConfig` or `scripts`. GNU tar
+  and npm can read one archive differently, so it then packs the checked files again with
+  `npm pack`, checks that tarball the same way, and publishes it with
+  `npm publish --provenance --access public`.
+
+No npm token is stored anywhere. On npmjs.com the package `foxleash` has a trusted publisher:
+GitHub Actions in this repository, the workflow file `publish.yml` and the environment `npm`.
+The environment allows only tags that match `v*` to use it. npm attaches provenance that links
+each version to the commit and the workflow run that built it.
+
+A failed run is re-run from the repository's Actions page with "Re-run all jobs", which replays
+the same release event; the build's artifact is kept for one day. When AMO did not serve the
+version within the 30 minutes, re-run it once AMO does. A version npm already has fails to
+publish: npm refuses to publish a version twice.
 
 ## Probing synthetic input
 
