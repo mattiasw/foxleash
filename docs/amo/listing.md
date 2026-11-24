@@ -26,8 +26,9 @@
 >   takes at most 150,000 characters.
 > - **Compatibility**: not text for AMO. It says which applications each version is
 >   submitted for, and why.
-> - **Screenshots**: AMO's screenshots of the add-on, uploaded from `docs/amo/screenshots/`
->   with the captions given there, in that order; not pasted text.
+> - **Screenshots**: AMO's screenshots of the add-on; not pasted text. Each release makes them
+>   the files of `docs/amo/screenshots/` named there, with their captions and in that order,
+>   from this file and those files at its tag before it submits the version.
 > - **Listing details**: the add-on's other fields on AMO (slug, category, license, homepage,
 >   support site, support email), set on the add-on and its versions, not pasted text. Each
 >   release sets the category, homepage, support site and support email from this file at its
@@ -35,6 +36,10 @@
 >   already match: the release stops when AMO's slug differs and never changes it. The slug is
 >   the last segment of `ADDON_PAGE_URL` unless that address is the one by add-on id, in which
 >   case the slug line holds the slug AMO has for the add-on.
+>
+> `docs/amo/icon-128.png` is the add-on's icon on AMO, which each release uploads. It is
+> rendered from `apps/extension/icons/foxleash.svg` (see `docs/development.md`) and must be
+> rendered again whenever that SVG changes.
 >
 > The release check fails when the Summary, the Description or the Permissions section is
 > longer than AMO takes.

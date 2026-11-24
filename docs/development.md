@@ -448,7 +448,8 @@ tagged commit (ADR 0075). `built` also compares the XPI's files with CI's build 
    support site and support email on AMO from `docs/amo/listing.md` at the tag, changing only
    what differs, before it submits the version: AMO takes a listed version only when the add-on
    has a name, a summary and categories, and Mozilla reviews each version against the whole
-   listing.
+   listing. It also sets the add-on's screenshots, their captions and its icon on AMO from
+   `docs/amo/` at the tag before it submits the version.
    Run `web-ext sign` with `--channel listed`, with `WEB_EXT_API_KEY` and
    `WEB_EXT_API_SECRET` (an AMO API key pair) in the environment, with the source archive
    attached by `--upload-source-code artifacts/foxleash-source-x.y.z.zip`, and with
@@ -484,6 +485,14 @@ openstreetmap.org:
 
 ```sh
 xvfb-run --auto-servernum --server-args='-screen 0 1280x800x24' npm run screenshots:amo
+```
+
+The add-on's icon on AMO, `docs/amo/icon-128.png`, is rendered from
+`apps/extension/icons/foxleash.svg`. Render it again whenever the SVG changes, with an `ffmpeg`
+built with librsvg, from the repository root:
+
+```sh
+ffmpeg -hide_banner -loglevel error -y -width 128 -height 128 -i apps/extension/icons/foxleash.svg -frames:v 1 docs/amo/icon-128.png
 ```
 
 ## Server
