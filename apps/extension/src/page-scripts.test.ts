@@ -375,12 +375,69 @@ describe("page script requests", { timeout: 10000 }, () => {
     assert.deepEqual(fake.tabMessages, []);
   });
 
+  it("refuses every act while Firefox withholds access to all websites, also on a site it gave access to", async () => {
+    const { fake, pages, open, grant, timers } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, contentScript(SITE));
+    const timersBefore = timers.pending();
+    fake.allUrls = false;
+    fake.grantedOrigins.add(`${SITE}/*`);
+    let sends = 0;
+    for (const type of ["click", "drag", "type", "press_key", "fill_form", "upload_file"]) {
+      await assert.rejects(
+        pages.request("s1", tab.id, type, {}, 0, () => {
+          sends += 1;
+        }),
+        {
+          code: "site_access_withheld",
+          message: `Foxleash needs access to all websites to act in the page in tab ${tab.id}: an act can load a page or file from another site, which Firefox then hides from Foxleash. Ask the user to open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites". Firefox lists this access as optional, but Foxleash needs it. Nothing was done in the page.`,
+        },
+        type,
+      );
+    }
+    assert.equal(sends, 0);
+    assertNothingSent(fake);
+    assert.equal(timers.pending(), timersBefore);
+    // A reading request still runs, with the first tag: the refused acts reserved none.
+    assert.deepEqual(await pages.request("s1", tab.id, "echo", { n: 1 }, 0), {
+      echoed: { n: 1 },
+    });
+    assert.deepEqual(tagsSent(fake), ["a"]);
+  });
+
+  it("asks whether Firefox gives access to all websites before an act, not before a read", async () => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, async () => ({ ok: true, site: SITE, result: "done" }));
+    fake.permissionChecks.length = 0;
+    assert.equal(await pages.request("s1", tab.id, "echo", {}, 0), "done");
+    assert.deepEqual(fake.permissionChecks, []);
+    assert.equal(await pages.request("s1", tab.id, "click", {}, 0), "done");
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+    assert.equal(fake.tabMessages.length, 2);
+  });
+
+  it("refuses an act when Firefox does not answer whether it gives access to all websites", async (t) => {
+    const { fake, pages, open, grant } = setup();
+    await grant(SITE);
+    const tab = await open("s1", `${SITE}/`);
+    fake.setContentScript(tab.id, contentScript(SITE));
+    t.mock.method(fake.browser.permissions, "contains", async () => {
+      throw new Error("permissions unavailable");
+    });
+    await rejectsWith(pages.request("s1", tab.id, "click", {}, 0), "site_access_withheld");
+    assertNothingSent(fake);
+  });
+
   it("says Firefox withholds the site when it refuses the injection without the site's access", async () => {
     const { fake, pages, open, grant, timers } = setup();
     await grant(SITE);
     const tab = await open("s1", `${SITE}/secret-path`);
     const timersBefore = timers.pending();
     fake.allUrls = false;
+    fake.permissionChecks.length = 0;
     fake.failNextInjection(new Error(`Missing host permission for ${SITE}/secret-path`));
     await assert.rejects(pages.request("s1", tab.id, "echo", {}, 0), {
       code: "site_access_withheld",
@@ -410,6 +467,7 @@ describe("page script requests", { timeout: 10000 }, () => {
     await grant("https://a.example:8443");
     const tab = await open("s1", "https://a.example:8443/");
     fake.allUrls = false;
+    fake.permissionChecks.length = 0;
     fake.failNextInjection(new Error("boom"));
     await rejectsWith(pages.request("s1", tab.id, "echo", {}, 0), "site_access_withheld");
     assert.deepEqual(fake.permissionChecks, [["https://a.example/*"]]);

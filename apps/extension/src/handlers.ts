@@ -24,6 +24,7 @@ import {
   type TabInfo,
 } from "@foxleash/protocol";
 import type { ActSettle } from "./act-settle.ts";
+import { mayReachAllSites } from "./all-sites.ts";
 import type {
   BrowserApi,
   BrowserWindow,
@@ -422,7 +423,9 @@ export function createHandlers<Handle>({
    * it (ADR 0057).
    */
   async function openOnPage(session: string, url: string, generation: number): Promise<TabInfo> {
+    const allSites = await mayReachAllSites(browser);
     refuseIfEnded(access, session, generation);
+    if (!allSites) throw loadNeedsAllSites();
     const tab = await groups.createTab(session, { url, active: false, discarded: true }, () =>
       refuseIfEnded(access, session, generation),
     );
@@ -585,12 +588,14 @@ export function createHandlers<Handle>({
       if (asked !== undefined && url !== undefined) {
         return { tab: await approveAndLoad(session, tabId, url, { kind: "url", url }, generation) };
       }
+      const allSites = await mayReachAllSites(browser);
       const gated = await gate(session, tab, target);
       if (gated !== undefined && gated.decision.decision !== "allowed") {
         return { tab: await approveAndLoad(session, tabId, gated.url, target, generation) };
       }
       refuseIfEnded(access, session, generation);
       keepPrompt(session, tabId);
+      if (!allSites) throw loadNeedsAllSites();
       const history =
         target.kind === "action" && target.action !== "reload"
           ? watchHistoryLoad(tabId)
@@ -815,6 +820,7 @@ export function createHandlers<Handle>({
     for (let decisions = 0; decisions < 2; decisions += 1) {
       if (history.reloads() === undefined) await history.decided(HISTORY_REQUEST_TIMEOUT_MS);
       if (history.reloads() !== true) return loaded;
+      const allSites = await mayReachAllSites(browser);
       const group = await groups.groupOf(session);
       const view = await access.view(session);
       const frames = await browser.webNavigation.getAllFrames({ tabId }).catch(() => null);
@@ -838,7 +844,8 @@ export function createHandlers<Handle>({
         group === undefined ||
         tab.groupId !== group.id ||
         access.openPrompt(session)?.tabId === tabId ||
-        !view.allowed(url)
+        !view.allowed(url) ||
+        !allSites
       ) {
         return loaded;
       }
@@ -940,10 +947,13 @@ export function createHandlers<Handle>({
     generation: number,
   ): Promise<Result<"tab_select">> {
     const tabId = tabIdParam(params, "tab_select");
-    await groupTab(session, tabId);
+    const tab = await groupTab(session, tabId);
+    const restores = tab.discarded === true && siteOf(tab.url ?? "") !== undefined;
+    const allSites = !restores || (await mayReachAllSites(browser));
     keepPromptInView(session, tabId);
     // Selecting a tab Firefox unloaded loads its page.
     refuseIfEnded(access, session, generation);
+    if (!allSites) throw loadNeedsAllSites();
     const updated = await browser.tabs.update(tabId, { active: true });
     const view = await access.view(session);
     return { tab: view.tabInfo(updated) };
@@ -1618,6 +1628,7 @@ export function createHandlers<Handle>({
     const tabId = tabIdParam(params, "read_network");
     const options = networkOptions(params);
     const site = await allowedPageSite({ browser, groups, access }, session, tabId);
+    if (!(await mayReachAllSites(browser))) throw networkNeedsAllSites(tabId);
     return network.read(session, tabId, site, options);
   }
 
@@ -1830,6 +1841,7 @@ export function createHandlers<Handle>({
     target: NavigationTarget,
     generation: number,
   ): Promise<TabInfo> {
+    const allSites = await mayReachAllSites(browser);
     const view = await access.view(session);
     const group = await groups.groupOf(session);
     const tab = await existingTab(tabId);
@@ -1840,6 +1852,7 @@ export function createHandlers<Handle>({
     if (site !== undefined && view.blocked(url)) throw siteBlocked(site);
     const onPrompt = tab.url?.startsWith(browser.runtime.getURL(PROMPT_PAGE)) === true;
     keepPrompt(session, tabId);
+    if (!allSites) throw loadNeedsAllSites();
     const loaded =
       target.kind === "action" && !onPrompt && tab.url === url
         ? await reloadPage(session, tab, url, generation)
@@ -1905,6 +1918,7 @@ export function createHandlers<Handle>({
     );
     // A reload cut off by its timeout gets no second wait.
     if (reloaded.url !== "about:blank" || reloaded.status !== "complete") return reloaded;
+    const allSites = await mayReachAllSites(browser);
     const group = await groups.groupOf(session);
     const view = await access.view(session);
     const current = await existingTab(tabId);
@@ -1916,7 +1930,8 @@ export function createHandlers<Handle>({
       group === undefined ||
       current.groupId !== group.id ||
       access.openPrompt(session)?.tabId === tabId ||
-      !view.allowed(url)
+      !view.allowed(url) ||
+      !allSites
     ) {
       return current;
     }
@@ -2381,6 +2396,20 @@ function screenshotNeedsAllSites(tabId: number): ToolError {
   return new ToolError(
     "site_access_withheld",
     `Foxleash needs access to all websites to take a screenshot of tab ${tabId}. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
+  );
+}
+
+function loadNeedsAllSites(): ToolError {
+  return new ToolError(
+    "site_access_withheld",
+    `Foxleash needs access to all websites to load a page: without it, Firefox hides other sites' answers from Foxleash, so it could not stop a file from a site this session may not act on. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it. Nothing was loaded.`,
+  );
+}
+
+function networkNeedsAllSites(tabId: number): ToolError {
+  return new ToolError(
+    "site_access_withheld",
+    `Foxleash needs access to all websites to see the requests of tab ${tabId}: without it, Firefox hides requests from Foxleash. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
   );
 }
 

@@ -283,6 +283,22 @@
         {
           "file": "apps/extension/src/act-settle.ts",
           "contains": "result.refusedFiles = refused;"
+        },
+        {
+          "file": "apps/extension/src/all-sites.ts",
+          "contains": "return await browser.permissions.contains({ origins: [\"<all_urls>\"] });"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "if (!allSites) throw loadNeedsAllSites();"
+        },
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "Foxleash needs access to all websites to load a page: without it, Firefox hides other sites' answers from Foxleash"
+        },
+        {
+          "file": "apps/extension/src/page-scripts.ts",
+          "contains": "if (acting && !(await mayReachAllSites(browser))) throw actNeedsAllSites(tabId);"
         }
       ]
     },

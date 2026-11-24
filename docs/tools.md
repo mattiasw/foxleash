@@ -25,11 +25,18 @@ ask: `read_page`, `get_page_text`, `read_console`, `read_network`, `screenshot`,
 it waits for text or a selector.
 
 These tools also need Firefox to give Foxleash access to the site. Firefox lists Foxleash's access
-to all websites as optional, and you can turn it off. Without it, each of these tools but
-`read_network` tells the agent that Firefox has not given Foxleash access to the site and asks it
-to have you turn it on: open about:addons in Firefox, click Foxleash, then the Permissions tab,
-and under "Optional" turn on "Access your data for all websites". While this access is off,
-Foxleash's settings page says so, and so do the question whether to allow a site and the page
+to all websites as optional, and you can turn it off. Without access to the site, each of these
+tools but `read_network` tells the agent that Firefox has not given Foxleash access to the site
+and asks it to have you turn it on: open about:addons in Firefox, click Foxleash, then the
+Permissions tab, and under "Optional" turn on "Access your data for all websites". While access
+to all websites is off, Firefox hides other sites' answers and requests from Foxleash, so these
+refuse with the same steps, even on a site Firefox gave access to: `read_network`; the acting
+tools (`click`, `drag`, `type`, `press_key`, `fill_form`, `upload_file`), since an act can load
+another site's page or file; and every load Foxleash starts in the agent's tabs, so that it can
+stop a file from a site the session may not act on: `tab_open` with a URL, `navigate`, the load
+after you answer the question whether to allow a site, and `tab_select` of a tab Firefox unloaded.
+The question itself still opens, and `tab_open` without a URL still works. While this access is
+off, Foxleash's settings page says so, and so do the question whether to allow a site and the page
 where the agent asks for sites or a recipe's sites, above their answers, each with a button that
 asks Firefox for it. An update of the add-on never turns this access back on.
 
@@ -101,6 +108,8 @@ to, and leave the others alone.
   address an action's result reports after a page load is cut the same way.
 - The agent can switch to (`tab_select`) and close (`tab_close`) only tabs in its own group, and
   never closes the last tab of a window.
+- Selecting a tab Firefox unloaded loads its page, so while Foxleash's access to all websites is
+  off, `tab_select` refuses such a tab on a web page.
 - `resize_window` resizes the whole window that holds the agent's group, your own tabs in it
   included, and first returns a maximized, minimized or full-screen window to its normal state.
   With each session in its own window, that is the session's window, not yours. It returns the
@@ -171,7 +180,8 @@ address.
   copied or reopened tab. While Foxleash watches the tab, your own load of that exact address in it
   stops with no message and the tab keeps its page: open it in a new tab. A redirect to a site that
   is only not approved still loads, and the tab comes back with only that site's address. Without
-  Foxleash's access to all websites, no such redirect step is seen or cancelled.
+  Foxleash's access to all websites, `tab_open` and `navigate` refuse to load
+  ([above](#sites-and-approval)).
   [Security](security.md#the-blocklist) has the limits.
 - When the page asks you to sign in with Firefox's own sign-in dialog, `tab_open` and `navigate`
   to an address fail about 2 seconds after the page asks, not after 30 seconds, with an error that
@@ -327,6 +337,10 @@ with its level, kind, text and time.
 resource type, start time, duration, status, redirect target, error and whether it came from
 the cache.
 
+- While Foxleash's access to all websites is off, `read_network` refuses, because Firefox then
+  hides requests from Foxleash. Requests to other sites made while it was off are missing from the
+  log, also once it is turned back on, and from the request count in the result of `hover` and
+  `scroll` while it is off.
 - Each request's request and response headers are included only when the agent asks for them
   (`headers`). Foxleash still records them, so a later read can ask for the headers of requests
   an earlier one left them out of.

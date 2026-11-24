@@ -1,4 +1,5 @@
 import { ALL_WEBSITES_ACCESS_STEPS, DOWNLOAD_MAX_BYTES } from "@foxleash/protocol";
+import { mayReachAllSites } from "./all-sites.ts";
 import type { BrowserApi, Cancel, DownloadDelta, RequestDetails, Timers } from "./browser-api.ts";
 import { refuseIfEnded, ToolError } from "./handlers.ts";
 import { siteOf, withoutFragment } from "./site.ts";
@@ -180,7 +181,7 @@ export function createDownloads<Handle>({
     hops: Hops,
   ): Promise<{ path: string; bytes: number }> {
     // Firefox fires webRequest events only for sites the add-on has host permission for.
-    if (!(await mayReachAllSites())) throw noAccessToAllSites();
+    if (!(await mayReachAllSites(browser))) throw noAccessToAllSites();
     await downloadGate(session, url, notApproved);
     refuseIfEnded(access, session, generation);
     let response: Response;
@@ -212,14 +213,6 @@ export function createDownloads<Handle>({
     refuseIfEnded(access, session, generation);
     const path = await saveFile(blob, filename, signal);
     return { path, bytes };
-  }
-
-  async function mayReachAllSites(): Promise<boolean> {
-    try {
-      return await browser.permissions.contains({ origins: ["<all_urls>"] });
-    } catch {
-      return false;
-    }
   }
 
   /** Refuses a URL that is not on a site the session may already act on. Never asks. */

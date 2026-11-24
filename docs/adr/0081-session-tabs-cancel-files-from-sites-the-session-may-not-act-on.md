@@ -33,6 +33,9 @@ Amended 2026-11-20: the tabs left in an ended session's group also pass files of
 session was allowed for itself, until the background restarts, so such a site's files are no
 longer stopped there, nor its Blob files cancelled in every tab.
 
+Amended 2026-11-24: while Firefox withholds Foxleash's access to all websites, Foxleash refuses
+the loads it starts in a session's tabs, the acting page tools and read_network.
+
 ## Context
 
 A page on a site the session is approved for (A) could make Firefox save, into the download
@@ -145,6 +148,15 @@ keeps its newest `MAX_REFUSALS` (20) until it closes, for at most `MAX_REFUSAL_T
 frame, also after its page committed; `handlers.ts` passes the guard to every load wait, and
 `tab_open` removes its tab. `act-settle.ts` awaits `settled()` and lists `refusedFiles` (`ActAfter`)
 from `refusedSince`.
+
+**Without access to all websites.** Firefox then shows the listeners no request to a site outside
+the add-on's grants
+([measured](../measurements/file-guard.md#loads-while-firefox-withholds-access-to-all-websites-2026-11-24)).
+So while `mayReachAllSites` (`all-sites.ts`) answers no, `handlers.ts` refuses `tab_open` of a
+web address, `navigate`, the load after a site prompt's answer and `tab_select` of a tab Firefox
+unloaded; `page-scripts.ts` refuses the acting page tools, also on a site Firefox gave
+access to, since an act can load another site's file; `read_network` refuses. The site prompt
+still opens.
 
 **Uploads.** `readOpened` in `apps/server/src/upload-policy.ts` refuses a file whose newest of
 `mtimeMs` (unless ahead of the clock), `ctimeMs` and `birthtimeMs` is under `FRESH_FILE_MS` (5,000
@@ -271,6 +283,10 @@ ms) old.
   list cannot be read, old groups' tabs are no session's. A group id of Firefox's fallback shape,
   counted per browser run, could name another group after a restart: more stopping, never more
   reach.
+- While Firefox withholds access to all websites, nothing is judged on sites outside its grants:
+  a page's own loads (its scripts, a timed refresh, a lazy frame a scroll brings into view), the
+  user's own loads, Firefox's restores of an unloaded tab (also one it selects after a close), and
+  a load under way or about to start when the user turns the access off.
 - Memory: one entry per tied tab, one number per open tab, the last 200 closed tabs and every one
   closed in the last 2 seconds, one site set per ended session up to 200; one storage read and
   write per group created.

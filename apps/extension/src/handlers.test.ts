@@ -8375,6 +8375,7 @@ describe("screenshot", { timeout: 10000 }, () => {
     const tab = await open("s1", "https://a.example/secret-path");
     const timersBefore = timers.pending();
     fake.allUrls = false;
+    fake.permissionChecks.length = 0;
     fake.grantedOrigins.add("https://a.example/*");
     fake.failNextCapture(new Error("Missing host permission for https://a.example/secret-path"));
     await assert.rejects(call("s1", "screenshot", { tabId: tab.id }), {
@@ -9689,6 +9690,234 @@ describe("screenshot", { timeout: 10000 }, () => {
       assert.deepEqual(fake.captures, []);
       assert.equal(timers.pending(), timersBefore);
     });
+  });
+});
+
+describe("loads and read_network while Firefox withholds access to all websites", {
+  timeout: 10000,
+}, () => {
+  const STEPS =
+    'open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites"';
+  const LOAD_REFUSED = {
+    code: "site_access_withheld",
+    message: `Foxleash needs access to all websites to load a page: without it, Firefox hides other sites' answers from Foxleash, so it could not stop a file from a site this session may not act on. Ask the user to ${STEPS}. Firefox lists this access as optional, but Foxleash needs it. Nothing was loaded.`,
+  };
+
+  it("refuses tab_open of an approved site before it creates a tab", async (t) => {
+    const { fake, call, grant } = setup();
+    await grant("https://a.example");
+    fake.allUrls = false;
+    const creates = recordCreates(fake);
+    const update = t.mock.method(fake.browser.tabs, "update");
+    await assert.rejects(call("s1", "tab_open", { url: "https://a.example/" }), LOAD_REFUSED);
+    assert.deepEqual(creates, []);
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(fake.tabs.size, 0);
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+  });
+
+  it("refuses tab_open when Firefox does not answer whether it gives access to all websites", async (t) => {
+    const { fake, call, grant } = setup();
+    await grant("https://a.example");
+    t.mock.method(fake.browser.permissions, "contains", async () => {
+      throw new Error("permissions unavailable");
+    });
+    await assert.rejects(call("s1", "tab_open", { url: "https://a.example/" }), LOAD_REFUSED);
+    assert.equal(fake.tabs.size, 0);
+  });
+
+  it("still opens a blank tab", async () => {
+    const { fake, open, list } = setup();
+    fake.allUrls = false;
+    const tab = await open("s1");
+    assert.equal(tab.url, "about:blank");
+    assert.deepEqual(
+      (await list("s1")).map((listed) => listed.id),
+      [tab.id],
+    );
+  });
+
+  it("opens the prompt for a site not approved, and refuses the load after the answer", async () => {
+    const { fake, call, page, promptOf } = setup();
+    fake.allUrls = false;
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const { tabId } = await promptOf("s1");
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    await assert.rejects(opened, LOAD_REFUSED);
+    assert.equal(loadsOf(fake, "https://a.example/x"), 0);
+    // The prompt was shown in the tab, which stays, as after any refusal there.
+    assert.deepEqual([...fake.tabs.keys()], [tabId]);
+  });
+
+  it("loads after the answer when the user gave the access while the prompt was open", async () => {
+    const { fake, call, page } = setup();
+    fake.allUrls = false;
+    const opened = call("s1", "tab_open", { url: "https://a.example/x" });
+    const shown = await page("s1");
+    fake.setAllUrls(true);
+    shown.deliver({ type: "answer", answer: "once" });
+    const result = await opened;
+    assert.ok("tab" in result);
+    assert.equal(result.tab.url, "https://a.example/x");
+    assert.equal(loadsOf(fake, "https://a.example/x"), 1);
+  });
+
+  it("refuses the load after navigate's prompt is answered", async () => {
+    const { fake, call, open, page } = setup();
+    const tab = await open("s1");
+    fake.allUrls = false;
+    const navigating = call("s1", "navigate", { tabId: tab.id, url: "https://a.example/" });
+    (await page("s1")).deliver({ type: "answer", answer: "once" });
+    await assert.rejects(navigating, LOAD_REFUSED);
+    assert.equal(loadsOf(fake, "https://a.example/"), 0);
+  });
+
+  it("refuses navigate with a URL, a path, reload, back and forward before any load", async (t) => {
+    const context = setup();
+    const { fake, call } = context;
+    const tab = await historyTab(context);
+    await pastRequestWait(context, { tabId: tab.id, action: "back" });
+    const blank = await context.open("s1");
+    fake.allUrls = false;
+    const update = t.mock.method(fake.browser.tabs, "update");
+    const reload = t.mock.method(fake.browser.tabs, "reload");
+    const goBack = t.mock.method(fake.browser.tabs, "goBack");
+    const goForward = t.mock.method(fake.browser.tabs, "goForward");
+    for (const params of [
+      { tabId: tab.id, url: "https://b.example/next" },
+      { tabId: tab.id, url: "/next" },
+      { tabId: tab.id, action: "reload" },
+      { tabId: tab.id, action: "back" },
+      { tabId: tab.id, action: "forward" },
+      { tabId: blank.id, action: "reload" },
+    ]) {
+      await assert.rejects(call("s1", "navigate", params), LOAD_REFUSED, JSON.stringify(params));
+    }
+    assert.equal(update.mock.callCount(), 0);
+    assert.equal(reload.mock.callCount(), 0);
+    assert.equal(goBack.mock.callCount(), 0);
+    assert.equal(goForward.mock.callCount(), 0);
+    assert.equal(fake.tabs.get(tab.id)?.url, "https://a.example/a");
+  });
+
+  it("asks whether Firefox gives access to all websites when it has it, and loads", async () => {
+    const { fake, open, navigate, grant } = setup();
+    await grant("https://a.example");
+    fake.permissionChecks.length = 0;
+    const tab = await open("s1", "https://a.example/");
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+    fake.permissionChecks.length = 0;
+    assert.equal(
+      (await navigate("s1", { tabId: tab.id, url: "https://a.example/next" })).url,
+      "https://a.example/next",
+    );
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+  });
+
+  it("loads nothing in place of the blank when the access was withdrawn during the reload", async () => {
+    const { fake, navigate, open, grant } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/page");
+    const reloads = reloadToBlank(fake, () => {
+      fake.allUrls = false;
+    });
+    const updates = fake.tabUpdates.length;
+    assert.equal((await navigate("s1", { tabId: tab.id, action: "reload" })).url, "about:blank");
+    assert.deepEqual(reloads, [[tab.id, { bypassCache: true }]]);
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+  });
+
+  it("loads nothing again after going back when the access was withdrawn meanwhile", async () => {
+    const context = setup();
+    const { fake, navigate } = context;
+    const tab = await historyTab(context);
+    const steps = recordSteps(fake, () => []);
+    const result = navigate("s1", { tabId: tab.id, action: "back" });
+    await flush();
+    fake.allUrls = false;
+    send(fake, [pageRequest(tab.id, "https://a.example/a")]);
+    assert.equal((await result).url, "https://a.example/a");
+    assert.deepEqual(steps, [["back", tab.id]]);
+  });
+
+  it("keeps the refusals that come first: a blocked site, a tab outside the group, an ended session", async () => {
+    const context = setup();
+    const { fake, call, open, grant } = context;
+    await grant("https://www.paypal.com");
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    const outside = fake.openTab({ url: "https://a.example/" });
+    fake.allUrls = false;
+    await rejectsWith(call("s1", "tab_open", { url: "https://www.paypal.com/" }), "site_blocked");
+    await rejectsWith(
+      call("s1", "navigate", { tabId: tab.id, url: "https://www.paypal.com/" }),
+      "site_blocked",
+    );
+    await rejectsWith(
+      call("s1", "navigate", { tabId: outside.id, action: "reload" }),
+      "tab_not_in_group",
+    );
+    await rejectsWith(call("s1", "tab_select", { tabId: outside.id }), "tab_not_in_group");
+    await rejectsWith(call("s1", "read_network", { tabId: outside.id }), "tab_not_in_group");
+    const { access } = context;
+    const check = access.check;
+    access.check = async (checked, url) => {
+      const decision = await check(checked, url);
+      access.endSession("s1");
+      return decision;
+    };
+    await rejectsWith(call("s1", "tab_open", { url: "https://a.example/b" }), "session_ended");
+    await rejectsWith(
+      call("s1", "navigate", { tabId: tab.id, url: "https://a.example/b" }),
+      "session_ended",
+    );
+    assert.equal(loadsOf(fake, "https://a.example/b"), 0);
+  });
+
+  it("refuses tab_select of a tab Firefox unloaded on a web page, and selects any other tab", async () => {
+    const { fake, call, open, grant } = setup();
+    await grant("https://a.example");
+    const unloaded = await open("s1", "https://a.example/");
+    const loaded = await open("s1", "https://a.example/other");
+    const blank = await open("s1");
+    const unloadedTab = fake.tabs.get(unloaded.id);
+    const blankTab = fake.tabs.get(blank.id);
+    assert.ok(unloadedTab && blankTab);
+    unloadedTab.discarded = true;
+    await call("s1", "tab_select", { tabId: loaded.id });
+    blankTab.discarded = true;
+    fake.allUrls = false;
+    fake.permissionChecks.length = 0;
+    const updates = fake.tabUpdates.length;
+    await assert.rejects(call("s1", "tab_select", { tabId: unloaded.id }), LOAD_REFUSED);
+    assert.deepEqual(fake.tabUpdates.slice(updates), []);
+    assert.equal(unloadedTab.active, false);
+    assert.equal(unloadedTab.discarded, true);
+    assert.deepEqual(fake.permissionChecks, [["<all_urls>"]]);
+    fake.permissionChecks.length = 0;
+    for (const tabId of [blank.id, loaded.id]) {
+      const selected = await call("s1", "tab_select", { tabId });
+      assert.ok("tab" in selected);
+      assert.equal(selected.tab.active, true);
+    }
+    assert.deepEqual(fake.permissionChecks, []);
+    fake.allUrls = true;
+    const selected = await call("s1", "tab_select", { tabId: unloaded.id });
+    assert.ok("tab" in selected);
+    assert.equal(selected.tab.active, true);
+    assert.equal(unloadedTab.discarded, false);
+  });
+
+  it("refuses read_network", async () => {
+    const { fake, call, open, grant, networkReads } = setup();
+    await grant("https://a.example");
+    const tab = await open("s1", "https://a.example/");
+    fake.allUrls = false;
+    await assert.rejects(call("s1", "read_network", { tabId: tab.id }), {
+      code: "site_access_withheld",
+      message: `Foxleash needs access to all websites to see the requests of tab ${tab.id}: without it, Firefox hides requests from Foxleash. Ask the user to ${STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
+    });
+    assert.deepEqual(networkReads, []);
   });
 });
 

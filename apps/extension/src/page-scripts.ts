@@ -1,4 +1,5 @@
 import { ALL_WEBSITES_ACCESS_STEPS, aimsWithoutRef, type MethodName } from "@foxleash/protocol";
+import { mayReachAllSites } from "./all-sites.ts";
 import type { BrowserApi, Timers } from "./browser-api.ts";
 import { documentTag, MAX_TAG_NUMBER } from "./element-refs.ts";
 import {
@@ -148,6 +149,8 @@ export function createPageScripts<Handle>(deps: PageScriptsDeps<Handle>): PageSc
       let sent = false;
       try {
         const site = await allowedPageSite(deps, session, tabId);
+        // Also on a site Firefox gave access to: an act can load another site's page or file.
+        if (acting && !(await mayReachAllSites(browser))) throw actNeedsAllSites(tabId);
         // A fresh tag for every message, so no two documents can take the same one.
         const tag = TAGLESS_REQUEST_TYPES.includes(type) ? null : await reserveTag(tabId);
         await inject(tabId, site);
@@ -473,6 +476,13 @@ function siteAccessWithheld(tabId: number): ToolError {
   return new ToolError(
     "site_access_withheld",
     `Firefox has not given Foxleash access to this site, so Foxleash cannot read or act in the page in tab ${tabId}. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
+  );
+}
+
+function actNeedsAllSites(tabId: number): ToolError {
+  return new ToolError(
+    "site_access_withheld",
+    `Foxleash needs access to all websites to act in the page in tab ${tabId}: an act can load a page or file from another site, which Firefox then hides from Foxleash. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it. Nothing was done in the page.`,
   );
 }
 

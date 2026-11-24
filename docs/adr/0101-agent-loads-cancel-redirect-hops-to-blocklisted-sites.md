@@ -22,6 +22,9 @@ a watch of that tab cancelled, remembered per tab until the tab closes. Firefox 
 forward step onto the page, a reload the page held back past its wait and the page's own reload
 straight to the hop's address, and they reached the blocklisted site (M10).
 
+Amended 2026-11-24: while Firefox withholds Foxleash's access to all websites, the loads the agent
+starts are refused (0081), since no hop to a site outside the grants is seen then.
+
 ## Context
 
 `navigate` and `tab_open` check only the first address of a load (`gate` and `access.check` in
@@ -258,8 +261,10 @@ its page.
   own load of any blocklisted address there stops the same way.
 - During such a reload's wait, a top-level load of the tab whose first request goes to a
   blocklisted site off the reloaded page's site is cancelled too, whoever started it.
-- Without access to all websites Foxleash sees no hop to a site outside its grants (M7), so it
-  cancels none.
+- Without access to all websites Foxleash sees no hop to a site outside its grants (M7), so the
+  loads the agent starts are refused in that state
+  ([0081](0081-session-tabs-cancel-files-from-sites-the-session-may-not-act-on.md)), and only
+  loads Foxleash did not start go unwatched.
 - A redirect hop to a restricted or quarantined domain is not seen, so Firefox sends it.
 - A hop to a site that is only not approved still loads, and the tab reaches the agent redacted
   (0007).

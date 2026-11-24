@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { ALL_WEBSITES_ACCESS_STEPS } from "@foxleash/protocol";
 import { type Firefox, KEY, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
-import { type FixtureServer, startFixtureServer, TITLES } from "./fixture-server.ts";
+import {
+  type FixtureServer,
+  FOREIGN_SECRET,
+  startFixtureServer,
+  TITLES,
+} from "./fixture-server.ts";
 import {
   createHarness,
   EXTENSION_DIST,
@@ -13,8 +20,14 @@ import {
   tabsOf,
 } from "./harness.ts";
 
+const REMOVE_ACCESS = 'browser.permissions.remove({ origins: ["<all_urls>"] })';
+/** An address on the approved site that redirects to the other site's file. */
+const TO_EXPORT = "/foreign/go/export.csv";
+const EXPORT = "/foreign/export.csv";
+const LOAD_REFUSED = `Foxleash needs access to all websites to load a page: without it, Firefox hides other sites' answers from Foxleash, so it could not stop a file from a site this session may not act on. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it. Nothing was loaded.`;
+
 // One Firefox for this describe: the tests run in order and build on each other's tab.
-describe("page tools while Firefox withholds access to websites", () => {
+describe("loads and page tools while Firefox withholds access to websites", () => {
   let harness: Harness;
   let fixtures: FixtureServer;
   let firefox: Firefox;
@@ -22,7 +35,7 @@ describe("page tools while Firefox withholds access to websites", () => {
   let tabId = -1;
   let settings = "";
 
-  /** The page-tool refusal for the tab opened by the first test. */
+  /** The page-tool refusal for the tab opened on the approved site. */
   function withheld(): string {
     return `Firefox has not given Foxleash access to this site, so Foxleash cannot read or act in the page in tab ${tabId}. Ask the user to open about:addons in Firefox, click Foxleash, then the Permissions tab, and under "Optional" turn on "Access your data for all websites". Firefox lists this access as optional, but Foxleash needs it.`;
   }
@@ -32,12 +45,15 @@ describe("page tools while Firefox withholds access to websites", () => {
       harness = createHarness();
       harness.install();
       fixtures = await startFixtureServer();
+      const other = `http://localhost:${fixtures.port}`;
       firefox = await harness.startFirefox(EXTENSION_DIST, { withholdSiteAccess: true });
       await harness.seedSettings({
         [`site:${fixtures.site}`]: { grantedAt: new Date().toISOString() },
       });
       session = await harness.connect();
       await harness.waitUntilReady(session);
+      // The user signs in to the other site in a tab of their own, so its export answers.
+      await firefox.closeContext(await firefox.openContext(`${other}/foreign/login`));
     },
     { timeout: 120_000 },
   );
@@ -53,42 +69,24 @@ describe("page tools while Firefox withholds access to websites", () => {
     { timeout: 60_000 },
   );
 
-  test("tab_open and tabs_list work", async () => {
-    const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
-    assert.equal(tab.title, TITLES.a);
-    tabId = tab.id;
-    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
-    assert.ok(
-      tabs.some((listed) => listed.id === tabId),
-      JSON.stringify(tabs),
+  test("tab_open of an address that leads to another site's file is refused at once, with nothing requested", async () => {
+    await assertLoadRefused(() =>
+      harness.call(session, "tab_open", { url: fixtures.url(TO_EXPORT) }),
     );
   });
 
-  for (const tool of ["get_page_text", "read_page", "screenshot"]) {
-    test(`${tool} says Firefox withholds the site's access, naming neither the site nor the page`, async () => {
-      const result = await harness.call(session, tool, { tabId });
-      assert.equal(result.isError, true, result.text);
-      assert.ok(result.text.includes(withheld()), result.text);
-      assert.ok(!result.text.includes(fixtures.site), result.text);
-      assert.ok(!result.text.includes(fixtures.url("/a")), result.text);
-      assert.deepEqual(result.images, [], result.text);
-    });
-  }
-
-  test("wait_for stops at once with the same refusal", async () => {
-    const started = performance.now();
-    const result = await harness.call(session, "wait_for", {
-      tabId,
-      text: "Never shown on this page",
-      timeout: 10,
-    });
-    const elapsed = performance.now() - started;
-    assert.equal(result.isError, true, result.text);
-    assert.ok(result.text.includes(withheld()), result.text);
-    assert.ok(elapsed < 5_000, `wait_for took ${Math.round(elapsed)} ms`);
+  test("tab_open without a URL opens a tab, and navigate of it to that address is refused the same way", async () => {
+    const blank = tabOf(await harness.ok(session, "tab_open"));
+    const tabs = tabsOf(await harness.ok(session, "tabs_list"));
+    assert.ok(
+      tabs.some((listed) => listed.id === blank.id),
+      JSON.stringify(tabs),
+    );
+    await assertLoadRefused(() =>
+      harness.call(session, "navigate", { tabId: blank.id, url: fixtures.url(TO_EXPORT) }),
+    );
   });
 
-  // The tests below end the withheld state, so they come last.
   test("the settings page warns while Firefox withholds access to all websites", async () => {
     settings = await harness.settingsPage();
     await waitFor('document.getElementById("website-access").hidden', false, "the warning shown");
@@ -120,10 +118,88 @@ describe("page tools while Firefox withholds access to websites", () => {
     );
   });
 
+  test("tab_open loads the approved site with the access, and the warning shows again once it is removed", async () => {
+    const tab = tabOf(await harness.ok(session, "tab_open", { url: fixtures.url("/a") }));
+    assert.equal(tab.title, TITLES.a);
+    tabId = tab.id;
+    await firefox.evaluate(settings, REMOVE_ACCESS);
+    await waitFor('document.getElementById("website-access").hidden', false, "the warning shown");
+  });
+
+  for (const tool of ["get_page_text", "read_page", "screenshot"]) {
+    test(`${tool} says Firefox withholds the site's access, naming neither the site nor the page`, async () => {
+      const result = await harness.call(session, tool, { tabId });
+      assert.equal(result.isError, true, result.text);
+      assert.ok(result.text.includes(withheld()), result.text);
+      assert.ok(!result.text.includes(fixtures.site), result.text);
+      assert.ok(!result.text.includes(fixtures.url("/a")), result.text);
+      assert.deepEqual(result.images, [], result.text);
+    });
+  }
+
+  test("wait_for stops at once with the same refusal", async () => {
+    const started = performance.now();
+    const result = await harness.call(session, "wait_for", {
+      tabId,
+      text: "Never shown on this page",
+      timeout: 10,
+    });
+    const elapsed = performance.now() - started;
+    assert.equal(result.isError, true, result.text);
+    assert.ok(result.text.includes(withheld()), result.text);
+    assert.ok(elapsed < 5_000, `wait_for took ${Math.round(elapsed)} ms`);
+  });
+
+  test("read_network says it cannot see the requests, naming neither the site nor the page", async () => {
+    const result = await harness.call(session, "read_network", { tabId });
+    assert.equal(result.isError, true, result.text);
+    assert.ok(
+      result.text.includes(
+        `Foxleash needs access to all websites to see the requests of tab ${tabId}: without it, Firefox hides requests from Foxleash. Ask the user to ${ALL_WEBSITES_ACCESS_STEPS}. Firefox lists this access as optional, but Foxleash needs it.`,
+      ),
+      result.text,
+    );
+    assert.ok(!result.text.includes(fixtures.site), result.text);
+    assert.ok(!result.text.includes(fixtures.url("/a")), result.text);
+  });
+
+  // The tests below end the withheld state, so they come last.
+  test("the warning's button gives the access again and hides the warning", async () => {
+    assert.equal(
+      await firefox.evaluate(settings, 'document.getElementById("website-access").hidden'),
+      false,
+    );
+    await firefox.click(settings, "#website-access-give");
+    await waitFor('document.getElementById("website-access").hidden', true, "the warning hidden");
+  });
+
   test("get_page_text reads the page once the access is given", async () => {
     const result = await harness.ok(session, "get_page_text", { tabId });
     assert.ok(JSON.stringify(result).includes(TITLES.a), JSON.stringify(result));
   });
+
+  /**
+   * The call fails well under the 30 s a load waits, with the load refusal, and neither the address
+   * nor the file it redirects to was requested, so no file holding the other site's secret was saved.
+   */
+  async function assertLoadRefused(load: () => Promise<ToolResult>): Promise<void> {
+    const hits = [fixtures.hits(TO_EXPORT), fixtures.hits(EXPORT)];
+    const started = performance.now();
+    const result = await load();
+    const elapsed = performance.now() - started;
+    assert.equal(result.isError, true, result.text);
+    assert.ok(result.text.includes(LOAD_REFUSED), result.text);
+    assert.ok(elapsed < 5_000, `the refusal took ${Math.round(elapsed)} ms`);
+    assert.deepEqual([fixtures.hits(TO_EXPORT), fixtures.hits(EXPORT)], hits);
+    const secrets = readdirSync(harness.downloads).filter((name) => {
+      try {
+        return readFileSync(join(harness.downloads, name), "utf8").includes(FOREIGN_SECRET);
+      } catch {
+        return false;
+      }
+    });
+    assert.deepEqual(secrets, []);
+  }
 
   async function waitFor(expression: string, expected: unknown, what: string): Promise<void> {
     await pollUntil(
@@ -141,7 +217,6 @@ describe("page tools while Firefox withholds access to websites", () => {
 // One Firefox for this describe, started with the access withheld: the tests run in order and
 // build on each other's pages.
 describe("the approval pages while Firefox withholds access to all websites", () => {
-  const REMOVE_ACCESS = 'browser.permissions.remove({ origins: ["<all_urls>"] })';
   const WARNING_HIDDEN = 'document.getElementById("website-access").hidden';
   // Records whether the warning was hidden when the first answer button next stops answering.
   const WATCH_UNARM = `(() => {

@@ -79,7 +79,7 @@ npx foxleash doctor
 ```
 
 It lists the Foxleash host of every running Firefox and whether the extension has access to
-all websites. Firefox lists that access as optional, but Foxleash needs it to read and act in
+all websites. Firefox lists that access as optional, but Foxleash needs it to open, read and act in
 pages: it is the switch "Access your data for all websites" on Foxleash's Permissions tab in
 about:addons.
 

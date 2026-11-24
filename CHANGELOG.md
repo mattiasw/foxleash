@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `read_network` now hides, as a best effort, credential-like values in request addresses,
   redirect targets and address headers (such as a session token a web app puts in `?authtoken=`,
   an `access_token` in a redirect, or a JWT), showing the parameter name with `[redacted]`.
+- While Firefox's optional "Access your data for all websites" is off for Foxleash, the agent can
+  no longer open or load pages in its tabs or click, drag, type, press keys, fill forms or upload
+  files in them, and `read_network` says it cannot see the requests instead of listing none. Firefox then hides other sites' answers from Foxleash, so
+  a page could get a file from a site you have not approved saved into your download folder.
 
 ## [0.6.0] - 2026-11-21
 

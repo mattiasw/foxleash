@@ -411,3 +411,25 @@ on:
    about 10 ms after Firefox started it and with no message, for as long as that tab stayed open.
    The usual "Export CSV" button of a site builds such a file.
 2. In the left-over tab itself, a file of B loaded by address was stopped.
+
+## Loads while Firefox withholds access to all websites (2026-11-24)
+
+Measured in Firefox 160.0.1 (the pinned build), headless, with the guard as it was before its
+2026-11-24 amendment, which refuses such loads. The pref
+`extensions.originControls.grantByDefault = false`, set through the end-to-end option
+`withholdSiteAccess`, kept Firefox from giving Foxleash access to all websites. A on `127.0.0.1`
+was approved; the user was signed in to B (`localhost:<port>`, `/foreign/login`) in a tab of
+their own. B's `/foreign/export.csv` answers its secret only to a signed-in user, and A's
+`/foreign/go/export.csv` redirects there. How: a probe test in a `withholdSiteAccess` launch.
+
+1. `navigate` of a tab on A to `/foreign/go/export.csv` failed after 30 s with "Tab 5 did not load
+   a page from that URL within 30 seconds." B's export was requested once, and Firefox saved
+   `export.csv` holding the secret.
+2. `tab_open` of the same address failed the same way (tab 6), and Firefox saved `export(1).csv`.
+3. `read_network` on a tab of A, after a reload, answered
+   `{"recording": true, "requests": [], "truncated": false}`, not an error.
+
+A reading of Firefox's source, not a measurement: `modules/WebRequest.sys.mjs` passes a request
+to an add-on's listeners only for an origin the add-on was granted
+(`if (policy && !policy.allowedOrigins.matches(uri))`), which is consistent with the results.
+ADR 0101's M7 found the same for redirect hops.

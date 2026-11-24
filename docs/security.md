@@ -181,7 +181,9 @@ Its limits:
   tab, while it watches the tab, until you close it: each such load waits for Foxleash to read its
   settings, and your own load of any blocked site there stops the same way.
 - Without Foxleash's access to all websites in Firefox's add-on settings, Firefox shows Foxleash
-  no request to a site outside the ones it may reach, so no such redirect step is cancelled.
+  no request to a site outside the ones it may reach, so Foxleash refuses the loads the agent
+  starts ([Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)), and
+  a redirect step in a load Foxleash did not start is not cancelled.
 - Firefox hides requests to a few sites, such as addons.mozilla.org, from add-ons, so a redirect
   step to one of them is not cancelled.
 - A redirect step to a site that is only not approved still loads; the agent then sees only that
@@ -726,6 +728,16 @@ saved or shown, and the tab keeps the page it had (ADR 0081). A window that a pa
 tabs opens, or that a page in such a window opens, is covered like those tabs until it closes,
 though the agent cannot reach it.
 
+Firefox shows Foxleash the loads of a site only while it gives Foxleash access to that site. So
+while Foxleash's access to all websites is off in Firefox's add-on settings, Foxleash refuses
+every load it would start in the agent's tabs: `tab_open` with a URL, `navigate`, the load after
+you answer the question whether to allow a site, and `tab_select` of a tab Firefox unloaded,
+whose page selecting it would load. It also refuses the acting tools (`click`, `drag`, `type`,
+`press_key`, `fill_form`, `upload_file`), also on a site Firefox gave access to, since an act can
+load another site's page or file, and `read_network`, which would see no request to another
+site. Each refusal tells the agent how you turn the access on. The question whether to allow a
+site still opens, and `tab_open` without a URL still works.
+
 What the agent learns:
 
 - The result of an action (`click`, `type`, `press_key` and the others) lists the site in
@@ -825,6 +837,14 @@ Exceptions and limits:
   there as well. Possibly not the first address it loads: Foxleash may hear of such a window only
   after that load began.
 - Other tabs outside every agent's tab group are not covered: files load in them as before.
+- While Foxleash's access to all websites is off, nothing is stopped on a site outside the ones
+  Firefox gives it access to: what an open page loads by itself (its scripts, a timed refresh, a
+  frame a scroll brings into view), your own loads, Firefox's restore of a tab it unloaded (after
+  a restart, when you select it, or when Firefox selects it after another tab closes, also after
+  the agent's `tab_close`), and a load already under way, or about to start, when you turned the
+  access off. `hover` and `scroll` stay allowed: what they can set off, the page could set off by
+  itself, while a click or Enter can follow a link or send a form with no script at all. Requests
+  made in that time are missing from `read_network`'s log, also once the access is back.
 - A page or frame from such a site that is not HTML, such as a PDF or an image opened as a page,
   is no longer shown in the group's tabs. Images and other parts that a page embeds are not
   affected, and neither is a PDF or another document in an `<object>` or `<embed>` element.
