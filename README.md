@@ -141,6 +141,9 @@ At the start of a task, the agent can also ask you on one page to allow the site
 needs, for that session only. After three such pages or recipe pages that you discarded,
 refused or closed, Foxleash opens no more in that session.
 
+While Firefox withholds Foxleash's access to all websites, these pages, and the one that asks you
+to allow a recipe's sites, say so above their answers, with a button that asks Firefox for it.
+
 ### The agent's tabs
 
 Each agent session's tabs open in an orange tab group titled Foxleash, and Foxleash acts only on

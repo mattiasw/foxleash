@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - While Firefox's optional "Access your data for all websites" is off for Foxleash, the settings
   page says so, with a button that asks Firefox to turn it on, and the steps to turn it on in the
-  add-ons manager.
+  add-ons manager. So do the question whether to allow a site and the page where the agent asks
+  you to allow the sites of a task or a recipe, above their answer buttons.
 
 ### Changed
 

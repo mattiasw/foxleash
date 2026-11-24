@@ -149,6 +149,18 @@ export interface Harness {
     size: { width: number; height: number },
     buttons?: number,
   ): Promise<void>;
+  /**
+   * Requires the page's answer buttons, three unless given, to be armed in a focused, visible
+   * page; then watches the `hidden` attribute of `selector` in the page, runs `change`, and
+   * requires every button to be unarmed, with the page still focused and visible, when the
+   * attribute first changes.
+   */
+  hiddenChangeUnarms(
+    context: string,
+    selector: string,
+    change: () => Promise<unknown>,
+    buttons?: number,
+  ): Promise<void>;
   waitForHost(): Promise<number>;
   waitUntilReady(session: Session, accept?: (result: ToolResult) => boolean): Promise<ToolResult>;
   /**
@@ -575,6 +587,55 @@ export function createHarness(): Harness {
         `${buttons} buttons, ${buttons} unarmed; ${SHOWN}`,
         "right after the resize",
       );
+    },
+
+    async hiddenChangeUnarms(context, selector, change, buttons = 3) {
+      assertOpen();
+      const firefox = currentFirefox();
+      await expectArming(
+        firefox,
+        context,
+        `${buttons} buttons, 0 unarmed; ${SHOWN}`,
+        "before the change",
+      );
+      const target = JSON.stringify(selector);
+      // The observer runs as a microtask after the page sets the attribute, so it reads the state
+      // everything before it in the same task left.
+      await firefox.evaluate(
+        context,
+        `(() => {
+          const watched = document.querySelector(${target});
+          if (watched === null) throw new Error("no element matches " + ${target});
+          delete document.documentElement.dataset.armingAtHiddenChange;
+          new MutationObserver((records, observer) => {
+            observer.disconnect();
+            document.documentElement.dataset.armingAtHiddenChange = ${ARMED_STATE};
+          }).observe(watched, { attributes: true, attributeFilter: ["hidden"] });
+        })()`,
+      );
+      await change();
+      let state: string;
+      try {
+        state = await pollUntil(
+          async () => {
+            const recorded = await firefox.evaluate(
+              context,
+              "document.documentElement.dataset.armingAtHiddenChange ?? null",
+            );
+            return typeof recorded === "string" ? recorded : undefined;
+          },
+          PAGE_TIMEOUT_MS,
+          `the hidden attribute of ${selector} to change`,
+        );
+      } catch (error: unknown) {
+        throw new Error(`${messageOf(error)}${diagnostics()}`, { cause: error });
+      }
+      const expected = `${buttons} buttons, ${buttons} unarmed; ${SHOWN}`;
+      if (state !== expected) {
+        throw new Error(
+          `when the hidden attribute of ${selector} changed, the page had ${state}, not ${expected}${diagnostics()}`,
+        );
+      }
     },
 
     waitForHost,

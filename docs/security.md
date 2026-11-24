@@ -296,7 +296,10 @@ the page or close it. Such a tab stays open until you answer its dialog or close
 question still cannot be answered by mistake: its buttons stop answering as soon as its tab is
 hidden or Firefox's window loses focus, and answer again only after its tab has been shown, with
 the window focused, for a full second. They also stop answering when the window changes size,
-whoever resized it, and answer again a full second after.
+whoever resized it, or when the warning about Firefox's access to all websites shows or hides
+above them, and answer again a full second after. While Firefox's own question for that access,
+opened by the warning's button, is open, they do not answer, and they answer again a full second
+after it closes.
 
 ## Stopping an agent session
 

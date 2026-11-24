@@ -37,6 +37,15 @@ question is open. Why: a resize moved the buttons under an armed pointer.
 Amended 2026-11-19: the call that showed a question ends with `approval_timeout` when its window is
 not in front 2 s later. Why: on a desktop that refused the focus, the call waited 30 s unseen.
 
+Amended 2026-11-24: the site prompt and the run page show the warning about Firefox's access to all
+websites above the answers. Its button is no answer and is not armed; whatever the warning changes
+on the page restarts the arming second, as a resize does; while the request its button makes is
+out, the page is not asking, and the second restarts when it settles; and a Tab path may start at
+that button, also when focus came into the page from Firefox's toolbar, as it can from the propose
+page's fields. Why: the warning and its status line move the answers when they change, so a click
+aimed at one button could land on another; and Firefox 153 opens its prompt for the access without
+taking focus (156 takes it), so keys meant for the prompt could reach the answers.
+
 ## Context
 
 Foxleash asks the user in a page of its own, in a tab of the session's group: the site prompt
@@ -76,11 +85,12 @@ work against each.
 Focusing grants nothing: only input on the armed page answers. No page focuses an answer button: a
 page focuses its heading when the question first shows, its resting element after a refused press
 and, on the propose page, after the stored recipe changed, its status element after an answer or
-when the request ended, and a propose field after the user's own save. Focus pulls are bounded per
-session: one question at a time, no close or load over its tab, and `PROMPT_BUDGET` (three refused
-or closed site prompts) and `RECIPE_PROMPT_BUDGET` (three discarded, refused or closed recipe
-pages) end the asking; a new MCP session starts new budgets. No call focuses the user's window; no
-permission is added.
+when the request ended, on the site prompt and the run page the warning's status line when the
+warning about Firefox's access to all websites hides with focus in it, and a propose field after the
+user's own save. Focus pulls are bounded per session: one question at a time, no close or load over
+its tab, and `PROMPT_BUDGET` (three refused or closed site prompts) and `RECIPE_PROMPT_BUDGET`
+(three discarded, refused or closed recipe pages) end the asking; a new MCP session starts new
+budgets. No call focuses the user's window; no permission is added.
 
 ### The arming and the keys
 
@@ -105,7 +115,10 @@ In `armButtons` (`page-ui.ts`), used by all three pages, with `createArming` and
 - **Restarts.** Every keydown while unarmed; while armed every keydown but a modifier, Tab while no
   counted Space is down, and a counted Enter or Space. Every keyup but that of a Tab, Space or
   non-Alt modifier seen going down since the last blur or hold. Any `resize`, through a listener
-  `watch()` adds that calls `rearm`, which also voids a pointer press under way.
+  `watch()` adds that calls `rearm`, which also voids a pointer press under way. On the site prompt
+  and the run page, `rearm` also runs before each change the warning about Firefox's access to all
+  websites makes (`beforeChange` of `watchWebsiteAccess`), and when the request its button makes
+  starts and when it settles (`onRequest`); in between the page is not asking.
 - **Holds.** Input that can open a Firefox menu disarms with no timer until the input that ends the
   hold: a lone Alt (an Alt keyup whose keydown the page saw, with no other keydown, pointer press or
   blur between); an unseen Alt keyup while the page has seen no keydown or pointer press since the
@@ -125,7 +138,8 @@ it saw go down since its last blur or hold, and no re-arm; (2) since then it saw
 and modifier keydowns, and focus moved, armed, from before the buttons onto the first and on from
 neighbour to neighbour to the button; (3) the Enter went down, or the Space down and up, on that
 button with no disarm between. An answer ends the path. From the resting element the k-th button is
-k Tabs away (Save from the propose page's `#heading` is 6); Shift+Tab alone answers nothing.
+k Tabs away, k + 1 while the warning about Firefox's access shows (Save from the propose page's
+`#heading` is 6); Shift+Tab alone answers nothing.
 
 ### The selected tab
 

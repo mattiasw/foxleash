@@ -22,6 +22,12 @@ export interface WebsiteAccessDeps {
    * warning is about to hide, so the page can move focus out of it first.
    */
   beforeChange?(hiding: boolean): void;
+  /**
+   * Runs with true in the click's task once Firefox has been asked for the access, and with false
+   * when its answer arrives, before anything that answer changes. Firefox 153 opens its prompt
+   * without taking focus, so keys meant for the prompt still reach the page meanwhile.
+   */
+  onRequest?(pending: boolean): void;
 }
 
 type Shown = "withheld" | "granted";
@@ -42,6 +48,7 @@ export function watchWebsiteAccess({
   browser,
   announce,
   beforeChange,
+  onRequest,
 }: WebsiteAccessDeps): void {
   // Checks sent, and the latest one whose answer was applied.
   let sent = 0;
@@ -88,14 +95,17 @@ export function watchWebsiteAccess({
       return;
     }
     requesting = true;
+    onRequest?.(true);
     request.then(
       (granted) => {
         requesting = false;
+        onRequest?.(false);
         if (granted) check();
         else outcome(SENTENCES.refused);
       },
       (error: unknown) => {
         requesting = false;
+        onRequest?.(false);
         failed(error);
       },
     );

@@ -29,8 +29,9 @@ to all websites as optional, and you can turn it off. Without it, each of these 
 `read_network` tells the agent that Firefox has not given Foxleash access to the site and asks it
 to have you turn it on: open about:addons in Firefox, click Foxleash, then the Permissions tab,
 and under "Optional" turn on "Access your data for all websites". While this access is off,
-Foxleash's settings page says so, with a button that asks Firefox for it. An update of the add-on
-never turns this access back on.
+Foxleash's settings page says so, and so do the question whether to allow a site and the page
+where the agent asks for sites or a recipe's sites, above their answers, each with a button that
+asks Firefox for it. An update of the add-on never turns this access back on.
 
 ## Sessions and tabs
 
@@ -111,7 +112,9 @@ to save or run a recipe, or to allow the sites a task needs), the agent cannot s
 tab or resize the window, and a tab it opens with `tab_open` meanwhile is not selected, though
 Firefox may still select a tab a page opens, also after the agent's click, or a tab whose page
 asks you to sign in with Firefox's sign-in dialog (see `tab_open` and `navigate` below). After
-the window changes size, the question's buttons wait a full second again before they answer.
+the window changes size, or the warning about Firefox's access to all websites shows or hides
+above them, the question's buttons wait a full second again before they answer. While Firefox's
+own question for that access, opened by the warning's button, is open, they do not answer.
 
 When a tab's page asks you to confirm leaving it, because the agent closes the tab or loads
 another page in it (a new address, a reload, going back or forward), Firefox selects that tab to

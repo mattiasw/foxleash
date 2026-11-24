@@ -1,8 +1,12 @@
 import { siteQuestionTitle } from "@foxleash/protocol";
-import type { Port, Timers } from "./browser-api.ts";
+import type { BrowserApi, Port, Timers } from "./browser-api.ts";
 import { announce, armButtons, element, fieldsOf, REFOCUS } from "./page-ui.ts";
+import { watchWebsiteAccess } from "./website-access.ts";
 
-declare const browser: { runtime: { connect(connectInfo: { name: string }): Port } };
+declare const browser: {
+  runtime: { connect(connectInfo: { name: string }): Port };
+  permissions: Pick<BrowserApi["permissions"], "contains" | "request" | "onAdded" | "onRemoved">;
+};
 
 type Answer = "once" | "always" | "no";
 type State = "waiting" | "prompt" | "saving" | "done" | "ended";
@@ -25,16 +29,41 @@ const status = element("status", PAGE);
 const after = element("after", PAGE);
 const back = element("back", PAGE);
 const close = element("close", PAGE);
+const websiteAccess = element("website-access", PAGE);
+const websiteAccessGive = element("website-access-give", PAGE);
+const websiteAccessStatus = element("website-access-status", PAGE);
 const buttons = [...answers.querySelectorAll<HTMLButtonElement>("button[data-answer]")];
 let state: State = "waiting";
 let port: Port | undefined;
+// True while Firefox's prompt for the access is open: keys meant for it must not answer.
+let accessRequested = false;
 const { renderButtons, watch, rearm } = armButtons({
   buttons,
   timers,
-  asking: () => state === "prompt",
+  asking: () => state === "prompt" && !accessRequested,
   onAnswer,
   onUnarmed: (reason) => announce(status, reason === "refocus" ? REFOCUS : UNARMED),
   rest: () => heading,
+});
+watchWebsiteAccess({
+  elements: {
+    warning: websiteAccess,
+    button: websiteAccessGive,
+    steps: element("website-access-steps", PAGE),
+  },
+  browser,
+  announce: (text) => announce(websiteAccessStatus, text),
+  // The warning sits above the answers: whatever it changes moves them (ADR 0057).
+  beforeChange: (hiding) => {
+    rearm();
+    if (hiding && websiteAccess.contains(document.activeElement)) websiteAccessStatus.focus();
+  },
+  onRequest: (pending) => {
+    accessRequested = pending;
+    // A Tab path built while the prompt was open must not carry over.
+    rearm();
+    renderButtons();
+  },
 });
 
 back.addEventListener("click", () => history.back());

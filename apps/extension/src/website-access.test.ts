@@ -247,6 +247,83 @@ describe("watchWebsiteAccess", { timeout: 10000 }, () => {
     await flush();
   });
 
+  it("tells the page a request is out until its answer, before the grant changes anything", async (t) => {
+    const { click, events, fake } = setup(t, { allUrls: false, onRequest: true });
+    await flush();
+    events.length = 0;
+    let answer: (granted: boolean) => void = () => {};
+    fake.browser.permissions.request = () =>
+      new Promise<boolean>((resolve) => {
+        answer = resolve;
+      });
+    click();
+    assert.deepEqual(events, [["request", true]]);
+    await flush();
+    assert.deepEqual(events, [["request", true]]);
+    fake.allUrls = true;
+    answer(true);
+    await flush();
+    assert.deepEqual(events, [
+      ["request", true],
+      ["request", false],
+      ["beforeChange", true],
+      ["hidden", true],
+      ["announce", SENTENCES.granted],
+    ]);
+  });
+
+  it("tells the page a refused request is no longer out before announcing the refusal", async (t) => {
+    const { click, events, fake } = setup(t, { allUrls: false, onRequest: true });
+    await flush();
+    events.length = 0;
+    fake.requestAnswer = false;
+    click();
+    await flush();
+    assert.deepEqual(events, [
+      ["request", true],
+      ["request", false],
+      ["beforeChange", false],
+      ["announce", SENTENCES.refused],
+    ]);
+  });
+
+  it("tells the page a failed request is no longer out before saying Firefox could not ask", async (t) => {
+    const { click, events, fake } = setup(t, { allUrls: false, onRequest: true });
+    await flush();
+    events.length = 0;
+    fake.requestAnswer = new Error("Not now.");
+    click();
+    await flush();
+    assert.deepEqual(events, [
+      ["request", true],
+      ["request", false],
+      ["beforeChange", false],
+      ["announce", SENTENCES.failed],
+    ]);
+  });
+
+  it("tells the page of no request when asking throws, nor of a second click while one is out", async (t) => {
+    const { click, events, fake } = setup(t, { allUrls: false, onRequest: true });
+    await flush();
+    events.length = 0;
+    const request = fake.browser.permissions.request;
+    fake.browser.permissions.request = () => {
+      throw new Error("Type error for parameter permissions.");
+    };
+    click();
+    assert.deepEqual(events, [
+      ["beforeChange", false],
+      ["announce", SENTENCES.failed],
+    ]);
+    events.length = 0;
+    fake.browser.permissions.request = request;
+    fake.requestAnswer = false;
+    click();
+    click();
+    assert.deepEqual(events, [["request", true]]);
+    await flush();
+  });
+
   it("works without beforeChange", async (t) => {
     const { click, elements, events, fake } = setup(t, { allUrls: false, beforeChange: false });
     await flush();
@@ -262,9 +339,16 @@ describe("watchWebsiteAccess", { timeout: 10000 }, () => {
   });
 });
 
-type Event = ["beforeChange", boolean] | ["hidden", boolean] | ["announce", string];
+type Event =
+  | ["beforeChange", boolean]
+  | ["hidden", boolean]
+  | ["announce", string]
+  | ["request", boolean];
 
-function setup(t: TestContext, options: { allUrls?: boolean; beforeChange?: boolean } = {}) {
+function setup(
+  t: TestContext,
+  options: { allUrls?: boolean; beforeChange?: boolean; onRequest?: boolean } = {},
+) {
   const warn = t.mock.method(console, "warn", () => {});
   const fake = createFakeBrowser();
   fake.allUrls = options.allUrls ?? true;
@@ -284,6 +368,9 @@ function setup(t: TestContext, options: { allUrls?: boolean; beforeChange?: bool
     ...(options.beforeChange === false
       ? {}
       : { beforeChange: (hiding: boolean) => events.push(["beforeChange", hiding]) }),
+    ...(options.onRequest === true
+      ? { onRequest: (pending: boolean) => events.push(["request", pending]) }
+      : {}),
   });
 
   function click(): void {
