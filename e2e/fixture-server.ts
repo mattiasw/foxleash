@@ -47,6 +47,7 @@ export const TITLES = {
   shotForeignPageFrame: "Fixture shot foreign page frame",
   upload: "Fixture upload",
   uploadHeld: "Fixture upload held",
+  uploadPageWide: "Fixture upload page wide",
   act: "Fixture act",
   actLinks: "Fixture act links",
   actNewTab: "Fixture act new tab",
@@ -811,6 +812,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, UPLOAD_PAGE);
     } else if (path === "/upload-held") {
       sendHtml(response, UPLOAD_HELD_PAGE);
+    } else if (path === "/upload-page-wide") {
+      sendHtml(response, UPLOAD_PAGE_WIDE_PAGE);
     } else if (path === "/act") {
       sendHtml(response, ACT_PAGE);
     } else if (path === "/act-links") {
@@ -3615,6 +3618,64 @@ Object.defineProperty(window, "__foxleashFilePicker", { value: "the page's own" 
 window.clicks = 0;
 document.getElementById("held").addEventListener("click", () => {
   window.clicks += 1;
+});
+</script>
+</body></html>
+`;
+
+// Cancels dragover everywhere, and the drop where window.cancelAt says: in the window's bubble
+// phase ("window", the default), in the document's capture phase ("document"), or in the window's
+// capture phase, stopping it there ("window-capture"), as pages do so Firefox does not open files
+// dropped anywhere. Plain takes nothing; Own drop zone cancels its own drop; Stopping drop zone
+// also stops it. The page keeps the files each zone got in window.received and the events it saw
+// in window.events, with the drops that reached the window's bubble listener.
+const UPLOAD_PAGE_WIDE_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.uploadPageWide}</title></head>
+<body>
+<main>
+<section id="plain" aria-label="Plain"><p>x</p></section>
+<section id="zone" aria-label="Own drop zone"><p>Drop files here</p></section>
+<section id="stopping" aria-label="Stopping drop zone"><p>Drop files here too</p></section>
+</main>
+<script>
+window.cancelAt = "window";
+window.received = { zone: [], stopping: [] };
+window.events = { plain: [], zone: [], stopping: [], windowDrops: 0 };
+window.addEventListener("dragover", (event) => event.preventDefault());
+window.addEventListener("drop", (event) => {
+  window.events.windowDrops += 1;
+  if (window.cancelAt === "window") event.preventDefault();
+});
+document.addEventListener(
+  "drop",
+  (event) => {
+    if (window.cancelAt === "document") event.preventDefault();
+  },
+  true,
+);
+window.addEventListener(
+  "drop",
+  (event) => {
+    if (window.cancelAt === "window-capture") {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+  },
+  true,
+);
+document.getElementById("plain").addEventListener("drop", () => {
+  window.events.plain.push("drop");
+});
+document.getElementById("zone").addEventListener("drop", (event) => {
+  event.preventDefault();
+  window.events.zone.push("drop");
+  window.received.zone = Array.from(event.dataTransfer.files);
+});
+document.getElementById("stopping").addEventListener("drop", (event) => {
+  event.preventDefault();
+  event.stopPropagation();
+  window.events.stopping.push("drop");
+  window.received.stopping = Array.from(event.dataTransfer.files);
 });
 </script>
 </body></html>

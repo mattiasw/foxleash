@@ -1445,12 +1445,15 @@ export function createHandlers<Handle>({
         },
         (site) => installCatcher(tabId, site),
       );
-      // The reply comes from the page's content process: only its own target and picker are read.
+      // The reply comes from the page's content process: only its own target, picker and pageWide
+      // are read.
       const target = isRecord(reply) ? ownField(reply, "target") : undefined;
       const picker = isRecord(reply) ? ownField(reply, "picker") : undefined;
+      const pageWide = isRecord(reply) ? ownField(reply, "pageWide") : undefined;
       if (
         (target !== "input" && target !== "drop") ||
-        (picker !== undefined && (picker !== true || target !== "input"))
+        (picker !== undefined && (picker !== true || target !== "input")) ||
+        (pageWide !== undefined && (pageWide !== true || target !== "drop"))
       ) {
         throw new ToolError(
           "page_error",
@@ -1461,6 +1464,7 @@ export function createHandlers<Handle>({
       result = {
         target,
         ...(picker === true ? { picker: true } : {}),
+        ...(pageWide === true ? { pageWide: true } : {}),
         files: listed,
         after: await watch.after(reply),
       };

@@ -76,6 +76,16 @@ interface Received {
   };
 }
 
+interface PageWideReceived {
+  files: Record<"zone" | "stopping", PageFile[]>;
+  events: Record<"plain" | "zone" | "stopping", string[]> & { windowDrops: number };
+}
+
+const DROP_NOTE =
+  "The page decides what to do with dropped files; read the page to check that it took them.";
+const PAGE_WIDE_DROP_NOTE =
+  "Pages often take drops anywhere on the page only to keep Firefox from opening the files, so read the page to check that it took them. If it did not, do not drop them there again: give upload_file the ref of a file field, or of the button that opens the page's file picker.";
+
 // One Firefox for the file: the tests run in order on one page.
 describe("upload_file in real Firefox", () => {
   let harness: Harness;
@@ -518,6 +528,137 @@ describe("upload_file in real Firefox", () => {
     });
     assert.ok(text.includes("read the page before you repeat it"), text);
     assert.equal(text.includes("try again"), false, text);
+  });
+
+  // In a tab of its own, opened after the upload tab's tests: a tab in front slows the timers of
+  // the upload tab.
+  describe("a page that takes drops as a whole", () => {
+    let wideTab = -1;
+    let wideContext = "";
+    const wide = { plain: "", zone: "", stopping: "" };
+    const notes = () => JSON.stringify(join(allowed, "notes.txt"));
+    const flagged = (ref: string) =>
+      `Dropped 1 file on ${ref} in tab ${wideTab}, but Foxleash saw only a listener on the whole page take the drop:\n- ${notes()}, 5 bytes\n${PAGE_WIDE_DROP_NOTE}`;
+
+    before(async () => {
+      const url = fixtures.url("/upload-page-wide");
+      const tab = tabOf(await harness.ok(session, "tab_open", { url }));
+      assert.equal(tab.title, TITLES.uploadPageWide);
+      wideTab = tab.id;
+      const found = (await firefox.contexts()).find((each) => each.url === url);
+      assert.ok(found !== undefined, `no tab shows ${url}`);
+      wideContext = found.context;
+      const read = await harness.call(session, "read_page", { tabId: wideTab });
+      assert.equal(read.isError, false, read.text);
+      const tree = untrustedContent(read.text) ?? "";
+      for (const [key, name] of [
+        ["plain", "Plain"],
+        ["zone", "Own drop zone"],
+        ["stopping", "Stopping drop zone"],
+      ] as const) {
+        const ref = new RegExp(`^ *region "${name}" \\[${REF}\\]$`, "m").exec(tree)?.[1];
+        assert.ok(ref !== undefined, `no ref for region "${name}" in:\n${tree}`);
+        wide[key] = ref;
+      }
+    });
+
+    test("a plain region on a page that cancels drops as a whole says only the page took them", async () => {
+      const before = await wideReceived();
+      const result = await dropWide(wide.plain);
+      assert.equal(result.isError, false, result.text);
+      assert.equal(result.text, flagged(wide.plain));
+      const page = await wideReceived();
+      assert.deepEqual(page.events.plain, [...before.events.plain, "drop"]);
+      assert.equal(page.events.windowDrops, before.events.windowDrops + 1);
+    });
+
+    test("an own drop zone on a page that cancels drops as a whole gets the plain drop result", async () => {
+      const before = await wideReceived();
+      const result = await dropWide(wide.zone);
+      assert.equal(result.isError, false, result.text);
+      assert.equal(
+        result.text,
+        `Dropped 1 file on ${wide.zone} in tab ${wideTab}:\n- ${notes()}, 5 bytes\n${DROP_NOTE}`,
+      );
+      const page = await wideReceived();
+      assert.deepEqual(page.files.zone, [
+        { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+      ]);
+      assert.deepEqual(page.events.zone, [...before.events.zone, "drop"]);
+      assert.equal(page.events.windowDrops, before.events.windowDrops + 1);
+    });
+
+    test("a drop zone that stops the drop on a page that cancels drops as a whole gets the plain drop result", async () => {
+      const before = await wideReceived();
+      const result = await dropWide(wide.stopping);
+      assert.equal(result.isError, false, result.text);
+      assert.equal(
+        result.text,
+        `Dropped 1 file on ${wide.stopping} in tab ${wideTab}:\n- ${notes()}, 5 bytes\n${DROP_NOTE}`,
+      );
+      const page = await wideReceived();
+      assert.deepEqual(page.files.stopping, [
+        { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+      ]);
+      assert.deepEqual(page.events.stopping, [...before.events.stopping, "drop"]);
+      assert.equal(page.events.windowDrops, before.events.windowDrops);
+    });
+
+    test("a plain region whose document cancels drops as a whole in the capture phase is flagged", async () => {
+      await firefox.evaluate(wideContext, `window.cancelAt = "document"`);
+      try {
+        const before = await wideReceived();
+        const result = await dropWide(wide.plain);
+        assert.equal(result.isError, false, result.text);
+        assert.equal(result.text, flagged(wide.plain));
+        const page = await wideReceived();
+        assert.deepEqual(page.events.plain, [...before.events.plain, "drop"]);
+        assert.equal(page.events.windowDrops, before.events.windowDrops + 1);
+      } finally {
+        await firefox.evaluate(wideContext, `window.cancelAt = "window"`);
+      }
+    });
+
+    test("an own drop zone whose document cancels drops as a whole in the capture phase is flagged, and gets the files", async () => {
+      await firefox.evaluate(wideContext, `window.cancelAt = "document"`);
+      try {
+        await firefox.evaluate(wideContext, `void (window.received.zone = [])`);
+        const before = await wideReceived();
+        const result = await dropWide(wide.zone);
+        assert.equal(result.isError, false, result.text);
+        assert.equal(result.text, flagged(wide.zone));
+        const page = await wideReceived();
+        assert.deepEqual(page.files.zone, [
+          { name: "notes.txt", size: 5, type: "text/plain", sha256: sha256("notes") },
+        ]);
+        assert.deepEqual(page.events.zone, [...before.events.zone, "drop"]);
+      } finally {
+        await firefox.evaluate(wideContext, `window.cancelAt = "window"`);
+      }
+    });
+
+    test("a plain region whose window cancels and stops drops as a whole in the capture phase is flagged", async () => {
+      await firefox.evaluate(wideContext, `window.cancelAt = "window-capture"`);
+      try {
+        const before = await wideReceived();
+        const result = await dropWide(wide.plain);
+        assert.equal(result.isError, false, result.text);
+        assert.equal(result.text, flagged(wide.plain));
+        const page = await wideReceived();
+        assert.deepEqual(page.events.plain, before.events.plain);
+        assert.equal(page.events.windowDrops, before.events.windowDrops);
+      } finally {
+        await firefox.evaluate(wideContext, `window.cancelAt = "window"`);
+      }
+    });
+
+    function dropWide(ref: string) {
+      return upload(ref, [join(allowed, "notes.txt")], { tabId: wideTab });
+    }
+
+    async function wideReceived(): Promise<PageWideReceived> {
+      return JSON.parse(String(await firefox.evaluate(wideContext, RECEIVED)));
+    }
   });
 
   // In a tab of its own, opened last: a tab in front slows the timers of the upload tab.

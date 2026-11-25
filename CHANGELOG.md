@@ -35,6 +35,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `upload_file` now drops files where a page shows a drop area once a drag starts, as Gmail's
   compose window does, so they reach it, and a drop the page does not take is reported as refused
   instead of as dropped.
+- `upload_file` no longer reports a drop as plainly taken when only the page as a whole cancelled
+  it, as many pages do so Firefox does not open dropped files: the result says so, and to check the
+  page.
 - When Firefox's optional "Access your data for all websites" is off for Foxleash, the tools that
   read or act in a page, all but `read_network`, now say that Firefox withholds the site's access
   and how to turn it on, instead of saying Foxleash could not get into the page, and `wait_for`

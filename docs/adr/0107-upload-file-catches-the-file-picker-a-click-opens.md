@@ -2,66 +2,77 @@
 
 **Status:** Accepted, 2026-11-24.
 
+Amended 2026-11-25: a drop only the window or the document cancelled is flagged `pageWide`, not
+refused; many pages cancel every drop only so Firefox does not open files.
+
 ## Context
 
-Firefox gives extensions no real user gesture. A page opens its file picker from its own click
-handler, with `input.click()` or `input.showPicker()`, and Firefox opens it only within the
-transient user activation of a real click, 5 seconds (`dom.user_activation.transient.timeout`).
-Upload buttons such as Gmail's Attach files make a file field they never add to the document and
-call its `click()`: `read_page` shows no field, and the isolated content script
-([0009](0009-content-scripts-injected-per-tab.md)) can neither see that field nor wrap the page's
-`click()`. Gmail's compose window also takes dropped files only on a drop area it shows once a
-drag enters, which a drop sent to the element itself never reached.
+Extensions get no real user gesture. Pages open their file picker from their own click
+handler (`input.click()`, `input.showPicker()`), which Firefox honours only within the 5 s
+transient activation of a real click. Upload buttons such as Gmail's Attach files call `click()`
+on a file field never added to the document: `read_page` shows no field, and the isolated content
+script ([0009](0009-content-scripts-injected-per-tab.md)) can neither see it nor wrap the page's
+`click()`. Gmail's compose window takes dropped files only on a drop area it shows once a drag
+enters.
 
 ## Decision
 
 - **Route by role.** `uploadFile` (`apps/extension/src/page-upload.ts`) gives a file field the
-  files as before. An element whose `read_page` role (`roleOf`) is `button` or `link` is clicked
-  through the click tool's code, under the protected-GET guard of
-  [0080](0080-click-and-enter-do-not-send-protected-fields-with-get.md), with its refusals. Any
-  other element gets a drop at its visible centre; after the drag enters, two pauses of
-  `DRAG_START_MS` let the page show a drop area, which the drag moves onto, and a drop the page
-  does not cancel is refused.
-- **The catcher.** `catchFilePickers` (`apps/extension/src/file-picker-catcher.ts`), a
-  self-contained function shipped in the package, runs in the page's main world. The background
-  injects it on every `upload_file` request, into frame 0 only, through the `prepare` step of
-  `PageScripts.request` (`page-scripts.ts`), which runs after the page tools' gate and the content
-  script's injection (`installCatcher` in `handlers.ts`). It installs once per document and only
-  on the gated site, and adds two window listeners. Armed by the content script right before the
-  click (`armPickerCatch`), it wraps `HTMLElement.prototype.click` and
+  files. An element whose `read_page` role is `button` or `link` is clicked through the click
+  tool's code, under the protected-GET guard of
+  [0080](0080-click-and-enter-do-not-send-protected-fields-with-get.md). Any other element gets a
+  drop at its visible centre after two pauses of `DRAG_START_MS`, so the drag can move onto a drop
+  area the page shows; a drop the page does not cancel is refused. `sendDrop` listens on the
+  document element: its drop, cancelled before the capture listener or only after the bubble
+  listener, is flagged.
+- **The catcher.** `catchFilePickers` (`apps/extension/src/file-picker-catcher.ts`) runs in the
+  page's main world, injected on every `upload_file` request into frame 0 through the `prepare`
+  step of `PageScripts.request`, after the page tools' gate (`installCatcher` in `handlers.ts`).
+  It installs once per document, only on the gated site, with two window listeners. Armed right
+  before the click (`armPickerCatch`), it wraps `HTMLElement.prototype.click` and
   `HTMLInputElement.prototype.showPicker`; the first call on a file field of that document opens
-  no picker and is handed to the content script as the detail of a window event, and the catcher
-  disarms, putting the originals back. Every other call goes to the original.
-- **Handover.** The catcher hands over the element; the content script checks it through
-  Firefox's Xray wrapper (an `HTMLInputElement` of type `file` in the clicked element's document)
-  and sets the files itself with `intoField`. The catcher never sees a file.
-- **Bounds.** The content script waits `PICKER_WAIT_MS` (5 s) for a catch and ignores one after
-  its deadline by the clock; the catcher disarms after 10 s by a timer, or by the clock at its next
-  call when Firefox delayed the timer. One catch per document at a time.
-- **Result.** `picker: true` with `target: "input"`; no protocol bump, since an older server
-  ignores the key ([0072](0072-the-extension-serves-the-server-of-the-release-before.md)).
+  no picker and hands the field to the content script in a window event, and the originals go
+  back.
+- **Handover.** The content script checks the field through Firefox's Xray wrapper (a file
+  `HTMLInputElement` of the clicked element's document) and sets the files; the catcher never sees
+  a file.
+- **Bounds.** The content script waits `PICKER_WAIT_MS` (5 s), ignoring a late catch; the
+  catcher disarms after 10 s, by a timer or by the clock. One catch per document at a time.
+- **Result.** `picker: true` with `target: "input"`; `pageWide: true` with `target: "drop"`, whose
+  text says to read the page and not to drop again. No protocol bump: an older server ignores the
+  keys ([0072](0072-the-extension-serves-the-server-of-the-release-before.md)).
 
 ## Alternatives rejected
 
 - **`exportFunction` from the content script.** It hands the page a function from the
   extension's world, which [0015](0015-console-recorder-in-the-page-world.md) rejected.
 - **A main-world script registered by URL.** It would run in the user's own tabs (0015).
-- **A real gesture.** An extension cannot make one.
+- **A real gesture.** Impossible for extensions.
 - **Leaving Attach buttons unsupported.** Attaching a file is a common task.
-- **A new `target` value.** An older server would refuse the reply, needing a protocol bump.
-- **Passing a page-realm `DataTransfer` to the catcher**, which would set the files. The catcher
-  would hold the files, and the checks would run in the page's world.
+- **A new `target` value.** Older servers would refuse it.
+- **Passing a page-realm `DataTransfer` to the catcher.** The catcher would hold the files.
+- **Refusing a drop only the window or the document cancelled.** The drop has already reached the
+  page: pages that take files at the document (React 16 and older, jQuery delegation,
+  drop-anywhere pages) would be refused, and the agent would drop the files twice.
+- **Refusing before the drop when only the page cancelled `dragover`.** It refuses those pages
+  outright.
+- **Watching whether the page reads the drop's files.** It needs a function of ours in the page on
+  every drop (0015).
 
 ## Consequences
 
-- Not caught: a page that kept its own reference to `click` before arming, a `<label>` that
-  forwards the click, a click event the page dispatches on the field itself, a picker asked for
-  after 5 seconds, a field of a frame or of another document. Each is refused after the wait.
-- The page can see the catcher and drive it within its own page, which gets the call's files
-  either way. While it is armed, the user's own click on the page's upload control opens no
-  picker either.
+- Not caught, so refused after the wait: a page's own saved `click`, a `<label>` that forwards
+  the click, a click event dispatched on the field, a picker asked for after 5 s, a field of a
+  frame or another document.
+- The page can drive the catcher, and gets the files either way. While armed, the user's own
+  click on the upload control opens no picker either.
 - A button or link that opens no picker costs 5 seconds and was clicked; the refusal says so. A
-  drop zone with the role `button` is now clicked, not dropped on.
-- An older server, which the extension still serves, describes a drop for every element that is
-  not a file field.
-- A drop area a page shows later than the two pauses is missed, and the drop is refused.
+  drop zone with the role `button` is clicked.
+- An older server describes a drop for every element that is not a file field, flagged or not.
+- A drop area shown later than the two pauses is missed, and the drop is refused.
+- A page-wide cancel on a page that took nothing is still a drop, now flagged; so is a drop zone
+  delegated to, or behind a capture-phase cancel on, the window or document, where reading the
+  page shows the files.
+- A listener on the document element counts as the page's in the capture phase, as the element's
+  in the bubble phase. A guard on `body` or an app root counts as the element's: page-wide guards
+  are usually on the window or document, and drop zones delegated to `body` stay unflagged.

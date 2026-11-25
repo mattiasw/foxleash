@@ -709,7 +709,15 @@ window does; when one appears at the point, the drag moves onto it and the drop 
 drop area that a page shows later than that is missed. The drop is refused when the page does not
 take the drag (it does not cancel `dragover`), and also when it takes the drag but not the files
 (it does not cancel the `drop`), with a message that says to use a file field or the button that
-opens the page's file picker instead.
+opens the page's file picker instead. Many pages cancel `dragover` and `drop` on the whole page,
+only so that Firefox does not open files dropped anywhere. When Foxleash sees only such a listener
+on the window or the document cancel the drop, the files are still dropped, since the page may
+have taken them there, but the result says so: read the page to check, and if it did not take
+them, use a file field or the button that opens its file picker instead of dropping them again. A
+cancel on the window or the document before the drop reaches the element hides whether the element
+took the files too, so such a drop is always flagged. A listener on `body`, on the root element of
+an app, or on the `html` element once the drop has passed the element counts as the element's: a
+cancel there is not flagged.
 
 Foxleash reads files only from the upload folders, never files or folders whose names start with
 a dot, files named like keys or files that hold a PEM, OpenSSH, PuTTY, PGP or age private key,

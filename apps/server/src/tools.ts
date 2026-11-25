@@ -308,6 +308,8 @@ const NETWORK_RESULT = z.object({
 });
 const DROP_NOTE =
   "The page decides what to do with dropped files; read the page to check that it took them.";
+const PAGE_WIDE_DROP_NOTE =
+  "Pages often take drops anywhere on the page only to keep Firefox from opening the files, so read the page to check that it took them. If it did not, do not drop them there again: give upload_file the ref of a file field, or of the button that opens the page's file picker.";
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
 // Below the 10 MiB line limit of the SDK's stdio transports, with room for the JSON-RPC envelope.
@@ -1887,18 +1889,25 @@ function proposedTabOf(result: unknown): number | undefined {
   return typeof tabId === "number" && Number.isInteger(tabId) && tabId >= 0 ? tabId : undefined;
 }
 
-/** Where the files went: `"picker"` for the file field a page opened from the clicked ref. */
-function uploadTargetOf(result: unknown): "input" | "drop" | "picker" | undefined {
+/**
+ * Where the files went: `"picker"` for the file field a page opened from the clicked ref,
+ * `"pageWide"` for a drop only the window or the document cancelled.
+ */
+function uploadTargetOf(result: unknown): "input" | "drop" | "picker" | "pageWide" | undefined {
   if (typeof result !== "object" || result === null) return undefined;
   const target = Object.hasOwn(result, "target") ? Reflect.get(result, "target") : undefined;
   if (target !== "input" && target !== "drop") return undefined;
-  if (!Object.hasOwn(result, "picker")) return target;
-  return Reflect.get(result, "picker") === true && target === "input" ? "picker" : undefined;
+  const picker = Object.hasOwn(result, "picker");
+  const pageWide = Object.hasOwn(result, "pageWide");
+  if (picker && (Reflect.get(result, "picker") !== true || target !== "input")) return undefined;
+  if (pageWide && (Reflect.get(result, "pageWide") !== true || target !== "drop")) return undefined;
+  if (picker) return "picker";
+  return pageWide ? "pageWide" : target;
 }
 
 /** Foxleash's own text, with the real paths quoted so a file name cannot shape it. */
 function uploadText(
-  where: "input" | "drop" | "picker",
+  where: "input" | "drop" | "picker" | "pageWide",
   { tabId, ref }: { tabId: number; ref: string },
   files: readonly UploadedFile[],
 ): string {
@@ -1907,12 +1916,14 @@ function uploadText(
     input: `Put ${count} into the file field ${ref} in tab ${tabId}:`,
     drop: `Dropped ${count} on ${ref} in tab ${tabId}:`,
     picker: `Clicked ${ref} in tab ${tabId} and put ${count} into the file field the page opened:`,
+    pageWide: `Dropped ${count} on ${ref} in tab ${tabId}, but Foxleash saw only a listener on the whole page take the drop:`,
   };
+  const notes = { input: [], drop: [DROP_NOTE], picker: [], pageWide: [PAGE_WIDE_DROP_NOTE] };
   const head = heads[where];
   const lines = files.map(
     (file) => `- ${JSON.stringify(file.path)}, ${byteCount(file.bytes.length)}`,
   );
-  return [head, ...lines, ...(where === "drop" ? [DROP_NOTE] : [])].join("\n");
+  return [head, ...lines, ...notes[where]].join("\n");
 }
 
 function byteCount(size: number): string {

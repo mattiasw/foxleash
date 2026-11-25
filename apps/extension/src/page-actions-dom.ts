@@ -874,7 +874,18 @@ export function sendDrag(
   transfer: DataTransfer,
   relatedTarget?: Element,
 ): boolean {
-  const event = new (viewOf(target).DragEvent)(type, {
+  return target.dispatchEvent(dragEvent(target, type, point, transfer, relatedTarget));
+}
+
+/** A drag event in the target's page realm, as a drag from outside the page sends it. */
+export function dragEvent(
+  target: Element,
+  type: string,
+  point: Point,
+  transfer: DataTransfer,
+  relatedTarget?: Element,
+): DragEvent {
+  return new (viewOf(target).DragEvent)(type, {
     bubbles: true,
     cancelable: type !== "dragleave" && type !== "dragend",
     composed: true,
@@ -883,7 +894,6 @@ export function sendDrag(
     relatedTarget: relatedTarget ?? null,
     dataTransfer: transfer,
   });
-  return target.dispatchEvent(event);
 }
 
 /** The page window's constructors, so events are made in the page's realm. */

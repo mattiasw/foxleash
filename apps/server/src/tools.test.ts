@@ -3576,6 +3576,8 @@ describe("upload_file", () => {
   const REF = "0a1b2c3d-7";
   const DROP_NOTE =
     "The page decides what to do with dropped files; read the page to check that it took them.";
+  const PAGE_WIDE_DROP_NOTE =
+    "Pages often take drops anywhere on the page only to keep Firefox from opening the files, so read the page to check that it took them. If it did not, do not drop them there again: give upload_file the ref of a file field, or of the button that opens the page's file picker.";
   let home = "";
   let folder = "";
 
@@ -3823,6 +3825,37 @@ describe("upload_file", () => {
     );
   });
 
+  it("says when only the page as a whole took the dropped files", LIMIT, async () => {
+    await writeFile(join(folder, "a.png"), "a");
+    await writeFile(join(folder, "b.csv"), "bb");
+    const { client } = await startUpload(() => ({ target: "drop", pageWide: true }));
+    const two = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["a.png", "b.csv"] },
+    });
+    assert.equal(
+      text(two),
+      [
+        `Dropped 2 files on ${REF} in tab 5, but Foxleash saw only a listener on the whole page take the drop:`,
+        `- ${JSON.stringify(join(folder, "a.png"))}, 1 byte`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+        PAGE_WIDE_DROP_NOTE,
+      ].join("\n"),
+    );
+    const one = await client.callTool({
+      name: "upload_file",
+      arguments: { tabId: 5, ref: REF, paths: ["b.csv"] },
+    });
+    assert.equal(
+      text(one),
+      [
+        `Dropped 1 file on ${REF} in tab 5, but Foxleash saw only a listener on the whole page take the drop:`,
+        `- ${JSON.stringify(join(folder, "b.csv"))}, 2 bytes`,
+        PAGE_WIDE_DROP_NOTE,
+      ].join("\n"),
+    );
+  });
+
   it("says it clicked the ref and filled the file field the page opened", LIMIT, async () => {
     await writeFile(join(folder, "a.png"), "a");
     await writeFile(join(folder, "b.csv"), "bb");
@@ -3991,6 +4024,11 @@ describe("upload_file", () => {
       { target: "input", picker: "yes" },
       { target: "input", picker: null },
       { target: "drop", picker: true },
+      { target: "input", pageWide: true },
+      { target: "drop", pageWide: false },
+      { target: "drop", pageWide: "yes" },
+      { target: "drop", pageWide: null },
+      { target: "input", picker: true, pageWide: true },
     ]) {
       const { client, logs } = await startUpload((method) =>
         method === "upload_file" ? result : { received: 1 },

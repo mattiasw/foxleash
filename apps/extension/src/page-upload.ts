@@ -1,9 +1,11 @@
 import { UPLOAD_PICKER_WAIT_MS } from "@foxleash/protocol";
 import { refError } from "./element-refs.ts";
 import { armPickerCatch } from "./file-picker-catcher.ts";
+import type { Point } from "./page-actions.ts";
 import {
   DRAG_START_MS,
   deepElementAt,
+  dragEvent,
   locate,
   type PointerState,
   sendDrag,
@@ -46,7 +48,7 @@ const NOT_TAKEN =
 export async function uploadFile(
   params: Record<string, unknown>,
   page: UploadPage,
-): Promise<{ target: "input" | "drop"; picker?: true }> {
+): Promise<{ target: "input" | "drop"; picker?: true; pageWide?: true }> {
   const ref = ownField(params, "ref");
   if (typeof ref !== "string") {
     throw new PageError("invalid_params", "upload_file needs ref to be a string.");
@@ -160,13 +162,14 @@ function acceptInput(element: Element): (detail: unknown) => HTMLInputElement | 
 /**
  * Drops the files at the element's visible centre as a drag from outside the page would: the
  * events go to the element under that point, which can be a drop area the page shows over the
- * element once the drag enters. Refused unless the page cancels the last `dragover` and the drop.
+ * element once the drag enters. Refused unless the page cancels the last `dragover` and the drop;
+ * a drop only the window or the document cancelled is flagged `pageWide`.
  */
 async function dropOn(
   ref: string,
   files: readonly PageFile[],
   page: UploadPage,
-): Promise<{ target: "drop" }> {
+): Promise<{ target: "drop"; pageWide?: true }> {
   // First: a throw here comes before the page is scrolled.
   const transfer = pageTransfer(files);
   const { point, hit } = locate({ ref }, page.refs, true);
@@ -197,9 +200,43 @@ async function dropOn(
       "That element is neither a file field nor a place that takes dropped files.",
     );
   }
-  // A page that takes the files cancels the drop, or Firefox would open them.
-  if (sendDrag(current, "drop", point, transfer)) throw new PageError("invalid_target", NOT_TAKEN);
-  return { target: "drop" };
+  return sendDrop(current, point, transfer) === "page"
+    ? { target: "drop", pageWide: true }
+    : { target: "drop" };
+}
+
+/**
+ * Sends the drop, refused unless the page cancels it, and says where it was cancelled: by a
+ * listener below the document element (`"element"`) or only by the window's or the document's.
+ */
+function sendDrop(target: Element, point: Point, transfer: DataTransfer): "element" | "page" {
+  const root = target.ownerDocument.documentElement;
+  const sent = dragEvent(target, "drop", point, transfer);
+  // Only our drop: the page may dispatch drops of its own meanwhile.
+  let atCapture: boolean | undefined;
+  let atBubble: boolean | undefined;
+  const onCapture = (event: Event): void => {
+    if (event === sent) atCapture = event.defaultPrevented;
+  };
+  const onBubble = (event: Event): void => {
+    if (event === sent) atBubble = event.defaultPrevented;
+  };
+  // Added after the page's own listeners on the root, so in each phase those run first: its
+  // capture ones count as the page's, its bubble ones as the element's.
+  root.addEventListener("drop", onCapture, true);
+  root.addEventListener("drop", onBubble);
+  try {
+    // A page that takes the files cancels the drop, or Firefox would open them.
+    if (target.dispatchEvent(sent)) throw new PageError("invalid_target", NOT_TAKEN);
+  } finally {
+    root.removeEventListener("drop", onCapture, true);
+    root.removeEventListener("drop", onBubble);
+  }
+  // Cancelled before the root, or stopped above it so that nothing below could cancel it.
+  if (atCapture !== false) return "page";
+  // Stopped below the root after it went down uncancelled: a drop zone that stops propagation.
+  if (atBubble === undefined) return "element";
+  return atBubble ? "element" : "page";
 }
 
 /**

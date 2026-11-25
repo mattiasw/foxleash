@@ -10241,7 +10241,19 @@ describe("upload_file", { timeout: 10000 }, () => {
     });
   });
 
-  it("refuses a reply without a target it knows, or with a picker it does not, as page_error", async () => {
+  it("says when only the page as a whole took the drop", async () => {
+    const { call, replyWith } = setup();
+    replyWith(async () => ({ target: "drop", pageWide: true }));
+    await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
+    assert.deepEqual(await call("s1", "upload_file", valid()), {
+      target: "drop",
+      pageWide: true,
+      files: [{ name: "a.txt", size: 1 }],
+      after: UNKNOWN,
+    });
+  });
+
+  it("refuses a reply without a target it knows, or with a picker or pageWide it does not, as page_error", async () => {
     const { call, replyWith } = setup();
     for (const reply of [
       undefined,
@@ -10255,6 +10267,11 @@ describe("upload_file", { timeout: 10000 }, () => {
       { target: "input", picker: "yes" },
       { target: "input", picker: null },
       { target: "drop", picker: true },
+      { target: "input", pageWide: true },
+      { target: "drop", pageWide: false },
+      { target: "drop", pageWide: "yes" },
+      { target: "drop", pageWide: null },
+      { target: "input", picker: true, pageWide: true },
     ]) {
       await call("s1", "upload_chunk", { upload: "u1", index: 0, data: "AQ==" });
       replyWith(async () => reply);

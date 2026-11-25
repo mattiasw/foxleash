@@ -570,6 +570,11 @@ export interface Methods {
        * with `target` "input"; an extension older than the field sends none.
        */
       picker?: true;
+      /**
+       * True when only listeners on the window or the document cancelled the drop, with `target`
+       * "drop"; an extension older than the field sends none.
+       */
+      pageWide?: true;
       files: { name: string; size: number }[];
       after?: ActAfter;
       view?: PageView;
