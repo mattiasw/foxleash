@@ -42,7 +42,9 @@
 > rendered again whenever that SVG changes.
 >
 > The release check fails when the Summary, the Description or the Permissions section is
-> longer than AMO takes.
+> longer than AMO takes. It also fails when a pasted section links a file of this repository
+> that is not tracked, or a heading that file does not have, and when a URL in a pasted
+> section is followed directly by punctuation instead of a space or the end of its line.
 >
 > The body of a pasted section is everything between its heading and the next `##` heading.
 > In those sections each paragraph and each list item is one line, and they hold plain
@@ -122,7 +124,7 @@ Why Foxleash requests each permission:
 
 Firefox for Android: not supported (no native messaging or tab groups).
 
-The native messaging host is the foxleash program (apps/server/, Node.js 24), in the same public repository, https://github.com/mattiasw/foxleash: not extension code, not in the source archive.
+The native messaging host is the foxleash program (apps/server/, Node.js 24): not extension code, not in the source archive, but in the same public repository, https://github.com/mattiasw/foxleash
 
 ## Data collection and handling
 

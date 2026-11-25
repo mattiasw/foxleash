@@ -2632,6 +2632,156 @@ describe("listing", () => {
       "protocol 6, oldest served 3",
     ]);
   });
+
+  describe("links", () => {
+    const REPO = "https://github.com/mattiasw/foxleash";
+    const SECURITY = "docs/security.md";
+    const SECURITY_URL = `${REPO}/blob/main/${SECURITY}`;
+    const SECURITY_DOC = [
+      "# Security",
+      "",
+      "## Downloads",
+      "",
+      "### Screenshots",
+      "",
+      "### Files a page loads in the agent's tabs",
+      "",
+      "## Downloads",
+      "",
+      "```sh",
+      "# Not a heading",
+      "```",
+      "",
+    ].join("\n");
+    const DATA_PARAGRAPH =
+      "Tab URLs are browsing activity (browsingActivity), which this list does not declare.";
+    const noPrevious = [{ level: "INFO", text: "no previous tag: drift check skipped" }];
+    const noHeading = (anchor: string, line = 39): string =>
+      `docs/amo/listing.md line ${line} links ${SECURITY_URL}#${anchor}, but docs/security.md has no heading with the anchor "${anchor}"`;
+    const followedBy = (url: string, punctuation: string, line: number): string =>
+      `docs/amo/listing.md line ${line}: the URL ${url} is followed by "${punctuation}": end the line after it or put a space after it, so a linkifier does not take "${punctuation}" into the address`;
+
+    /** Tracks a `docs/security.md` and puts `links` at the end of the fixture's line 39. */
+    function linking(links: string, doc = SECURITY_DOC): Tree {
+      const tree = firstReleaseTree();
+      tree.files[SECURITY] = doc;
+      tree.commands[lsStaged(SECURITY)] = stagedEntry(SECURITY);
+      return withListing(tree, (text) =>
+        text.replace(DATA_PARAGRAPH, `${DATA_PARAGRAPH} ${links}`),
+      );
+    }
+
+    test("a link naming a heading passes, as does one with no fragment", () => {
+      const links = [
+        `${SECURITY_URL}#screenshots`,
+        `${SECURITY_URL}#files-a-page-loads-in-the-agents-tabs`,
+        `${SECURITY_URL}#downloads`,
+        `${SECURITY_URL}#downloads-1`,
+        `${SECURITY_URL} ${REPO} https://example.org/x#nothing ${SECURITY_URL}`,
+      ];
+      assert.deepEqual(listing(linking(links.join(" "))), noPrevious);
+    });
+
+    test("a fragment with no heading fails, naming the line and the URL", () => {
+      const findings = listing(linking(`${SECURITY_URL}#no-such-section`));
+      assert.deepEqual(texts(findings, "FAIL"), [noHeading("no-such-section")]);
+    });
+
+    test("a renamed heading fails", () => {
+      const doc = SECURITY_DOC.replace("### Screenshots", "### Screenshot pictures");
+      const findings = listing(linking(`${SECURITY_URL}#screenshots`, doc));
+      assert.deepEqual(texts(findings, "FAIL"), [noHeading("screenshots")]);
+      assert.deepEqual(listing(linking(`${SECURITY_URL}#screenshot-pictures`, doc)), noPrevious);
+    });
+
+    test("a heading inside a code fence is not a heading", () => {
+      const findings = listing(linking(`${SECURITY_URL}#not-a-heading`));
+      assert.deepEqual(texts(findings, "FAIL"), [noHeading("not-a-heading")]);
+    });
+
+    test("a link to a file that is not tracked fails", () => {
+      const tree = linking(SECURITY_URL);
+      tree.commands[lsStaged(SECURITY)] = "";
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        `docs/amo/listing.md line 39 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+      ]);
+    });
+
+    test("a fragment on a tracked file that is not Markdown fails", () => {
+      const license = `${REPO}/blob/main/LICENSE`;
+      const tree = linking(`${license} ${license}#top`);
+      tree.files.LICENSE = "GPL";
+      tree.commands[lsStaged("LICENSE")] = stagedEntry("LICENSE");
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        `docs/amo/listing.md line 39 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
+      ]);
+    });
+
+    test("a failing git command is a FAIL for its link, and the other links are still checked", () => {
+      const license = `${REPO}/blob/main/LICENSE`;
+      const tree = linking(`${SECURITY_URL}#screenshots ${license}#top`);
+      tree.files.LICENSE = "GPL";
+      tree.commands[lsStaged("LICENSE")] = stagedEntry("LICENSE");
+      tree.commands[lsStaged(SECURITY)] = new CommandError("git ls-files", 128, "fatal: broken");
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        "docs/amo/listing.md line 39: `git ls-files` failed (status 128): fatal: broken",
+        `docs/amo/listing.md line 39 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
+      ]);
+    });
+
+    test("a URL followed directly by punctuation fails, in line order, with the punctuation named", () => {
+      const tree = withListing(
+        linking(`${SECURITY_URL}#screenshots. Or https://example.org/a).`),
+        (text) =>
+          text.replace(
+            "Lets an agent use Firefox.",
+            `Lets an agent use Firefox. See ${REPO}: now.`,
+          ),
+      );
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        followedBy(REPO, ":", 5),
+        followedBy(`${SECURITY_URL}#screenshots`, ".", 39),
+        followedBy("https://example.org/a", ").", 39),
+      ]);
+    });
+
+    test("a repository link followed by punctuation still gets its link check", () => {
+      const findings = listing(linking(`${SECURITY_URL}#no-such-section.`));
+      assert.deepEqual(texts(findings, "FAIL"), [
+        followedBy(`${SECURITY_URL}#no-such-section`, ".", 39),
+        noHeading("no-such-section"),
+      ]);
+    });
+
+    test("only a permission bullet's name is a match pattern, not a link", () => {
+      const pattern = "https://*.example.com/*";
+      const tree = withListing(
+        withManifest(firstReleaseTree(), { optional_host_permissions: [pattern] }),
+        (text) =>
+          text.replace(
+            "- storage:",
+            `- ${pattern}: the example site, see https://example.org/a.\n- storage:`,
+          ),
+      );
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        followedBy("https://example.org/a", ".", 30),
+      ]);
+      const elsewhere = withListing(firstReleaseTree(), (text) =>
+        text.replace(DATA_PARAGRAPH, `${DATA_PARAGRAPH}\n- ${pattern}: more.`),
+      );
+      assert.deepEqual(texts(listing(elsewhere), "FAIL"), [followedBy(pattern, ":", 40)]);
+    });
+
+    test("URLs outside the four pasted sections are not checked", () => {
+      const tree = withListing(linking(SECURITY_URL), (text) =>
+        text.replace(
+          "(authenticationInfo).",
+          `(authenticationInfo). See ${SECURITY_URL}#no-such-section.`,
+        ),
+      );
+      assert.deepEqual(listing(tree), noPrevious);
+    });
+  });
 });
 
 describe("protocol", () => {

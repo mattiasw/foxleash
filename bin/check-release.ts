@@ -176,6 +176,11 @@ const SECTION_CAPS = [
 ];
 const DATA_HEADING = "## Data collection and handling";
 const AMO_HEADINGS = [...SECTION_CAPS.map((cap) => cap.heading), DATA_HEADING];
+const REPO_FILE_URL = "https://github.com/mattiasw/foxleash/blob/main/";
+const URL_TOKEN = /https?:\/\/\S+/g;
+const URL_TRAILING_PUNCTUATION = /[.,:;!?'")\]}]+$/;
+const ATX_HEADING = /^ {0,3}#{1,6}[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/;
+const CODE_FENCE = /^ {0,3}(?:`{3,}|~{3,})/;
 const PERMISSION_KEYS = [
   "permissions",
   "host_permissions",
@@ -459,6 +464,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
     checkPermissionsExplained(listing, manifest, findings);
   }
   if (listing !== undefined) checkSectionLengths(listing, findings);
+  if (listing !== undefined) checkListingLinks(env, listing, findings);
   checkListingDrift(env, tag, manifest, listing, findings);
 }
 
@@ -860,6 +866,81 @@ function sectionText(section: Entry[]): string {
     .map((line) => line.text)
     .join("\n")
     .trim();
+}
+
+/**
+ * In the pasted sections, a link to a file of this repository on GitHub names a tracked file and,
+ * with a fragment, a heading of it, and no URL is followed directly by punctuation, which a
+ * linkifier would take into the address.
+ */
+function checkListingLinks(env: Env, listing: string, findings: Finding[]): void {
+  const all = listing.split(/\r?\n/);
+  for (const heading of AMO_HEADINGS) {
+    // A missing section is already a FAIL of the other listing checks.
+    for (const { line, text } of sectionLines(all, heading, []) ?? []) {
+      const bullet = heading === PERMISSIONS_HEADING && PERMISSION_BULLET.test(text);
+      for (const { 0: token, index } of text.matchAll(URL_TOKEN)) {
+        // A permission bullet starts with a manifest match pattern and a colon, which is no link.
+        if (bullet && index === 2) continue;
+        const punctuation = URL_TRAILING_PUNCTUATION.exec(token)?.[0];
+        const url = punctuation === undefined ? token : token.slice(0, -punctuation.length);
+        if (punctuation !== undefined) {
+          findings.push(
+            fail(
+              `${LISTING} line ${line}: the URL ${url} is followed by ${quote(punctuation)}: end the line after it or put a space after it, so a linkifier does not take ${quote(punctuation)} into the address`,
+            ),
+          );
+        }
+        if (url.startsWith(REPO_FILE_URL)) {
+          attempt(findings, `${LISTING} line ${line}`, () =>
+            checkRepoLink(env, line, url, findings),
+          );
+        }
+      }
+    }
+  }
+}
+
+function checkRepoLink(env: Env, line: number, url: string, findings: Finding[]): void {
+  const target = url.slice(REPO_FILE_URL.length);
+  const hash = target.indexOf("#");
+  const file = hash === -1 ? target : target.slice(0, hash);
+  const fragment = hash === -1 ? undefined : target.slice(hash + 1);
+  const links = `${LISTING} line ${line} links ${url}, but ${file}`;
+  if (!isTrackedRegularFile(env, file)) {
+    findings.push(fail(`${links} is not a tracked regular file`));
+  } else if (fragment !== undefined && !file.endsWith(".md")) {
+    findings.push(fail(`${links} is not a Markdown file, so its anchor cannot be checked`));
+  } else if (fragment !== undefined && !headingAnchors(env.readFile(file)).has(fragment)) {
+    findings.push(fail(`${links} has no heading with the anchor ${quote(fragment)}`));
+  }
+}
+
+/** The anchors GitHub gives the ATX headings of `markdown`, outside code fences. */
+function headingAnchors(markdown: string): Set<string> {
+  const anchors = new Set<string>();
+  const seen = new Map<string, number>();
+  let fenced = false;
+  for (const text of markdown.split(/\r?\n/)) {
+    if (CODE_FENCE.test(text)) fenced = !fenced;
+    const title = fenced ? undefined : ATX_HEADING.exec(text)?.[1];
+    if (title === undefined) continue;
+    const anchor = githubAnchor(title);
+    // The first heading of an anchor gets it bare, the next ones get -1, -2 and so on.
+    const count = seen.get(anchor) ?? 0;
+    seen.set(anchor, count + 1);
+    anchors.add(count === 0 ? anchor : `${anchor}-${count}`);
+  }
+  return anchors;
+}
+
+/** GitHub's rule: lower case, spaces to hyphens, everything but letters, digits, _ and - dropped. */
+function githubAnchor(title: string): string {
+  return title
+    .trim()
+    .toLowerCase()
+    .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
+    .replace(/ /g, "-");
 }
 
 function checkListingDrift(

@@ -291,7 +291,12 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   section, which must name, as `(name)`, each category the manifest declares and no other of
   Mozilla's categories; the Summary, the Description and the Permissions section, which go
   to AMO as the add-on's summary and description and as each version's notes to reviewers,
-  hold at most the 250, 15,000 and 3,000 characters AMO takes for them.
+  hold at most the 250, 15,000 and 3,000 characters AMO takes for them; in those three and the
+  Data collection and handling section every link to a file of the repository on GitHub
+  (`https://github.com/mattiasw/foxleash/blob/main/<path>`) names a tracked file and, with a
+  `#fragment`, a heading of that Markdown file by GitHub's anchor rule (lower case, spaces to
+  `-`, punctuation such as apostrophes dropped, `-1`, `-2` for repeated headings), and no URL
+  is followed directly by punctuation, which a linkifier would take into the address.
   With a previous tag, it prints the diffs of the manifest, the listing and
   `bin/amo-source-files.txt` between that tag and the working tree, and fails when the
   manifest's permissions, content script matches, data declarations, `web_accessible_resources`,
