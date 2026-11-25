@@ -550,7 +550,7 @@
       ]
     },
     {
-      "listing": "Screenshots hide the text of the same fields and of drop-downs, also in frames from other sites, with a style sheet Foxleash adds to each frame while it takes the screenshot; if a frame does not take that style sheet, Foxleash takes no screenshot, unless that frame shows Firefox's error page for a page that could not be loaded or does not allow being shown in a frame, or is a frame of another add-on, such as a password manager's menu, or lies inside one. While it takes a screenshot of a page with such a frame, Foxleash hides that frame and every other frame of the page or frame that holds it, so none of their content is in the screenshot.",
+      "listing": "Screenshots hide the text of the same fields and of drop-downs, also in frames from other sites",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
         {
@@ -601,7 +601,7 @@
       ]
     },
     {
-      "listing": "it refuses clicks on links and form buttons that lead to another site or out of the browser",
+      "listing": "refuses clicks on links and form buttons that lead to another site or out of the browser",
       "evidence": [
         {
           "file": "apps/extension/src/page-actions.ts",
@@ -618,7 +618,7 @@
       ]
     },
     {
-      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and Foxleash does not select the tabs it opens for the agent meanwhile. Firefox itself may still select a tab to show a page's sign-in dialog or to ask whether you want to leave a page, and a page may select a tab it opens, also after the agent's click",
+      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and Foxleash does not select the tabs it opens for the agent meanwhile",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "function keepPromptInView(" },
         {
