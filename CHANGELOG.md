@@ -44,6 +44,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   stops at once instead of waiting out its timeout.
 - Suggestion lists that open when their field gets focus, such as the trip search on sl.se, now
   open when the agent types while its tab is not in front.
+- While the agent's tab is not in front, pages now also notice focus that moves into a dialog
+  that opens, back to the button after Escape closes a dialog or popover, on to the field inside
+  an element that passes focus on, and into or out of an editor frame.
 
 ### Security
 

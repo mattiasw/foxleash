@@ -4,6 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { type Firefox, PAGE_TIMEOUT_MS, pollUntil } from "./firefox.ts";
 import {
   type FixtureServer,
+  FOCUS_FORM_FIELDS,
   startFixtureServer,
   TITLES,
   WAIT_LATE_TEXT,
@@ -18,7 +19,7 @@ import {
   withoutAfter,
 } from "./harness.ts";
 
-interface ComboboxPage {
+interface OpenedPage {
   tabId: number;
   context: string;
   tree: string;
@@ -34,6 +35,40 @@ const STATUS = "#session-window-status";
 const FROM = 'combobox "From"';
 const HEADING = `heading "${TITLES.focusCombobox}"`;
 const TO = 'textbox "To"';
+const TOP = 'textbox "Top field"';
+// Firefox's events with the window in front, in its order, for the focus moves page's steps.
+const WRAPPER_CLICKED = [
+  "focus:wrapper",
+  "blur:wrapper:inner",
+  "focusout:wrapper:inner",
+  "focus:inner:wrapper",
+  "focusin:inner:wrapper",
+  "click:wrapper",
+];
+const WRAPPER_TYPED = [
+  "blur:inner:top",
+  "focusout:inner:top",
+  "focus:top:inner",
+  "focusin:top:inner",
+];
+const TOP_TYPED = ["focus:top", "focusin:top"];
+const FOCUSER_CLICKED = ["blur:top", "focusout:top", "focus:inner", "focusin:inner"];
+const DIALOG_OPENED = [
+  "focus:opener",
+  "focusin:opener",
+  "blur:opener:dialog-field",
+  "focusout:opener:dialog-field",
+  "focus:dialog-field:opener",
+  "focusin:dialog-field:opener",
+];
+const DIALOG_CLOSED = [
+  "keydown:dialog-field",
+  "blur:dialog-field:opener",
+  "focusout:dialog-field:opener",
+  "focus:opener:dialog-field",
+  "focusin:opener:dialog-field",
+  "keyup:dialog-field",
+];
 // Long enough for a session end the host has passed on to have closed what it closes.
 const SESSION_END_MS = 2000;
 
@@ -391,6 +426,208 @@ describe("each agent session in its own window, in real Firefox", () => {
     }
   });
 
+  test("a focus listener that passes focus on gives a page behind the user's window both focuses", async () => {
+    const page = await openFocusMoves("wrapper", false);
+    await wrapperSteps(page, true);
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("a field a click listener focuses after the click blurred another gets a focus from nothing behind the user's window", async () => {
+    const page = await openFocusMoves("focuser", false);
+    await focuserSteps(page, true);
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("a dialog a click opens, and Escape closes, moves focus with its events behind the user's window", async () => {
+    const page = await openFocusMoves("dialog", false);
+    await dialogSteps(page, true);
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("Escape gives the popover's opener its focus back behind the user's window", async () => {
+    const page = await openFocusMoves("popover", false);
+    await acted("click", { tabId: page.tabId, ref: refOf(page.tree, 'button "Open popover"') });
+    const opened = await readTree(page.tabId);
+    await acted("click", { tabId: page.tabId, ref: refOf(opened, 'button "In popover"') });
+    assert.deepEqual(await acted("press_key", { tabId: page.tabId, key: "Escape" }), {
+      action: "hid_popover",
+      prevented: false,
+    });
+    assert.deepEqual(await focusLog(page), {
+      events: [
+        "focus:popover-opener",
+        "focusin:popover-opener",
+        "blur:popover-opener:popover-button",
+        "focusout:popover-opener:popover-button",
+        "focus:popover-button:popover-opener",
+        "focusin:popover-button:popover-opener",
+        "keydown:popover-button",
+        "blur:popover-button:popover-opener",
+        "focusout:popover-button:popover-opener",
+        "focus:popover-opener:popover-button",
+        "focusin:popover-opener:popover-button",
+        "keyup:popover-button",
+      ],
+      sent: 10,
+    });
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("type into an editor frame and back blurs and focuses each document behind the user's window", async () => {
+    for (const [frame, editor] of [
+      ['iframe "Body editor"', "body-editor"],
+      ['iframe "Inner editor"', "inner-editor"],
+    ] as const) {
+      const page = await openFocusMoves(editor, false);
+      const top = refOf(page.tree, TOP);
+      assert.equal(
+        (await acted("type", { tabId: page.tabId, ref: top, text: "a" })).outcome,
+        "typed",
+      );
+      const typed = await acted("type", {
+        tabId: page.tabId,
+        ref: refOf(page.tree, frame),
+        text: "b",
+      });
+      assert.equal(typed.outcome, "typed");
+      assert.equal(
+        (await acted("type", { tabId: page.tabId, ref: top, text: "c" })).outcome,
+        "typed",
+      );
+      assert.deepEqual(await focusLog(page), {
+        events: [
+          "focus:top",
+          "focusin:top",
+          "blur:top",
+          "focusout:top",
+          `focus:${editor}`,
+          `focusin:${editor}`,
+          `blur:${editor}`,
+          `focusout:${editor}`,
+          "focus:top",
+          "focusin:top",
+        ],
+        sent: 10,
+      });
+      await harness.ok(session, "tab_close", { tabId: page.tabId });
+    }
+  });
+
+  test("a key pressed on an editor frame blurs the top field before the frame gets its focus behind the user's window", async () => {
+    const page = await openFocusMoves("frame-key", false);
+    const top = refOf(page.tree, TOP);
+    const frame = refOf(page.tree, 'iframe "Body editor"');
+    for (const [ref, text] of [
+      [top, "a"],
+      [frame, "b"],
+      [top, "c"],
+    ] as const) {
+      assert.equal((await acted("type", { tabId: page.tabId, ref, text })).outcome, "typed");
+    }
+    assert.deepEqual(await acted("press_key", { tabId: page.tabId, ref: frame, key: "a" }), {
+      action: "none",
+      prevented: false,
+    });
+    assert.deepEqual(await focusLog(page), {
+      events: [
+        "focus:top",
+        "focusin:top",
+        "blur:top",
+        "focusout:top",
+        "focus:body-editor",
+        "focusin:body-editor",
+        "blur:body-editor",
+        "focusout:body-editor",
+        "focus:top",
+        "focusin:top",
+        "blur:top",
+        "focusout:top",
+        "focus:body-editor",
+        "focusin:body-editor",
+      ],
+      sent: 14,
+    });
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("an act that goes on after the page removed an editor frame the agent typed into still succeeds behind the user's window", async () => {
+    const page = await openFocusMoves("frame-removed", false);
+    const typed = await acted("type", {
+      tabId: page.tabId,
+      ref: refOf(page.tree, 'iframe "Inner editor"'),
+      text: "b",
+    });
+    assert.equal(typed.outcome, "typed");
+    // The first field removes the frame. Firefox cuts the content script's references into the
+    // frame's document in a task at most 1 s later (dom/base/WindowDestroyedEvent.cpp), before the
+    // act ends.
+    const fields = Array.from({ length: FOCUS_FORM_FIELDS }, (_, index) => ({
+      ref: refOf(page.tree, `textbox "Field ${index + 1}"`),
+      value: "d",
+    }));
+    assert.deepEqual(await acted("fill_form", { tabId: page.tabId, fields }), {
+      fields: fields.map(({ ref }) => ({ ref, ok: true, outcome: "typed" })),
+    });
+    assert.equal(
+      await firefox.evaluate(page.context, 'document.getElementById("inner-frame") === null'),
+      true,
+    );
+    assert.equal(
+      (await acted("type", { tabId: page.tabId, ref: refOf(page.tree, TOP), text: "c" })).outcome,
+      "typed",
+    );
+    assert.deepEqual(await focusLog(page), {
+      events: [
+        "focus:inner-editor",
+        "focusin:inner-editor",
+        "blur:inner-editor",
+        "focusout:inner-editor",
+        "focus:top",
+        "focusin:top",
+      ],
+      sent: 6,
+    });
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("a page in the session's window in front sees Firefox's own events for focus it or Firefox moves", async () => {
+    try {
+      const wrapper = await openFocusMoves("wrapper-front", true);
+      await wrapperSteps(wrapper, false);
+      await harness.ok(session, "tab_close", { tabId: wrapper.tabId });
+      const focuser = await openFocusMoves("focuser-front", true);
+      await focuserSteps(focuser, false);
+      await harness.ok(session, "tab_close", { tabId: focuser.tabId });
+      const dialog = await openFocusMoves("dialog-front", true);
+      await dialogSteps(dialog, false);
+      await harness.ok(session, "tab_close", { tabId: dialog.tabId });
+    } finally {
+      await run(`browser.windows.update(${userWindow}, { focused: true })`);
+    }
+  });
+
+  test("an act that moves no focus sends nothing for a field the page focused itself behind the user's window", async () => {
+    const page = await openFocusMoves("page-focus", false);
+    await firefox.evaluate(page.context, '(document.getElementById("top").focus(), true)');
+    assert.equal(await firefox.evaluate(page.context, "document.activeElement.id"), "top");
+    await acted("hover", {
+      tabId: page.tabId,
+      ref: refOf(page.tree, `heading "${TITLES.focusMoves}"`),
+    });
+    assert.deepEqual(await focusLog(page), { events: [], sent: 0 });
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
+  test("focus listeners that focus each other do not keep an act behind the user's window going", async () => {
+    const page = await openFocusMoves("ping-pong", false);
+    await acted("click", { tabId: page.tabId, ref: refOf(page.tree, 'textbox "Ping"') });
+    const { events } = await focusLog(page);
+    assert.ok(events.length > 0);
+    // Two reports, the click's own and the act's end, of at most 10 rounds of four events.
+    assert.ok(events.length <= 80, `${events.length} events`);
+    await harness.ok(session, "tab_close", { tabId: page.tabId });
+  });
+
   test("the next tab opens a new window once the user closed the session's window", async () => {
     await run(`browser.windows.remove(${sessionWindow})`);
     await pollUntil(
@@ -625,10 +862,23 @@ describe("each agent session in its own window, in real Firefox", () => {
    * Opens the focus combobox page in the session's window, with that window in front or the
    * user's window in front of it.
    */
-  async function openCombobox(query: string, front: boolean): Promise<ComboboxPage> {
-    const url = fixtures.url(`/focus-combobox?${query}`);
+  async function openCombobox(query: string, front: boolean): Promise<OpenedPage> {
+    return openPage("/focus-combobox", TITLES.focusCombobox, query, front);
+  }
+
+  /**
+   * Opens a fixture page in the session's window, with that window in front or the user's window
+   * in front of it.
+   */
+  async function openPage(
+    path: string,
+    title: string,
+    query: string,
+    front: boolean,
+  ): Promise<OpenedPage> {
+    const url = fixtures.url(`${path}?${query}`);
     const tab = tabOf(await harness.ok(session, "tab_open", { url }));
-    assert.equal(tab.title, TITLES.focusCombobox);
+    assert.equal(tab.title, title);
     assert.equal((await windowOf(tab.id)).id, sessionWindow);
     const context = await pollUntil(
       async () => (await firefox.contexts()).find((found) => found.url === url)?.context,
@@ -637,6 +887,56 @@ describe("each agent session in its own window, in real Firefox", () => {
     );
     await putInFront(context, front);
     return { tabId: tab.id, context, tree: await readTree(tab.id) };
+  }
+
+  async function openFocusMoves(query: string, front: boolean): Promise<OpenedPage> {
+    return openPage("/focus-moves", TITLES.focusMoves, query, front);
+  }
+
+  /**
+   * A click on the wrapper that passes focus on, then a type into the top field, each checked
+   * against the page's focus log, with Foxleash's events counted when `sent`.
+   */
+  async function wrapperSteps(page: OpenedPage, sent: boolean): Promise<void> {
+    await acted("click", { tabId: page.tabId, ref: refOf(page.tree, 'group "Wrapper"') });
+    assert.deepEqual(await focusLog(page), { events: WRAPPER_CLICKED, sent: sent ? 5 : 0 });
+    const typed = await acted("type", { tabId: page.tabId, ref: refOf(page.tree, TOP), text: "a" });
+    assert.equal(typed.outcome, "typed");
+    assert.deepEqual(await focusLog(page), {
+      events: [...WRAPPER_CLICKED, ...WRAPPER_TYPED],
+      sent: sent ? 9 : 0,
+    });
+  }
+
+  /**
+   * A type into the top field, then a click on the button that cannot take focus, which blurs the
+   * field before its click listener focuses the inner one, as `wrapperSteps` checks them.
+   */
+  async function focuserSteps(page: OpenedPage, sent: boolean): Promise<void> {
+    const typed = await acted("type", { tabId: page.tabId, ref: refOf(page.tree, TOP), text: "a" });
+    assert.equal(typed.outcome, "typed");
+    assert.deepEqual(await focusLog(page), { events: TOP_TYPED, sent: sent ? 2 : 0 });
+    await acted("click", { tabId: page.tabId, ref: refOf(page.tree, 'button "Focus inner"') });
+    assert.deepEqual(await focusLog(page), {
+      events: [...TOP_TYPED, ...FOCUSER_CLICKED],
+      sent: sent ? 6 : 0,
+    });
+  }
+
+  /** A click that opens the dialog, then Escape, as `wrapperSteps` checks them. */
+  async function dialogSteps(page: OpenedPage, sent: boolean): Promise<void> {
+    await acted("click", { tabId: page.tabId, ref: refOf(page.tree, 'button "Open dialog"') });
+    assert.deepEqual(await focusLog(page), { events: DIALOG_OPENED, sent: sent ? 6 : 0 });
+    assert.equal(await firefox.evaluate(page.context, "document.activeElement.id"), "dialog-field");
+    assert.deepEqual(await acted("press_key", { tabId: page.tabId, key: "Escape" }), {
+      action: "closed_dialog",
+      prevented: false,
+    });
+    assert.deepEqual(await focusLog(page), {
+      events: [...DIALOG_OPENED, ...DIALOG_CLOSED],
+      sent: sent ? 10 : 0,
+    });
+    assert.equal(await firefox.evaluate(page.context, "document.activeElement.id"), "opener");
   }
 
   /**
@@ -672,7 +972,7 @@ describe("each agent session in its own window, in real Firefox", () => {
     return withoutAfter(await harness.ok(session, name, args));
   }
 
-  async function assertListOpen(page: ComboboxPage): Promise<void> {
+  async function assertListOpen(page: OpenedPage): Promise<void> {
     const tree = await readTree(page.tabId);
     assert.match(tree, new RegExp(`${FROM} \\[${REF}\\] expanded=true`));
     assert.match(tree, new RegExp(`option "Stockholms central" \\[${REF}\\]`));
@@ -681,7 +981,7 @@ describe("each agent session in its own window, in real Firefox", () => {
     assert.equal(await ariaExpanded(page), "true");
   }
 
-  async function ariaExpanded(page: ComboboxPage): Promise<unknown> {
+  async function ariaExpanded(page: OpenedPage): Promise<unknown> {
     return firefox.evaluate(
       page.context,
       'document.getElementById("from").getAttribute("aria-expanded")',
@@ -689,7 +989,7 @@ describe("each agent session in its own window, in real Firefox", () => {
   }
 
   /** The focus, blur and change events the page's fields saw, and how many were untrusted. */
-  async function focusLog(page: ComboboxPage): Promise<{ events: string[]; sent: number }> {
+  async function focusLog(page: OpenedPage): Promise<{ events: string[]; sent: number }> {
     const text = await firefox.evaluate(
       page.context,
       "JSON.stringify({ events: window.focusEvents, sent: window.sentFocusEvents })",

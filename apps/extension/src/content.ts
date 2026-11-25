@@ -144,10 +144,11 @@ interface Watched {
 }
 
 /**
- * The act's handler, with a watch of the page started right before it runs, and its result with
- * the watch's id and the element that took the act: `target`'s, described before the act can
- * remove it, or, with `fromResult` when the act had no target up front, the element of the
- * result's ref. The act's own result never has fields of these names.
+ * The act's handler, with a watch of the page started right before it runs, the focus moves made
+ * during it told to a page without focus when it ends, and its result with the watch's id and the
+ * element that took the act: `target`'s, described before the act can remove it, or, with
+ * `fromResult` when the act had no target up front, the element of the result's ref. The act's
+ * own result never has fields of these names.
  */
 function act(
   { memory, changes }: Watched,
@@ -159,7 +160,13 @@ function act(
     const before = target(params);
     const described = before === undefined ? undefined : describeElement(before, memory);
     const watch = changes.start();
-    const result: unknown = await handler(params);
+    const finish = actions.watchFocusMoves();
+    let result: unknown;
+    try {
+      result = await handler(params);
+    } finally {
+      finish();
+    }
     if (!isRecord(result)) return result;
     let element = described;
     if (before === undefined && fromResult) {

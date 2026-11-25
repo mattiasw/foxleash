@@ -115,6 +115,7 @@ export const TITLES = {
   foreignBuilt: "Fixture foreign built",
   foreignBuiltFrame: "Fixture foreign built frame",
   focusCombobox: "Fixture focus combobox",
+  focusMoves: "Fixture focus moves",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -151,6 +152,9 @@ export interface NavigationVariant {
 export const WAIT_LATE_TEXT = "The late text has arrived";
 /** How long the wait pages wait after loading before they add their text or navigate. */
 export const WAIT_LATE_MS = 2000;
+
+/** The focus moves page's form fields: fill_form takes over 1.5 s to fill them, 100 ms each. */
+export const FOCUS_FORM_FIELDS = 16;
 
 /** The long title page sets its title to this character repeated LONG_TITLE_CHARS times. */
 export const LONG_TITLE_CHAR = "T";
@@ -648,6 +652,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, WAIT_LATE_PAGE);
     } else if (path === "/focus-combobox") {
       sendHtml(response, FOCUS_COMBOBOX_PAGE);
+    } else if (path === "/focus-moves") {
+      sendHtml(response, FOCUS_MOVES_PAGE);
     } else if (path === "/wait-navigate") {
       sendHtml(response, WAIT_NAVIGATE_PAGE);
     } else if (path === "/slow") {
@@ -1553,6 +1559,81 @@ for (const field of [from, document.getElementById("to")]) {
     });
   }
 }
+</script>
+</body></html>
+`;
+
+const FOCUS_FORM = Array.from(
+  { length: FOCUS_FORM_FIELDS },
+  (_, index) => `<input id="field-${index + 1}" aria-label="Field ${index + 1}">`,
+).join(" ");
+
+// Focus the page or Firefox moves on its own: a wrapper whose focus listener passes focus to the
+// field inside it, a button that cannot take focus and whose click focuses that field, a modal
+// dialog and an auto popover opened by a click, two same-site editor frames (one whose body is the
+// editing host), two fields whose focus listeners focus each other, and a form whose first field
+// removes the inner editor frame as it gets focus. Focus events are logged into focusEvents as on
+// the focus combobox page, the frames' too.
+const FOCUS_MOVES_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.focusMoves}</title></head>
+<body><h1>${TITLES.focusMoves}</h1>
+<div id="wrapper" tabindex="0" role="group" aria-label="Wrapper"
+  style="display:block;width:300px;padding:60px 10px 10px;border:1px solid"><input id="inner" aria-label="Inner"></div>
+<p><label for="top">Top field</label> <input id="top"></p>
+<p><span id="focuser" role="button">Focus inner</span></p>
+<p><button id="opener">Open dialog</button></p>
+<dialog id="dialog"><label>Dialog field <input id="dialog-field"></label></dialog>
+<p><button id="popover-opener">Open popover</button></p>
+<div id="pop" popover="auto"><button id="popover-button">In popover</button></div>
+<p><iframe id="body-frame" title="Body editor"></iframe></p>
+<p><iframe id="inner-frame" title="Inner editor"></iframe></p>
+<p><input id="ping" aria-label="Ping"> <input id="pong" aria-label="Pong"></p>
+<p>${FOCUS_FORM}</p>
+<script>
+window.focusEvents = [];
+window.sentFocusEvents = 0;
+const byId = (id) => document.getElementById(id);
+const wrapper = byId("wrapper");
+const bodyFrame = byId("body-frame").contentDocument;
+bodyFrame.open();
+bodyFrame.write('<!doctype html><body id="body-editor" contenteditable="true"></body>');
+bodyFrame.close();
+const innerFrame = byId("inner-frame").contentDocument;
+innerFrame.open();
+innerFrame.write('<!doctype html><body><p>Above</p><div id="inner-editor" contenteditable="true">x</div></body>');
+innerFrame.close();
+function log(element, types, counted) {
+  for (const type of types) {
+    element.addEventListener(type, (event) => {
+      // Only at its target: focusin and focusout from the inner input bubble to the wrapper.
+      if (event.target !== element) return;
+      // Not instanceof Element: the frames' elements are of their own realms.
+      const id = event.relatedTarget?.id;
+      window.focusEvents.push(type + ":" + element.id + (typeof id === "string" && id !== "" ? ":" + id : ""));
+      if (counted && !event.isTrusted) window.sentFocusEvents += 1;
+    });
+  }
+}
+const logged = [
+  ...["wrapper", "inner", "top", "opener", "dialog-field", "popover-opener", "popover-button"],
+  ...["body-frame", "inner-frame", "ping", "pong"],
+].map(byId);
+for (const element of [...logged, bodyFrame.body, innerFrame.getElementById("inner-editor")]) {
+  log(element, ["focus", "focusin", "blur", "focusout"], true);
+}
+log(wrapper, ["click"], false);
+log(byId("dialog-field"), ["keydown", "keyup"], false);
+log(byId("popover-button"), ["keydown", "keyup"], false);
+// After the logging listeners, so an event is logged before a listener moves focus on.
+wrapper.addEventListener("focus", (event) => {
+  if (event.target === wrapper) byId("inner").focus();
+});
+byId("focuser").addEventListener("click", () => byId("inner").focus());
+byId("opener").addEventListener("click", () => byId("dialog").showModal());
+byId("popover-opener").addEventListener("click", () => byId("pop").showPopover());
+byId("ping").addEventListener("focus", () => byId("pong").focus());
+byId("pong").addEventListener("focus", () => byId("ping").focus());
+byId("field-1").addEventListener("focus", () => byId("inner-frame")?.remove());
 </script>
 </body></html>
 `;

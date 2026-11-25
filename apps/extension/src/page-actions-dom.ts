@@ -507,51 +507,138 @@ function clickFocus(element: Element, before: Element | null): boolean {
 // Firefox sends no focus or blur events to a document that does not have focus (its window is
 // behind another, or its tab is not selected) until it comes to the front, so a page's focus
 // listeners would not run (docs/measurements/focus-events.md). The helpers below send what a
-// user's focus change would have, never at the window or document.
+// user's focus change would have, never at the window or document, for Foxleash's own focus
+// changes and for those the page or Firefox makes during an act.
 
-// Per document that does not have focus: the element Foxleash last sent a focus event to, until
-// a blur, Foxleash's or Firefox's. It is what that page was last told has focus.
-const told = new WeakMap<EventTarget, Element>();
+// Per document that does not have focus: the element Foxleash last sent a focus event to, or null
+// once it sent that element's blur. No entry: told nothing since Firefox's own blur, or ever.
+const told = new WeakMap<EventTarget, Element | null>();
+// The documents told an element has focus, so focus leaving a frame reaches the frame's page.
+const toldDocuments = new Set<WeakRef<Document>>();
+// A page whose listeners keep moving focus, as two that focus each other, gets at most this many
+// rounds of events per report.
+const FOCUS_ROUNDS = 10;
+
+/** A document a running act may move focus in. */
+interface WatchedDocument {
+  /** What had focus in it, as its page sees it, when the act started or first acted in it. */
+  before: Element | null;
+  /** Whether Firefox sent it a focus or blur during the act, and so told the page itself. */
+  trusted: boolean;
+  stop: () => void;
+}
+
+// The running acts' documents; acts in one tab can overlap, and the last to finish stops it.
+let watched: Map<Document, WatchedDocument> | undefined;
+let running = 0;
 
 /** Focuses the element, and sends the focus events Firefox held back from its document. */
 export function focusWithEvents(element: HTMLElement | SVGElement, options?: FocusOptions): void {
   const doc = element.ownerDocument;
-  const left = focusedElement(doc);
+  watchDocument(doc);
+  const before = focusOf(doc);
   const trusted = trustedFocusEvents(doc, () => element.focus(options));
-  if (doc.hasFocus()) return;
-  const now = focusedElement(doc);
-  if (now === null || now === doc.body || now === doc.documentElement) return;
-  if (!landedIn(now, element)) return;
-  const previous = told.get(doc);
-  if (previous === now) return;
-  told.delete(doc);
-  const blurred = previous?.isConnected === true && !trusted.blur ? previous : undefined;
-  if (blurred !== undefined) {
-    sendFocusEvent(blurred, "blur", now);
-    sendFocusEvent(blurred, "focusout", now);
-  }
-  // A blur listener may have moved focus on, as a focus trap does.
-  if (focusedElement(doc) !== now || trusted.focus) return;
-  // In the page's eyes, focus leaves the element it was told has focus.
-  const related =
-    blurred ?? (left === doc.body || left === doc.documentElement || left === now ? null : left);
-  sendFocusEvent(now, "focus", related);
-  sendFocusEvent(now, "focusin", related);
-  told.set(doc, now);
-  doc.addEventListener("blur", forgetTold, true);
+  if (doc.hasFocus() || trusted.focus || trusted.blur) return;
+  const focused = focusedElement(doc);
+  if (focused === null || !landedIn(focused, element)) return;
+  tellDocuments(doc, before);
 }
 
 /** Blurs the element, and sends the blur events Firefox held back from a page told it had focus. */
 export function blurWithEvents(element: HTMLElement | SVGElement): void {
   const doc = element.ownerDocument;
+  watchDocument(doc);
   const trusted = trustedFocusEvents(doc, () => element.blur());
   if (doc.hasFocus() || trusted.blur || focusedElement(doc) === element) return;
-  const previous = told.get(doc);
-  if (previous === undefined || focusedElement(doc) === previous) return;
-  told.delete(doc);
-  if (!previous.isConnected) return;
-  sendFocusEvent(previous, "blur", null);
-  sendFocusEvent(previous, "focusout", null);
+  tellDocuments(doc, null);
+}
+
+/**
+ * Starts watching the page for focus moves during an act, and returns the act's finish, which
+ * sends the events for any move its page was not told about.
+ */
+export function watchFocusMoves(): () => void {
+  watched ??= new Map();
+  watchDocument(document);
+  for (const doc of liveToldDocuments()) watchDocument(doc);
+  // Counted once set up, so a throw above leaves no act counted that never finishes.
+  running += 1;
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    try {
+      tellFocusMoves();
+    } finally {
+      running -= 1;
+      if (running === 0) {
+        for (const [doc, entry] of watched ?? []) {
+          if (!isGone(doc)) entry.stop();
+        }
+        watched = undefined;
+      }
+    }
+  };
+}
+
+/**
+ * Sends the events for focus the page or Firefox moved during the running act, in each watched
+ * document Firefox told nothing: blurs first, as Firefox blurs the document focus leaves first.
+ */
+export function tellFocusMoves(): void {
+  if (watched === undefined || document.hasFocus()) return;
+  const entries = [...watched].filter(([doc]) => !isGone(doc));
+  const ordered = [
+    ...entries.filter(([doc]) => focusOf(doc) === null),
+    ...entries.filter(([doc]) => focusOf(doc) !== null),
+  ];
+  for (const [doc, entry] of ordered) {
+    if (entry.trusted) continue;
+    // Told nothing, the page believes what had focus when the act started.
+    const believed = told.has(doc) ? (told.get(doc) ?? null) : entry.before;
+    if (focusOf(doc) !== believed) tellFocus(doc, believed);
+  }
+}
+
+/** Adds the document to the running act's watch, if any. */
+function watchDocument(doc: Document): void {
+  if (watched === undefined || watched.has(doc)) return;
+  const entry: WatchedDocument = { before: focusOf(doc), trusted: false, stop: () => undefined };
+  entry.stop = onTrustedFocus(doc, () => {
+    entry.trusted = true;
+  });
+  watched.set(doc, entry);
+}
+
+/**
+ * What has focus in the document as its page would see it with the window in front: nothing when
+ * the document is a frame focus is not in, or when a frame element has focus, which Firefox
+ * gives no focus event; the body only as a frame's editing host.
+ */
+function focusOf(doc: Document): Element | null {
+  for (let current = doc; ; ) {
+    const frame = current.defaultView?.frameElement;
+    if (frame === undefined) return null;
+    if (frame === null) break;
+    // A frame focus left keeps its active element.
+    if (focusedElement(frame.ownerDocument) !== frame) return null;
+    current = frame.ownerDocument;
+  }
+  const focused = focusedElement(doc);
+  if (focused === null) return null;
+  const view = viewOf(focused);
+  if (focused instanceof view.HTMLIFrameElement || focused instanceof view.HTMLFrameElement) {
+    return null;
+  }
+  if (focused === doc.body || focused === doc.documentElement) {
+    const editingBody =
+      focused === doc.body &&
+      doc.defaultView?.frameElement !== null &&
+      doc.body.isContentEditable &&
+      doc.designMode !== "on";
+    return editingBody ? focused : null;
+  }
+  return focused;
 }
 
 /**
@@ -560,20 +647,105 @@ export function blurWithEvents(element: HTMLElement | SVGElement): void {
  */
 function trustedFocusEvents(doc: Document, act: () => void): { focus: boolean; blur: boolean } {
   const seen = { focus: false, blur: false };
-  const note = (event: Event): void => {
-    if (!event.isTrusted) return;
-    if (event.type === "focus") seen.focus = true;
-    else seen.blur = true;
-  };
-  doc.addEventListener("focus", note, true);
-  doc.addEventListener("blur", note, true);
+  const stop = onTrustedFocus(doc, (type) => {
+    seen[type] = true;
+  });
   try {
     act();
   } finally {
-    doc.removeEventListener("focus", note, true);
-    doc.removeEventListener("blur", note, true);
+    stop();
   }
   return seen;
+}
+
+/** Calls `note` for each trusted focus or blur at the document, until the returned stop. */
+function onTrustedFocus(doc: Document, note: (type: "focus" | "blur") => void): () => void {
+  const listener = (event: Event): void => {
+    if (event.isTrusted) note(event.type === "focus" ? "focus" : "blur");
+  };
+  doc.addEventListener("focus", listener, true);
+  doc.addEventListener("blur", listener, true);
+  return () => {
+    doc.removeEventListener("focus", listener, true);
+    doc.removeEventListener("blur", listener, true);
+  };
+}
+
+/**
+ * Tells the pages of the document and of the others told an element has focus where focus is,
+ * those it left first, as Firefox blurs the document focus leaves before it focuses the one it
+ * enters; `before` is what had focus in the document. Focus on a frame element enters the frame.
+ */
+function tellDocuments(doc: Document, before: Element | null): void {
+  const documents = [...liveToldDocuments().filter((other) => other !== doc), doc];
+  const ordered = [
+    ...documents.filter((each) => focusOf(each) === null),
+    ...documents.filter((each) => focusOf(each) !== null),
+  ];
+  for (const each of ordered) tellFocus(each, each === doc ? before : null);
+}
+
+/** The documents told an element has focus that are still in the tab. */
+function liveToldDocuments(): Document[] {
+  const live: Document[] = [];
+  for (const ref of toldDocuments) {
+    const doc = ref.deref();
+    if (doc === undefined || isGone(doc) || !told.has(doc)) toldDocuments.delete(ref);
+    else live.push(doc);
+  }
+  return live;
+}
+
+/** Whether the document has left the tab, as the document of a removed frame has. */
+function isGone(doc: Document): boolean {
+  try {
+    return doc.defaultView === null;
+  } catch {
+    // Firefox cuts a content script's references into a removed frame's document.
+    return true;
+  }
+}
+
+/**
+ * Brings the page of a document without focus up to date with what has focus there: a blur for
+ * the element it was told has focus, a focus for the one that has it, `before` being what had
+ * focus before. A listener of those events may move focus on, so this repeats, bounded.
+ */
+function tellFocus(doc: Document, before: Element | null): void {
+  // A removed frame's nodes still say they are connected, and its events would reach the top
+  // window's listeners.
+  if (isGone(doc)) {
+    told.delete(doc);
+    return;
+  }
+  let left: Element | null = null;
+  for (let round = 0; round < FOCUS_ROUNDS; round += 1) {
+    // Then focus is in the tab, and Firefox sends every event itself.
+    if (document.hasFocus()) return;
+    const now = focusOf(doc);
+    const previous = told.get(doc) ?? null;
+    if (now === previous) return;
+    told.set(doc, null);
+    if (previous?.isConnected === true) {
+      sendFocusEvent(previous, "blur", now);
+      sendFocusEvent(previous, "focusout", now);
+      left = previous;
+    }
+    // A blur listener may have moved focus on, as a focus trap does.
+    if (focusOf(doc) !== now) continue;
+    if (now === null) return;
+    // In the page's eyes, focus leaves the element it was told has focus.
+    const from = left ?? before;
+    const related = from === now ? null : from;
+    sendFocusEvent(now, "focus", related);
+    told.set(doc, now);
+    if (!liveToldDocuments().includes(doc)) toldDocuments.add(new WeakRef(doc));
+    doc.addEventListener("blur", forgetTold, true);
+    // Firefox sends no focusin to an element whose focus listener moved focus on.
+    if (focusOf(doc) !== now) continue;
+    sendFocusEvent(now, "focusin", related);
+    if (focusOf(doc) === now) return;
+  }
 }
 
 /**

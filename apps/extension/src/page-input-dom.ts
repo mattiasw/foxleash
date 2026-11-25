@@ -2,7 +2,13 @@ import type { KeyAction, Result } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import { flatParentOf } from "./flat-tree.ts";
 import { crossSiteDestination, formDestination, leavesSiteText } from "./page-actions.ts";
-import { crossSiteOf, focusWithEvents, tookFocus, viewOf } from "./page-actions-dom.ts";
+import {
+  crossSiteOf,
+  focusWithEvents,
+  tellFocusMoves,
+  tookFocus,
+  viewOf,
+} from "./page-actions-dom.ts";
 import {
   blocksImplicitSubmission,
   expectedValue,
@@ -500,6 +506,8 @@ export function pressKey(options: PressKeyOptions, page: InputPage): Result<"pre
       throw error;
     }
   }
+  // Firefox restores focus inside close() and hidePopover(), before the key is released.
+  tellFocusMoves();
   // A real key is released where focus went.
   const released = action === "focus_moved" ? (focusedElement() ?? target) : target;
   released.dispatchEvent(new (viewOf(released).KeyboardEvent)("keyup", init));

@@ -537,7 +537,11 @@ Google Docs document, the result says the text was sent but not confirmed.
 When the agent's tab is not in front (its window is behind another, or another tab is selected),
 Firefox sends the page no focus or blur events, so Foxleash sends them itself: as it focuses the
 element, as a click moves focus and as Tab moves it. A suggestion list that opens when its field
-gets focus then opens as the agent types.
+gets focus then opens as the agent types. Focus the page or Firefox moves during the act gets its
+events too: on to the field a wrapper passes it to, into a dialog that opens, and back to the
+button after Escape closes a dialog or popover. Typing into an editor frame and back also blurs
+the field or editor that focus leaves. A move the page makes later, such as from a timer, gets
+them when the agent's next act ends, if Foxleash had already sent that page focus events.
 
 `type` refuses a field that Firefox filled in from your saved logins, addresses or cards, until
 you edit it.

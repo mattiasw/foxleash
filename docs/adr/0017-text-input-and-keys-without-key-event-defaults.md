@@ -5,6 +5,9 @@
 Amended 2026-11-25: the act tools send the focus events Firefox holds back from a page not in
 front.
 
+Amended 2026-11-25: Foxleash also reports focus moves the page or Firefox makes during an act, in
+rounds of at most 10.
+
 ## Context
 
 Firefox gives extensions no trusted input (ADR 0014), so `type` and `press_key` can only work
@@ -71,6 +74,12 @@ rules (key syntax, tab order, implicit submission, option stepping) are in
   `focusin` to the new one, in Firefox's order with `relatedTarget`; never at the body, the root,
   `document` or `window`, and `hasFocus()` is unchanged. It remembers which element it told, so
   a click then a type give one focus. Firefox sends `change` for such a blur as for its own.
+  It also reports a move the page or Firefox makes during an act: as a focus listener passes
+  focus on, before the act goes on; focus Firefox restores when Escape closes a dialog or
+  popover, before keyup; and any other by the time the act ends, such as into a dialog a click
+  opens. As focus enters or leaves a same-site editor frame the agent types into, the element in
+  the document it leaves gets its blur, and a frame body that is the editing host gets the focus.
+  A frame element never gets one; Firefox sends it none either.
 - **Forms are read through prototypes.** A form control's name shadows the form's own property
   of that name, so `requestSubmit`, `elements`, `noValidate`, `getRootNode`, `baseURI` and the
   `action` attribute are read through `HTMLFormElement.prototype`, `Node.prototype` and
@@ -101,3 +110,8 @@ rules (key syntax, tab order, implicit submission, option stepping) are in
 - The validity of form-associated custom elements is not read, so such a form can report
   `submitted` while its validation stopped it.
 - A page brought to the front gets Firefox's real focus on top of the one Foxleash sent.
+- A focus move the page makes after an act ends, from a timer, gets its events only when the
+  next act ends, and only in a page Foxleash already sent focus events. The `document` and
+  `window` events Firefox sends as focus enters or leaves a frame stay unsent, a frame the agent
+  never typed into gets none when the page moves focus into it, nor does the body of a frame in
+  `designMode`.
