@@ -487,7 +487,7 @@ function focusFrom(hit: Element): void {
   const before = focusedElement();
   if (chainOf(hit).some((element) => clickFocus(element, before))) return;
   const focused = focusedElement();
-  if (focused instanceof HTMLElement || focused instanceof SVGElement) focused.blur();
+  if (focused instanceof HTMLElement || focused instanceof SVGElement) blurWithEvents(focused);
 }
 
 /**
@@ -500,8 +500,114 @@ function clickFocus(element: Element, before: Element | null): boolean {
   if (root?.delegatesFocus === true) return delegateFocus(root, before);
   if (!(element instanceof HTMLElement || element instanceof SVGElement)) return false;
   if (!clickFocuses(element)) return false;
-  element.focus({ preventScroll: true });
+  focusWithEvents(element, { preventScroll: true });
   return tookFocus(element, before);
+}
+
+// Firefox sends no focus or blur events to a document that does not have focus (its window is
+// behind another, or its tab is not selected) until it comes to the front, so a page's focus
+// listeners would not run (docs/measurements/focus-events.md). The helpers below send what a
+// user's focus change would have, never at the window or document.
+
+// Per document that does not have focus: the element Foxleash last sent a focus event to, until
+// a blur, Foxleash's or Firefox's. It is what that page was last told has focus.
+const told = new WeakMap<EventTarget, Element>();
+
+/** Focuses the element, and sends the focus events Firefox held back from its document. */
+export function focusWithEvents(element: HTMLElement | SVGElement, options?: FocusOptions): void {
+  const doc = element.ownerDocument;
+  const left = focusedElement(doc);
+  const trusted = trustedFocusEvents(doc, () => element.focus(options));
+  if (doc.hasFocus()) return;
+  const now = focusedElement(doc);
+  if (now === null || now === doc.body || now === doc.documentElement) return;
+  if (!landedIn(now, element)) return;
+  const previous = told.get(doc);
+  if (previous === now) return;
+  told.delete(doc);
+  const blurred = previous?.isConnected === true && !trusted.blur ? previous : undefined;
+  if (blurred !== undefined) {
+    sendFocusEvent(blurred, "blur", now);
+    sendFocusEvent(blurred, "focusout", now);
+  }
+  // A blur listener may have moved focus on, as a focus trap does.
+  if (focusedElement(doc) !== now || trusted.focus) return;
+  // In the page's eyes, focus leaves the element it was told has focus.
+  const related =
+    blurred ?? (left === doc.body || left === doc.documentElement || left === now ? null : left);
+  sendFocusEvent(now, "focus", related);
+  sendFocusEvent(now, "focusin", related);
+  told.set(doc, now);
+  doc.addEventListener("blur", forgetTold, true);
+}
+
+/** Blurs the element, and sends the blur events Firefox held back from a page told it had focus. */
+export function blurWithEvents(element: HTMLElement | SVGElement): void {
+  const doc = element.ownerDocument;
+  const trusted = trustedFocusEvents(doc, () => element.blur());
+  if (doc.hasFocus() || trusted.blur || focusedElement(doc) === element) return;
+  const previous = told.get(doc);
+  if (previous === undefined || focusedElement(doc) === previous) return;
+  told.delete(doc);
+  if (!previous.isConnected) return;
+  sendFocusEvent(previous, "blur", null);
+  sendFocusEvent(previous, "focusout", null);
+}
+
+/**
+ * Which trusted focus events reached the document while `act` ran. Firefox sends them
+ * synchronously inside `focus()` and `blur()`, so any seen are the call's.
+ */
+function trustedFocusEvents(doc: Document, act: () => void): { focus: boolean; blur: boolean } {
+  const seen = { focus: false, blur: false };
+  const note = (event: Event): void => {
+    if (!event.isTrusted) return;
+    if (event.type === "focus") seen.focus = true;
+    else seen.blur = true;
+  };
+  doc.addEventListener("focus", note, true);
+  doc.addEventListener("blur", note, true);
+  try {
+    act();
+  } finally {
+    doc.removeEventListener("focus", note, true);
+    doc.removeEventListener("blur", note, true);
+  }
+  return seen;
+}
+
+/**
+ * Whether focus is on the element or in its shadow tree, where a host that delegates focus puts
+ * it. Not a light-DOM descendant, nor an element that simply kept focus.
+ */
+function landedIn(focused: Element, element: Element): boolean {
+  for (let current: Element | undefined = focused; current !== undefined; ) {
+    if (current === element) return true;
+    const root = current.getRootNode();
+    current = root instanceof viewOf(current).ShadowRoot ? root.host : undefined;
+  }
+  return false;
+}
+
+/** A real blur means the document had focus, and what its page was told is Firefox's again. */
+function forgetTold(event: Event): void {
+  const doc = event.currentTarget;
+  if (event.isTrusted && doc !== null) told.delete(doc);
+}
+
+function sendFocusEvent(
+  target: Element,
+  type: "focus" | "focusin" | "blur" | "focusout",
+  relatedTarget: Element | null,
+): void {
+  target.dispatchEvent(
+    new (viewOf(target).FocusEvent)(type, {
+      bubbles: type === "focusin" || type === "focusout",
+      cancelable: false,
+      composed: true,
+      relatedTarget,
+    }),
+  );
 }
 
 /** Focuses the first element in the shadow tree a click focuses, those with autofocus first. */

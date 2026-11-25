@@ -39,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read or act in a page, all but `read_network`, now say that Firefox withholds the site's access
   and how to turn it on, instead of saying Foxleash could not get into the page, and `wait_for`
   stops at once instead of waiting out its timeout.
+- Suggestion lists that open when their field gets focus, such as the trip search on sl.se, now
+  open when the agent types while its tab is not in front.
 
 ### Security
 

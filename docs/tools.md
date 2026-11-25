@@ -534,6 +534,11 @@ when that changes nothing and the page did not receive it, once more by setting 
 value the way a page's own scripts do. When an editor cannot be read back, such as the body of a
 Google Docs document, the result says the text was sent but not confirmed.
 
+When the agent's tab is not in front (its window is behind another, or another tab is selected),
+Firefox sends the page no focus or blur events, so Foxleash sends them itself: as it focuses the
+element, as a click moves focus and as Tab moves it. A suggestion list that opens when its field
+gets focus then opens as the agent types.
+
 `type` refuses a field that Firefox filled in from your saved logins, addresses or cards, until
 you edit it.
 
@@ -542,7 +547,8 @@ you edit it.
 `fill_form` fills several form fields in one call, each given by its reference from
 `read_page`: text fields, selects, checkboxes and radio buttons.
 
-- The text replaces what a field holds and goes in as with `type`.
+- The text replaces what a field holds and goes in as with `type`, with the same focus and blur
+  events.
 - A select takes the value or label of an option.
 - A checkbox or radio button is clicked when its state differs.
 - The result says for each field whether it was filled or why not, and never contains a field's

@@ -2,7 +2,7 @@ import type { KeyAction, Result } from "@foxleash/protocol";
 import { type ElementRefs, refError } from "./element-refs.ts";
 import { flatParentOf } from "./flat-tree.ts";
 import { crossSiteDestination, formDestination, leavesSiteText } from "./page-actions.ts";
-import { crossSiteOf, tookFocus, viewOf } from "./page-actions-dom.ts";
+import { crossSiteOf, focusWithEvents, tookFocus, viewOf } from "./page-actions-dom.ts";
 import {
   blocksImplicitSubmission,
   expectedValue,
@@ -183,7 +183,7 @@ function notEditable(ref: string): PageError {
 /** Focuses the field or the editing host. */
 function focusTarget(target: TypeTarget, ref: string): void {
   const element = target.field ?? target.host;
-  element.focus();
+  focusWithEvents(element);
   if (!isFocused(element)) {
     throw new PageError(
       "not_editable",
@@ -522,7 +522,7 @@ function keyTarget(
   const lookup = refs.resolve(ref);
   if ("error" in lookup) throw refError(ref, lookup.error);
   const element = lookup.element;
-  if (element instanceof HTMLElement || element instanceof SVGElement) element.focus();
+  if (element instanceof HTMLElement || element instanceof SVGElement) focusWithEvents(element);
   return { element, focused: focusedElement() === element };
 }
 
@@ -704,7 +704,7 @@ function tab(backwards: boolean): KeyAction {
     const next = nextInTabOrder(entries, current, backwards);
     const candidate = next === undefined ? undefined : entries[next];
     if (next === undefined || candidate === undefined) return "none";
-    candidate.element.focus({ focusVisible: true });
+    focusWithEvents(candidate.element, { focusVisible: true });
     if (tookFocus(candidate.element, before)) return "focus_moved";
     current = next;
   }

@@ -6,7 +6,7 @@ import {
   type Result,
 } from "@foxleash/protocol";
 import { refError } from "./element-refs.ts";
-import { viewOf } from "./page-actions-dom.ts";
+import { blurWithEvents, focusWithEvents, viewOf } from "./page-actions-dom.ts";
 import { type FillFormOptions, optionMatcher } from "./page-fill.ts";
 import { isTypeableInput, lengthLimit, lineFeeds, singleLine } from "./page-input.ts";
 import {
@@ -131,14 +131,14 @@ async function fillText(
   let expected = valueFor(field, value, ref);
   // Firefox records the value at focus, and on blur sends change when the value differs from it;
   // a field focused already is blurred so that it records it at the focus below.
-  if (isFocused(field)) field.blur();
+  if (isFocused(field)) blurWithEvents(field);
   let changes = 0;
   const onChange = (): void => {
     changes += 1;
   };
   field.addEventListener("change", onChange, true);
   try {
-    field.focus();
+    focusWithEvents(field);
     if (!isFocused(field)) {
       throw new PageError(
         "not_editable",
@@ -158,7 +158,7 @@ async function fillText(
       // same events in the same order whatever the field held.
       if (expected === compared && isFocused(field)) sendChange(field);
     } finally {
-      if (isFocused(field)) field.blur();
+      if (isFocused(field)) blurWithEvents(field);
     }
     if (changes === 0) sendChange(field);
     if (field.value !== expected) {

@@ -537,9 +537,9 @@ function svgRendersChild(holder: SVGElement, node: Node): boolean {
   );
 }
 
-/** The focused element, followed into shadow roots. */
-export function focusedElement(): Element | null {
-  let focused = document.activeElement;
+/** The focused element of the document, followed into shadow roots. */
+export function focusedElement(root: Document = document): Element | null {
+  let focused = root.activeElement;
   while (focused !== null) {
     const inner = shadowRootOf(focused)?.activeElement ?? null;
     if (inner === null) return focused;

@@ -113,6 +113,7 @@ export const TITLES = {
   foreignWorkerRetry: "Fixture foreign worker retry",
   foreignBuilt: "Fixture foreign built",
   foreignBuiltFrame: "Fixture foreign built frame",
+  focusCombobox: "Fixture focus combobox",
 } as const;
 
 /** What the view shop page's status says once Add to cart is clicked. */
@@ -644,6 +645,8 @@ export async function startFixtureServer(): Promise<FixtureServer> {
       sendHtml(response, LONG_ADDRESS_PAGE);
     } else if (path === "/wait-late") {
       sendHtml(response, WAIT_LATE_PAGE);
+    } else if (path === "/focus-combobox") {
+      sendHtml(response, FOCUS_COMBOBOX_PAGE);
     } else if (path === "/wait-navigate") {
       sendHtml(response, WAIT_NAVIGATE_PAGE);
     } else if (path === "/slow") {
@@ -1487,6 +1490,66 @@ addEventListener("load", () => {
     document.body.append(late);
   }, ${WAIT_LATE_MS});
 });
+</script>
+</body></html>
+`;
+
+// A combobox whose list shows only while its field has focus, and a field after it. Each field
+// logs its focus, blur and change events into focusEvents, and counts the untrusted ones.
+const FOCUS_COMBOBOX_PAGE = `<!doctype html>
+<html><head><meta charset="utf-8"><title>${TITLES.focusCombobox}</title></head>
+<body><h1>${TITLES.focusCombobox}</h1>
+<label for="from">From</label>
+<input id="from" role="combobox" aria-controls="from-list" aria-expanded="false"
+  aria-autocomplete="list" autocomplete="off">
+<ul id="from-list" role="listbox" aria-label="From suggestions" hidden></ul>
+<label for="to">To</label><input id="to">
+<script>
+const STATIONS = ["Stockholms central", "Stockholms södra", "Sundbyberg"];
+const from = document.getElementById("from");
+const list = document.getElementById("from-list");
+let focused = false;
+let suggestions = [];
+window.focusEvents = [];
+window.sentFocusEvents = 0;
+function render() {
+  const open = focused && suggestions.length > 0;
+  list.replaceChildren(...(open ? suggestions : []).map((name) => {
+    const option = document.createElement("li");
+    option.setAttribute("role", "option");
+    option.textContent = name;
+    return option;
+  }));
+  list.hidden = !open;
+  from.setAttribute("aria-expanded", String(open));
+}
+from.addEventListener("input", () => {
+  const typed = from.value.toLowerCase();
+  suggestions = typed === "" ? [] : STATIONS.filter((name) => name.toLowerCase().startsWith(typed));
+  render();
+});
+// As React's onFocus and onBlur do: focusin and focusout, listened for at the root.
+document.addEventListener("focusin", (event) => {
+  if (event.target !== from) return;
+  focused = true;
+  render();
+});
+document.addEventListener("focusout", (event) => {
+  if (event.target !== from) return;
+  focused = false;
+  render();
+});
+for (const field of [from, document.getElementById("to")]) {
+  for (const type of ["focus", "focusin", "blur", "focusout", "change"]) {
+    field.addEventListener(type, (event) => {
+      const related = event.relatedTarget instanceof Element && event.relatedTarget.id !== ""
+        ? ":" + event.relatedTarget.id
+        : "";
+      window.focusEvents.push(type + ":" + field.id + related);
+      if (!event.isTrusted) window.sentFocusEvents += 1;
+    });
+  }
+}
 </script>
 </body></html>
 `;

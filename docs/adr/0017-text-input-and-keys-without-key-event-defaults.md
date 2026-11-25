@@ -2,6 +2,9 @@
 
 **Status:** Accepted, 2026-10-23. Its rule that only http and https destinations are checked is superseded by [0018](0018-click-and-enter-refuse-destinations-outside-the-web.md), 2026-10-23. Its `type` refuses a field Firefox autofilled, by [0021](0021-autofilled-fields-are-protected.md), 2026-10-23. Its caret at the end of an editable area is superseded by [0028](0028-type-adds-text-at-the-caret-of-an-editable-area.md), 2026-10-24.
 
+Amended 2026-11-25: the act tools send the focus events Firefox holds back from a page not in
+front.
+
 ## Context
 
 Firefox gives extensions no trusted input (ADR 0014), so `type` and `press_key` can only work
@@ -62,6 +65,12 @@ rules (key syntax, tab order, implicit submission, option stepping) are in
   default action, Enter is refused with `cross_site_navigation` when the link, the default
   button or the form's own action leads to another site, through the same check click uses
   (ADR 0014). keyup is sent first, as for a released key.
+- **Focus events where Firefox sends none.** In a document without focus, Firefox moves focus
+  without events ([measurements](../measurements/focus-events.md)). When it sent none, Foxleash
+  sends `blur` and `focusout` to the element the page was told has focus, then `focus` and
+  `focusin` to the new one, in Firefox's order with `relatedTarget`; never at the body, the root,
+  `document` or `window`, and `hasFocus()` is unchanged. It remembers which element it told, so
+  a click then a type give one focus. Firefox sends `change` for such a blur as for its own.
 - **Forms are read through prototypes.** A form control's name shadows the form's own property
   of that name, so `requestSubmit`, `elements`, `noValidate`, `getRootNode`, `baseURI` and the
   `action` attribute are read through `HTMLFormElement.prototype`, `Node.prototype` and
@@ -77,6 +86,10 @@ rules (key syntax, tab order, implicit submission, option stepping) are in
 - **Legacy key codes (`keyCode`, `charCode`, `which`).** Whether Firefox runs its own default
   actions for untrusted events that carry 13 or 32 is unmeasured; if it did, it would submit or
   click before or without the cross-site check. They stay out until measured.
+- **Key events around each character, for a list that opens on focus.** Focus was the cause,
+  and key events insert nothing.
+- **Focusing the session's window for real focus events.**
+  [ADR 0044](0044-each-agent-session-in-its-own-window.md) rejects taking focus from the user.
 
 ## Consequences
 
@@ -87,3 +100,4 @@ rules (key syntax, tab order, implicit submission, option stepping) are in
   closes the last open popover in tree order.
 - The validity of form-associated custom elements is not read, so such a form can report
   `submitted` while its validation stopped it.
+- A page brought to the front gets Firefox's real focus on top of the one Foxleash sent.
