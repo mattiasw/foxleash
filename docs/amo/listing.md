@@ -130,6 +130,8 @@ Why Foxleash requests each permission:
 - storage: keeps settings, such as approved sites and the blocklist.
 - <all_urls>: the user may approve any site, so none can be listed beforehand.
 
+The manifest sets content_security_policy for extension pages to script-src 'self', without Manifest V3's default upgrade-insecure-requests, so that a download of an http:// address on a site the user approved is requested over http, for example from a device on the user's network.
+
 The extension bundles an input probe (apps/extension/src/probe-page.ts), which the program's probe command runs in a tab on a site the user approved. It types short test words into the page's first text field and editors and clicks an expand or collapse toggle and a same-page link, to measure which simulated input the page accepts, and reports each element's tag, type, role and class names, never page text.
 
 Firefox for Android: not supported.
