@@ -85,6 +85,14 @@ A page's own
 scripts can also open an email address. Whatever the agent puts in an address, types or submits in
 a page goes to that site, and to wherever that page sends it, as it would if you did it yourself.
 
+## The agent's tab group
+
+Each agent session works in its own orange tab group titled Foxleash, and Foxleash acts only on
+tabs in that group, including tabs you move into it and tabs that a page in the group opens, also
+after your own click. Foxleash's checks on file loads reach further, to windows that a page in
+the group opens and, in some cases, to a download of your own in any tab (see
+[Files a page loads in the agent's tabs](#files-a-page-loads-in-the-agents-tabs)).
+
 ## Tabs on other sites
 
 Tabs on sites you have not approved show the agent only the site's address, with no path, query

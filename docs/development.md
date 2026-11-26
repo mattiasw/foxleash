@@ -277,14 +277,20 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `## [x.y.z] - YYYY-MM-DD` sections with real dates and descending versions, each holding
   only `### Added`, `Changed`, `Deprecated`, `Removed`, `Fixed` or `Security` headings, in
   that order, with `- ` entries and their indented continuation lines.
-- `listing`: `docs/amo/listing-claims.json` maps each capability and safeguard that
-  `docs/amo/listing.md` states to the tools and code that provide it. Every capability claim
-  occurs in a bullet of the listing's capability list and every safeguard claim in the
-  listing, and every bullet of the capability list has a capability claim and every bullet of
-  the safeguard list and of the Description's first-screen list of protections ("What
-  protects you:") a safeguard claim; the tools the server registers are exactly the claimed
-  ones; each safeguard's evidence holds (a tracked file contains, or lacks, a string), and a
-  safeguard with no evidence fails, because it is not built yet; every permission and data
+- `listing`: `docs/amo/listing-claims.json` maps each capability that `docs/amo/listing.md`
+  states, and each safeguard that it or `docs/security.md` states, to the tools and code that
+  provide it. Every capability claim occurs in a bullet of the listing's capability list and
+  every safeguard claim in the listing or in `docs/security.md`, which must be a tracked
+  regular file, and every bullet of the capability list has a capability claim and every
+  bullet of the Description's first-screen list of protections ("What protects you:") a
+  safeguard claim; the Data collection and handling section links `docs/security.md` itself
+  (`https://github.com/mattiasw/foxleash/blob/main/docs/security.md` as a word of its own, with
+  no `#fragment`) and holds no `<`, because it leaves the safeguards to that file and markup
+  could hide the link
+  ([ADR 0108](adr/0108-safeguard-claims-may-be-stated-in-the-security-document.md)); the tools
+  the server registers are exactly the claimed ones; each safeguard's evidence holds (a
+  tracked file contains, or lacks, a string), and a safeguard with no evidence fails, because
+  it is not built yet; every permission and data
   collection category in the manifest is explained in the listing, and every permission the
   listing explains is in the manifest; the categories are matched in the list after "The
   extension declares these kinds of data to Firefox:" in the Data collection and handling

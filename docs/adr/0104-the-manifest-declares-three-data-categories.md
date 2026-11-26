@@ -20,7 +20,7 @@ page makes (URLs, methods, resource types, status, timing, errors, headers, and 
 value kinds of what a request sent, never the values) and the text of responses; the URLs and
 titles of the agent's tabs on approved sites, the site address of its other tabs, and where
 navigations end. Much of this can carry sign-in details. The listing's Data collection and
-handling section says the same at length.
+handling section says the same in brief.
 
 The page defines the categories this way:
 

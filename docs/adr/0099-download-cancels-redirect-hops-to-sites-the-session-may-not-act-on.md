@@ -157,7 +157,7 @@ outside the user's grants.
   redirect comes more than 5 minutes later would be unjudged.
 - `download` is refused while Foxleash lacks access to all websites.
 - A redirect hop to a restricted or quarantined domain is not seen, so Firefox sends it; the save
-  fails when it is the last hop. The listing and the docs name this exception.
+  fails when it is the last hop. `docs/security.md` names this exception.
 - Not measured: another add-on's blocking listener holding a hop past the abort (the ended mode
   covers it whichever route leads to M8), and an event in flight at the listener's removal (M9
   could not produce one).

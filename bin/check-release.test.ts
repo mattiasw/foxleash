@@ -182,6 +182,9 @@ const MANIFEST = "apps/extension/manifest.json";
 const PROTOCOL = "packages/protocol/src/index.ts";
 const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
+const REPO = "https://github.com/mattiasw/foxleash";
+const SECURITY = "docs/security.md";
+const SECURITY_URL = `${REPO}/blob/main/${SECURITY}`;
 const AMO_SOURCES = "bin/amo-source-files.txt";
 const FIXTURE_MANIFEST = {
   manifest_version: 3,
@@ -208,11 +211,6 @@ const FIXTURE_LISTING = [
   "- open tabs and navigate them,",
   "- read pages.",
   "",
-  "Each session acts only on tabs in its group. Foxleash limits what a fooled agent can do:",
-  "",
-  "- The approval can only come from your click.",
-  "- Tool results mark page content as untrusted.",
-  "",
   "What protects you:",
   "",
   "- it acts only on tabs in its group.",
@@ -231,11 +229,33 @@ const FIXTURE_LISTING = [
   "",
   "- Website content (websiteContent): page text (text).",
   "",
-  "Tab URLs are browsing activity (browsingActivity), which this list does not declare.",
+  `Tab URLs are browsing activity (browsingActivity), which this list does not declare. See ${SECURITY_URL}`,
   "",
   "## Compatibility",
   "",
   "Linux only; this is not about (authenticationInfo).",
+  "",
+].join("\n");
+/** States the first two safeguard claims of the fixture, the first over a wrapped line. */
+const SECURITY_DOC = [
+  "# Security",
+  "",
+  "## Downloads",
+  "",
+  "The approval can only come from your",
+  "click, not from the agent.",
+  "",
+  "### Screenshots",
+  "",
+  "Tool results mark page content as untrusted.",
+  "",
+  "### Files a page loads in the agent's tabs",
+  "",
+  "## Downloads",
+  "",
+  "```sh",
+  "# Not a heading",
+  "```",
   "",
 ].join("\n");
 const FIXTURE_CLAIMS = {
@@ -263,6 +283,12 @@ const FIXTURE_CLAIMS = {
   ],
 };
 const FIXTURE_TOOLS = ["navigate", "read_page", "tabs_list"];
+const APPROVAL = "The approval can only come from your click";
+const UNTRUSTED = "Tool results mark page content as untrusted";
+const neither = (claim: string): string =>
+  `docs/amo/listing-claims.json: "${claim}" occurs in neither docs/amo/listing.md nor docs/security.md`;
+const securityUntracked =
+  "docs/security.md is not a tracked regular file, so the safeguard claims are checked against docs/amo/listing.md alone";
 const EVIDENCE_FILES: Record<string, string> = {
   "apps/extension/src/approval.ts": "export const approvedByClick = true;\n",
   "apps/extension/src/tools.ts":
@@ -399,12 +425,20 @@ function zipDigest(file: string): string {
 
 /** The listing, its claims, their evidence and the tools, all in agreement. */
 function listingFiles(): Tree["files"] {
-  return { [LISTING]: FIXTURE_LISTING, [CLAIMS]: json(FIXTURE_CLAIMS), ...EVIDENCE_FILES };
+  return {
+    [LISTING]: FIXTURE_LISTING,
+    [CLAIMS]: json(FIXTURE_CLAIMS),
+    [SECURITY]: SECURITY_DOC,
+    ...EVIDENCE_FILES,
+  };
 }
 
 function listingCommands(): Tree["commands"] {
   return Object.fromEntries(
-    [MANIFEST, ...Object.keys(EVIDENCE_FILES)].map((file) => [lsStaged(file), stagedEntry(file)]),
+    [MANIFEST, SECURITY, ...Object.keys(EVIDENCE_FILES)].map((file) => [
+      lsStaged(file),
+      stagedEntry(file),
+    ]),
   );
 }
 
@@ -1624,6 +1658,14 @@ describe("listing", () => {
     return tree;
   }
 
+  function withSecurity(tree: Tree, edit: (text: string) => string): Tree {
+    const before = tree.files[SECURITY] ?? "";
+    const after = edit(before);
+    assert.notEqual(after, before, "the edit changed nothing");
+    tree.files[SECURITY] = after;
+    return tree;
+  }
+
   function withClaims(tree: Tree, claims: unknown): Tree {
     tree.files[CLAIMS] = json(claims);
     return tree;
@@ -1656,6 +1698,7 @@ describe("listing", () => {
   const undeclaredCategory = (name: string, line: number) =>
     `docs/amo/listing.md line ${line} names the data collection category "${name}", which the manifest does not declare`;
   const websiteBullet = "- Website content (websiteContent): page text (text).\n";
+  const securityUnlinked = `the Data collection and handling section of docs/amo/listing.md does not link ${SECURITY_URL}, which describes the safeguards for it: add that URL there as a word of its own, without a fragment`;
 
   test("passes when the listing, the claims, the manifest and the tools agree", () => {
     const findings = listing(firstReleaseTree());
@@ -1683,7 +1726,7 @@ describe("listing", () => {
     ]);
   });
 
-  test("a claim string absent from the listing fails, for a capability and a safeguard", () => {
+  test("a claim string in neither file fails, for a capability and a safeguard", () => {
     const claims = claimsCopy();
     const [capability] = claims.capabilities;
     const safeguard = claims.safeguards[2];
@@ -1692,9 +1735,9 @@ describe("listing", () => {
     safeguard.listing = "acts only on approved tabs";
     assert.deepEqual(texts(listing(withClaims(firstReleaseTree(), claims)), "FAIL"), [
       'docs/amo/listing-claims.json: the capability "open windows" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
-      'docs/amo/listing-claims.json: "acts only on approved tabs" does not occur in docs/amo/listing.md',
+      neither("acts only on approved tabs"),
       'docs/amo/listing.md line 13 "open tabs and navigate them," has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 23 "it acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 18 "it acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1702,11 +1745,11 @@ describe("listing", () => {
     const tree = withListing(firstReleaseTree(), (text) =>
       text
         .replace("- read pages.", "- read pages,\n- take screenshots.")
-        .replace("as untrusted.", "as untrusted.\n- Uploads are limited."),
+        .replace("in its group.", "in its group,\n- uploads are limited."),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       'docs/amo/listing.md line 15 "take screenshots." has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 21 "Uploads are limited." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 20 "uploads are limited." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1734,11 +1777,14 @@ describe("listing", () => {
     const tree = withListing(firstReleaseTree(), (text) =>
       text
         .replace("- read pages.", "- read pages,\n- acts only on tabs in its group.")
-        .replace("as untrusted.", "as untrusted.\n- It can read pages only in approved tabs."),
+        .replace(
+          "- it acts only on tabs in its group.",
+          "$&\n- It can read pages only in approved tabs.",
+        ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
       'docs/amo/listing.md line 15 "acts only on tabs in its group." has no claim in docs/amo/listing-claims.json',
-      'docs/amo/listing.md line 21 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 20 "It can read pages only in approved tabs." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
@@ -1750,24 +1796,112 @@ describe("listing", () => {
       ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 24 "it can read pages only on approved sites." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 19 "it can read pages only on approved sites." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
   test("a list item with another marker needs its own claim", () => {
     const tree = withListing(firstReleaseTree(), (text) =>
-      text.replace("as untrusted.", "as untrusted.\n* It can run code from any page."),
+      text.replace("in its group.", "in its group.\n* It can run code from any page."),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      'docs/amo/listing.md line 20 "It can run code from any page." has no claim in docs/amo/listing-claims.json',
+      'docs/amo/listing.md line 19 "It can run code from any page." has no claim in docs/amo/listing-claims.json',
     ]);
   });
 
   test("a claim may span a wrapped line", () => {
     const tree = withListing(firstReleaseTree(), (text) =>
-      text.replace("mark page content as", "mark page content\n  as"),
+      text.replace("acts only on tabs in", "acts only on tabs\n  in"),
     );
     assertClean(listing(tree));
+  });
+
+  test("a claim may span a wrapped line of the security document", () => {
+    const tree = withSecurity(firstReleaseTree(), (text) =>
+      text.replace("mark page content as", "mark page\r\n  content\tas"),
+    );
+    assertClean(listing(tree));
+  });
+
+  test("a safeguard claim that occurs only in the security document passes", () => {
+    const tree = firstReleaseTree();
+    for (const claim of [APPROVAL, UNTRUSTED]) {
+      assert.ok(!tree.files[LISTING]?.includes(claim), claim);
+    }
+    assertClean(listing(tree));
+  });
+
+  test("a safeguard claim that occurs in both files passes", () => {
+    const tree = withListing(firstReleaseTree(), (text) =>
+      text.replace("Linux only;", `${UNTRUSTED}. Linux only;`),
+    );
+    assertClean(listing(tree));
+  });
+
+  for (const [state, staged, onDisk] of [
+    ["is not in the index", "", true],
+    ["is a symlink", stagedEntry(SECURITY, "120000"), true],
+    ["is missing on disk", stagedEntry(SECURITY), false],
+  ] as const) {
+    test(`a claim only in the security document fails when that file ${state}`, () => {
+      const tree = firstReleaseTree();
+      tree.commands[lsStaged(SECURITY)] = staged;
+      if (!onDisk) delete tree.files[SECURITY];
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        securityUntracked,
+        neither(APPROVAL),
+        neither(UNTRUSTED),
+        `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+      ]);
+    });
+  }
+
+  test("a failing git ls-files for the security document is one FAIL, and the rest still runs", () => {
+    const tree = withManifest(firstReleaseTree(), { permissions: ["tabs", "storage", "cookies"] });
+    tree.commands[lsStaged(SECURITY)] = new CommandError("git ls-files", 128, "fatal: broken");
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "docs/security.md: `git ls-files` failed (status 128): fatal: broken",
+      neither(APPROVAL),
+      neither(UNTRUSTED),
+      missingCookies,
+      "docs/amo/listing.md line 34: `git ls-files` failed (status 128): fatal: broken",
+    ]);
+  });
+
+  test("a capability claim does not count in the security document", () => {
+    const tree = withSecurity(
+      withListing(firstReleaseTree(), (text) => text.replace(",\n- read pages.", ".")),
+      (text) => `${text}\nThe agent can:\n\n- read pages.\n`,
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      'docs/amo/listing-claims.json: the capability "read pages" is in no bullet of the list after "The agent can:" in docs/amo/listing.md',
+    ]);
+  });
+
+  test("a claim does not match across the end of one file and the start of the other", () => {
+    const claims = claimsCopy();
+    const across = [
+      // The listing's end and the security document's start, joined with nothing or a space.
+      "(authenticationInfo). # Security",
+      "(authenticationInfo).  # Security",
+      "(authenticationInfo).# Security",
+      // The security document's end and the listing's start.
+      "``` # AMO listing",
+      "```  # AMO listing",
+      "```# AMO listing",
+    ];
+    for (const text of across) {
+      claims.safeguards.push({
+        listing: text,
+        evidence: [{ file: "apps/extension/src/tools.ts", contains: "group" }],
+      });
+    }
+    const tree = withClaims(firstReleaseTree(), claims);
+    assert.deepEqual(texts(listing(tree), "FAIL"), across.map(neither));
+    assert.ok(tree.files[LISTING]?.endsWith("(authenticationInfo).\n"));
+    assert.ok(tree.files[LISTING]?.startsWith("# AMO listing\n"));
+    assert.ok(tree.files[SECURITY]?.startsWith("# Security\n"));
+    assert.ok(tree.files[SECURITY]?.endsWith("```\n"));
   });
 
   test("a wrapped bullet does not end the list", () => {
@@ -2029,7 +2163,11 @@ describe("listing", () => {
       'docs/amo/listing-claims.json: safeguards[2] has no "listing"',
       missingCookies,
     ]);
-    assert.ok(!env.calls.some(([command, verb]) => command === "git" && verb === "ls-files"));
+    // Only the link check asks about a file: no evidence file and no claim is looked up.
+    assert.deepEqual(
+      env.calls.filter(([command, verb]) => command === "git" && verb === "ls-files"),
+      [JSON.parse(lsStaged(SECURITY))],
+    );
   });
 
   test("a claims file of the wrong top-level shape fails", () => {
@@ -2157,7 +2295,7 @@ describe("listing", () => {
       missingCookies,
       'the manifest requests "https://*.example.com/*", but the Permissions section of docs/amo/listing.md has no "- https://*.example.com/*:" bullet',
       'the manifest requests "downloads", but the Permissions section of docs/amo/listing.md has no "- downloads:" bullet',
-      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "storage", which the manifest does not request',
       missingCategory("locationInfo"),
       missingCategory("browsingActivity"),
       missingCategory("authenticationInfo"),
@@ -2172,7 +2310,7 @@ describe("listing", () => {
       ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      undeclaredCategory("personalCommunications", 38),
+      undeclaredCategory("personalCommunications", 33),
     ]);
   });
 
@@ -2184,8 +2322,8 @@ describe("listing", () => {
       ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      undeclaredCategory("searchTerms", 38),
-      undeclaredCategory("personalCommunications", 38),
+      undeclaredCategory("searchTerms", 33),
+      undeclaredCategory("personalCommunications", 33),
     ]);
   });
 
@@ -2197,8 +2335,8 @@ describe("listing", () => {
       ),
     );
     assert.deepEqual(texts(listing(tree), "FAIL"), [
-      undeclaredCategory("searchTerms", 38),
-      undeclaredCategory("personalCommunications", 39),
+      undeclaredCategory("searchTerms", 33),
+      undeclaredCategory("personalCommunications", 34),
     ]);
   });
 
@@ -2358,10 +2496,10 @@ describe("listing", () => {
       "apps/extension/manifest.json: host_permissions must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.required must be absent or an array of strings",
       "apps/extension/manifest.json: browser_specific_settings.gecko.data_collection_permissions.optional must be absent or an array of strings",
-      'docs/amo/listing.md line 29 explains the permission "tabs", which the manifest does not request',
-      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
-      'docs/amo/listing.md line 31 explains the permission "<all_urls>", which the manifest does not request',
-      undeclaredCategory("websiteContent", 37),
+      'docs/amo/listing.md line 24 explains the permission "tabs", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 26 explains the permission "<all_urls>", which the manifest does not request',
+      undeclaredCategory("websiteContent", 32),
     ]);
   });
 
@@ -2634,38 +2772,18 @@ describe("listing", () => {
   });
 
   describe("links", () => {
-    const REPO = "https://github.com/mattiasw/foxleash";
-    const SECURITY = "docs/security.md";
-    const SECURITY_URL = `${REPO}/blob/main/${SECURITY}`;
-    const SECURITY_DOC = [
-      "# Security",
-      "",
-      "## Downloads",
-      "",
-      "### Screenshots",
-      "",
-      "### Files a page loads in the agent's tabs",
-      "",
-      "## Downloads",
-      "",
-      "```sh",
-      "# Not a heading",
-      "```",
-      "",
-    ].join("\n");
     const DATA_PARAGRAPH =
       "Tab URLs are browsing activity (browsingActivity), which this list does not declare.";
     const noPrevious = [{ level: "INFO", text: "no previous tag: drift check skipped" }];
-    const noHeading = (anchor: string, line = 39): string =>
+    const noHeading = (anchor: string, line = 34): string =>
       `docs/amo/listing.md line ${line} links ${SECURITY_URL}#${anchor}, but docs/security.md has no heading with the anchor "${anchor}"`;
     const followedBy = (url: string, punctuation: string, line: number): string =>
       `docs/amo/listing.md line ${line}: the URL ${url} is followed by "${punctuation}": end the line after it or put a space after it, so a linkifier does not take "${punctuation}" into the address`;
 
-    /** Tracks a `docs/security.md` and puts `links` at the end of the fixture's line 39. */
+    /** Puts `links` in the fixture's line 34, and `doc` in the place of its security document. */
     function linking(links: string, doc = SECURITY_DOC): Tree {
       const tree = firstReleaseTree();
       tree.files[SECURITY] = doc;
-      tree.commands[lsStaged(SECURITY)] = stagedEntry(SECURITY);
       return withListing(tree, (text) =>
         text.replace(DATA_PARAGRAPH, `${DATA_PARAGRAPH} ${links}`),
       );
@@ -2700,10 +2818,14 @@ describe("listing", () => {
     });
 
     test("a link to a file that is not tracked fails", () => {
-      const tree = linking(SECURITY_URL);
+      const tree = linking(`${SECURITY_URL}#screenshots`);
       tree.commands[lsStaged(SECURITY)] = "";
       assert.deepEqual(texts(listing(tree), "FAIL"), [
-        `docs/amo/listing.md line 39 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+        securityUntracked,
+        neither(APPROVAL),
+        neither(UNTRUSTED),
+        `docs/amo/listing.md line 34 links ${SECURITY_URL}#screenshots, but docs/security.md is not a tracked regular file`,
+        `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
       ]);
     });
 
@@ -2713,7 +2835,7 @@ describe("listing", () => {
       tree.files.LICENSE = "GPL";
       tree.commands[lsStaged("LICENSE")] = stagedEntry("LICENSE");
       assert.deepEqual(texts(listing(tree), "FAIL"), [
-        `docs/amo/listing.md line 39 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
+        `docs/amo/listing.md line 34 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
       ]);
     });
 
@@ -2724,8 +2846,12 @@ describe("listing", () => {
       tree.commands[lsStaged("LICENSE")] = stagedEntry("LICENSE");
       tree.commands[lsStaged(SECURITY)] = new CommandError("git ls-files", 128, "fatal: broken");
       assert.deepEqual(texts(listing(tree), "FAIL"), [
-        "docs/amo/listing.md line 39: `git ls-files` failed (status 128): fatal: broken",
-        `docs/amo/listing.md line 39 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
+        "docs/security.md: `git ls-files` failed (status 128): fatal: broken",
+        neither(APPROVAL),
+        neither(UNTRUSTED),
+        "docs/amo/listing.md line 34: `git ls-files` failed (status 128): fatal: broken",
+        `docs/amo/listing.md line 34 links ${license}#top, but LICENSE is not a Markdown file, so its anchor cannot be checked`,
+        "docs/amo/listing.md line 34: `git ls-files` failed (status 128): fatal: broken",
       ]);
     });
 
@@ -2740,15 +2866,15 @@ describe("listing", () => {
       );
       assert.deepEqual(texts(listing(tree), "FAIL"), [
         followedBy(REPO, ":", 5),
-        followedBy(`${SECURITY_URL}#screenshots`, ".", 39),
-        followedBy("https://example.org/a", ").", 39),
+        followedBy(`${SECURITY_URL}#screenshots`, ".", 34),
+        followedBy("https://example.org/a", ").", 34),
       ]);
     });
 
     test("a repository link followed by punctuation still gets its link check", () => {
       const findings = listing(linking(`${SECURITY_URL}#no-such-section.`));
       assert.deepEqual(texts(findings, "FAIL"), [
-        followedBy(`${SECURITY_URL}#no-such-section`, ".", 39),
+        followedBy(`${SECURITY_URL}#no-such-section`, ".", 34),
         noHeading("no-such-section"),
       ]);
     });
@@ -2764,12 +2890,86 @@ describe("listing", () => {
           ),
       );
       assert.deepEqual(texts(listing(tree), "FAIL"), [
-        followedBy("https://example.org/a", ".", 30),
+        followedBy("https://example.org/a", ".", 25),
       ]);
       const elsewhere = withListing(firstReleaseTree(), (text) =>
         text.replace(DATA_PARAGRAPH, `${DATA_PARAGRAPH}\n- ${pattern}: more.`),
       );
-      assert.deepEqual(texts(listing(elsewhere), "FAIL"), [followedBy(pattern, ":", 40)]);
+      assert.deepEqual(texts(listing(elsewhere), "FAIL"), [followedBy(pattern, ":", 35)]);
+    });
+
+    test("the Data section must link the security document itself", () => {
+      const link = ` See ${SECURITY_URL}`;
+      const edited = (edit: (text: string) => string): string[] =>
+        texts(listing(withListing(firstReleaseTree(), edit)), "FAIL");
+      assert.deepEqual(
+        edited((text) => text.replace(link, "")),
+        [securityUnlinked],
+      );
+      assert.deepEqual(
+        edited((text) => text.replace(link, `${link}#screenshots`)),
+        [securityUnlinked],
+      );
+      assert.deepEqual(
+        edited((text) =>
+          text.replace(link, "").replace("Foxleash lets an agent use Firefox.", `$&${link}`),
+        ),
+        [securityUnlinked],
+      );
+      assert.deepEqual(
+        edited((text) => text.replace(link, `${link}.`)),
+        [followedBy(SECURITY_URL, ".", 34)],
+      );
+    });
+
+    test("a longer address that starts like the security document's is not its link", () => {
+      const tree = withListing(firstReleaseTree(), (text) =>
+        text.replace(` See ${SECURITY_URL}`, "$&x"),
+      );
+      tree.commands[lsStaged(`${SECURITY}x`)] = "";
+      assert.deepEqual(texts(listing(tree), "FAIL"), [
+        `docs/amo/listing.md line 34 links ${SECURITY_URL}x, but docs/security.mdx is not a tracked regular file`,
+        securityUnlinked,
+      ]);
+    });
+
+    /** The FAIL texts with `to` in the place of the fixture's link to the security document. */
+    function relinked(to: string): string[] {
+      const tree = withListing(firstReleaseTree(), (text) =>
+        text.replace(` See ${SECURITY_URL}`, () => to),
+      );
+      return texts(listing(tree), "FAIL");
+    }
+
+    test("an address joined to other text is not the security document's link", () => {
+      for (const joined of [
+        ` See${SECURITY_URL}`,
+        // Neither is a plain space, so a linkifier can take what follows into the address.
+        ` See ${SECURITY_URL}\uFEFF#screenshots`,
+        ` See ${SECURITY_URL}\u00A0now`,
+      ]) {
+        assert.deepEqual(relinked(joined), [securityUnlinked], JSON.stringify(joined));
+      }
+    });
+
+    test("the Data section takes no markup, which can hide the link or point it elsewhere", () => {
+      const markup = (line: number): string =>
+        `docs/amo/listing.md line ${line} holds "<" in the Data collection and handling section: markup there can hide the link to docs/security.md or point it elsewhere, so write the section without "<"`;
+      for (const marked of [
+        ` <!-- See ${SECURITY_URL} -->`,
+        ` <abbr title="see ${SECURITY_URL} now">the security document</abbr>`,
+        ` <a href="https://example.org/x"> ${SECURITY_URL} </a>`,
+      ]) {
+        assert.deepEqual(relinked(marked), [markup(34)], marked);
+      }
+      assert.deepEqual(relinked(` See ${REPO}/blob/<!-- -->main/${SECURITY}`), [
+        markup(34),
+        securityUnlinked,
+      ]);
+      assert.deepEqual(
+        relinked(` See ${SECURITY_URL}\n\nSizes < 5 and <b>bold</b>.\nMore <i>text</i>.`),
+        [markup(36), markup(37)],
+      );
     });
 
     test("URLs outside the four pasted sections are not checked", () => {
@@ -5985,7 +6185,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     const findings = listingAt(dir);
     assert.deepEqual(texts(findings, "FAIL"), [
-      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
     const lines = texts(findings, "INFO");
@@ -6016,7 +6216,7 @@ describe("real git", () => {
     commit(dir, "Drop storage", withoutStorage);
     git(dir, "update-ref", "refs/v0.1.0", "HEAD");
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });
@@ -6030,7 +6230,7 @@ describe("real git", () => {
     assert.ok(texts(findings, "INFO").includes('-    "storage"'));
     write(dir, { [LISTING]: FIXTURE_LISTING });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
-      'docs/amo/listing.md line 30 explains the permission "storage", which the manifest does not request',
+      'docs/amo/listing.md line 25 explains the permission "storage", which the manifest does not request',
       driftFail("permissions"),
     ]);
   });
@@ -6166,6 +6366,32 @@ describe("real git", () => {
     commit(dir, "Link", { [CLAIMS]: json(claims) });
     assert.deepEqual(texts(listingAt(dir), "FAIL"), [
       'safeguard "The approval can only come from your click": apps/extension/src/link.ts is not a tracked regular file',
+    ]);
+  });
+
+  test("a committed symlink is not the security document", () => {
+    const dir = listingRepo();
+    rmSync(path.join(dir, SECURITY));
+    symlinkSync("elsewhere.md", path.join(dir, SECURITY));
+    commit(dir, "Link", { "docs/elsewhere.md": SECURITY_DOC });
+    assert.equal(readFileSync(path.join(dir, SECURITY), "utf8"), SECURITY_DOC);
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      securityUntracked,
+      neither(APPROVAL),
+      neither(UNTRUSTED),
+      `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+    ]);
+  });
+
+  test("an untracked security document does not count, a committed one does", () => {
+    const dir = listingRepo();
+    assertClean(listingAt(dir));
+    git(dir, "rm", "-q", "--cached", SECURITY);
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      securityUntracked,
+      neither(APPROVAL),
+      neither(UNTRUSTED),
+      `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
     ]);
   });
 

@@ -114,8 +114,8 @@ A filter cannot pass a response's failure on
   body stored before an error, at the copy limit or at a stop that came first, is dropped at the
   error (`onErrorOccurred`). Bodies count toward the page's `MAX_LOG_CHARS` (4,000,000); while
   they take more than half of it, `trim` drops the oldest bodies before any request.
-- **A cut response is stated and pinned.** The add-on listing and
-  [response bodies](../security.md#response-bodies) state that a response that fails while it
+- **A cut response is stated and pinned.**
+  [Response bodies](../security.md#response-bodies) states that a response that fails while it
   arrives reaches a recorded page without its error. The end-to-end test `a response the connection
   cuts short reaches a recorded page as complete, and read_network shows the error` in
   `e2e/network.test.ts` pins it, so a Firefox change that passes the error on shows.

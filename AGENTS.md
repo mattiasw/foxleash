@@ -139,8 +139,11 @@ release check refuses a release where the manifest's permissions, data declarati
 web-accessible resources, external connections or content security policy changed but the
 listing's Summary, Description, Permissions and Data collection and handling sections did
 not. A new, renamed or removed tool, or a new safeguard, also updates
-`docs/amo/listing-claims.json`, which the release check compares with the listing and with the
-tools the server registers. CI runs these checks as `npm run check:release -- listing`. When a
+`docs/amo/listing-claims.json`, which the release check compares with the listing, with
+`docs/security.md` and with the tools the server registers. A safeguard claim occurs word for
+word in the listing or in `docs/security.md`, which the listing links for the safeguards, so a
+change to such a sentence in `docs/security.md` is checked like a listing sentence and updates
+the claim in the same commit. CI runs these checks as `npm run check:release -- listing`. When a
 change moves or rewrites code that a safeguard's evidence names, point the evidence at the new
 code in the same commit; a safeguard that no longer holds is a listing change.
 

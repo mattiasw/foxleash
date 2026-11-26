@@ -1,5 +1,5 @@
 {
-  "note": "Maps each capability and safeguard that docs/amo/listing.md states to the tools and code that provide it, and npm run check:release -- listing compares it with the listing, the manifest and the tools the server registers. An empty evidence list means the safeguard is not built yet, and it fails the release on purpose.",
+  "note": "Maps each capability that docs/amo/listing.md states, and each safeguard that it or docs/security.md states, to the tools and code that provide it. npm run check:release -- listing compares it with both files, the manifest and the tools the server registers: a capability claim occurs in the listing's capability list, and a safeguard claim occurs word for word in the listing or in docs/security.md. An empty evidence list means the safeguard is not built yet, and it fails the release on purpose.",
   "capabilities": [
     {
       "listing": "open tabs and navigate them",
@@ -81,7 +81,7 @@
       ]
     },
     {
-      "listing": "after your click Foxleash refuses every tool call of that session",
+      "listing": "After your click, Foxleash refuses every tool call of that session, also on sites you allowed always",
       "evidence": [
         { "file": "apps/extension/src/site-access.ts", "contains": "session_stopped" },
         { "file": "apps/extension/src/handlers.ts", "contains": "access.admit(" },
@@ -97,7 +97,7 @@
       ]
     },
     {
-      "listing": "When the agent opens, reloads, or goes back or forward to an address that answers with a redirect to one of them, directly or after other redirects, Foxleash cancels that step before Firefox requests it",
+      "listing": "A load the agent started is one of `navigate` to an address, a reload, back or forward, and `tab_open`, also after you approved its site. When a redirect step of such a load leads to a blocked site, even one you approved, Foxleash cancels it before Firefox sends it",
       "evidence": [
         {
           "file": "apps/extension/src/load-hops.ts",
@@ -129,7 +129,7 @@
       ]
     },
     {
-      "listing": "After such a cancel, Firefox can send a later load of that page straight to the blocked site: Foxleash cancels that too when the agent reloads the tab or goes back or forward onto the page",
+      "listing": "That load is cancelled the same way when the agent reloads the tab or goes back or forward onto the page",
       "evidence": [
         {
           "file": "apps/extension/src/load-hops.ts",
@@ -165,7 +165,7 @@
       ]
     },
     {
-      "listing": "Downloads request only addresses on sites you approved that are not on the blocklist",
+      "listing": "Downloads request and save only from sites you approved that are not on the blocklist",
       "evidence": [
         {
           "file": "apps/extension/src/downloads.ts",
@@ -196,7 +196,7 @@
       ]
     },
     {
-      "listing": "Foxleash stops a page or frame load whose answer comes from a site you have not approved, or that is on the blocklist, and is anything other than a web page",
+      "listing": "Foxleash stops a page or frame load whose answer comes from a site that session may not act on (not approved, or on the blocklist) and is anything other than a web page",
       "evidence": [
         {
           "file": "apps/extension/src/file-guard.ts",
@@ -338,7 +338,7 @@
       ]
     },
     {
-      "listing": "never outside that folder and never over an existing file",
+      "listing": "Saved screenshots go only into the agent's working folder, as new files, and never over an existing file",
       "evidence": [
         { "file": "apps/server/src/save-file.ts", "contains": "\"wx\"" },
         { "file": "apps/server/src/save-file.ts", "contains": "realpath" },
@@ -372,7 +372,7 @@
       ]
     },
     {
-      "listing": "replaces the values in request addresses that look like sign-in credentials",
+      "listing": "As a best effort, `read_network` replaces such values with `[redacted]` and keeps the parameter name",
       "evidence": [
         { "file": "apps/extension/src/url-credentials.ts", "contains": "const CREDENTIAL_WORDS" },
         { "file": "apps/extension/src/url-credentials.ts", "contains": "\"token\"" },
@@ -398,7 +398,7 @@
       "evidence": [{ "file": "apps/extension/manifest.json", "lacks": "userScripts" }]
     },
     {
-      "listing": "only the site's address (scheme, host and port), with no path, query or title",
+      "listing": "Tabs on sites you have not approved show the agent only the site's address, with no path, query or title",
       "evidence": [
         { "file": "apps/extension/src/site-access.ts", "contains": "redactedUrl(tab.url)" }
       ]
@@ -417,7 +417,7 @@
       ]
     },
     {
-      "listing": "Foxleash never gives it the values a request sent",
+      "listing": "`read_network` never returns a value from a request body",
       "evidence": [
         {
           "file": "apps/extension/src/request-body.ts",
@@ -431,7 +431,7 @@
       ]
     },
     {
-      "listing": "keeps only for requests to sites you approved that are not on the blocklist",
+      "listing": "Only responses to requests whose own URL is on a site the session may act on: approved and not on the blocklist",
       "evidence": [
         {
           "file": "apps/extension/src/network-log.ts",
@@ -460,7 +460,7 @@
       ]
     },
     {
-      "listing": "passes every byte of each response on to the page unchanged",
+      "listing": "Foxleash writes each chunk of the response on to the page, in the order it arrives, before it copies anything, and never changes one",
       "evidence": [
         { "file": "apps/extension/src/response-body.ts", "contains": "filter.write(event.data);" },
         {
@@ -475,7 +475,7 @@
       ]
     },
     {
-      "listing": "with access, refresh and ID tokens and JWTs redacted as a best effort",
+      "listing": "As a best effort, the values of access, refresh and ID token fields and JWT-shaped strings are replaced with `[redacted]`",
       "evidence": [
         {
           "file": "apps/extension/src/response-body.ts",
@@ -492,7 +492,7 @@
       ]
     },
     {
-      "listing": "never gives it the values of password fields, of one-time code and card number fields that the page marks as such for autofill, or of text fields that Firefox filled in from your saved logins, addresses or cards, until you edit them",
+      "listing": "Text results never return the values of these fields, only whether they are filled: - password fields, - one-time code and card number fields that the page marks as such for autofill, - text fields that Firefox filled in from your saved logins, addresses or cards, until you edit them.",
       "evidence": [
         { "file": "apps/extension/src/page-tree.ts", "contains": "isProtectedField" },
         {
@@ -537,7 +537,7 @@
       ]
     },
     {
-      "listing": "When a click or Enter by the agent would send a form with GET",
+      "listing": "when a `click`, Enter with `press_key`, or the click `upload_file` makes on a button or link would send a form with GET while the form would send the value of a protected field, Foxleash cancels the submission and refuses the action",
       "evidence": [
         { "file": "apps/extension/src/content.ts", "contains": "\"protected_get_form\"" },
         { "file": "apps/extension/src/content.ts", "contains": "addEventListener(\"submit\", " },
@@ -550,7 +550,7 @@
       ]
     },
     {
-      "listing": "Screenshots hide the text of the same fields and of drop-downs, also in frames from other sites",
+      "listing": "Screenshots hide the text of protected fields, also in frames from other sites",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "getAllFrames({ tabId })" },
         {
@@ -601,6 +601,16 @@
       ]
     },
     {
+      "listing": "A screenshot also hides the text of every drop-down",
+      "evidence": [
+        {
+          "file": "apps/extension/src/handlers.ts",
+          "contains": "browser.scripting.insertCSS(mask)"
+        },
+        { "file": "apps/extension/src/screenshot.ts", "contains": "\"select\"," }
+      ]
+    },
+    {
       "listing": "refuses clicks on links and form buttons that lead to another site or out of the browser",
       "evidence": [
         {
@@ -618,7 +628,7 @@
       ]
     },
     {
-      "listing": "While Foxleash is asking you something in a tab, the agent cannot select another tab of its group, and Foxleash does not select the tabs it opens for the agent meanwhile",
+      "listing": "While Foxleash is asking you something in a tab of the session's group (whether to allow a site, to save or run a recipe, or to allow the sites a task needs), the agent cannot select another tab: `tab_select` of any other tab is refused, and a tab `tab_open` opens is not selected",
       "evidence": [
         { "file": "apps/extension/src/handlers.ts", "contains": "function keepPromptInView(" },
         {

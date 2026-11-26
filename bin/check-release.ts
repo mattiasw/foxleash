@@ -141,6 +141,7 @@ const AUDIT_ARGS = [
 ];
 const LISTING = "docs/amo/listing.md";
 const CLAIMS = "docs/amo/listing-claims.json";
+const SECURITY_DOC = "docs/security.md";
 const MANIFEST = "apps/extension/manifest.json";
 const PROTOCOL = "packages/protocol/src/index.ts";
 // The published npm package, as apps/server/build.ts names it; the workspace's own name is private.
@@ -165,7 +166,6 @@ const NPM_TIME = /^(\d{4})-(\d{2})-(\d{2})T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$/;
 const AMO_SOURCE_FILES = "bin/amo-source-files.txt";
 const README = "README.md";
 const CAPABILITIES_INTRO = "The agent can:";
-const SAFEGUARDS_INTRO = "Foxleash limits what a fooled agent can do:";
 const PROTECTIONS_INTRO = "What protects you:";
 const DATA_INTRO = "The extension declares these kinds of data to Firefox:";
 const PERMISSIONS_HEADING = "## Permissions";
@@ -435,9 +435,9 @@ export function checkListing(env: Env): Finding[] {
 }
 
 /**
- * The listing, the claims file, the manifest and the registered tools agree, and, with a
- * previous tag, the manifest's declarations did not change without the listing. `tag` is
- * undefined when listing the tags failed, which is already a FAIL.
+ * The listing, the claims file, the security document, the manifest and the registered tools
+ * agree, and, with a previous tag, the manifest's declarations did not change without the
+ * listing. `tag` is undefined when listing the tags failed, which is already a FAIL.
  */
 function checkListingAgrees(env: Env, tag: string | null | undefined, findings: Finding[]): void {
   const listing = attempt(findings, "listing text", () => env.readFile(LISTING));
@@ -445,7 +445,6 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   const manifest = attempt(findings, "listing manifest", () => readJson(env, MANIFEST));
   const tools = attempt(findings, "registered tools", () => env.listTools());
   const capabilityBullets = bulletList(listing, CAPABILITIES_INTRO, findings);
-  const safeguardBullets = bulletList(listing, SAFEGUARDS_INTRO, findings);
   const protectionBullets = bulletList(listing, PROTECTIONS_INTRO, findings);
   if (claims !== undefined) {
     const capabilities = claims.capabilities.map((claim) => claim.listing);
@@ -453,9 +452,8 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
     if (capabilityBullets !== undefined) {
       checkCapabilitiesListed(capabilityBullets, capabilities, findings);
     }
-    if (listing !== undefined) checkClaimsOccur(listing, safeguards, findings);
+    if (listing !== undefined) checkClaimsOccur(env, listing, safeguards, findings);
     checkBulletsClaimed(capabilityBullets ?? [], capabilities, findings);
-    checkBulletsClaimed(safeguardBullets ?? [], safeguards, findings);
     checkBulletsClaimed(protectionBullets ?? [], safeguards, findings);
     if (tools !== undefined) checkToolsClaimed(tools, claims.capabilities, findings);
     checkSafeguards(env, claims.safeguards, findings);
@@ -465,6 +463,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   }
   if (listing !== undefined) checkSectionLengths(listing, findings);
   if (listing !== undefined) checkListingLinks(env, listing, findings);
+  if (listing !== undefined) checkSecurityDocLinked(listing, findings);
   checkListingDrift(env, tag, manifest, listing, findings);
 }
 
@@ -641,14 +640,40 @@ function checkCapabilitiesListed(
   }
 }
 
-function checkClaimsOccur(listing: string, strings: readonly string[], findings: Finding[]): void {
+/**
+ * A safeguard claim occurs in the listing or in the security document, which the privacy policy
+ * links for the safeguards. The two texts are searched apart, so no claim matches across the end
+ * of one file and the start of the other.
+ */
+function checkClaimsOccur(
+  env: Env,
+  listing: string,
+  strings: readonly string[],
+  findings: Finding[],
+): void {
   // A claim may span a wrapped line.
   const flat = listing.replace(/\s+/g, " ");
+  const security = attempt(findings, SECURITY_DOC, () => securityText(env, findings));
   for (const text of strings) {
-    if (!flat.includes(text)) {
-      findings.push(fail(`${CLAIMS}: ${quote(text)} does not occur in ${LISTING}`));
+    if (!flat.includes(text) && security?.includes(text) !== true) {
+      findings.push(
+        fail(`${CLAIMS}: ${quote(text)} occurs in neither ${LISTING} nor ${SECURITY_DOC}`),
+      );
     }
   }
+}
+
+/** The security document, flattened like the listing; none when it cannot be read safely. */
+function securityText(env: Env, findings: Finding[]): string | undefined {
+  if (!isTrackedRegularFile(env, SECURITY_DOC)) {
+    findings.push(
+      fail(
+        `${SECURITY_DOC} is not a tracked regular file, so the safeguard claims are checked against ${LISTING} alone`,
+      ),
+    );
+    return undefined;
+  }
+  return env.readFile(SECURITY_DOC).replace(/\s+/g, " ");
 }
 
 function checkBulletsClaimed(
@@ -941,6 +966,40 @@ function githubAnchor(title: string): string {
     .toLowerCase()
     .replace(/[^\p{L}\p{M}\p{N}\p{Pc} -]/gu, "")
     .replace(/ /g, "-");
+}
+
+/**
+ * The privacy policy leaves the safeguards to the security document, so its section links that
+ * document as a whole: a link to one of its headings, or a link in another section, does not count.
+ * Nor does an address joined to other text, and the section takes no `<` at all, since markup can
+ * hide an address or point its link elsewhere.
+ */
+function checkSecurityDocLinked(listing: string, findings: Finding[]): void {
+  const wanted = REPO_FILE_URL + SECURITY_DOC;
+  // A missing section is already a FAIL of the category check.
+  const section = sectionLines(listing.split(/\r?\n/), DATA_HEADING, []);
+  if (section === undefined) return;
+  for (const { line, text } of section) {
+    if (text.includes("<")) {
+      findings.push(
+        fail(
+          `${LISTING} line ${line} holds ${quote("<")} in the Data collection and handling section: markup there can hide the link to ${SECURITY_DOC} or point it elsewhere, so write the section without ${quote("<")}`,
+        ),
+      );
+    }
+  }
+  // Only a plain space or a line end parts words: a linkifier can take any other character into
+  // the address.
+  const linked = section.some(({ text }) =>
+    text.split(" ").some((word) => word.replace(URL_TRAILING_PUNCTUATION, "") === wanted),
+  );
+  if (!linked) {
+    findings.push(
+      fail(
+        `the Data collection and handling section of ${LISTING} does not link ${wanted}, which describes the safeguards for it: add that URL there as a word of its own, without a fragment`,
+      ),
+    );
+  }
 }
 
 function checkListingDrift(
