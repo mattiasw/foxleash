@@ -6,6 +6,11 @@ Amended 2026-11-21: the release check reads categories only from the listing's l
 data, and also fails when that list names a category the manifest does not declare: that drift
 between the listing and the manifest used to pass.
 
+Amended 2026-11-26: the input probe no longer sends the browser's user agent string to the
+program, which printed it in the probe report. Mozilla's page puts "Device and browser info" under
+`technicalAndInteraction`, which none of the three declared categories covers, and a test in
+`apps/extension/lint.test.ts` now fails when the extension's source reads such details.
+
 ## Context
 
 Mozilla's Extension Workshop page "Firefox built-in consent for data collection and
@@ -73,6 +78,10 @@ response text and console messages.
   sign-in details to the local program.
 - Making a category optional. Nothing Foxleash sends is optional per category, and its tools need
   all three.
+- Declaring `technicalAndInteraction` for the probe's user agent line. The page says the category
+  "cannot be required", so it would add a choice to Firefox's install prompt, and code that asks
+  for it, for one line of a diagnostic report. The `User-Agent` header among a page's network
+  requests is request information, which `websiteContent` covers.
 
 ## Consequences
 

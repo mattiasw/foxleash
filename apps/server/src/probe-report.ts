@@ -3,7 +3,6 @@ import type { ProbeCheck } from "@foxleash/protocol";
 export interface ProbeReport {
   date: string;
   foxleash: string;
-  userAgent: string | null;
   pages: PageReport[];
 }
 
@@ -26,7 +25,6 @@ export function renderMarkdown(report: ProbeReport): string {
     "",
     `- Date: ${cell(report.date)}`,
     `- Foxleash: ${cell(report.foxleash)}`,
-    `- Browser: ${report.userAgent === null ? "unknown" : cell(report.userAgent)}`,
   ];
   for (const page of report.pages) {
     lines.push("", `## ${cell(page.url)}`, "");

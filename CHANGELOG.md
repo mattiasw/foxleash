@@ -29,6 +29,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the program of the newest release npm has served for 14 days and every release after it, so an
   npm release-age limit of up to 14 days no longer leaves the add-on refusing the program. The
   README says what to run when npx says "No versions available for foxleash".
+- A `foxleash probe` report no longer names the browser: the add-on no longer sends Firefox's user
+  agent string to the Foxleash program.
 
 ### Fixed
 

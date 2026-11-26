@@ -17,7 +17,6 @@ const CHECK: ProbeCheck = {
 const REPORT: ProbeReport = {
   date: "2026-10-19T08:30:00.000Z",
   foxleash: "0.1.0",
-  userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:150.0) Gecko/20100101 Firefox/150.0",
   pages: [
     {
       url: "https://a.example/",
@@ -50,7 +49,6 @@ describe("renderMarkdown", () => {
         "",
         "- Date: 2026-10-19T08:30:00.000Z",
         "- Foxleash: 0.1.0",
-        "- Browser: Mozilla/5.0 (X11; Linux x86\\_64; rv:150.0) Gecko/20100101 Firefox/150.0",
         "",
         "## https://a.example/",
         "",
@@ -67,9 +65,9 @@ describe("renderMarkdown", () => {
     );
   });
 
-  it("renders an unknown browser when no page was probed", () => {
-    const markdown = renderMarkdown({ ...REPORT, userAgent: null, pages: [] });
-    assert.ok(markdown.endsWith("- Browser: unknown\n"), markdown);
+  it("ends with the header when there is no page", () => {
+    const markdown = renderMarkdown({ ...REPORT, pages: [] });
+    assert.ok(markdown.endsWith("- Foxleash: 0.1.0\n"), markdown);
   });
 
   it("renders an empty element as a dash", () => {
@@ -86,7 +84,6 @@ describe("renderMarkdown", () => {
   it("escapes Markdown and turns line breaks and controls into spaces in a cell", () => {
     const markdown = renderMarkdown({
       ...REPORT,
-      userAgent: HOSTILE,
       pages: [
         {
           url: "https://a.example/",
@@ -101,7 +98,6 @@ describe("renderMarkdown", () => {
         },
       ],
     });
-    assert.ok(markdown.includes(`- Browser: ${ESCAPED}\n`), markdown);
     assert.ok(
       markdown.includes(
         `| tab\\_focus | probe | ${ESCAPED} | ${ESCAPED} | no\\_effect | yes | ${ESCAPED} |\n`,

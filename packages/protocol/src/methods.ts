@@ -54,6 +54,10 @@ export interface ProbeCheck {
 }
 
 export interface ProbeResult {
+  /**
+   * Always empty: the manifest declares no data category that covers browser details. A program
+   * that still reads the field refuses a result without it.
+   */
   userAgent: string;
   checks: ProbeCheck[];
 }

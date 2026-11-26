@@ -106,7 +106,7 @@ export async function probePage(site: string, cutoff: number): Promise<ProbeResu
       focused.focus();
     }
   }
-  return { userAgent: navigator.userAgent, checks };
+  return { userAgent: "", checks };
 
   function listen(view: Window): void {
     if (listened.has(view)) return;

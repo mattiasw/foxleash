@@ -100,12 +100,10 @@ export async function runProbe(options: ProbeOptions): Promise<number> {
     log,
   });
   const pages: PageReport[] = [];
-  let userAgent: string | null = null;
   try {
     for (const [index, url] of urls.entries()) {
       const probed = await probeOrRecord(bridge, url, now, log);
       pages.push(probed.page);
-      if ("checks" in probed.page) userAgent ??= probed.userAgent ?? null;
       if (probed.openQuestion !== undefined) {
         for (const rest of urls.slice(index + 1)) {
           pages.push({ url: rest, error: notProbed(probed.openQuestion) });
@@ -124,7 +122,6 @@ export async function runProbe(options: ProbeOptions): Promise<number> {
   const report: ProbeReport = {
     date: date.toISOString(),
     foxleash: SERVER_VERSION,
-    userAgent,
     pages,
   };
   try {
@@ -152,7 +149,6 @@ async function unusableOutput(base: string): Promise<string | undefined> {
 
 interface Probed {
   page: PageReport;
-  userAgent?: string;
   /** The tab where Foxleash's question is still open, which blocks every later URL. */
   openQuestion?: number;
 }
@@ -202,7 +198,7 @@ async function probeUrl(bridge: Bridge, url: string, now: () => Date, log: Log):
       page: errorPage(url, "invalid_result", "The extension's probe result is not readable."),
     };
   }
-  return { page: { url, checks: result.checks }, userAgent: result.userAgent };
+  return { page: { url, checks: result.checks } };
 }
 
 async function callProbe(bridge: Bridge, tabId: number): Promise<unknown> {
@@ -220,17 +216,18 @@ async function callProbe(bridge: Bridge, tabId: number): Promise<unknown> {
   }
 }
 
-/** A probe result from the extension, bounded and with only its known fields; else undefined. */
-export function parseProbeResult(value: unknown): ProbeResult | undefined {
-  if (!isRecord(value) || typeof value.userAgent !== "string" || !Array.isArray(value.checks)) {
-    return undefined;
-  }
+/**
+ * The checks of a probe result from the extension, bounded and with only their known fields;
+ * else undefined. Reads nothing else: an older extension sends the browser's user agent too.
+ */
+export function parseProbeResult(value: unknown): Pick<ProbeResult, "checks"> | undefined {
+  if (!isRecord(value) || !Array.isArray(value.checks)) return undefined;
   const checks: ProbeCheck[] = [];
   for (const entry of value.checks.slice(0, MAX_CHECKS)) {
     const check = parseCheck(entry);
     if (check !== undefined) checks.push(check);
   }
-  return { userAgent: cut(value.userAgent), checks };
+  return { checks };
 }
 
 function parseCheck(entry: unknown): ProbeCheck | undefined {

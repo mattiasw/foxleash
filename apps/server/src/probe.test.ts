@@ -89,7 +89,6 @@ describe("runProbe", () => {
     assert.deepEqual(report, {
       date: START.toISOString(),
       foxleash: SERVER_VERSION,
-      userAgent: RESULT.userAgent,
       pages: [
         { url: "HTTPS://A.example", checks: [CHECK] },
         { url: "http://b.example/x?y#z", checks: [CHECK] },
@@ -183,7 +182,6 @@ describe("runProbe", () => {
       { url: urls[1], error: notProbed },
       { url: urls[2], error: notProbed },
     ]);
-    assert.equal(report.userAgent, null);
     assert.equal(report.date, START.toISOString());
   });
 
@@ -225,7 +223,7 @@ describe("runProbe", () => {
             ? {
                 error: { code: "probe_failed", message: "Foxleash could not run its input probe." },
               }
-            : { result: { ...RESULT, userAgent: `agent ${calls}` } },
+            : { result: RESULT },
       }),
     );
     const urls = ["https://a.example/", "https://bank.example/", "https://c.example/"];
@@ -248,7 +246,6 @@ describe("runProbe", () => {
       { url: "https://d.example/", checks: [CHECK] },
       { url: "https://e.example/", checks: [CHECK] },
     ]);
-    assert.equal(report.userAgent, "agent 2");
     assert.equal(sent(host).length, 13);
   });
 
@@ -338,13 +335,7 @@ describe("runProbe", () => {
   it("records results it cannot read as invalid_result", LIMIT, async () => {
     const base = privateBase();
     const tabs: unknown[] = [{}, { tab: { id: -1 } }, { tab: { id: 1.5 } }, { tab: { id: "5" } }];
-    const results: unknown[] = [
-      null,
-      { userAgent: "x" },
-      { userAgent: 1, checks: [] },
-      { userAgent: "x", checks: {} },
-      [RESULT],
-    ];
+    const results: unknown[] = [null, { userAgent: "x" }, { userAgent: "x", checks: {} }, [RESULT]];
     await fakeHost(
       base.socketDir,
       standard({
@@ -516,22 +507,16 @@ describe("parseProbeResult", () => {
       ],
     };
     const { element: _element, ...withoutElement } = CHECK;
-    assert.deepEqual(parseProbeResult(value), {
-      userAgent: "agent",
-      checks: [CHECK, withoutElement],
-    });
+    assert.deepEqual(parseProbeResult(value), { checks: [CHECK, withoutElement] });
     const parsed = parseProbeResult(value);
     assert.equal(Object.hasOwn(parsed?.checks[1] ?? {}, "element"), false);
   });
 
-  for (const value of [
-    null,
-    "x",
-    [],
-    { checks: [] },
-    { userAgent: "x" },
-    { userAgent: "x", checks: "" },
-  ]) {
+  it("keeps a result that names no user agent", () => {
+    assert.deepEqual(parseProbeResult({ checks: [CHECK] }), { checks: [CHECK] });
+  });
+
+  for (const value of [null, "x", [], { userAgent: "x" }, { userAgent: "x", checks: "" }]) {
     it(`refuses ${JSON.stringify(value)}`, () => {
       assert.equal(parseProbeResult(value), undefined);
     });
@@ -617,15 +602,11 @@ describe("parseProbeResult", () => {
   it("cuts every string to 200 code points without splitting a pair", () => {
     const long = `${"x".repeat(199)}${"\u{1f600}".repeat(300)}`;
     const classes = Array.from({ length: 3 }, () => `.${"c".repeat(40)}`).join(" ");
-    const parsed = parseProbeResult({
-      userAgent: long,
-      checks: [{ ...CHECK, strategy: long, detail: long }],
-    });
+    const parsed = parseProbeResult({ checks: [{ ...CHECK, strategy: long, detail: long }] });
     const cut = `${"x".repeat(199)}\u{1f600}`;
-    assert.equal(parsed?.userAgent, cut);
     assert.equal(parsed?.checks[0]?.strategy, cut);
     assert.equal(parsed?.checks[0]?.detail, cut);
-    assert.ok(parsed?.userAgent.isWellFormed());
+    assert.ok(parsed?.checks[0]?.detail.isWellFormed());
     const longElement = `${"a".repeat(40)} type=${"b".repeat(20)} role=${"r".repeat(20)} editor=${"e".repeat(20)} ${classes}`;
     const kept = parseProbeResult({ userAgent: "x", checks: [{ ...CHECK, element: longElement }] });
     assert.equal(kept?.checks[0]?.element, Array.from(longElement).slice(0, 200).join(""));

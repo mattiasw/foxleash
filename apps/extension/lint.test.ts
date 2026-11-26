@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { after, before, describe, test } from "node:test";
@@ -296,6 +296,21 @@ describe("manifest.json", () => {
     const manifest = await readManifest();
     assert.ok("incognito" in manifest);
     assert.equal(manifest.incognito, "not_allowed");
+  });
+});
+
+describe("the extension's source", () => {
+  // Technical data, which none of the data categories the manifest declares covers.
+  const BROWSER_DETAILS = /\bnavigator\.(userAgent|platform|oscpu)|\bget(Browser|Platform)Info\b/;
+
+  test("reads no browser or device details", async () => {
+    const dir = join(import.meta.dirname, "src");
+    const found: string[] = [];
+    for (const name of await readdir(dir, { recursive: true })) {
+      if (!name.endsWith(".ts") || name.endsWith(".test.ts")) continue;
+      if (BROWSER_DETAILS.test(await readFile(join(dir, name), "utf8"))) found.push(name);
+    }
+    assert.deepEqual(found, []);
   });
 });
 
