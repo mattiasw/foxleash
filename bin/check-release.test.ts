@@ -450,6 +450,7 @@ function driftCommands(tag: string): Tree["commands"] {
     [diffSince(tag, AMO_SOURCES)]: "",
     [show(`refs/tags/${tag}`, MANIFEST)]: json(FIXTURE_MANIFEST),
     [show(`refs/tags/${tag}`, LISTING)]: FIXTURE_LISTING,
+    [show(`refs/tags/${tag}`, CLAIMS)]: json(FIXTURE_CLAIMS),
   };
 }
 
@@ -2680,6 +2681,77 @@ describe("listing", () => {
       "listing since v0.1.0: no change",
       "AMO source files since v0.1.0: no change",
     ]);
+  });
+
+  test("an unreadable claims file at the tag is one FAIL, and the manifest comparison still runs", () => {
+    const tree = withManifest(firstReleaseTree(), { optional_permissions: ["tabs"] });
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", CLAIMS)] = new CommandError(
+      "git show",
+      128,
+      "fatal: no",
+    );
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "docs/amo/listing-claims.json at v0.1.0: `git show` failed (status 128): fatal: no",
+      driftFail("optional_permissions"),
+    ]);
+    tree.commands[show("refs/tags/v0.1.0", CLAIMS)] = "{";
+    const fails = texts(listing(tree), "FAIL");
+    assert.equal(fails.length, 2, JSON.stringify(fails));
+    assert.match(fails[0] ?? "", /^docs\/amo\/listing-claims\.json at v0\.1\.0: \S/);
+    assert.equal(fails[1], driftFail("optional_permissions"));
+  });
+
+  test("each shape problem of the claims file at the tag is a FAIL naming the tag", () => {
+    const tree = firstReleaseTree();
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", CLAIMS)] = json({
+      ...FIXTURE_CLAIMS,
+      note: 1,
+      safeguards: "none",
+    });
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      "docs/amo/listing-claims.json at v0.1.0: note must be a string",
+      "docs/amo/listing-claims.json at v0.1.0: safeguards must be an array",
+    ]);
+  });
+
+  test("an unusable claims file reads neither the security document nor the tagged claims", () => {
+    const tree = firstReleaseTree();
+    tree.files[CLAIMS] = "{";
+    tree.commands[lsStaged(SECURITY)] = "";
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", CLAIMS)] = new CommandError("git show", 128, "x");
+    const fails = texts(listing(tree), "FAIL");
+    assert.equal(fails.length, 2, JSON.stringify(fails));
+    assert.match(fails[0] ?? "", /^listing claims: docs\/amo\/listing-claims\.json is not JSON/);
+    assert.equal(
+      fails[1],
+      `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+    );
+  });
+
+  test("without the listing or the security document the tagged claims are not read", () => {
+    const tree = firstReleaseTree();
+    tree.commands[lsStaged(SECURITY)] = "";
+    Object.assign(tree.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    tree.commands[show("refs/tags/v0.1.0", CLAIMS)] = new CommandError("git show", 128, "x");
+    assert.deepEqual(texts(listing(tree), "FAIL"), [
+      securityUntracked,
+      neither(APPROVAL),
+      neither(UNTRUSTED),
+      `docs/amo/listing.md line 34 links ${SECURITY_URL}, but docs/security.md is not a tracked regular file`,
+    ]);
+    const unlisted = firstReleaseTree();
+    delete unlisted.files[LISTING];
+    Object.assign(unlisted.commands, { [TAGS]: "v0.1.0", ...driftCommands("v0.1.0") });
+    unlisted.commands[show("refs/tags/v0.1.0", CLAIMS)] = new CommandError("git show", 128, "x");
+    const fails = texts(listing(unlisted), "FAIL");
+    assert.ok(fails.length > 0);
+    assert.deepEqual(
+      fails.filter((line) => line.startsWith(`${CLAIMS} at `)),
+      [],
+    );
   });
 
   for (const heading of ["## Data collection and handling", "## Summary"]) {
@@ -6354,6 +6426,154 @@ describe("real git", () => {
       assertClean(listingAt(dir));
     });
   }
+
+  const removedFail = (claim: string, files: string): string =>
+    `the safeguard claim "${claim}" was in docs/amo/listing-claims.json at v0.1.0 but is no longer, while its sentence still stands in ${files}: restore the claim with its evidence, or remove or reword that sentence`;
+  const removedInfo = (claim: string): string =>
+    `safeguard claim removed since v0.1.0, with its sentence: "${claim}"`;
+
+  /** The fixture's claims file without the safeguard claim `claim`. */
+  function claimsWithout(claim: string): string {
+    return json({
+      ...FIXTURE_CLAIMS,
+      safeguards: FIXTURE_CLAIMS.safeguards.filter((safeguard) => safeguard.listing !== claim),
+    });
+  }
+
+  /** The INFO lines about safeguard claims that changed since the tag. */
+  function claimLines(findings: readonly Finding[]): string[] {
+    return texts(findings, "INFO").filter((line) => line.startsWith("safeguard "));
+  }
+
+  for (const claim of [APPROVAL, UNTRUSTED]) {
+    test(`removed claims: ${claim} gone from the working tree's claims fails while the security document states it`, () => {
+      const dir = listingRepo();
+      write(dir, { [CLAIMS]: claimsWithout(claim) });
+      const findings = listingAt(dir);
+      assert.deepEqual(texts(findings, "FAIL"), [removedFail(claim, SECURITY)]);
+      assert.deepEqual(claimLines(findings), []);
+      commit(dir, "Drop the claim", { [CLAIMS]: claimsWithout(claim) });
+      write(dir, { [CLAIMS]: json(FIXTURE_CLAIMS) });
+      const restored = listingAt(dir);
+      assertClean(restored);
+      assert.deepEqual(claimLines(restored), []);
+    });
+  }
+
+  test("removed claims: a claim the listing states over a wrapped line, or both files, fails", () => {
+    const dir = listingRepo();
+    const claim = "works on any approved site";
+    const claims = structuredClone(FIXTURE_CLAIMS);
+    claims.safeguards.push({
+      listing: claim,
+      evidence: [{ file: "apps/extension/src/tools.ts", contains: "group" }],
+    });
+    commit(dir, "Claim it", { [CLAIMS]: json(claims) });
+    git(dir, "tag", "-f", "v0.1.0");
+    write(dir, {
+      [CLAIMS]: json(FIXTURE_CLAIMS),
+      [LISTING]: FIXTURE_LISTING.replace(claim, "works on any\n  approved site"),
+    });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [removedFail(claim, LISTING)]);
+    write(dir, { [SECURITY]: `${SECURITY_DOC}\nIt ${claim}.\n` });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [
+      removedFail(claim, `${LISTING} and ${SECURITY}`),
+    ]);
+  });
+
+  test("removed claims: a claim removed with its sentence is an INFO", () => {
+    const dir = listingRepo();
+    write(dir, {
+      [CLAIMS]: claimsWithout(UNTRUSTED),
+      [SECURITY]: SECURITY_DOC.replace(`${UNTRUSTED}.\n`, ""),
+    });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), [removedInfo(UNTRUSTED)]);
+  });
+
+  test("removed claims: a reworded claim is the old one removed with its sentence", () => {
+    const dir = listingRepo();
+    const reworded = "Tool results mark page text as untrusted";
+    write(dir, {
+      [CLAIMS]: json(FIXTURE_CLAIMS).replace(UNTRUSTED, reworded),
+      [SECURITY]: SECURITY_DOC.replace(UNTRUSTED, reworded),
+    });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), [removedInfo(UNTRUSTED)]);
+  });
+
+  for (const [change, now] of [
+    ["shortened", "mark page content as untrusted"],
+    ["lengthened", `${UNTRUSTED}, also in frames`],
+  ] as const) {
+    test(`removed claims: a claim ${change} while its sentence stands is reworded, not a FAIL`, () => {
+      const dir = listingRepo();
+      write(dir, {
+        [CLAIMS]: json(FIXTURE_CLAIMS).replace(UNTRUSTED, now),
+        [SECURITY]: SECURITY_DOC.replace(`${UNTRUSTED}.`, `${UNTRUSTED}, also in frames.`),
+      });
+      const findings = listingAt(dir);
+      assertClean(findings);
+      assert.deepEqual(claimLines(findings), [
+        `safeguard claim reworded since v0.1.0: "${UNTRUSTED}" is now "${now}"`,
+      ]);
+    });
+  }
+
+  test("removed claims: a claim around a kept claim fails, one within a kept claim is an INFO", () => {
+    const dir = listingRepo();
+    const part = "mark page content as untrusted";
+    const claims = structuredClone(FIXTURE_CLAIMS);
+    claims.safeguards.push({
+      listing: part,
+      evidence: [{ file: "apps/extension/src/tools.ts", contains: "untrusted" }],
+    });
+    commit(dir, "Claim part of it", { [CLAIMS]: json(claims) });
+    git(dir, "tag", "-f", "v0.1.0");
+    const safeguards = claims.safeguards.filter((safeguard) => safeguard.listing !== UNTRUSTED);
+    write(dir, { [CLAIMS]: json({ ...claims, safeguards }) });
+    assert.deepEqual(texts(listingAt(dir), "FAIL"), [removedFail(UNTRUSTED, SECURITY)]);
+    write(dir, { [CLAIMS]: json(FIXTURE_CLAIMS) });
+    const findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), [
+      `safeguard claim removed since v0.1.0, its text within the claim "${UNTRUSTED}": "${part}"`,
+    ]);
+  });
+
+  test("removed claims: a kept claim with fewer evidence entries is an INFO naming those gone", () => {
+    const dir = listingRepo();
+    type FixtureEvidence = (typeof FIXTURE_CLAIMS)["safeguards"][number]["evidence"];
+    const withEvidence = (evidence: FixtureEvidence): Record<string, string> => ({
+      [CLAIMS]: json({
+        ...FIXTURE_CLAIMS,
+        safeguards: FIXTURE_CLAIMS.safeguards.map((safeguard) =>
+          safeguard.listing === UNTRUSTED ? { ...safeguard, evidence } : safeguard,
+        ),
+      }),
+    });
+    const marks = { file: "apps/extension/src/tools.ts", contains: "untrusted" };
+    const group = { file: "apps/extension/src/tools.ts", contains: "group" };
+    const shrank = `safeguard "${UNTRUSTED}" has fewer evidence entries than at v0.1.0 (1 now, 2 then); gone: `;
+    write(dir, withEvidence([marks]));
+    let findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), [
+      `${shrank}apps/extension/manifest.json lacks "userScripts"`,
+    ]);
+    write(dir, withEvidence([group]));
+    findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), [
+      `${shrank}apps/extension/src/tools.ts contains "untrusted"; apps/extension/manifest.json lacks "userScripts"`,
+    ]);
+    write(dir, withEvidence([marks, group]));
+    findings = listingAt(dir);
+    assertClean(findings);
+    assert.deepEqual(claimLines(findings), []);
+  });
 
   test("a committed symlink is not evidence", () => {
     const dir = listingRepo();

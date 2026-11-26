@@ -309,8 +309,15 @@ all of its checks and prints one `INFO:`, `WARNING:` or `FAIL:` line per finding
   `externally_connectable` or `content_security_policy` changed but none of the listing's
   Summary, Description, Permissions and Data collection and handling sections (the text that
   goes to AMO as fields, notes to reviewers and privacy policy) did. A change elsewhere in the
-  listing (its preface, Name, Compatibility or Screenshots) does not count. It also fails when
-  the tag's listing cannot be read or lacks one of those sections.
+  listing (its preface, Name, Compatibility or Screenshots) does not count. It also reads
+  `docs/amo/listing-claims.json` at that tag and fails for each safeguard claim there that the
+  working tree's claims file no longer holds while its string still occurs in the listing or in
+  `docs/security.md`: the sentence would outlive its evidence. A claim shortened or lengthened
+  into a claim added since the tag counts as reworded, not removed, and one whose text lies
+  within a kept claim does not fail either. Each reworded claim, each removed claim whose
+  sentence is gone, and each kept claim whose evidence list is shorter than at the tag, is
+  printed as INFO. It also fails when the tag's listing or claims file cannot be read or parsed,
+  or the listing lacks one of those sections.
 - `protocol`: the extension still serves the server of the latest release (see
   [Protocol versions](#protocol-versions)). It reads `PROTOCOL_VERSION` and
   `OLDEST_SERVED_PROTOCOL` from `packages/protocol/src/index.ts` in the working tree and

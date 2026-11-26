@@ -2,6 +2,9 @@
 
 **Status:** Accepted, 2026-11-26.
 
+Amended 2026-11-26: a safeguard claim removed since the previous release while its sentence still
+stands now fails the release check.
+
 ## Context
 
 `docs/amo/listing-claims.json` ties each safeguard to evidence in the code, and the release check
@@ -37,8 +40,9 @@ The Data collection and handling section must hold the link
 `https://github.com/mattiasw/foxleash/blob/main/docs/security.md` as a word of its own, without a
 fragment, and no `<`: markup could hide the link or point it elsewhere.
 
-It lands in `checkClaimsOccur` and `checkSecurityDocLinked` in `bin/check-release.ts`, in
-`docs/amo/listing-claims.json` and in those two sections of `docs/amo/listing.md`.
+It lands in `checkClaimsOccur`, `checkSecurityDocLinked` and `checkRemovedClaims` in
+`bin/check-release.ts`, in `docs/amo/listing-claims.json` and in those two sections of
+`docs/amo/listing.md`.
 
 ## Alternatives rejected
 
@@ -63,7 +67,10 @@ It lands in `checkClaimsOccur` and `checkSecurityDocLinked` in `bin/check-releas
 - The link points at the main branch, so the document can describe a safeguard that the
   released version does not have yet, where the policy text used to be fixed at the release's
   tag. The privacy policy says so.
-- No check asks for a claim when a new safeguard is written into `docs/security.md`, and none
-  notices a claim that is removed while its sentence stays: the list that needed one claim per
-  item is gone. The rules in `AGENTS.md` cover both: a new safeguard updates the claims file, and
-  a safeguard that no longer holds is a listing change.
+- No check asks for a claim when a new safeguard is written into `docs/security.md`: the list
+  that needed one claim per item is gone, and the rule in `AGENTS.md` that a new safeguard
+  updates the claims file covers it. The release check compares the claims file with the
+  previous release's tag instead: a safeguard claim removed since then fails while its sentence
+  still occurs in the listing or in `docs/security.md`, and one removed with its sentence, one
+  shortened or lengthened into a new claim, or a kept claim whose evidence list shrank, is
+  printed as INFO for whoever reviews the release.

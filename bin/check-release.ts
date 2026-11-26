@@ -436,8 +436,9 @@ export function checkListing(env: Env): Finding[] {
 
 /**
  * The listing, the claims file, the security document, the manifest and the registered tools
- * agree, and, with a previous tag, the manifest's declarations did not change without the
- * listing. `tag` is undefined when listing the tags failed, which is already a FAIL.
+ * agree, and, with a previous tag, no safeguard claim left the claims file while its sentence
+ * stayed and the manifest's declarations did not change without the listing. `tag` is undefined
+ * when listing the tags failed, which is already a FAIL.
  */
 function checkListingAgrees(env: Env, tag: string | null | undefined, findings: Finding[]): void {
   const listing = attempt(findings, "listing text", () => env.readFile(LISTING));
@@ -446,13 +447,17 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   const tools = attempt(findings, "registered tools", () => env.listTools());
   const capabilityBullets = bulletList(listing, CAPABILITIES_INTRO, findings);
   const protectionBullets = bulletList(listing, PROTECTIONS_INTRO, findings);
+  const security =
+    claims === undefined
+      ? undefined
+      : attempt(findings, SECURITY_DOC, () => securityText(env, findings));
   if (claims !== undefined) {
     const capabilities = claims.capabilities.map((claim) => claim.listing);
     const safeguards = claims.safeguards.map((claim) => claim.listing);
     if (capabilityBullets !== undefined) {
       checkCapabilitiesListed(capabilityBullets, capabilities, findings);
     }
-    if (listing !== undefined) checkClaimsOccur(env, listing, safeguards, findings);
+    if (listing !== undefined) checkClaimsOccur(listing, security, safeguards, findings);
     checkBulletsClaimed(capabilityBullets ?? [], capabilities, findings);
     checkBulletsClaimed(protectionBullets ?? [], safeguards, findings);
     if (tools !== undefined) checkToolsClaimed(tools, claims.capabilities, findings);
@@ -464,7 +469,7 @@ function checkListingAgrees(env: Env, tag: string | null | undefined, findings: 
   if (listing !== undefined) checkSectionLengths(listing, findings);
   if (listing !== undefined) checkListingLinks(env, listing, findings);
   if (listing !== undefined) checkSecurityDocLinked(listing, findings);
-  checkListingDrift(env, tag, manifest, listing, findings);
+  checkListingDrift(env, tag, manifest, listing, claims, security, findings);
 }
 
 function readClaims(env: Env, findings: Finding[]): Claims | undefined {
@@ -646,14 +651,13 @@ function checkCapabilitiesListed(
  * of one file and the start of the other.
  */
 function checkClaimsOccur(
-  env: Env,
   listing: string,
+  security: string | undefined,
   strings: readonly string[],
   findings: Finding[],
 ): void {
   // A claim may span a wrapped line.
   const flat = listing.replace(/\s+/g, " ");
-  const security = attempt(findings, SECURITY_DOC, () => securityText(env, findings));
   for (const text of strings) {
     if (!flat.includes(text) && security?.includes(text) !== true) {
       findings.push(
@@ -1007,6 +1011,8 @@ function checkListingDrift(
   tag: string | null | undefined,
   manifest: unknown,
   listing: string | undefined,
+  claims: Claims | undefined,
+  security: string | undefined,
   findings: Finding[],
 ): void {
   if (tag === undefined) return;
@@ -1017,6 +1023,7 @@ function checkListingDrift(
   printDiff(env, tag, MANIFEST, `manifest since ${tag}:`, findings);
   printDiff(env, tag, LISTING, `listing since ${tag}:`, findings);
   printDiff(env, tag, AMO_SOURCE_FILES, `AMO source files since ${tag}:`, findings);
+  checkRemovedClaims(env, tag, claims, listing, security, findings);
   const tagged = attempt(findings, `${MANIFEST} at ${tag}`, () =>
     parseJson(env.sh("git", ["show", `refs/tags/${tag}:${MANIFEST}`])),
   );
@@ -1042,6 +1049,89 @@ function checkListingDrift(
         `the manifest's ${changed.join(", ")} changed since ${tag}, but the Summary, Description, Permissions and Data collection and handling sections of ${LISTING} did not: update the listing to match`,
       ),
     );
+  }
+}
+
+/**
+ * A safeguard claim in the claims file at `tag` that the working tree's file no longer holds is a
+ * FAIL while its sentence still stands in the listing or the security document, matched as
+ * checkClaimsOccur matches, and an INFO otherwise. It is reworded, an INFO, when a claim added
+ * since `tag` contains it or lies within it, and an INFO when a kept claim contains it, since
+ * that claim's evidence still covers its text. A kept claim with fewer evidence entries than at
+ * `tag` is an INFO. Nothing is compared while the working tree's claims, listing or security
+ * document is unusable, which is already a FAIL.
+ */
+function checkRemovedClaims(
+  env: Env,
+  tag: string,
+  claims: Claims | undefined,
+  listing: string | undefined,
+  security: string | undefined,
+  findings: Finding[],
+): void {
+  if (claims === undefined || listing === undefined || security === undefined) return;
+  const where = `${CLAIMS} at ${tag}`;
+  const value = attempt(findings, where, () =>
+    parseJson(env.sh("git", ["show", `refs/tags/${tag}:${CLAIMS}`])),
+  );
+  if (value === undefined) return;
+  const tagged = parseClaims(value);
+  if (Array.isArray(tagged)) {
+    for (const problem of tagged) findings.push(fail(`${where}: ${problem}`));
+    return;
+  }
+  const flat = listing.replace(/\s+/g, " ");
+  const added = claims.safeguards.filter(
+    (safeguard) => !tagged.safeguards.some((claim) => claim.listing === safeguard.listing),
+  );
+  for (const before of tagged.safeguards) {
+    const text = before.listing;
+    const now = claims.safeguards.find((safeguard) => safeguard.listing === text);
+    if (now === undefined) {
+      const successor = added.find(
+        (safeguard) => safeguard.listing.includes(text) || text.includes(safeguard.listing),
+      );
+      const container = claims.safeguards.find((safeguard) => safeguard.listing.includes(text));
+      const stating: string[] = [];
+      if (flat.includes(text)) stating.push(LISTING);
+      if (security.includes(text)) stating.push(SECURITY_DOC);
+      if (successor !== undefined) {
+        findings.push(
+          info(
+            `safeguard claim reworded since ${tag}: ${quote(text)} is now ${quote(successor.listing)}`,
+          ),
+        );
+      } else if (container !== undefined) {
+        findings.push(
+          info(
+            `safeguard claim removed since ${tag}, its text within the claim ${quote(container.listing)}: ${quote(text)}`,
+          ),
+        );
+      } else if (stating.length > 0) {
+        findings.push(
+          fail(
+            `the safeguard claim ${quote(text)} was in ${CLAIMS} at ${tag} but is no longer, while its sentence still stands in ${stating.join(" and ")}: restore the claim with its evidence, or remove or reword that sentence`,
+          ),
+        );
+      } else {
+        findings.push(
+          info(`safeguard claim removed since ${tag}, with its sentence: ${quote(text)}`),
+        );
+      }
+    } else if (now.evidence.length < before.evidence.length) {
+      const gone = before.evidence
+        .filter((entry) => !now.evidence.some((kept) => isDeepStrictEqual(kept, entry)))
+        .map((entry) =>
+          "contains" in entry
+            ? `${entry.file} contains ${quote(entry.contains)}`
+            : `${entry.file} lacks ${quote(entry.lacks)}`,
+        );
+      findings.push(
+        info(
+          `safeguard ${quote(text)} has fewer evidence entries than at ${tag} (${now.evidence.length} now, ${before.evidence.length} then); gone: ${gone.join("; ")}`,
+        ),
+      );
+    }
   }
 }
 

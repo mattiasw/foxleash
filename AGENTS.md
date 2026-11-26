@@ -143,9 +143,12 @@ not. A new, renamed or removed tool, or a new safeguard, also updates
 `docs/security.md` and with the tools the server registers. A safeguard claim occurs word for
 word in the listing or in `docs/security.md`, which the listing links for the safeguards, so a
 change to such a sentence in `docs/security.md` is checked like a listing sentence and updates
-the claim in the same commit. CI runs these checks as `npm run check:release -- listing`. When a
-change moves or rewrites code that a safeguard's evidence names, point the evidence at the new
-code in the same commit; a safeguard that no longer holds is a listing change.
+the claim in the same commit. A safeguard claim removed since the previous release fails the
+release check while its sentence still stands in the listing or in `docs/security.md`, so removing
+a claim also removes or rewords its sentence. CI runs these checks as
+`npm run check:release -- listing`. When a change moves or rewrites code that a safeguard's
+evidence names, point the evidence at the new code in the same commit; a safeguard that no longer
+holds is a listing change.
 
 Firefox does not show users host permissions that an update adds, so adding one is a
 listing change and a decision, not a routine edit.
